@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nicegrow-agent"
+version = "0.1.0"
+description = "Agente modular para cultivo y e-commerce"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{name = "Growen", email = ""}]
+dependencies = [
+    "SQLAlchemy>=2.0",
+    "alembic>=1.9",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "typer>=0.9",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "coverage",
+    "factory_boy",
+]
