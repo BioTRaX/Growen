@@ -1,7 +1,8 @@
 """Fachada para enrutar peticiones de IA."""
+
 from __future__ import annotations
 
-from typing import Iterable
+import logging
 
 from agent_core.config import Settings
 from .policy import choose
@@ -28,4 +29,9 @@ class AIRouter:
         if name == "openai" and not self.settings.ai_allow_external:
             name = "ollama"
         provider = self._providers[name]
+        if not provider.supports(task):
+            logging.warning(
+                "Proveedor %s no soporta la tarea %s, usando ollama", name, task
+            )
+            provider = self._providers["ollama"]
         return "".join(provider.generate(prompt))
