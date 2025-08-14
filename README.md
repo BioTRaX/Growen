@@ -83,6 +83,26 @@ Con `--dry-run` se generan reportes en `data/reports/` sin tocar la base. Al apl
 
 Si el archivo no incluye SKU ni GTIN se genera uno interno estable. Las categorías y marcas se crean si no existen y los productos quedan en estado `draft` por defecto.
 
+### Ingesta Santa Planta (mensual)
+
+1. En el chat adjuntá el Excel `ListaPrecios_export_XXXX.xlsx`.
+2. Growen detecta automáticamente el proveedor y ejecuta un *dry-run*.
+3. Revisá los reportes generados en `data/reports/`.
+4. Para aplicar los cambios ejecutá `/import last --apply` en el chat o:
+
+```bash
+python -m cli.ng ingest file ListaPrecios_export_XXXX.xlsx --supplier santa-planta --dry-run
+python -m cli.ng ingest last --apply
+```
+
+### Historial de precios
+
+Cada ingestión registra los precios de compra y venta en la tabla `supplier_price_history` con las variaciones porcentuales respecto del último valor conocido.
+
+### Stock
+
+El catálogo base ingresa con `stock_qty=0` en `inventory`. La sincronización de stock con proveedores se agregará más adelante.
+
 ## IA híbrida
 
 La política por defecto utiliza:
