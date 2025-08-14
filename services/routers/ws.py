@@ -3,22 +3,25 @@
 import asyncio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ai import ChatMsg, complete
+
 router = APIRouter()
 
 
 @router.websocket("/ws/chat")
 async def chat_ws(socket: WebSocket) -> None:
-    """Recibe mensajes y envía una respuesta simulada por chunks."""
+    """Recibe mensajes y envía respuestas generadas por IA."""
     await socket.accept()
     try:
         while True:
-            await socket.receive_json()
-            # Respuesta simple enviada en tres partes
-            for chunk in ["Hola ", "Growen", "!"]:
-                await socket.send_json(
-                    {"role": "assistant", "content": chunk, "done": False}
-                )
-                await asyncio.sleep(0.1)
-            await socket.send_json({"role": "assistant", "content": "", "done": True})
+            data = await socket.receive_json()
+            text = data.get("message", "")
+            if any(k in text.lower() for k in ["seo", "descripción", "redact", "mejorar"]):
+                task = "seo.product_desc" if "seo" in text.lower() else "content.generation"
+            else:
+                task = "short_answer"
+            messages = [ChatMsg(role="user", content=text)]
+            async for chunk in complete(task, messages, stream=True):
+                await socket.send_json(chunk)
     except WebSocketDisconnect:
         pass
