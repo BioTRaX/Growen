@@ -1,0 +1,25 @@
+supplier_name: "Santa Planta"
+slug: "santa-planta"
+file_type: "xlsx"
+sheet_name: "data"
+header_row: 1
+columns:
+  supplier_product_id: ["ID"]
+  title: ["Producto"]
+  category_level_1: ["Agrupamiento"]
+  category_level_2: ["Familia"]
+  category_level_3: ["SubFamilia"]
+  min_purchase_qty: ["Compra Minima"]
+  supplier_stock: ["Stock"]
+  purchase_price: ["PrecioDeCompra"]
+  sale_price: ["PrecioDeVenta"]
+transform:
+  purchase_price:
+    replace_comma_decimal: false
+  sale_price:
+    replace_comma_decimal: false
+defaults:
+  status: "draft"
+  stock_qty: 0
+  min_qty: 0
+category_map: {}

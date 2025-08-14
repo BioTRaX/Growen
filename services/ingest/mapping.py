@@ -6,7 +6,7 @@ from typing import Any, Dict
 import pandas as pd
 
 
-REQUIRED_FIELDS = {"title", "price"}
+REQUIRED_FIELDS = {"supplier_product_id", "title"}
 
 
 def map_columns(df: pd.DataFrame, mapping: Dict[str, Any]) -> pd.DataFrame:

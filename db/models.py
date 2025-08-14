@@ -1,12 +1,13 @@
 """Modelos principales de la base de datos."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -151,3 +152,68 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
     result: Mapped[Optional[dict]] = mapped_column(JSON)
+
+
+class Supplier(Base):
+    __tablename__ = "suppliers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(50), unique=True)
+    name: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+    products: Mapped[list["SupplierProduct"]] = relationship(back_populates="supplier")
+
+
+class SupplierFile(Base):
+    __tablename__ = "supplier_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"))
+    filename: Mapped[str] = mapped_column(String(200))
+    sha256: Mapped[str] = mapped_column(String(64))
+    rows: Mapped[int] = mapped_column(Integer)
+    uploaded_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    processed: Mapped[bool] = mapped_column(Boolean, default=False)
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class SupplierProduct(Base):
+    __tablename__ = "supplier_products"
+    __table_args__ = (
+        UniqueConstraint("supplier_id", "supplier_product_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"))
+    supplier_product_id: Mapped[str] = mapped_column(String(100))
+    title: Mapped[str] = mapped_column(String(200))
+    category_level_1: Mapped[Optional[str]] = mapped_column(String(100))
+    category_level_2: Mapped[Optional[str]] = mapped_column(String(100))
+    category_level_3: Mapped[Optional[str]] = mapped_column(String(100))
+    min_purchase_qty: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
+    current_purchase_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
+    current_sale_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    internal_product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id"))
+    internal_variant_id: Mapped[Optional[int]] = mapped_column(ForeignKey("variants.id"))
+
+    supplier: Mapped["Supplier"] = relationship(back_populates="products")
+    price_history: Mapped[list["SupplierPriceHistory"]] = relationship(back_populates="supplier_product")
+
+
+class SupplierPriceHistory(Base):
+    __tablename__ = "supplier_price_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    supplier_product_fk: Mapped[int] = mapped_column(ForeignKey("supplier_products.id"))
+    file_fk: Mapped[int] = mapped_column(ForeignKey("supplier_files.id"))
+    as_of_date: Mapped[date]
+    purchase_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
+    sale_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
+    delta_purchase_pct: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
+    delta_sale_pct: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+    supplier_product: Mapped["SupplierProduct"] = relationship(back_populates="price_history")
