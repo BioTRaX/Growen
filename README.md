@@ -33,3 +33,37 @@ Agente modular para cultivo y e-commerce.
    uvicorn services.api:app --reload
    ```
 2. Revisa la salud del servicio visitando `http://localhost:8000/health`.
+
+## Modo de IA híbrido
+
+El proyecto integra dos proveedores de lenguaje:
+
+- **Ollama** (local) para NLU y respuestas cortas.
+- **OpenAI** para generación de contenido largo y tareas de SEO.
+
+Configura las variables del archivo `.env` siguiendo `.env.example`.
+
+### Instalación de Ollama
+
+1. [Descarga Ollama](https://ollama.com/download) para tu plataforma (Debian o Windows).
+2. Inicia el servicio y descarga el modelo requerido:
+   ```bash
+   ollama pull llama3.1:8b-instruct
+   ```
+
+### Clave de OpenAI
+
+Si deseas usar el proveedor externo, define `OPENAI_API_KEY` con tu clave.
+
+### Ejemplos de uso
+
+- **Interpretar comando ambiguo** (usa Ollama):
+  ```json
+  {"message": "¿qué hace /sync?"}
+  ```
+- **Generar descripción SEO** (usa OpenAI):
+  ```json
+  {"message": "redactá descripción detallada para SKU X con tono Nice Grow"}
+  ```
+
+Si `AI_ALLOW_EXTERNAL=false`, todas las peticiones se procesan con Ollama.
