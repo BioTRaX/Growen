@@ -4,34 +4,33 @@ try:
     from pydantic_settings import BaseSettings, SettingsConfigDict
 
     class Settings(BaseSettings):
-        """Configuración basada en Pydantic."""
+        """Configuración basada en Pydantic para todo el proyecto."""
 
         env: str = "dev"
-        db_url_postgres: str = "postgresql+psycopg://user:pass@localhost:5432/growen"
-        db_url_sqlite: str = "sqlite:///./growen.db"
-        use_sqlite: bool = True
+        db_url: str = "sqlite+aiosqlite:///./growen.db"
+        pg_url: str = "postgresql+psycopg://user:pass@localhost:5432/growen"
+        tn_client_id: str | None = None
+        tn_client_secret: str | None = None
+        tn_access_token: str | None = None
+        tn_shop_id: str | None = None
 
         model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
-        @property
-        def db_url(self) -> str:
-            return self.db_url_sqlite if self.use_sqlite else self.db_url_postgres
-
 except ModuleNotFoundError:
+
     class Settings:
         """Fallback simple cuando Pydantic no está disponible."""
 
         def __init__(self) -> None:
             self.env = os.getenv("ENV", "dev")
-            self.db_url_postgres = os.getenv(
-                "DB_URL_POSTGRES", "postgresql+psycopg://user:pass@localhost:5432/growen"
+            self.db_url = os.getenv("DB_URL", "sqlite+aiosqlite:///./growen.db")
+            self.pg_url = os.getenv(
+                "PG_URL", "postgresql+psycopg://user:pass@localhost:5432/growen"
             )
-            self.db_url_sqlite = os.getenv("DB_URL_SQLITE", "sqlite:///./growen.db")
-            self.use_sqlite = os.getenv("USE_SQLITE", "1") == "1"
-
-        @property
-        def db_url(self) -> str:
-            return self.db_url_sqlite if self.use_sqlite else self.db_url_postgres
+            self.tn_client_id = os.getenv("TN_CLIENT_ID")
+            self.tn_client_secret = os.getenv("TN_CLIENT_SECRET")
+            self.tn_access_token = os.getenv("TN_ACCESS_TOKEN")
+            self.tn_shop_id = os.getenv("TN_SHOP_ID")
 
 
 settings = Settings()
