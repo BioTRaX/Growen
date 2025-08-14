@@ -1,50 +1,26 @@
-"""Política de decisión para elegir proveedor de IA."""
-
+"""Política de selección de proveedores IA."""
 from __future__ import annotations
 
-import os
-from typing import Literal
+from typing import Dict
 
-Task = Literal[
-    "nlu.parse_command",
-    "nlu.intent",
-    "short_answer",
-    "content.generation",
-    "seo.product_desc",
-    "reasoning.heavy",
-]
+from agent_core.config import Settings
+from .types import Task
 
-
-_DEFAULTS: dict[Task, str] = {
-    "nlu.parse_command": "ollama",
-    "nlu.intent": "ollama",
-    "short_answer": "ollama",
-    "content.generation": "openai",
-    "seo.product_desc": "openai",
-    "reasoning.heavy": "openai",
+PRIMARY: Dict[str, str] = {
+    Task.NLU_PARSE.value: "ollama",
+    Task.NLU_INTENT.value: "ollama",
+    Task.SHORT_ANSWER.value: "ollama",
+    Task.CONTENT.value: "openai",
+    Task.SEO.value: "openai",
+    Task.REASONING.value: "openai",
 }
 
 
-def choose_provider(task: Task, context: dict | None = None) -> Literal["ollama", "openai"]:
-    """Devuelve el nombre del proveedor a usar."""
-
-    context = context or {}
-    override = context.get("override")
-    if override in {"openai", "ollama"}:
-        return override  # preferencia explícita
-
-    mode = os.getenv("AI_MODE", "auto")
-    if mode in {"openai", "ollama"}:
-        return mode  # modo forzado global
-
-    env = os.getenv("ENV", "dev")
-    if env == "dev_offline":
-        return "ollama"
-
-    if not os.getenv("OPENAI_API_KEY"):
-        return "ollama"
-
-    if not (os.getenv("OLLAMA_HOST") and os.getenv("OLLAMA_MODEL")):
+def choose(task: str, settings: Settings) -> str:
+    """Devuelve el proveedor recomendado para la tarea."""
+    mode = settings.ai_mode
+    if mode == "openai":
         return "openai"
-
-    return _DEFAULTS[task]
+    if mode == "ollama":
+        return "ollama"
+    return PRIMARY.get(task, "ollama")
