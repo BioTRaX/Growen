@@ -2,8 +2,8 @@ import os
 import sys
 from pathlib import Path
 
-os.environ.setdefault("USE_SQLITE", "1")
-os.environ.setdefault("DB_URL_SQLITE", "sqlite:///:memory:")
+# Usa una base SQLite en memoria para los tests sin afectar PostgreSQL.
+os.environ.setdefault("DB_URL", "sqlite:///:memory:")
 
 # Añade el directorio raíz del proyecto al path para importar los módulos sin instalar
 sys.path.append(str(Path(__file__).resolve().parents[1]))
