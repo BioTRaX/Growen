@@ -74,7 +74,7 @@ docker-compose.override.yml
 **/.docker/
 
 # Datos de ejemplo
-data/
+data/*
 *.csv
 *.xlsx
 *.json
