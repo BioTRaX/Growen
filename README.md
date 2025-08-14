@@ -67,6 +67,22 @@ En el chat o vía API se pueden usar:
 
 La ruta `GET /actions` devuelve acciones rápidas.
 
+## Carga de catálogo desde proveedores (ingesta)
+
+Permite subir archivos `.csv` o `.xlsx` de distintos proveedores para poblar el catálogo interno.
+
+- El stock inicial siempre se crea en `0`.
+- Los campos se normalizan según mapeos en `config/suppliers/*.yml`.
+- Se puede ejecutar desde el chat o por CLI:
+
+```bash
+python -m cli.ng ingest file datos.xlsx --supplier default --dry-run
+```
+
+Con `--dry-run` se generan reportes en `data/reports/` sin tocar la base. Al aplicar sin ese flag se insertan/actualizan productos y variantes.
+
+Si el archivo no incluye SKU ni GTIN se genera uno interno estable. Las categorías y marcas se crean si no existen y los productos quedan en estado `draft` por defecto.
+
 ## IA híbrida
 
 La política por defecto utiliza:
