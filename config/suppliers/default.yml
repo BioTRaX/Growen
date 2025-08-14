@@ -1,0 +1,35 @@
+supplier_name: "Generico"
+file_type: "xlsx"
+encoding: "utf-8"
+sheet_name: "Productos"
+delimiter: ","
+header_row: 1
+columns:
+  sku: ["SKU", "Codigo", "Código", "Cod."]
+  title: ["Producto", "Nombre", "Descripción corta"]
+  description_html: ["Descripcion", "Descripción", "Detalle"]
+  price: ["Precio", "Precio Lista", "Precio Unitario"]
+  promo_price: ["Precio Oferta", "Precio Promo"]
+  brand: ["Marca"]
+  category: ["Categoria", "Rubro"]
+  barcode: ["EAN", "GTIN", "Código de barras"]
+  images: ["Imagen", "Imagenes", "URL Imagen", "Imagen 1"]
+  variant_name: ["Variante", "Presentación", "Tamaño"]
+  variant_value: ["Valor", "Contenido", "Volumen"]
+  weight_kg: ["Peso (kg)"]
+  width_cm: ["Ancho (cm)"]
+  height_cm: ["Alto (cm)"]
+  length_cm: ["Largo (cm)"]
+transform:
+  price:
+    replace_comma_decimal: true
+  promo_price:
+    replace_comma_decimal: true
+category_map:
+  "Sustratos": "Sustratos"
+  "Fertilizantes": "Fertilizantes"
+  "Hongos": "Fungi"
+defaults:
+  status: "draft"
+  stock_qty: 0
+  min_qty: 0
