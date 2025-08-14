@@ -67,6 +67,17 @@ En el chat o vía API se pueden usar:
 
 La ruta `GET /actions` devuelve acciones rápidas.
 
+## Flujo de chat e intents
+
+El endpoint de chat y el WebSocket analizan cada mensaje para detectar comandos.
+
+1. Si el texto corresponde a un intent conocido, se ejecuta el handler asociado y se retorna una respuesta estructurada.
+2. Cuando el intent es desconocido, se invoca `AIRouter.run` con la tarea `Task.SHORT_ANSWER` para generar una contestación libre mediante IA.
+
+El WebSocket utiliza la misma lógica para cada mensaje entrante y cierra la conexión de forma limpia ante una desconexión del cliente.
+
+Cuando el proveedor de IA elegido no soporta la tarea solicitada, el ruteador registra una advertencia y cambia a **Ollama** como alternativa.
+
 ## Carga de catálogo desde proveedores (ingesta)
 
 Permite subir archivos `.csv` o `.xlsx` de distintos proveedores para poblar el catálogo interno.
