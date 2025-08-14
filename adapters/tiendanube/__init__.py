@@ -1,0 +1,1 @@
+"""Cliente stub para Tiendanube."""

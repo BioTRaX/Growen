@@ -1,34 +1,11 @@
-"""Tipos comunes usados por los proveedores de IA."""
-
-from typing import AsyncIterator, Literal, TypedDict
-
-
-class ChatMsg(TypedDict):
-    """Mensaje simple para los proveedores de chat."""
-
-    role: Literal["user", "assistant", "system"]
-    content: str
+"""Tipos y constantes relacionados con tareas de IA."""
+from enum import Enum
 
 
-class Chunk(TypedDict, total=False):
-    """Chunk de texto emitido durante un stream."""
-
-    role: Literal["assistant"]
-    content: str
-    done: bool
-
-
-class ProviderHealth(TypedDict):
-    """Estado de salud de un proveedor."""
-
-    ok: bool
-    detail: str
-
-
-class FullResponse(TypedDict):
-    """Respuesta completa cuando el proveedor no soporta streaming."""
-
-    content: str
-
-
-Stream = AsyncIterator[Chunk]
+class Task(str, Enum):
+    NLU_PARSE = "nlu.parse_command"
+    NLU_INTENT = "nlu.intent"
+    SHORT_ANSWER = "short_answer"
+    CONTENT = "content.generation"
+    SEO = "seo.product_desc"
+    REASONING = "reasoning.heavy"

@@ -1,29 +1,28 @@
-[build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "nicegrow-agent"
+name = "growen"
 version = "0.1.0"
-description = "Agente modular para cultivo y e-commerce"
-readme = "README.md"
+description = "Agente para gestión de catálogo y stock de Nice Grow"
+authors = [{name = "Growen"}]
 requires-python = ">=3.11"
-authors = [{name = "Growen", email = ""}]
-dependencies = [
-    "SQLAlchemy>=2.0",
-    "psycopg[binary]>=3.1",
-    "alembic>=1.9",
-    "pydantic>=2.0",
-    "pydantic-settings>=2.0",
-    "typer>=0.9",
-    "python-dotenv>=1.0",
-    "fastapi>=0.100",
-    "uvicorn>=0.23",
-]
+readme = "README.md"
+
+[project.dependencies]
+fastapi = "^0.111.0"
+uvicorn = {version = "^0.30.1", extras = ["standard"]}
+sqlalchemy = "^2.0.29"
+alembic = "^1.13.1"
+psycopg = {version = "^3.1.18", extras = ["binary"]}
+pydantic-settings = "^2.2.1"
+typer = "^0.12.3"
+websockets = "^12.0"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0",
-    "coverage",
-    "factory_boy",
+    "ruff>=0.4.2",
+    "black>=24.3.0",
+    "pytest>=8.1.0",
 ]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

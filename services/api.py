@@ -1,34 +1,24 @@
-"""Aplicación principal de FastAPI."""
-
+"""Aplicación FastAPI principal del agente."""
 from fastapi import FastAPI
 
-from ai.providers.ollama_provider import OllamaProvider
-from ai.providers.openai_provider import OpenAIProvider
-from .routers import chat, actions, ws
+from agent_core.config import settings
+from ai.router import AIRouter
+from .routers import actions, chat, ws
 
-app = FastAPI()
+app = FastAPI(title="Growen")
+app.include_router(chat.router)
+app.include_router(actions.router)
+app.include_router(ws.router)
 
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    """Verifica que el servicio esté vivo."""
+    """Devuelve OK si la aplicación está viva."""
     return {"status": "ok"}
 
 
 @app.get("/health/ai")
-async def health_ai() -> dict[str, dict[str, str]]:
-    """Consulta el estado de salud de los proveedores de IA."""
-    providers = {
-        "ollama": OllamaProvider(),
-        "openai": OpenAIProvider(),
-    }
-    result: dict[str, dict[str, str]] = {}
-    for name, provider in providers.items():
-        result[name] = await provider.healthcheck()
-    return result
-
-
-# Registro de routers secundarios
-app.include_router(chat.router)
-app.include_router(actions.router)
-app.include_router(ws.router)
+async def health_ai() -> dict[str, list[str]]:
+    """Informa los proveedores disponibles de IA."""
+    router = AIRouter(settings)
+    return {"providers": router.available_providers()}
