@@ -36,14 +36,31 @@ def ingest_file(
 
     async def _run() -> None:
         async with SessionLocal() as session:
-            await upsert.upsert_rows(
-                df.to_dict("records"),
-                session,
-                mapping_cfg.get("supplier_name", supplier),
-                dry_run=dry_run,
-            )
+            if supplier == "santa-planta":
+                await upsert.upsert_supplier_rows(
+                    df.to_dict("records"), session, supplier, dry_run=dry_run
+                )
+            else:
+                await upsert.upsert_rows(
+                    df.to_dict("records"),
+                    session,
+                    mapping_cfg.get("supplier_name", supplier),
+                    dry_run=dry_run,
+                )
 
     asyncio.run(_run())
+
+
+@ingest_app.command("last")
+def ingest_last(apply: bool = False, supplier: str = "santa-planta") -> None:
+    """Reprocesa el último archivo subido."""
+    uploads_dir = Path("data/uploads")
+    files = sorted(uploads_dir.glob("*.xlsx"))
+    if not files:
+        typer.echo("No hay archivos para procesar")
+        return
+    file = files[-1]
+    ingest_file(file, supplier=supplier, dry_run=not apply)
 
 
 if __name__ == "__main__":
