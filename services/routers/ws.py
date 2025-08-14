@@ -1,27 +1,15 @@
-"""Comunicación de chat vía WebSocket con streaming."""
-
-import asyncio
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-
-from ai import ChatMsg, complete
+"""WebSocket de chat básico."""
+from fastapi import APIRouter, WebSocket
 
 router = APIRouter()
 
 
 @router.websocket("/ws/chat")
-async def chat_ws(socket: WebSocket) -> None:
-    """Recibe mensajes y envía respuestas generadas por IA."""
+async def ws_chat(socket: WebSocket) -> None:
     await socket.accept()
     try:
         while True:
-            data = await socket.receive_json()
-            text = data.get("message", "")
-            if any(k in text.lower() for k in ["seo", "descripción", "redact", "mejorar"]):
-                task = "seo.product_desc" if "seo" in text.lower() else "content.generation"
-            else:
-                task = "short_answer"
-            messages = [ChatMsg(role="user", content=text)]
-            async for chunk in complete(task, messages, stream=True):
-                await socket.send_json(chunk)
-    except WebSocketDisconnect:
-        pass
+            data = await socket.receive_text()
+            await socket.send_text(f"echo: {data}")
+    except Exception:
+        await socket.close()

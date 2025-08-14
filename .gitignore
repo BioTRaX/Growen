@@ -1,2 +1,87 @@
+# =========================
+# Growen - .gitignore
+# =========================
+
+# Entornos y dependencias
+.venv/
+env/
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+
+# Archivos de configuración local
+.env
+.env.*
+!.env.example
+
+# Credenciales y llaves
+*.pem
+*.key
+*.crt
+*.pfx
+
+# Logs y temporales
+*.log
+*.log.*
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+.DS_Store
+
+# Bases locales
+*.sqlite
+*.db
+*.db-journal
+
+# Alembic caches
+alembic/versions/*.pyc
+alembic/versions/__pycache__/
+
+# Cache y pruebas
+.cache/
+.pytest_cache/
+pytestdebug.log
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+
+# Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+frontend/dist/
+frontend/.vite/
+
+# Docker
+docker-compose.override.yml
+.docker/
+**/.docker/
+
+# Datos de ejemplo
+data/
+*.csv
+*.xlsx
+*.json
+!data/README.md
+
+# Backups
+backup/
+*.bak
+*.old
+*.orig

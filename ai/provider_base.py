@@ -1,25 +1,17 @@
-"""Definiciones base para los proveedores de LLM."""
-
+"""Interfaz común para proveedores LLM."""
 from __future__ import annotations
 
-from typing import AsyncIterator, Protocol, runtime_checkable
+from abc import ABC, abstractmethod
+from typing import Iterable
 
-from .types import ChatMsg, Chunk, FullResponse, ProviderHealth
 
-
-@runtime_checkable
-class ILLMProvider(Protocol):
-    """Interfaz requerida por todos los proveedores."""
-
+class ILLMProvider(ABC):
     name: str
 
-    def supports(self, stream: bool, modality: str) -> bool:
-        """Indica si el proveedor soporta el modo solicitado."""
+    @abstractmethod
+    def supports(self, task: str) -> bool:  # pragma: no cover - interfaz
+        """Indica si el proveedor soporta la tarea."""
 
-    async def acomplete(
-        self, messages: list[ChatMsg], **kwargs
-    ) -> AsyncIterator[Chunk] | FullResponse:
-        """Realiza una completion de manera asíncrona."""
-
-    async def healthcheck(self) -> ProviderHealth:
-        """Devuelve el estado de salud del proveedor."""
+    @abstractmethod
+    def generate(self, prompt: str) -> Iterable[str]:  # pragma: no cover - interfaz
+        """Devuelve tokens generados para el prompt."""
