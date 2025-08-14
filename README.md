@@ -25,3 +25,11 @@ Agente modular para cultivo y e-commerce.
    ```bash
    pytest
    ```
+
+## Ejecución del servicio API
+
+1. Inicia el backend de desarrollo:
+   ```bash
+   uvicorn services.api:app --reload
+   ```
+2. Revisa la salud del servicio visitando `http://localhost:8000/health`.
