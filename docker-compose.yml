@@ -1,0 +1,19 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: usuario
+      POSTGRES_PASSWORD: clave
+      POSTGRES_DB: growen
+    ports:
+      - "5432:5432"
+  app:
+    build: .
+    depends_on:
+      - db
+    env_file: .env
+    environment:
+      DB_URL: postgresql+psycopg://usuario:clave@db:5432/growen
+    ports:
+      - "8000:8000"
