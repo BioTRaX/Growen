@@ -35,7 +35,7 @@ source .venv/bin/activate
 pip install -e .[dev]
 cp .env.example .env
 # crear base de datos growen en PostgreSQL
-alembic upgrade head
+alembic -c ./alembic.ini upgrade head
 uvicorn services.api:app --reload
 ```
 
@@ -55,6 +55,21 @@ El backend se ejecuta en `http://localhost:8000` y el frontend en `http://localh
 docker compose up --build
 ```
 Levanta PostgreSQL, API en `:8000` y frontend en `:5173`.
+
+## Migraciones (Alembic)
+
+Las migraciones se administran con Alembic usando la carpeta `db/migrations`. La URL `DB_URL` se toma de `.env`.
+
+```bash
+# Crear una nueva revisión a partir de los modelos
+alembic -c ./alembic.ini revision -m "descripcion" --autogenerate
+
+# Aplicar las migraciones pendientes
+alembic -c ./alembic.ini upgrade head
+
+# Revertir la última migración
+alembic -c ./alembic.ini downgrade -1
+```
 
 ## Variables de entorno
 
