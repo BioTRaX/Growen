@@ -81,44 +81,54 @@ La interfaz muestra las respuestas del asistente con la etiqueta visual **Growen
 
 La API permite subir archivos de proveedores en formatos `.xlsx` o `.csv` para revisar y aplicar nuevas listas de precios.
 
-1. `POST /suppliers/{supplier_id}/price-list/upload` recibe el archivo y un parámetro `dry_run` (por defecto `true`). Devuelve un `job_id` y un resumen sin modificar la base de datos.
+1. `POST /suppliers/{supplier_id}/price-list/upload` recibe el archivo del proveedor y un parámetro `dry_run` (por defecto `true`). Es obligatorio que el proveedor exista y tenga un *parser* registrado.
 2. `GET /imports/{job_id}?limit=N` muestra las primeras `N` filas analizadas y los errores detectados (`N` por defecto es `50`).
-3. `POST /imports/{job_id}/commit` aplica los cambios, insertando o actualizando categorías, productos y relaciones en `supplier_products`.
+3. `POST /imports/{job_id}/commit` aplica los cambios, creando categorías, productos y relaciones en `supplier_products`.
 
-Columnas mínimas esperadas: `codigo`, `nombre`, `categoria` y `precio`. En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios definitivos.
+Cada proveedor tiene su propio formato de planilla. Los *parsers* disponibles se registran en `SUPPLIER_PARSERS`.
+
+| Proveedor | Campos requeridos | Campos normalizados |
+|-----------|------------------|---------------------|
+| `santaplanta` | ID, Producto, Agrupamiento, Familia, SubFamilia, Compra Minima, PrecioDeCompra, PrecioDeVenta | codigo, nombre, categoria_path, compra_minima, precio_compra, precio_venta |
+
+En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios definitivos.
 
 ## Consulta de productos
 
-`GET /products` lista los productos disponibles permitiendo filtros y paginación.
+`GET /products` lista los productos disponibles con filtros, orden y paginación.
 
-Parámetros opcionales:
+Parámetros soportados:
 
 - `supplier_id`: filtra por proveedor.
 - `category_id`: filtra por categoría interna.
-- `q`: busca por texto parcial en el título.
-- `page` y `page_size`: controlan la paginación (por defecto `1` y `20`).
+- `q`: búsqueda parcial por nombre.
+- `page` y `page_size`: paginación (por defecto `1` y `20`).
+- `sort_by`: `updated_at`, `precio_venta`, `precio_compra` o `name`.
+- `order`: `asc` o `desc`.
 
 Ejemplo de respuesta:
 
 ```json
 {
+  "page": 1,
+  "page_size": 20,
+  "total": 1,
   "items": [
     {
-      "id": 1,
-      "supplier_product_id": "ABC123",
-      "title": "Producto demo",
-      "price": 10.5,
-      "supplier": { "id": 1, "name": "Santa Planta" },
-      "category": { "id": 2, "name": "Sustratos" }
+      "product_id": 1,
+      "name": "Carpa Indoor 80x80",
+      "supplier": {"id": 1, "slug": "santaplanta", "name": "Santa Planta"},
+      "precio_compra": 10000.0,
+      "precio_venta": 12500.0,
+      "compra_minima": 1,
+      "category_path": "Carpas>80x80",
+      "updated_at": "2025-08-15T20:33:00Z"
     }
-  ],
-  "total": 1,
-  "page": 1,
-  "page_size": 20
+  ]
 }
 ```
 
-Este endpoint será utilizado por la interfaz para consultar el catálogo existente.
+Este endpoint se utiliza para consultar el catálogo existente desde el frontend.
 
 ## Inicio rápido (1‑clic)
 
@@ -203,6 +213,8 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `ALLOWED_ORIGINS`: orígenes permitidos para CORS.
 - `ADMIN_USER`, `ADMIN_PASS`: credenciales del administrador inicial.
 - `MAX_UPLOAD_MB`: tamaño máximo de archivos a subir.
+- `AUTH_ENABLED`: si es `true`, requiere sesión autenticada.
+- `PRODUCTS_PAGE_MAX`: límite máximo de resultados por página.
 
 ## Comandos y chat
 

@@ -1,9 +1,10 @@
 """Endpoints para gestionar proveedores y categorías."""
 from __future__ import annotations
 
+import os
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -251,6 +252,20 @@ async def generate_categories(
 # ------------------------------- Productos -------------------------------
 
 
+async def _category_path(session: AsyncSession, category_id: int | None) -> str | None:
+    if not category_id:
+        return None
+    parts: List[str] = []
+    current_id = category_id
+    while current_id:
+        cat = await session.get(Category, current_id)
+        if not cat:
+            break
+        parts.append(cat.name)
+        current_id = cat.parent_id
+    return ">".join(reversed(parts)) if parts else None
+
+
 @router.get("/products")
 async def list_products(
     supplier_id: Optional[int] = None,
@@ -258,38 +273,47 @@ async def list_products(
     q: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
+    sort_by: str = "updated_at",
+    order: str = "desc",
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Lista productos con filtros y paginación.
+    """Lista productos de proveedores con filtros, orden y paginación."""
 
-    - ``supplier_id`` filtra por proveedor.
-    - ``category_id`` filtra por categoría interna.
-    - ``q`` busca texto parcial en el título del producto.
-    - ``page`` y ``page_size`` controlan la paginación.
-    """
-
-    if page < 1 or page_size < 1 or page_size > 100:
+    max_page = int(os.getenv("PRODUCTS_PAGE_MAX", "100"))
+    if page < 1 or page_size < 1 or page_size > max_page:
         raise HTTPException(status_code=400, detail="paginación inválida")
 
+    sp = SupplierProduct
+    p = Product
+    s = Supplier
+
     stmt = (
-        select(SupplierProduct, Supplier, Product, Category)
-        .join(Supplier, SupplierProduct.supplier_id == Supplier.id)
-        .outerjoin(Product, SupplierProduct.internal_product_id == Product.id)
-        .outerjoin(Category, Product.category_id == Category.id)
+        select(sp, p, s)
+        .join(s, sp.supplier_id == s.id)
+        .join(p, sp.internal_product_id == p.id)
     )
 
     if supplier_id is not None:
-        stmt = stmt.where(SupplierProduct.supplier_id == supplier_id)
+        stmt = stmt.where(sp.supplier_id == supplier_id)
     if category_id is not None:
-        stmt = stmt.where(Product.category_id == category_id)
+        stmt = stmt.where(p.category_id == category_id)
     if q:
-        stmt = stmt.where(SupplierProduct.title.ilike(f"%{q}%"))
+        stmt = stmt.where(p.title.ilike(f"%{q}%"))
 
-    count_stmt = stmt.with_only_columns(func.count()).order_by(None)
-    total = await session.scalar(count_stmt)
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = await session.scalar(count_stmt) or 0
+
+    sort_map = {
+        "updated_at": sp.last_seen_at,
+        "precio_venta": sp.current_sale_price,
+        "precio_compra": sp.current_purchase_price,
+        "name": p.title,
+    }
+    sort_col = sort_map.get(sort_by, sp.last_seen_at)
+    sort_col = sort_col.asc() if order == "asc" else sort_col.desc()
 
     stmt = (
-        stmt.order_by(SupplierProduct.id)
+        stmt.order_by(sort_col)
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
@@ -297,23 +321,36 @@ async def list_products(
     rows = result.all()
 
     items = []
-    for sp, sup, prod, cat in rows:
+    for sp_obj, p_obj, s_obj in rows:
+        cat_path = await _category_path(session, p_obj.category_id)
         items.append(
             {
-                "id": sp.id,
-                "supplier_product_id": sp.supplier_product_id,
-                "title": sp.title,
-                "price": float(sp.current_purchase_price)
-                if sp.current_purchase_price is not None
+                "product_id": p_obj.id,
+                "name": p_obj.title,
+                "supplier": {
+                    "id": s_obj.id,
+                    "slug": s_obj.slug,
+                    "name": s_obj.name,
+                },
+                "precio_compra": float(sp_obj.current_purchase_price)
+                if sp_obj.current_purchase_price is not None
                 else None,
-                "supplier": {"id": sup.id, "name": sup.name},
-                "category": {"id": cat.id, "name": cat.name} if cat else None,
+                "precio_venta": float(sp_obj.current_sale_price)
+                if sp_obj.current_sale_price is not None
+                else None,
+                "compra_minima": float(sp_obj.min_purchase_qty)
+                if sp_obj.min_purchase_qty is not None
+                else None,
+                "category_path": cat_path,
+                "updated_at": sp_obj.last_seen_at.isoformat()
+                if sp_obj.last_seen_at
+                else None,
             }
         )
 
     return {
-        "items": items,
-        "total": total or 0,
         "page": page,
         "page_size": page_size,
+        "total": total,
+        "items": items,
     }
