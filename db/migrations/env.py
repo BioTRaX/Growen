@@ -4,6 +4,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlalchemy.engine import Connection
+from dotenv import load_dotenv
 
 # Config Alembic
 config = context.config
@@ -11,6 +12,9 @@ config = context.config
 # Logging (si alembic.ini tiene secciones de logging)
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# === Cargar variables desde .env ===
+load_dotenv()
 
 # === Cargar DB_URL desde entorno ===
 db_url = os.getenv("DB_URL")
