@@ -12,11 +12,6 @@ router = APIRouter()
 async def ws_chat(socket: WebSocket) -> None:
     """Canal WebSocket principal."""
 
-    origin = socket.headers.get("origin")
-    allowed = {"http://localhost:5173", "http://127.0.0.1:5173"}
-    if origin not in allowed:
-        await socket.close(code=1008)
-        return
     await socket.accept()
     try:
         while True:

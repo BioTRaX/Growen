@@ -10,8 +10,14 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
       },
-      '/chat': 'http://localhost:8000',
-      '/actions': 'http://localhost:8000'
+      '/chat': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/actions': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
     }
   }
 })
