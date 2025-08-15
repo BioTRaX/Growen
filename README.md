@@ -82,7 +82,7 @@ La interfaz muestra las respuestas del asistente con la etiqueta visual **Growen
 La API permite subir archivos de proveedores en formatos `.xlsx` o `.csv` para revisar y aplicar nuevas listas de precios.
 
 1. `POST /suppliers/{supplier_id}/price-list/upload` recibe el archivo y un parámetro `dry_run` (por defecto `true`). Devuelve un `job_id` y un resumen sin modificar la base de datos.
-2. `GET /imports/{job_id}` muestra las filas analizadas y los errores detectados.
+2. `GET /imports/{job_id}?limit=N` muestra las primeras `N` filas analizadas y los errores detectados (`N` por defecto es `50`).
 3. `POST /imports/{job_id}/commit` aplica los cambios, insertando o actualizando categorías, productos y relaciones en `supplier_products`.
 
 Columnas mínimas esperadas: `codigo`, `nombre`, `categoria` y `precio`. En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios definitivos.
