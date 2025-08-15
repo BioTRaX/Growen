@@ -16,6 +16,7 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - Node.js LTS
 - PostgreSQL 15
 - Opcional: Docker y Docker Compose
+- El backend usa httpx para llamadas a proveedores (Ollama / APIs); ya viene incluido.
 
 ## Instalación local
 
