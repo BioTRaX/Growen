@@ -3,12 +3,13 @@ from fastapi import FastAPI
 
 from agent_core.config import settings
 from ai.router import AIRouter
-from .routers import actions, chat, ws
+from .routers import actions, chat, ws, catalog
 
 app = FastAPI(title="Growen")
 app.include_router(chat.router)
 app.include_router(actions.router)
 app.include_router(ws.router)
+app.include_router(catalog.router)
 
 
 @app.get("/health")

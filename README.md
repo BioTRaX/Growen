@@ -114,6 +114,33 @@ Cada ingestión registra los precios de compra y venta en la tabla `supplier_pri
 
 El catálogo base ingresa con `stock_qty=0` en `inventory`. La sincronización de stock con proveedores se agregará más adelante.
 
+## Gestión de proveedores
+
+La API expone endpoints para administrar proveedores externos:
+
+- `GET /suppliers` lista todos los proveedores con la cantidad de archivos cargados.
+- `POST /suppliers` crea un nuevo proveedor validando que el `slug` sea único.
+- `PATCH /suppliers/{id}` actualiza el nombre de un proveedor existente.
+- `GET /suppliers/{id}/files` muestra los archivos cargados por un proveedor.
+
+Estos recursos facilitan la organización de las distintas listas de precio y su historial.
+
+## Categorías desde proveedor
+
+Se puede proponer y generar la jerarquía de categorías a partir de un archivo de proveedor:
+
+```bash
+POST /categories/generate-from-supplier-file
+{
+  "file_id": 1,
+  "dry_run": true
+}
+```
+
+Con `dry_run=true` solo se informa qué rutas de categoría se detectarían. Si se envía `dry_run=false`, las categorías faltantes se crean respetando la jerarquía `parent_id`.
+
+Además, `GET /categories` lista las categorías con su ruta completa y `GET /categories/search?q=` permite búsquedas parciales.
+
 ## IA híbrida
 
 La política por defecto utiliza:
