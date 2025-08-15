@@ -2,7 +2,8 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine
+from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
 
 # Config Alembic
@@ -17,9 +18,7 @@ load_dotenv()
 
 # === Cargar DB_URL desde entorno ===
 db_url = os.getenv("DB_URL")
-if db_url:
-    config.set_main_option("sqlalchemy.url", db_url)
-else:
+if not db_url:
     raise RuntimeError("DB_URL no definida en entorno/.env")
 
 # === Importar metadatos del proyecto ===
@@ -35,12 +34,8 @@ except Exception:
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    url = config.get_main_option("sqlalchemy.url")
-    if not url:
-        raise RuntimeError("No SQLALCHEMY URL configured for Alembic.")
-
     context.configure(
-        url=url,
+        url=db_url,
         target_metadata=target_metadata,
         literal_binds=True,
         compare_type=True,
@@ -54,13 +49,7 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-        future=True,
-    )
-
+    connectable = create_engine(db_url, future=True, poolclass=NullPool)
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
