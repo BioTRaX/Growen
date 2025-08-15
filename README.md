@@ -71,10 +71,11 @@ Levanta PostgreSQL, API en `:8000` y frontend en `:5173`.
 Las migraciones se administran con Alembic usando la carpeta `db/migrations`. El archivo `env.py` carga automáticamente las
 variables definidas en `.env`, por lo que no es necesario configurar la URL en `alembic.ini`.
 
-1. Copiá `.env.example` a `.env` y completá `DB_URL`.
-2. Ejecutá `alembic -c ./alembic.ini upgrade head` para aplicar el esquema inicial.
-
 ```bash
+cp .env.example .env   # en Windows usar: copy .env.example .env
+# Completar DB_URL en .env
+alembic -c ./alembic.ini upgrade head
+
 # Crear una nueva revisión a partir de los modelos
 alembic -c ./alembic.ini revision -m "descripcion" --autogenerate
 
