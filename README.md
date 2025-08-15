@@ -68,6 +68,28 @@ npm run dev
 
 En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8000`, evitando errores de CORS. El chat abre un WebSocket en `/ws` y, si no está disponible, utiliza `POST /chat`. Para modificar las URLs se puede crear `frontend/.env.development` con `VITE_WS_URL` y `VITE_API_BASE`.
 
+## Inicio rápido (1‑clic)
+
+Levanta API y frontend al mismo tiempo.
+
+### Windows
+
+- **CMD**: doble clic en `start.bat`.
+- **PowerShell**: `./start.ps1` (si `ExecutionPolicy` lo bloquea: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`).
+
+### Debian/Ubuntu
+
+```bash
+chmod +x start.sh
+./start.sh
+```
+
+**Requisitos previos**: entorno virtual creado (`python -m venv .venv`), `pip install -e .`, Node.js instalado y `.env` con `DB_URL` y `OLLAMA_MODEL=llama3.1`. El backend escucha en `http://localhost:8000` y el frontend en `http://localhost:5173`.
+
+En Windows puede aparecer un aviso de firewall; permitir el acceso para ambos puertos. Si alguna de las aplicaciones no inicia, verificar que los puertos 8000 y 5173 estén libres.
+
+**Modelos Ollama**: instalar [Ollama](https://ollama.com/download) y ejecutar `ollama pull llama3.1`. Si la descarga falla, probar con `ollama pull llama3` u otra variante disponible. La variable `OLLAMA_MODEL` apunta por defecto a `llama3.1`.
+
 ## Instalación con Docker
 
 ```bash
@@ -102,7 +124,7 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `DB_URL`: URL de PostgreSQL.
 - `AI_MODE`: `auto`, `openai` u `ollama`.
 - `AI_ALLOW_EXTERNAL`: si es `false`, solo se usa Ollama.
-- `OLLAMA_HOST`, `OLLAMA_MODEL`.
+- `OLLAMA_HOST`, `OLLAMA_MODEL` (por defecto `llama3.1`).
 - `OPENAI_API_KEY`, `OPENAI_MODEL`.
 
 ## Comandos y chat
