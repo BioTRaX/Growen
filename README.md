@@ -75,6 +75,18 @@ En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8
 - **Proveedor**: Ollama es el motor por defecto (`OLLAMA_MODEL=llama3.1`). El backend normaliza la respuesta y remueve prefijos como `ollama:` antes de reenviarla.
 - **CORS/WS**: solo se aceptan orígenes `http://localhost:5173` y `http://127.0.0.1:5173`.
 
+La interfaz muestra las respuestas del asistente con la etiqueta visual **Growen**.
+
+## Importación de listas de precios
+
+La API permite subir archivos de proveedores en formatos `.xlsx` o `.csv` para revisar y aplicar nuevas listas de precios.
+
+1. `POST /suppliers/{supplier_id}/price-list/upload` recibe el archivo y un parámetro `dry_run` (por defecto `true`). Devuelve un `job_id` y un resumen sin modificar la base de datos.
+2. `GET /imports/{job_id}` muestra las filas analizadas y los errores detectados.
+3. `POST /imports/{job_id}/commit` aplica los cambios, insertando o actualizando categorías, productos y relaciones en `supplier_products`.
+
+Columnas mínimas esperadas: `codigo`, `nombre`, `categoria` y `precio`. En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios definitivos.
+
 ## Inicio rápido (1‑clic)
 
 Levanta API y frontend al mismo tiempo.
