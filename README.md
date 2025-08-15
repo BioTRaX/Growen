@@ -74,33 +74,25 @@ Levanta API y frontend al mismo tiempo.
 
 ### Windows
 
-- **CMD**: doble clic en `start.bat`.
-- **PowerShell**: `./start.ps1` (si `ExecutionPolicy` lo bloquea: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`).
+Doble clic en `start.bat` → abre dos ventanas:
 
-`start.bat` ejecuta primero `stop.bat` para liberar los puertos `8000` y `5173`,
-valida que sigan libres y luego inicia backend y frontend en ventanas
-separadas con `cmd /k`. Toda la salida se muestra en consola y se agrega a
-`logs/server.log` con marca temporal, verificando que el archivo exista antes de cada arranque.
-Tras unos segundos se realiza una
-petición con `curl` para confirmar que respondan.
+- Growen API (Uvicorn) en http://127.0.0.1:8000/docs
+- Growen Frontend (Vite) en http://127.0.0.1:5173/
 
-Las versiones recientes de `start.bat` soportan rutas con espacios porque las
-envuelven en comillas simples al invocar PowerShell. Si aun así aparecen
-problemas, prueba con `start.ps1` o mueve el repositorio a una ruta sin
-espacios. El script utiliza PowerShell y un mal escape de comillas puede
-impedir el arranque.
+Requisitos previos:
 
-- **Backend**: `http://localhost:8000/docs`
-- **Frontend**: `http://localhost:5173/`
+- Python 3.11
+- venv creado e instalado (`python -m venv .venv` → activar → `pip install -e .`)
+- Node.js/npm instalados
+- `.env` completado (DB_URL, IA, etc.)
 
-En consola se muestran mensajes `[OK]` o `[ERROR]` según el estado y las
-ventanas permanecen abiertas incluso si ocurre un fallo. El resultado de cada
-inicio queda registrado en `logs/server.log` con entradas como
-`[YYYY-MM-DD HH:MM:SS] START backend: OK`.
+Para detener:
 
-Para detener los servicios usar `stop.bat` (CMD) o `stop.ps1` (PowerShell);
-ambos cierran los procesos en `8000` y `5173` y registran la acción en el
-mismo archivo de log.
+- Doble clic en `stop.bat` → libera puertos 8000/5173.
+
+Rutas con espacios soportadas (scripts usan `cd /d` y comillas).
+
+PowerShell no requerido (los scripts son CMD puro).
 
 ### Debian/Ubuntu
 
