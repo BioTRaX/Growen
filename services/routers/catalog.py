@@ -1,14 +1,21 @@
 """Endpoints para gestionar proveedores y categorías."""
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Category, Supplier, SupplierFile, SupplierPriceHistory, SupplierProduct
+from db.models import (
+    Category,
+    Supplier,
+    SupplierFile,
+    SupplierPriceHistory,
+    SupplierProduct,
+    Product,
+)
 from db.session import get_session
 
 router = APIRouter(tags=["catalog"])
@@ -239,3 +246,74 @@ async def generate_categories(
         await session.commit()
 
     return {"proposed": proposed, "created": created, "skipped": skipped}
+
+
+# ------------------------------- Productos -------------------------------
+
+
+@router.get("/products")
+async def list_products(
+    supplier_id: Optional[int] = None,
+    category_id: Optional[int] = None,
+    q: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Lista productos con filtros y paginación.
+
+    - ``supplier_id`` filtra por proveedor.
+    - ``category_id`` filtra por categoría interna.
+    - ``q`` busca texto parcial en el título del producto.
+    - ``page`` y ``page_size`` controlan la paginación.
+    """
+
+    if page < 1 or page_size < 1 or page_size > 100:
+        raise HTTPException(status_code=400, detail="paginación inválida")
+
+    stmt = (
+        select(SupplierProduct, Supplier, Product, Category)
+        .join(Supplier, SupplierProduct.supplier_id == Supplier.id)
+        .outerjoin(Product, SupplierProduct.internal_product_id == Product.id)
+        .outerjoin(Category, Product.category_id == Category.id)
+    )
+
+    if supplier_id is not None:
+        stmt = stmt.where(SupplierProduct.supplier_id == supplier_id)
+    if category_id is not None:
+        stmt = stmt.where(Product.category_id == category_id)
+    if q:
+        stmt = stmt.where(SupplierProduct.title.ilike(f"%{q}%"))
+
+    count_stmt = stmt.with_only_columns(func.count()).order_by(None)
+    total = await session.scalar(count_stmt)
+
+    stmt = (
+        stmt.order_by(SupplierProduct.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    items = []
+    for sp, sup, prod, cat in rows:
+        items.append(
+            {
+                "id": sp.id,
+                "supplier_product_id": sp.supplier_product_id,
+                "title": sp.title,
+                "price": float(sp.current_purchase_price)
+                if sp.current_purchase_price is not None
+                else None,
+                "supplier": {"id": sup.id, "name": sup.name},
+                "category": {"id": cat.id, "name": cat.name} if cat else None,
+            }
+        )
+
+    return {
+        "items": items,
+        "total": total or 0,
+        "page": page,
+        "page_size": page_size,
+    }

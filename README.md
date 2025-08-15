@@ -87,6 +87,39 @@ La API permite subir archivos de proveedores en formatos `.xlsx` o `.csv` para r
 
 Columnas mínimas esperadas: `codigo`, `nombre`, `categoria` y `precio`. En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios definitivos.
 
+## Consulta de productos
+
+`GET /products` lista los productos disponibles permitiendo filtros y paginación.
+
+Parámetros opcionales:
+
+- `supplier_id`: filtra por proveedor.
+- `category_id`: filtra por categoría interna.
+- `q`: busca por texto parcial en el título.
+- `page` y `page_size`: controlan la paginación (por defecto `1` y `20`).
+
+Ejemplo de respuesta:
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "supplier_product_id": "ABC123",
+      "title": "Producto demo",
+      "price": 10.5,
+      "supplier": { "id": 1, "name": "Santa Planta" },
+      "category": { "id": 2, "name": "Sustratos" }
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "page_size": 20
+}
+```
+
+Este endpoint será utilizado por la interfaz para consultar el catálogo existente.
+
 ## Inicio rápido (1‑clic)
 
 Levanta API y frontend al mismo tiempo.
