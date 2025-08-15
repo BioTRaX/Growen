@@ -49,6 +49,15 @@ alembic -c ./alembic.ini upgrade head
 uvicorn services.api:app --reload
 ```
 
+### Permisos mínimos en esquema
+
+Para evitar errores como `permiso denegado al esquema public`, el usuario de la base de datos debe contar con permisos sobre el esquema `public`:
+
+```sql
+ALTER DATABASE growen OWNER TO growen;
+GRANT USAGE, CREATE ON SCHEMA public TO growen;
+```
+
 ## Instalación Frontend
 
 ```bash
@@ -57,7 +66,7 @@ npm install
 npm run dev
 ```
 
-El backend se ejecuta en `http://localhost:8000` y el frontend en `http://localhost:5173`.
+En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8000`, evitando errores de CORS. El chat abre un WebSocket en `/ws` y, si no está disponible, utiliza `POST /chat`. Para modificar las URLs se puede crear `frontend/.env.development` con `VITE_WS_URL` y `VITE_API_BASE`.
 
 ## Instalación con Docker
 
