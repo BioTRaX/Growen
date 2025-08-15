@@ -95,13 +95,15 @@ Levanta API y frontend al mismo tiempo.
 
 Doble clic en `start.bat` → abre dos ventanas:
 
+`start.bat` ejecuta previamente `fix_deps.bat` para asegurar que las dependencias de `pyproject.toml` estén instaladas en `.venv`.
+
 - Growen API (Uvicorn) en http://127.0.0.1:8000/docs
 - Growen Frontend (Vite) en http://127.0.0.1:5173/
 
 Requisitos previos:
 
 - Python 3.11
-- venv creado e instalado (`python -m venv .venv` → activar → `pip install -e .`)
+- venv creado (`python -m venv .venv`)
 - Node.js/npm instalados
 - `.env` completado (DB_URL, IA, etc.)
 
