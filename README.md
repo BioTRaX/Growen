@@ -34,6 +34,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
 cp .env.example .env
+# las variables de entorno se cargan automáticamente desde .env
 # crear base de datos growen en PostgreSQL
 alembic -c ./alembic.ini upgrade head
 uvicorn services.api:app --reload
@@ -58,7 +59,7 @@ Levanta PostgreSQL, API en `:8000` y frontend en `:5173`.
 
 ## Migraciones (Alembic)
 
-Las migraciones se administran con Alembic usando la carpeta `db/migrations`. La URL `DB_URL` se toma de `.env`.
+Las migraciones se administran con Alembic usando la carpeta `db/migrations`. La URL `DB_URL` se toma automáticamente de `.env` gracias a `python-dotenv`.
 
 ```bash
 # Crear una nueva revisión a partir de los modelos
