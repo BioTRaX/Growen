@@ -81,9 +81,13 @@ Levanta API y frontend al mismo tiempo.
 valida que sigan libres y luego inicia backend y frontend en ventanas
 separadas con `cmd /k`. Toda la salida se muestra en consola y se agrega a
 `logs/server.log` con marca temporal. Tras unos segundos se realiza una
-petición con `curl` para confirmar que respondan:
-El script maneja correctamente rutas con espacios gracias a que las rutas se
-envuelven en comillas simples al invocar PowerShell.
+petición con `curl` para confirmar que respondan.
+
+Las versiones recientes de `start.bat` soportan rutas con espacios porque las
+envuelven en comillas simples al invocar PowerShell. Si aun así aparecen
+problemas, prueba con `start.ps1` o mueve el repositorio a una ruta sin
+espacios. El script utiliza PowerShell y un mal escape de comillas puede
+impedir el arranque.
 
 - **Backend**: `http://localhost:8000/docs`
 - **Frontend**: `http://localhost:5173/`
