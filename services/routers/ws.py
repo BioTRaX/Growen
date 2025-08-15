@@ -32,13 +32,16 @@ async def ws_chat(socket: WebSocket) -> None:
             data = await socket.receive_text()
             try:
                 result = handle(data)
+                reply = result.get("message", "")
             except KeyError:
                 reply = ai.run(Task.SHORT_ANSWER.value, data)
-                result = {"message": reply}
-            await socket.send_json(result)
+            await socket.send_json({"role": "assistant", "text": reply})
     except WebSocketDisconnect:
-        await socket.close(code=1000)
-    except Exception:
+        # El cliente cerró la conexión; no es necesario llamar a ``close``.
+        pass
+    except Exception as exc:
         logger.exception("Error inesperado en ws_chat")
-        await socket.close(code=1011)
-        raise
+        try:
+            await socket.send_json({"role": "system", "text": f"error: {exc}"})
+        except Exception:
+            pass
