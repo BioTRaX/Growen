@@ -57,11 +57,14 @@ export default function ChatWindow() {
           minHeight: 300,
         }}
       >
-        {messages.map((m, i) => (
-          <div key={i} style={{ margin: '6px 0' }}>
-            <strong>{m.role}:</strong> {m.text}
-          </div>
-        ))}
+        {messages.map((m, i) => {
+          const label = m.role === 'assistant' ? 'Growen' : m.role === 'user' ? 'Tú' : m.role
+          return (
+            <div key={i} style={{ margin: '6px 0' }}>
+              <strong>{label}:</strong> {m.text}
+            </div>
+          )
+        })}
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         <input

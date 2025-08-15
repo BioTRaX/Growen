@@ -217,3 +217,29 @@ class SupplierPriceHistory(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
     supplier_product: Mapped["SupplierProduct"] = relationship(back_populates="price_history")
+
+
+class ImportJob(Base):
+    __tablename__ = "import_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"))
+    filename: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    status: Mapped[str] = mapped_column(String(20), default="DRY_RUN")
+    summary_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    rows: Mapped[list["ImportJobRow"]] = relationship(back_populates="job")
+
+
+class ImportJobRow(Base):
+    __tablename__ = "import_job_rows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("import_jobs.id", ondelete="CASCADE"))
+    row_index: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20))
+    error: Mapped[str | None] = mapped_column(String(200))
+    row_json_normalized: Mapped[dict] = mapped_column(JSON)
+
+    job: Mapped["ImportJob"] = relationship(back_populates="rows")

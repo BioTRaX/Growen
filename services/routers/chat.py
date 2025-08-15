@@ -1,38 +1,29 @@
-"""Endpoint de chat síncrono que enruta intents y usa IA de respaldo."""
+"""Endpoint de chat síncrono que consulta la IA."""
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from agent_core.config import settings
-from ai.router import AIRouter
-from ai.types import Task
-from services.intents.router import handle
+from services.ai.provider import ai_reply
 
-router = APIRouter(prefix="/chat", tags=["chat"])
+router = APIRouter()
 
 
-class ChatRequest(BaseModel):
+class ChatIn(BaseModel):
     """Modelo del cuerpo recibido en ``POST /chat``."""
 
     text: str
 
 
-class ChatResponse(BaseModel):
+class ChatOut(BaseModel):
     """Estructura común de salida del chat."""
 
     role: str = "assistant"
     text: str
 
 
-@router.post("", response_model=ChatResponse)
-@router.post("/", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
-    """Procesa el mensaje y retorna la respuesta del intent o de la IA."""
+@router.post("/chat", response_model=ChatOut)
+async def chat_endpoint(payload: ChatIn) -> ChatOut:
+    """Llama a la IA y normaliza la respuesta."""
 
-    ai = AIRouter(settings)
-    try:
-        result = handle(req.text)
-        reply = result.get("message", "")
-    except KeyError:
-        reply = ai.run(Task.SHORT_ANSWER.value, req.text)
-    return ChatResponse(text=reply)
+    reply = await ai_reply(payload.text)
+    return ChatOut(text=reply)
