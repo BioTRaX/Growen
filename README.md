@@ -164,6 +164,12 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `AI_ALLOW_EXTERNAL`: si es `false`, solo se usa Ollama.
 - `OLLAMA_HOST`, `OLLAMA_MODEL` (por defecto `llama3.1`).
 - `OPENAI_API_KEY`, `OPENAI_MODEL`.
+- `SECRET_KEY`: clave usada para firmar sesiones.
+- `SESSION_EXPIRE_MINUTES`: tiempo de expiración de la sesión.
+- `COOKIE_SECURE`: activa cookies seguras en producción.
+- `ALLOWED_ORIGINS`: orígenes permitidos para CORS.
+- `ADMIN_USER`, `ADMIN_PASS`: credenciales del administrador inicial.
+- `MAX_UPLOAD_MB`: tamaño máximo de archivos a subir.
 
 ## Comandos y chat
 
