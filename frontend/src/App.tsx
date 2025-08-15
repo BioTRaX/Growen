@@ -1,11 +1,8 @@
-import Chat from './components/Chat'
-import Sidebar from './components/Sidebar'
-
 export default function App() {
   return (
-    <div style={{ display: 'flex' }}>
-      <Sidebar />
-      <Chat />
+    <div style={{ padding: 16 }}>
+      <h1>Growen</h1>
+      <p>Frontend inicial listo. Probando conexión al backend y chat…</p>
     </div>
-  )
+  );
 }

@@ -79,6 +79,9 @@ data/*
 *.xlsx
 *.json
 !data/README.md
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/tsconfig.json
 
 # Backups
 backup/
