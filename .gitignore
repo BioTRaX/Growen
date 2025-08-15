@@ -67,6 +67,7 @@ yarn-error.log*
 .pnpm-debug.log*
 frontend/dist/
 frontend/.vite/
+frontend/tsconfig.tsbuildinfo
 
 # Docker
 docker-compose.override.yml
@@ -82,6 +83,7 @@ data/*
 !frontend/package.json
 !frontend/package-lock.json
 !frontend/tsconfig.json
+!frontend/.env.development
 
 # Backups
 backup/
