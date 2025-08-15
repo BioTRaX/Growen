@@ -12,8 +12,19 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.websocket("/ws/chat")
+@router.websocket("/ws")
 async def ws_chat(socket: WebSocket) -> None:
+    """Canal WebSocket principal.
+
+    Se valida el encabezado `Origin` para aceptar solo conexiones provenientes
+    del frontend en `localhost:5173`.
+    """
+
+    origin = socket.headers.get("origin")
+    allowed = {"http://localhost:5173", "http://127.0.0.1:5173"}
+    if origin not in allowed:
+        await socket.close(code=1008)  # violación de política
+        return
     await socket.accept()
     ai = AIRouter(settings)
     try:
