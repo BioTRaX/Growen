@@ -1,7 +1,7 @@
-export function connect(path: string): WebSocket {
-  const ws = new WebSocket(path)
-  ws.onclose = () => {
-    console.log('conexión cerrada')
-  }
+export function createWS(onMessage: (m: string) => void) {
+  const url = (import.meta.env.VITE_WS_URL as string) || '/ws'
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  const ws = new WebSocket(`${proto}://${location.host}${url}`)
+  ws.onmessage = (e) => onMessage(e.data)
   return ws
 }
