@@ -21,15 +21,15 @@ client = TestClient(app)
 
 
 def test_preview_limit() -> None:
-    resp = client.post("/suppliers", json={"slug": "sp2", "name": "Santa Planta"})
+    resp = client.post("/suppliers", json={"slug": "santaplanta", "name": "Santa Planta"})
     assert resp.status_code == 200
     supplier_id = resp.json()["id"]
 
     content = (
-        "codigo,nombre,categoria,precio\n"
-        "1,A,cat,10\n"
-        "2,B,cat,20\n"
-        "3,C,cat,30\n"
+        "ID,Producto,Agrupamiento,Familia,SubFamilia,Compra Minima,PrecioDeCompra,PrecioDeVenta\n"
+        "1,A,A,F,S,1,10,15\n"
+        "2,B,A,F,S,1,20,25\n"
+        "3,C,A,F,S,1,30,35\n"
     )
     resp = client.post(
         f"/suppliers/{supplier_id}/price-list/upload",
