@@ -1,5 +1,6 @@
 @echo off
 setlocal ENABLEDELAYEDEXPANSION
+set ERROR_FLAG=0
 
 REM ── Ir a la raíz del repo (ruta de este .bat)
 cd /d "%~dp0"
@@ -36,15 +37,53 @@ if "%OLLAMA_MODEL%"=="" (
   echo [WARN] Falta OLLAMA_MODEL en .env
 )
 
-REM ── Iniciar backend en ventana nueva
-start "Growen API" cmd /k "uvicorn services.api:app --reload"
-
-REM ── Frontend: instalar deps si faltan y levantar Vite
-pushd frontend
-if not exist "node_modules" (
-  echo [INFO] Instalando dependencias frontend...
-  npm install
+REM ── Iniciar backend si el puerto está libre
+netstat -ano | findstr ":8000" >nul
+if %errorlevel%==0 (
+  echo [ERROR] Puerto 8000 ocupado. No se inicia backend.
+  set ERROR_FLAG=1
+) else (
+  echo [INFO] Iniciando backend...
+  start "Growen API" cmd /k "uvicorn services.api:app --reload"
+  timeout /t 5 /nobreak >nul
+  curl --silent --fail http://localhost:8000/docs >nul 2>&1
+  if %errorlevel%==0 (
+    echo [OK] Backend en línea
+  ) else (
+    echo [ERROR] Backend no responde
+    set ERROR_FLAG=1
+  )
 )
-echo [INFO] Iniciando frontend...
-npm run dev
-popd
+
+REM ── Frontend: instalar deps si faltan
+set FRONTEND_DIR=%~dp0frontend
+if not exist "%FRONTEND_DIR%\node_modules" (
+  echo [INFO] Instalando dependencias frontend...
+  pushd "%FRONTEND_DIR%"
+  npm install
+  popd
+)
+
+REM ── Iniciar frontend si el puerto está libre
+netstat -ano | findstr ":5173" >nul
+if %errorlevel%==0 (
+  echo [ERROR] Puerto 5173 ocupado. No se inicia frontend.
+  set ERROR_FLAG=1
+) else (
+  echo [INFO] Iniciando frontend...
+  start "Growen Frontend" cmd /k "cd /d ^"%FRONTEND_DIR%^" && npm run dev"
+  timeout /t 5 /nobreak >nul
+  curl --silent --fail http://localhost:5173/ >nul 2>&1
+  if %errorlevel%==0 (
+    echo [OK] Frontend en línea
+  ) else (
+    echo [ERROR] Frontend no responde
+    set ERROR_FLAG=1
+  )
+)
+
+if %ERROR_FLAG%==1 (
+  echo.
+  echo [INFO] Ocurrieron errores. Presione una tecla para continuar.
+  pause
+)
