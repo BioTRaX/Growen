@@ -80,7 +80,8 @@ Levanta API y frontend al mismo tiempo.
 `start.bat` ejecuta primero `stop.bat` para liberar los puertos `8000` y `5173`,
 valida que sigan libres y luego inicia backend y frontend en ventanas
 separadas con `cmd /k`. Toda la salida se muestra en consola y se agrega a
-`logs/server.log` con marca temporal. Tras unos segundos se realiza una
+`logs/server.log` con marca temporal, verificando que el archivo exista antes de cada arranque.
+Tras unos segundos se realiza una
 petición con `curl` para confirmar que respondan.
 
 Las versiones recientes de `start.bat` soportan rutas con espacios porque las

@@ -62,6 +62,8 @@ if %errorlevel%==0 (
 ) else (
   call :log "[INFO] Iniciando backend..."
   start "Growen API" cmd /k "powershell -Command \"uvicorn services.api:app --reload 2^>^&1 ^| Tee-Object -FilePath '%LOG_FILE%' -Append\""
+  REM Verificación: crea el archivo de log si no existe para registrar la salida del backend
+  if not exist "%LOG_FILE%" echo > "%LOG_FILE%"
   timeout /t 5 /nobreak >nul
   curl --silent --fail http://localhost:8000/docs >nul 2>&1
   if %errorlevel%==0 (
@@ -91,6 +93,8 @@ if %errorlevel%==0 (
 ) else (
   call :log "[INFO] Iniciando frontend..."
   start "Growen Frontend" cmd /k "powershell -Command \"Set-Location -Path '%FRONTEND_DIR%'; npm run dev 2^>^&1 ^| Tee-Object -FilePath '%LOG_FILE%' -Append\""
+  REM Verificación: crea el archivo de log si no existe para registrar la salida del frontend
+  if not exist "%LOG_FILE%" echo > "%LOG_FILE%"
   timeout /t 5 /nobreak >nul
   curl --silent --fail http://localhost:5173/ >nul 2>&1
   if %errorlevel%==0 (
