@@ -1,6 +1,6 @@
 """Endpoints para importar listas de precios de proveedores."""
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from io import BytesIO
@@ -129,13 +129,21 @@ async def upload_price_list(
 
 
 @router.get("/imports/{job_id}")
-async def get_import(job_id: int, db: AsyncSession = Depends(get_session)):
+async def get_import(
+    job_id: int,
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_session),
+):
+    """Devuelve el resumen del job y las primeras ``limit`` filas."""
     res = await db.execute(select(ImportJob).where(ImportJob.id == job_id))
     job = res.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Job no encontrado")
     res = await db.execute(
-        select(ImportJobRow).where(ImportJobRow.job_id == job_id).order_by(ImportJobRow.row_index)
+        select(ImportJobRow)
+        .where(ImportJobRow.job_id == job_id)
+        .order_by(ImportJobRow.row_index)
+        .limit(limit)
     )
     rows = [
         {
@@ -146,7 +154,7 @@ async def get_import(job_id: int, db: AsyncSession = Depends(get_session)):
         }
         for r in res.scalars()
     ]
-    return {"job_id": job.id, "status": job.status, "summary": job.summary_json, "rows": rows[:50]}
+    return {"job_id": job.id, "status": job.status, "summary": job.summary_json, "rows": rows}
 
 
 @router.post("/imports/{job_id}/commit")
