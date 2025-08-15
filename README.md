@@ -39,7 +39,7 @@ alembic upgrade head
 uvicorn services.api:app --reload
 ```
 
-Frontend:
+## Instalación Frontend
 
 ```bash
 cd frontend
@@ -47,7 +47,7 @@ npm install
 npm run dev
 ```
 
-Visita `http://localhost:5173` para el chat.
+El backend se ejecuta en `http://localhost:8000` y el frontend en `http://localhost:5173`.
 
 ## Instalación con Docker
 
