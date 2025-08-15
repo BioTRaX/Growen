@@ -19,6 +19,16 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 
 ## Instalación local
 
+Antes de instalar dependencias, `pyproject.toml` debe listar los paquetes o usar un directorio `src/`.
+Este repositorio mantiene sus módulos en la raíz, así que es necesario declararlos explícitamente:
+
+```toml
+[tool.setuptools.packages.find]
+include = ["agent_core", "ai", "cli", "adapters", "services", "db"]
+```
+
+Si se prefiere un layout `src/`, trasladá las carpetas anteriores a `src/` y añadí `where = ["src"]` en la misma sección.
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
