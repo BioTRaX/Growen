@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from agent_core.config import settings
 from ai.router import AIRouter
-from .routers import actions, chat, ws, catalog
+from .routers import actions, chat, ws, catalog, imports
 
 # `redirect_slashes=False` evita redirecciones 307 entre `/ruta` y `/ruta/`,
 # lo que rompe las solicitudes *preflight* de CORS.
@@ -28,6 +28,7 @@ app.include_router(chat.router)
 app.include_router(actions.router)
 app.include_router(ws.router)
 app.include_router(catalog.router)
+app.include_router(imports.router)
 
 
 @app.get("/health")
