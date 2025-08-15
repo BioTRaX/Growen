@@ -82,6 +82,8 @@ valida que sigan libres y luego inicia backend y frontend en ventanas
 separadas con `cmd /k`. Toda la salida se muestra en consola y se agrega a
 `logs/server.log` con marca temporal. Tras unos segundos se realiza una
 petición con `curl` para confirmar que respondan:
+El script maneja correctamente rutas con espacios gracias a que las rutas se
+envuelven en comillas simples al invocar PowerShell.
 
 - **Backend**: `http://localhost:8000/docs`
 - **Frontend**: `http://localhost:5173/`
