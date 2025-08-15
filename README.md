@@ -25,6 +25,15 @@ Este repositorio mantiene sus módulos en la raíz, así que es necesario declar
 ```toml
 [tool.setuptools.packages.find]
 include = ["agent_core", "ai", "cli", "adapters", "services", "db"]
+```bash
+# Crear una nueva revisión a partir de los modelos
+alembic -c ./alembic.ini revision -m "descripcion" --autogenerate
+
+# Aplicar las migraciones pendientes
+alembic -c ./alembic.ini upgrade head
+
+# Revertir la última migración
+alembic -c ./alembic.ini downgrade -1
 ```
 
 Si se prefiere un layout `src/`, trasladá las carpetas anteriores a `src/` y añadí `where = ["src"]` en la misma sección.
@@ -59,7 +68,11 @@ Levanta PostgreSQL, API en `:8000` y frontend en `:5173`.
 
 ## Migraciones (Alembic)
 
-Las migraciones se administran con Alembic usando la carpeta `db/migrations`. La URL `DB_URL` se toma automáticamente de `.env` gracias a `python-dotenv`.
+Las migraciones se administran con Alembic usando la carpeta `db/migrations`. El archivo `env.py` carga automáticamente las
+variables definidas en `.env`, por lo que no es necesario configurar la URL en `alembic.ini`.
+
+1. Copiá `.env.example` a `.env` y completá `DB_URL`.
+2. Ejecutá `alembic -c ./alembic.ini upgrade head` para aplicar el esquema inicial.
 
 ```bash
 # Crear una nueva revisión a partir de los modelos

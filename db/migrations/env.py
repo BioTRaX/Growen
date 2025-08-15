@@ -3,7 +3,6 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
-from sqlalchemy.engine import Connection
 from dotenv import load_dotenv
 
 # Config Alembic
@@ -20,11 +19,14 @@ load_dotenv()
 db_url = os.getenv("DB_URL")
 if db_url:
     config.set_main_option("sqlalchemy.url", db_url)
+else:
+    raise RuntimeError("DB_URL no definida en entorno/.env")
 
 # === Importar metadatos del proyecto ===
 try:
     from db.base import Base
     import db.models  # noqa: F401
+
     target_metadata = Base.metadata
 except Exception:
     # Fallback seguro: sin metadata, autogenerate no funcionará
