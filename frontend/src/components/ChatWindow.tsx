@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { createWS } from '../lib/ws'
+import { createWS, WSMessage } from '../lib/ws'
 import { chatHttp } from '../lib/http'
 
 type Msg = { role: 'user' | 'assistant' | 'system'; text: string }
@@ -11,8 +11,8 @@ export default function ChatWindow() {
 
   useEffect(() => {
     try {
-      const ws = createWS((m) => {
-        setMessages((prev) => [...prev, { role: 'assistant', text: m }])
+      const ws = createWS((m: WSMessage) => {
+        setMessages((prev) => [...prev, m as Msg])
       })
       wsRef.current = ws
       ws.onopen = () => console.log('WS connected')
@@ -36,8 +36,7 @@ export default function ChatWindow() {
         ws.send(text)
       } else {
         const r = await chatHttp(text)
-        const reply = r.reply || r.message || JSON.stringify(r)
-        setMessages((p) => [...p, { role: 'assistant', text: reply }])
+        setMessages((p) => [...p, r as Msg])
       }
     } catch (err: any) {
       setMessages((p) => [
