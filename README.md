@@ -77,6 +77,20 @@ Levanta API y frontend al mismo tiempo.
 - **CMD**: doble clic en `start.bat`.
 - **PowerShell**: `./start.ps1` (si `ExecutionPolicy` lo bloquea: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`).
 
+`start.bat` valida que los puertos `8000` y `5173` estén libres antes de iniciar.
+Cada servicio se abre en una ventana separada con `cmd /k` y,
+tras unos segundos, se realiza una petición con `curl` para confirmar
+que respondan:
+
+- **Backend**: `http://localhost:8000/docs`
+- **Frontend**: `http://localhost:5173/`
+
+En consola se muestran mensajes `[OK]` o `[ERROR]` según el estado y las
+ventanas permanecen abiertas incluso si ocurre un fallo.
+
+Para detener los servicios usar `stop.bat` (CMD) o `stop.ps1` (PowerShell),
+que buscan y finalizan los procesos en los puertos `8000` y `5173`.
+
 ### Debian/Ubuntu
 
 ```bash
