@@ -1,11 +1,29 @@
 """Aplicación FastAPI principal del agente."""
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from agent_core.config import settings
 from ai.router import AIRouter
 from .routers import actions, chat, ws, catalog
 
-app = FastAPI(title="Growen")
+# `redirect_slashes=False` evita redirecciones 307 entre `/ruta` y `/ruta/`,
+# lo que rompe las solicitudes *preflight* de CORS.
+app = FastAPI(title="Growen", redirect_slashes=False)
+
+# Permitir que el frontend de desarrollo (Vite) consulte la API sin errores de
+# CORS. Se limita a `localhost:5173` y `127.0.0.1:5173`.
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(chat.router)
 app.include_router(actions.router)
 app.include_router(ws.router)
