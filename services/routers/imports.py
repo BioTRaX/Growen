@@ -102,7 +102,7 @@ async def download_price_list_template(
     if not parser:
         raise HTTPException(
             status_code=400,
-            detail=f"Proveedor no soportado (parser faltante): {supplier.slug}",
+            detail=f"Proveedor no soportado: {supplier.slug}",
         )
 
     wb = Workbook()
@@ -159,7 +159,7 @@ async def upload_price_list(
     if not parser:
         raise HTTPException(
             status_code=400,
-            detail=f"Proveedor no soportado (parser faltante): {supplier.slug}",
+            detail=f"Proveedor no soportado: {supplier.slug}",
         )
 
     filename = (file.filename or "").lower()
