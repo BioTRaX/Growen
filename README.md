@@ -89,17 +89,18 @@ La interfaz muestra las respuestas del asistente con la etiqueta visual **Growen
 
 ## Importación de listas de precios
 
-La API permite subir archivos de proveedores en formatos `.xlsx` o `.csv` para revisar y aplicar nuevas listas de precios.
+La API permite subir archivos de proveedores en formato `.xlsx` para revisar y aplicar nuevas listas de precios.
 
 1. `POST /suppliers/{supplier_id}/price-list/upload` recibe el archivo del proveedor y un parámetro `dry_run` (por defecto `true`). Es obligatorio que el proveedor exista y tenga un *parser* registrado.
 2. `GET /imports/{job_id}?limit=N` muestra las primeras `N` filas analizadas y los errores detectados (`N` por defecto es `50`).
 3. `POST /imports/{job_id}/commit` aplica los cambios, creando categorías, productos y relaciones en `supplier_products`.
 
 Cada proveedor tiene su propio formato de planilla. Los *parsers* disponibles se registran en `SUPPLIER_PARSERS`.
+Para depurar los parsers habilitados se puede llamar a `GET /debug/imports/parsers`.
 
 | Proveedor | Campos requeridos | Campos normalizados |
 |-----------|------------------|---------------------|
-| `santaplanta` | ID, Producto, Agrupamiento, Familia, SubFamilia, Compra Minima, PrecioDeCompra, PrecioDeVenta | codigo, nombre, categoria_path, compra_minima, precio_compra, precio_venta |
+| `santa-planta` | ID, Producto, PrecioDeCompra, PrecioDeVenta | codigo, nombre, categoria_path, compra_minima, precio_compra, precio_venta |
 
 En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios definitivos.
 
@@ -107,7 +108,7 @@ En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios d
 
 La interfaz de chat incluye un botón **+** y la opción de la botonera **Adjuntar Excel** para subir listas de precios sin pasar por la IA.
 
-1. Hacer clic en **Adjuntar Excel** o arrastrar un archivo `.xlsx`/`.csv` sobre la ventana.
+1. Hacer clic en **Adjuntar Excel** o arrastrar un archivo `.xlsx` sobre la ventana.
 2. El modal exige elegir un proveedor; si no existen proveedores se muestra un estado vacío con el botón **Crear proveedor**.
 3. Tras seleccionar proveedor y archivo, el frontend llama a `POST /suppliers/{supplier_id}/price-list/upload?dry_run=true`.
 4. Growen envía un mensaje de sistema con el `job_id` y abre un visor para revisar el *dry-run*.
@@ -164,7 +165,7 @@ Ejemplo de respuesta:
     {
       "product_id": 1,
       "name": "Carpa Indoor 80x80",
-      "supplier": {"id": 1, "slug": "santaplanta", "name": "Santa Planta"},
+      "supplier": {"id": 1, "slug": "santa-planta", "name": "Santa Planta"},
       "precio_compra": 10000.0,
       "precio_venta": 12500.0,
       "compra_minima": 1,
