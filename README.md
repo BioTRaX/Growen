@@ -93,6 +93,20 @@ Cada proveedor tiene su propio formato de planilla. Los *parsers* disponibles se
 
 En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios definitivos.
 
+### Adjuntar Excel desde el chat
+
+La interfaz de chat incluye un botón **+** para subir listas de precios sin pasar por la IA.
+
+1. Hacer clic en **+** o arrastrar un archivo `.xlsx`/`.csv` sobre la ventana.
+2. Seleccionar el proveedor y confirmar la subida. El frontend llama a `POST /suppliers/{supplier_id}/price-list/upload?dry_run=true`.
+3. Growen envía un mensaje de sistema con el `job_id` y abre un visor para revisar el *dry-run*.
+4. Desde el visor se puede explorar la previsualización y los errores paginados y luego ejecutar `POST /imports/{job_id}/commit`.
+
+Errores comunes:
+
+- **400** columnas faltantes.
+- **413** tamaño excedido (límite `MAX_UPLOAD_MB`).
+
 ## Consulta de productos
 
 `GET /products` lista los productos disponibles con filtros, orden y paginación.
