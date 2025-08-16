@@ -29,7 +29,7 @@ if [[ -z "${OLLAMA_MODEL:-}" ]]; then
 fi
 
 # Backend (background) y Frontend (foreground)
-( uvicorn services.api:app --reload ) &
+( uvicorn services.api:app --host 127.0.0.1 --port 8000 --reload --log-level debug --access-log ) &
 
 cd frontend
 if [[ ! -d node_modules ]]; then

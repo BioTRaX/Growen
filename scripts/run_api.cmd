@@ -15,7 +15,7 @@ if not exist ".\.venv\Scripts\activate.bat" (
 
 call ".\.venv\Scripts\activate.bat"
 echo [INFO] Lanzando backend (Uvicorn)...
-uvicorn services.api:app --reload
+uvicorn services.api:app --host 127.0.0.1 --port 8000 --reload --log-level debug --access-log
 
 echo [INFO] Backend finalizado.
 pause
