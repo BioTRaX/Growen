@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- feat: drag & drop, tema oscuro en buscador y modal de subida más robusto
 - Add: upload UI (+), dry-run viewer, commit
 - Add: productos canónicos y tabla de equivalencias
 - Add: middleware de logging, endpoints `/healthz` y `/debug/*`, SQLAlchemy con `echo` opcional.

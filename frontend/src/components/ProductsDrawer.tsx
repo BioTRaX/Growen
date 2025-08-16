@@ -69,6 +69,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
 
   return (
     <div
+      className="panel p-4"
       style={{
         position: 'fixed',
         top: 0,
@@ -76,9 +77,6 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         bottom: 0,
         width: '80%',
         maxWidth: 800,
-        background: '#fff',
-        boxShadow: '-2px 0 4px rgba(0,0,0,0.2)',
-        padding: 16,
         overflow: 'auto',
       }}
     >
@@ -88,15 +86,16 @@ export default function ProductsDrawer({ open, onClose }: Props) {
       <h3>Consultar base</h3>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
         <input
+          className="input w-full"
           placeholder="Buscar..."
           value={q}
           onChange={(e) => {
             setPage(1)
             setQ(e.target.value)
           }}
-          style={{ flex: 1, padding: 4 }}
         />
         <select
+          className="select"
           value={supplierId}
           onChange={(e) => {
             setSupplierId(e.target.value)
@@ -111,6 +110,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           ))}
         </select>
         <select
+          className="select"
           value={categoryId}
           onChange={(e) => {
             setCategoryId(e.target.value)
@@ -128,20 +128,16 @@ export default function ProductsDrawer({ open, onClose }: Props) {
       <div style={{ fontSize: 12, marginBottom: 8 }}>
         {total} resultados
       </div>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <table className="table w-full">
         <thead>
           <tr>
-            <th style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-              Producto
-            </th>
-            <th style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-              Proveedor
-            </th>
-            <th style={{ borderBottom: '1px solid #ccc' }}>Precio venta</th>
-            <th style={{ borderBottom: '1px solid #ccc' }}>Compra</th>
-            <th style={{ borderBottom: '1px solid #ccc' }}>Stock</th>
-            <th style={{ borderBottom: '1px solid #ccc' }}>Categoría</th>
-            <th style={{ borderBottom: '1px solid #ccc' }}>Actualizado</th>
+            <th>Producto</th>
+            <th>Proveedor</th>
+            <th>Precio venta</th>
+            <th>Compra</th>
+            <th>Stock</th>
+            <th>Categoría</th>
+            <th>Actualizado</th>
           </tr>
         </thead>
         <tbody>

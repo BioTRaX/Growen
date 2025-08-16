@@ -5,6 +5,7 @@ import UploadModal from './UploadModal'
 import ImportViewer from './ImportViewer'
 import SuppliersModal from './SuppliersModal'
 import ProductsDrawer from './ProductsDrawer'
+import DragDropZone from './DragDropZone'
 
 type Msg = { role: 'user' | 'assistant' | 'system'; text: string }
 
@@ -86,22 +87,15 @@ export default function ChatWindow() {
     ])
   }
 
-  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault()
-    const f = e.dataTransfer.files?.[0]
-    if (f) {
-      setDroppedFile(f)
-      setUploadOpen(true)
-    }
-  }
-
   return (
-    <div
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={handleDrop}
-      style={{ maxWidth: 800, margin: '40px auto', padding: 16 }}
-    >
+    <div style={{ maxWidth: 800, margin: '40px auto', padding: 16 }}>
       <h1>Growen</h1>
+      <DragDropZone
+        onFileDropped={(f) => {
+          setDroppedFile(f)
+          setUploadOpen(true)
+        }}
+      />
       <div
         style={{
           border: '1px solid #ddd',
@@ -141,7 +135,7 @@ export default function ChatWindow() {
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
         onUploaded={handleUploaded}
-        initialFile={droppedFile}
+        preselectedFile={droppedFile}
       />
       <SuppliersModal
         open={suppliersOpen}
