@@ -79,6 +79,11 @@ La interfaz presenta una botonera fija sobre el chat con accesos rápidos:
 
 La barra queda visible al hacer scroll y usa un estilo mínimo con sombreado suave.
 
+## Modo oscuro
+
+El frontend define un esquema de color gris con acentos violeta (`#7C4DFF`) y verde (`#22C55E`).
+Un botón en la barra permite alternar el tema y, por defecto, se respeta `prefers-color-scheme` del sistema.
+
 ## Contrato del Chat (DEV)
 
 - **HTTP**: `POST /chat` con cuerpo `{ "text": "hola" }` → responde `{ "role": "assistant", "text": "..." }`.
@@ -88,6 +93,8 @@ La barra queda visible al hacer scroll y usa un estilo mínimo con sombreado sua
 La interfaz muestra las respuestas del asistente con la etiqueta visual **Growen**.
 
 ## Importación de listas de precios
+
+Flujo básico: **Subir Excel → Dry-run → Visor → Commit**.
 
 La API permite subir archivos de proveedores en formato `.xlsx` para revisar y aplicar nuevas listas de precios.
 
@@ -127,9 +134,12 @@ vincularse a uno de estos canónicos mediante *equivalencias*.
 
 - **Crear canónico**: `POST /canonical-products` con `name`, `brand` y `specs_json` opcional. El sistema genera `ng_sku` con el
   formato `NG-000001`.
-- **Listar canónicos**: `GET /canonical-products?q=` permite buscar y paginar el catálogo.
+- **Buscar canónicos**: `GET /canonical-products?q=&page=` permite paginar y filtrar.
+- **Detalle/edición**: `GET /canonical-products/{id}` y `PATCH /canonical-products/{id}` devuelven y actualizan un canónico.
 - **Vincular oferta**: `POST /equivalences` une un `supplier_product` existente con un `canonical_product`.
-- **Ver ofertas**: `GET /canonical-products/{id}/offers` muestra todas las ofertas vinculadas a un canónico para comparar precios.
+- **Listar equivalencias**: `GET /equivalences?supplier_id=&canonical_product_id=` soporta filtros y paginación.
+- **Eliminar equivalencia**: `DELETE /equivalences/{id}`.
+- **Comparador**: `GET /canonical-products/{id}/offers` ordena las ofertas por precio de venta y marca la mejor con `mejor_precio`.
 
 Variables de entorno relevantes:
 
