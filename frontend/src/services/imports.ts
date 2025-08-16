@@ -9,12 +9,13 @@ export async function uploadPriceList(supplierId: number, file: File): Promise<{
     credentials: 'include',
   })
   if (!res.ok) {
-    let msg = `HTTP ${res.status}`
+    let data: any = null
     try {
-      const data = await res.json()
-      if (data?.detail) msg = data.detail
+      data = await res.json()
     } catch {}
-    throw new Error(msg)
+    const err: any = new Error(data?.detail || `HTTP ${res.status}`)
+    err.response = { data }
+    throw err
   }
   return res.json()
 }
