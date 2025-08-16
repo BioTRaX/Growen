@@ -1,35 +1,66 @@
 """Aplicación FastAPI principal del agente."""
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import logging
 import os
+import time
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
 from agent_core.config import settings
 from ai.router import AIRouter
-from .routers import actions, chat, ws, catalog, imports, canonical_products
+from .routers import actions, chat, ws, catalog, imports, canonical_products, debug
+
+level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=level, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+logger = logging.getLogger("growen")
+logging.getLogger("uvicorn").setLevel(level)
+logging.getLogger("uvicorn.error").setLevel(level)
+logging.getLogger("uvicorn.access").setLevel(level)
 
 # `redirect_slashes=False` evita redirecciones 307 entre `/ruta` y `/ruta/`,
 # lo que rompe las solicitudes *preflight* de CORS.
 app = FastAPI(title="Growen", redirect_slashes=False)
 
-# Permitir que el frontend consulte la API sin errores de CORS.
-# Se lee la lista desde la variable de entorno ``ALLOWED_ORIGINS`` separada
-# por comas. Si se especifica ``localhost`` o ``127.0.0.1`` se agrega su
-# contraparte automáticamente para evitar fallos entre ambos hostnames.
-raw_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
-origins_set = set(raw_origins)
-for url in list(raw_origins):
-    if "localhost" in url:
-        origins_set.add(url.replace("localhost", "127.0.0.1"))
-    if "127.0.0.1" in url:
-        origins_set.add(url.replace("127.0.0.1", "localhost"))
-origins = sorted(origins_set)
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Registra cada solicitud y captura excepciones."""
+    start = time.perf_counter()
+    try:
+        resp = await call_next(request)
+    except Exception:
+        dur = (time.perf_counter() - start) * 1000
+        logger.exception("EXC %s %s (%.2fms)", request.method, request.url.path, dur)
+        return JSONResponse({"detail": "Internal Server Error"}, status_code=500)
+    dur = (time.perf_counter() - start) * 1000
+    logger.info("%s %s -> %s (%.2fms)", request.method, request.url.path, resp.status_code, dur)
+    return resp
+
+
+def _expand_local(origins: list[str]) -> list[str]:
+    """Duplica ``localhost``/``127.0.0.1`` para evitar errores de CORS."""
+    out: set[str] = set()
+    for o in origins:
+        o = o.strip()
+        if not o:
+            continue
+        out.add(o)
+        if o.startswith("http://localhost:"):
+            out.add(o.replace("http://localhost:", "http://127.0.0.1:"))
+        if o.startswith("http://127.0.0.1:"):
+            out.add(o.replace("http://127.0.0.1:", "http://localhost:"))
+    return list(out)
+
+
+allowed = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+allowed = _expand_local(allowed)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=allowed,
     allow_credentials=True,
-    # Solo se habilitan los métodos necesarios y se permiten credenciales.
-    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 app.include_router(chat.router)
@@ -39,6 +70,7 @@ app.include_router(catalog.router)
 app.include_router(imports.router)
 app.include_router(canonical_products.canonical_router)
 app.include_router(canonical_products.equivalences_router)
+app.include_router(debug.router, tags=["debug"])
 
 
 @app.get("/health")
