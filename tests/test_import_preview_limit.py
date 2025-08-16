@@ -1,5 +1,8 @@
 import os
 import asyncio
+from io import BytesIO
+
+import pandas as pd
 
 os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
 
@@ -21,20 +24,31 @@ client = TestClient(app)
 
 
 def test_preview_limit() -> None:
-    resp = client.post("/suppliers", json={"slug": "santaplanta", "name": "Santa Planta"})
+    resp = client.post("/suppliers", json={"slug": "santa-planta", "name": "Santa Planta"})
     assert resp.status_code == 200
     supplier_id = resp.json()["id"]
 
-    content = (
-        "ID,Producto,Agrupamiento,Familia,SubFamilia,Compra Minima,PrecioDeCompra,PrecioDeVenta\n"
-        "1,A,A,F,S,1,10,15\n"
-        "2,B,A,F,S,1,20,25\n"
-        "3,C,A,F,S,1,30,35\n"
+    df = pd.DataFrame(
+        {
+            "ID": [1, 2, 3],
+            "Producto": ["A", "B", "C"],
+            "PrecioDeCompra": [10, 20, 30],
+            "PrecioDeVenta": [15, 25, 35],
+        }
     )
+    buf = BytesIO()
+    df.to_excel(buf, index=False)
+    buf.seek(0)
     resp = client.post(
         f"/suppliers/{supplier_id}/price-list/upload",
         data={"dry_run": "true"},
-        files={"file": ("test.csv", content, "text/csv")},
+        files={
+            "file": (
+                "test.xlsx",
+                buf.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
     )
     assert resp.status_code == 200
     job_id = resp.json()["job_id"]
