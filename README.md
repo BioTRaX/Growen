@@ -111,6 +111,12 @@ Para depurar los parsers habilitados se puede llamar a `GET /debug/imports/parse
 
 En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios definitivos.
 
+### Plantilla Excel por proveedor
+
+`GET /suppliers/{supplier_id}/price-list/template` genera un archivo `.xlsx` con la hoja `data` y los encabezados esperados:
+`ID`, `Agrupamiento`, `Familia`, `SubFamilia`, `Producto`, `Compra Minima`, `Stock`, `PrecioDeCompra`, `PrecioDeVenta`.
+La celda `A1` incluye una nota con instrucciones y la fila 2 trae un ejemplo. Desde el modal de carga puede descargarse esta plantilla antes de completar los datos.
+
 ### Adjuntar Excel desde el chat
 
 La interfaz de chat incluye un botón **+** y la opción de la botonera **Adjuntar Excel** para subir listas de precios sin pasar por la IA.
