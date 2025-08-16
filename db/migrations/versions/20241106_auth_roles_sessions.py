@@ -1,9 +1,10 @@
-"""create users and sessions tables"""
+"""create users and sessions tables with admin seed"""
 
 from alembic import op
 import sqlalchemy as sa
+from passlib.hash import argon2
 
-revision = "20241105_auth_roles_sessions"
+revision = "20241106_auth_roles_sessions"
 down_revision = "20241103_imports_tables"
 branch_labels = None
 depends_on = None
@@ -22,10 +23,11 @@ def upgrade():
         op.create_table(
             "users",
             sa.Column("id", sa.Integer, primary_key=True),
-            sa.Column("email", sa.String(255), nullable=False, unique=True),
+            sa.Column("identifier", sa.Text, nullable=False, unique=True),
+            sa.Column("email", sa.Text, nullable=True, unique=True),
+            sa.Column("name", sa.Text, nullable=True),
             sa.Column("password_hash", sa.Text, nullable=False),
-            sa.Column("name", sa.String(100)),
-            sa.Column("role", sa.String(20), nullable=False),
+            sa.Column("role", sa.Text, nullable=False),
             sa.Column(
                 "supplier_id",
                 sa.Integer,
@@ -54,14 +56,37 @@ def upgrade():
                 sa.ForeignKey("users.id", ondelete="CASCADE"),
                 nullable=True,
             ),
-            sa.Column("role", sa.String(20), nullable=False),
-            sa.Column("csrf_token", sa.String(100), nullable=False),
+            sa.Column("role", sa.Text, nullable=False),
+            sa.Column("csrf_token", sa.Text, nullable=False),
             sa.Column("expires_at", sa.DateTime(), nullable=False),
             sa.Column(
                 "created_at", sa.DateTime(), server_default=sa.text("now()"), nullable=False
             ),
-            sa.Column("ip", sa.String(100)),
-            sa.Column("user_agent", sa.String(200)),
+            sa.Column("ip", sa.Text, nullable=True),
+            sa.Column("user_agent", sa.Text, nullable=True),
+            sa.CheckConstraint(
+                "role IN ('guest','cliente','proveedor','colaborador','admin')",
+                name="ck_sessions_role",
+            ),
+        )
+
+    conn = op.get_bind()
+    res = conn.execute(sa.text("SELECT 1 FROM users WHERE role='admin' LIMIT 1")).first()
+    if not res:
+        pwd = argon2.using(type="ID").hash("123456")
+        conn.execute(
+            sa.text(
+                """
+                INSERT INTO users (identifier, email, name, password_hash, role)
+                VALUES (:identifier, :email, :name, :password_hash, 'admin')
+                """
+            ),
+            {
+                "identifier": "Admin",
+                "email": "admin@growen.local",
+                "name": "Admin",
+                "password_hash": pwd,
+            },
         )
 
 
@@ -70,4 +95,3 @@ def downgrade():
         op.drop_table("sessions")
     if _table_exists("users"):
         op.drop_table("users")
-

@@ -1,27 +1,34 @@
-import ChatWindow from './components/ChatWindow'
-import AppToolbar from './components/AppToolbar'
-import ToastContainer from './components/Toast'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { AuthProvider } from './auth/AuthContext'
+import ProtectedRoute from './auth/ProtectedRoute'
 import Login from './components/Login'
-import { AuthProvider, useAuth } from './auth/AuthContext'
-
-function InnerApp() {
-  const { state } = useAuth()
-  if (!state.isAuthenticated) {
-    return <Login />
-  }
-  return (
-    <>
-      <AppToolbar />
-      <ChatWindow />
-      <ToastContainer />
-    </>
-  )
-}
+import AdminPanel from './pages/AdminPanel'
+import Dashboard from './pages/Dashboard'
 
 export default function App() {
   return (
     <AuthProvider>
-      <InnerApp />
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute roles={['admin']}>
+                <AdminPanel />
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </BrowserRouter>
     </AuthProvider>
   )
 }

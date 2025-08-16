@@ -5,7 +5,8 @@ export type Role = 'guest' | 'cliente' | 'proveedor' | 'colaborador' | 'admin'
 
 interface User {
   id: number
-  email: string
+  identifier: string
+  email?: string | null
   name?: string | null
   role: Role
   supplier_id?: number | null
@@ -19,9 +20,10 @@ interface AuthState {
 
 interface AuthContextShape {
   state: AuthState
-  login: (email: string, password: string) => Promise<void>
+  login: (identifier: string, password: string) => Promise<void>
   loginAsGuest: () => Promise<void>
   logout: () => Promise<void>
+  refreshMe: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextShape | undefined>(undefined)
@@ -33,6 +35,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const resp = await http.get('/auth/me')
     if (resp.data.is_authenticated) {
       setState({ user: resp.data.user, role: resp.data.role, isAuthenticated: true })
+    } else {
+      setState({ role: 'guest', isAuthenticated: false })
     }
   }
 
@@ -40,8 +44,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     refreshMe()
   }, [])
 
-  const login = async (email: string, password: string) => {
-    const resp = await http.post('/auth/login', { email, password })
+  const login = async (identifier: string, password: string) => {
+    const resp = await http.post('/auth/login', { identifier, password })
     setState({ user: resp.data, role: resp.data.role, isAuthenticated: true })
   }
 
@@ -56,7 +60,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   }
 
   return (
-    <AuthContext.Provider value={{ state, login, loginAsGuest, logout }}>
+    <AuthContext.Provider value={{ state, login, loginAsGuest, logout, refreshMe }}>
       {children}
     </AuthContext.Provider>
   )
