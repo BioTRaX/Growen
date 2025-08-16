@@ -3,6 +3,7 @@
 from alembic import op
 import sqlalchemy as sa
 from passlib.hash import argon2
+from sqlalchemy.sql import text
 
 revision = "20241106_auth_roles_sessions"
 down_revision = "20241103_imports_tables"
@@ -71,23 +72,14 @@ def upgrade():
         )
 
     conn = op.get_bind()
-    res = conn.execute(sa.text("SELECT 1 FROM users WHERE role='admin' LIMIT 1")).first()
+    res = conn.execute(text("SELECT 1 FROM users WHERE role='admin' LIMIT 1")).first()
     if not res:
         pwd = argon2.using(type="ID").hash("123456")
-        conn.execute(
-            sa.text(
-                """
-                INSERT INTO users (identifier, email, name, password_hash, role)
-                VALUES (:identifier, :email, :name, :password_hash, 'admin')
-                """
-            ),
-            {
-                "identifier": "Admin",
-                "email": "admin@growen.local",
-                "name": "Admin",
-                "password_hash": pwd,
-            },
-        )
+        conn.execute(text("""
+            INSERT INTO users (identifier,email,name,password_hash,role)
+            VALUES (:i,:e,:n,:h,'admin')
+            ON CONFLICT (identifier) DO NOTHING
+        """), dict(i="Admin", e="admin@growen.local", n="Admin", h=pwd))
 
 
 def downgrade():

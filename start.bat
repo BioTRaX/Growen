@@ -1,31 +1,39 @@
 @echo off
-setlocal enableextensions enabledelayedexpansion
+setlocal ENABLEDELAYEDEXPANSION
 
-REM Cambiar al directorio del repo (este .bat)
-cd /d "%~dp0"
+set ROOT=%~dp0
+set SCRIPTS=%ROOT%scripts
+set VENV=%ROOT%.venv\Scripts
 
-REM 1) Intentar detener procesos previos
-if exist "stop.bat" (
-  call "stop.bat"
+REM Cerrar instancias previas
+if exist "%SCRIPTS%\stop.bat" call "%SCRIPTS%\stop.bat"
+timeout /t 2 /nobreak >NUL
+
+REM Fix deps
+call "%SCRIPTS%\fix_deps.bat"
+if %ERRORLEVEL% NEQ 0 (
+  echo [ERROR] Fallo la instalacion de dependencias
+  pause
+  exit /b 1
 )
 
-REM 2) Esperar 3 segundos para liberar puertos
-timeout /t 3 /nobreak >nul
-
-REM 3) Fijar venv si aplica
-if exist ".venv\Scripts\activate.bat" (
-  call ".venv\Scripts\activate.bat"
+REM Migraciones
+pushd "%ROOT%"
+call "%VENV%\python.exe" -m alembic upgrade head
+if %ERRORLEVEL% NEQ 0 (
+  echo [ERROR] Fallo al aplicar migraciones
+  popd
+  pause
+  exit /b 1
 )
+popd
 
-REM 4) Opcional: fix_deps.bat
-if exist "fix_deps.bat" (
-  call "fix_deps.bat"
-)
+REM Backend
+start "Growen API" cmd /k ""%VENV%\python.exe" -m uvicorn services.api:app --host 127.0.0.1 --port 8000"
 
-alembic -c alembic.ini upgrade head
-
-REM 5) Lanzar API y Front en ventanas separadas
-start "Growen API" cmd /c "scripts\run_api.cmd"
-start "Growen Frontend" cmd /c "scripts\run_frontend.cmd"
+REM Frontend
+pushd "%ROOT%frontend"
+start "Growen Frontend" cmd /k "npm run dev"
+popd
 
 endlocal
