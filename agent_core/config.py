@@ -19,6 +19,11 @@ class Settings:
     )
     ai_mode: str = os.getenv("AI_MODE", "auto")
     ai_allow_external: bool = os.getenv("AI_ALLOW_EXTERNAL", "true").lower() == "true"
+    secret_key: str = os.getenv("SECRET_KEY", "changeme")
+    session_expire_minutes: int = int(os.getenv("SESSION_EXPIRE_MINUTES", "43200"))
+    auth_enabled: bool = os.getenv("AUTH_ENABLED", "false").lower() == "true"
+    cookie_secure: bool = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+    cookie_domain: str | None = os.getenv("COOKIE_DOMAIN") or None
 
 
 settings = Settings()
