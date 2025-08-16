@@ -50,6 +50,11 @@ alembic -c ./alembic.ini upgrade head
 uvicorn services.api:app --reload
 ```
 
+## Migraciones automáticas
+
+`start.bat` y `scripts/run_api.cmd` ejecutan `alembic upgrade head` antes de iniciar el servidor.
+De esta forma la base siempre está en el esquema más reciente sin comandos manuales.
+
 ### Permisos mínimos en esquema
 
 Para evitar errores como `permiso denegado al esquema public`, el usuario de la base de datos debe contar con permisos sobre el esquema `public`:
@@ -110,6 +115,9 @@ Para depurar los parsers habilitados se puede llamar a `GET /debug/imports/parse
 | `santa-planta` | ID, Producto, PrecioDeCompra, PrecioDeVenta | codigo, nombre, categoria_path, compra_minima, precio_compra, precio_venta |
 
 En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios definitivos.
+
+Las tablas `import_jobs` e `import_job_rows` guardan cada archivo cargado y sus filas normalizadas.
+`supplier_price_history` registra los cambios de precios para auditoría.
 
 ### Plantilla Excel por proveedor
 
