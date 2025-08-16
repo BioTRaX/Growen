@@ -31,7 +31,7 @@ export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Pr
     try {
       setCommitting(true)
       const r = await commitImport(jobId)
-      alert(`Insertados: ${r.inserted}, Actualizados: ${r.updated}, Historial: ${r.price_history}`)
+      alert(`Insertados: ${r.inserted}, Actualizados: ${r.updated}, Cambios de precio: ${r.price_changes}`)
       onClose()
     } catch (e: any) {
       setError(e.message)

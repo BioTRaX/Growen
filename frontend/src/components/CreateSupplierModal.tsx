@@ -38,7 +38,7 @@ export default function CreateSupplierModal({ open, onClose, onCreated }: Props)
       showToast('success', 'Proveedor creado')
       onCreated(s)
     } catch (e: any) {
-      if (e.message === 'slug existente') setError('Slug ya existe')
+      if (e.message === 'slug existente') setError('El slug ya existe')
       else setError(e.message)
     }
   }

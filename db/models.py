@@ -208,7 +208,11 @@ class SupplierPriceHistory(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     supplier_product_fk: Mapped[int] = mapped_column(ForeignKey("supplier_products.id"))
-    file_fk: Mapped[int] = mapped_column(ForeignKey("supplier_files.id"))
+    # `file_fk` solía ser obligatorio; se vuelve opcional para permitir
+    # registrar cambios de precio sin asociarlos a un archivo concreto.
+    file_fk: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("supplier_files.id"), nullable=True
+    )
     as_of_date: Mapped[date]
     purchase_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
     sale_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))

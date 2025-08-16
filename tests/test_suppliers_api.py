@@ -60,3 +60,22 @@ def test_supplier_crud() -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["name"] == "Proveedor X"
+
+
+def test_supplier_slug_conflict() -> None:
+    resp = client.post("/suppliers", json={"slug": "dup", "name": "A"})
+    assert resp.status_code == 200
+    resp = client.post("/suppliers", json={"slug": "dup", "name": "B"})
+    assert resp.status_code == 409
+    assert resp.json()["message"] == "Slug ya utilizado"
+
+
+def test_supplier_missing_fields() -> None:
+    resp = client.post("/suppliers", json={"slug": "xx"})
+    assert resp.status_code == 400
+    assert resp.json()["message"] == "Faltan campos"
+
+    resp = client.post(
+        "/suppliers", data="no-json", headers={"Content-Type": "text/plain"}
+    )
+    assert resp.status_code == 415

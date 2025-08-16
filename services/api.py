@@ -1,6 +1,7 @@
 """Aplicación FastAPI principal del agente."""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import os
 
 from agent_core.config import settings
 from ai.router import AIRouter
@@ -10,18 +11,25 @@ from .routers import actions, chat, ws, catalog, imports
 # lo que rompe las solicitudes *preflight* de CORS.
 app = FastAPI(title="Growen", redirect_slashes=False)
 
-# Permitir que el frontend de desarrollo (Vite) consulte la API sin errores de
-# CORS. Se limita a `localhost:5173` y `127.0.0.1:5173`.
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+# Permitir que el frontend consulte la API sin errores de CORS.
+# Se lee la lista desde la variable de entorno ``ALLOWED_ORIGINS`` separada
+# por comas. Si se especifica ``localhost`` o ``127.0.0.1`` se agrega su
+# contraparte automáticamente para evitar fallos entre ambos hostnames.
+raw_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+origins_set = set(raw_origins)
+for url in list(raw_origins):
+    if "localhost" in url:
+        origins_set.add(url.replace("localhost", "127.0.0.1"))
+    if "127.0.0.1" in url:
+        origins_set.add(url.replace("127.0.0.1", "localhost"))
+origins = sorted(origins_set)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    # Solo se habilitan los métodos necesarios y se permiten credenciales.
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
 app.include_router(chat.router)
