@@ -32,7 +32,7 @@ def _idx_exists(table: str, idx_name: str) -> bool:
 
 
 def upgrade():
-    # --- import_jobs ---
+    # import_jobs
     if not _table_exists("import_jobs"):
         op.create_table(
             "import_jobs",
@@ -59,7 +59,7 @@ def upgrade():
         )
         op.create_index("ix_import_jobs_supplier", "import_jobs", ["supplier_id"])
 
-    # --- import_job_rows ---
+    # import_job_rows
     if not _table_exists("import_job_rows"):
         op.create_table(
             "import_job_rows",
@@ -87,7 +87,7 @@ def upgrade():
         op.create_index("ix_import_job_rows_job_idx", "import_job_rows", ["job_id", "row_index"])
         op.create_index("ix_import_job_rows_job_status", "import_job_rows", ["job_id", "status"])
 
-    # --- supplier_price_history ---
+    # supplier_price_history
     if not _table_exists("supplier_price_history"):
         op.create_table(
             "supplier_price_history",
@@ -120,10 +120,54 @@ def upgrade():
             ["supplier_id", "product_id"],
         )
     else:
-        # existe: asegurar columna, FK e índice
+        # Añadir columnas faltantes (NULLables)
+        if not _col_exists("supplier_price_history", "supplier_id"):
+            op.add_column("supplier_price_history", sa.Column("supplier_id", sa.Integer, nullable=True))
+        if not _col_exists("supplier_price_history", "product_id"):
+            op.add_column("supplier_price_history", sa.Column("product_id", sa.Integer, nullable=True))
+        if not _col_exists("supplier_price_history", "precio_compra"):
+            op.add_column(
+                "supplier_price_history",
+                sa.Column("precio_compra", sa.Numeric(12, 2), nullable=True),
+            )
+        if not _col_exists("supplier_price_history", "precio_venta"):
+            op.add_column(
+                "supplier_price_history",
+                sa.Column("precio_venta", sa.Numeric(12, 2), nullable=True),
+            )
         if not _col_exists("supplier_price_history", "job_id"):
             op.add_column("supplier_price_history", sa.Column("job_id", sa.Integer, nullable=True))
-        if not _fk_exists("supplier_price_history", "fk_sph_job"):
+        if not _col_exists("supplier_price_history", "created_at"):
+            op.add_column(
+                "supplier_price_history",
+                sa.Column(
+                    "created_at",
+                    sa.DateTime(timezone=False),
+                    server_default=sa.text("now()"),
+                    nullable=False,
+                ),
+            )
+
+        # FKs
+        if not _fk_exists("supplier_price_history", "fk_sph_supplier") and _col_exists("supplier_price_history", "supplier_id"):
+            op.create_foreign_key(
+                "fk_sph_supplier",
+                "supplier_price_history",
+                "suppliers",
+                local_cols=["supplier_id"],
+                remote_cols=["id"],
+                ondelete="CASCADE",
+            )
+        if not _fk_exists("supplier_price_history", "fk_sph_product") and _col_exists("supplier_price_history", "product_id"):
+            op.create_foreign_key(
+                "fk_sph_product",
+                "supplier_price_history",
+                "products",
+                local_cols=["product_id"],
+                remote_cols=["id"],
+                ondelete="CASCADE",
+            )
+        if not _fk_exists("supplier_price_history", "fk_sph_job") and _col_exists("supplier_price_history", "job_id"):
             op.create_foreign_key(
                 "fk_sph_job",
                 "supplier_price_history",
@@ -132,12 +176,15 @@ def upgrade():
                 remote_cols=["id"],
                 ondelete="SET NULL",
             )
-        if not _idx_exists("supplier_price_history", "ix_price_hist_supplier_product"):
-            op.create_index(
-                "ix_price_hist_supplier_product",
-                "supplier_price_history",
-                ["supplier_id", "product_id"],
-            )
+
+        # Índice compuesto
+        if _col_exists("supplier_price_history", "supplier_id") and _col_exists("supplier_price_history", "product_id"):
+            if not _idx_exists("supplier_price_history", "ix_price_hist_supplier_product"):
+                op.create_index(
+                    "ix_price_hist_supplier_product",
+                    "supplier_price_history",
+                    ["supplier_id", "product_id"],
+                )
 
 
 def downgrade():
@@ -145,9 +192,12 @@ def downgrade():
     if _table_exists("supplier_price_history"):
         if _idx_exists("supplier_price_history", "ix_price_hist_supplier_product"):
             op.drop_index("ix_price_hist_supplier_product", table_name="supplier_price_history")
-        # FK puede existir con nombre fijo o con nombre autogenerado; intentar por nombre fijo
         if _fk_exists("supplier_price_history", "fk_sph_job"):
             op.drop_constraint("fk_sph_job", "supplier_price_history", type_="foreignkey")
+        if _fk_exists("supplier_price_history", "fk_sph_product"):
+            op.drop_constraint("fk_sph_product", "supplier_price_history", type_="foreignkey")
+        if _fk_exists("supplier_price_history", "fk_sph_supplier"):
+            op.drop_constraint("fk_sph_supplier", "supplier_price_history", type_="foreignkey")
         op.drop_table("supplier_price_history")
 
     if _table_exists("import_job_rows"):
