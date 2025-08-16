@@ -5,6 +5,8 @@ from db.session import engine
 import os
 from urllib.parse import urlsplit
 
+from services.suppliers.parsers import SUPPLIER_PARSERS
+
 router = APIRouter()
 
 
@@ -41,4 +43,10 @@ async def debug_config() -> dict[str, object]:
         "allowed_origins": [o.strip() for o in origins if o.strip()],
         "db_url": safe,
     }
+
+
+@router.get("/debug/imports/parsers")
+async def debug_import_parsers() -> dict[str, list[str]]:
+    """Lista los parsers de proveedores registrados."""
+    return {"parsers": list(SUPPLIER_PARSERS.keys())}
 

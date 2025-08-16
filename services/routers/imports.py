@@ -3,9 +3,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from io import BytesIO
 from datetime import datetime, date
-import pandas as pd
 
 from db.models import (
     ImportJob,
@@ -90,36 +88,32 @@ async def _upsert_supplier_product(
 @router.post("/suppliers/{supplier_id}/price-list/upload")
 async def upload_price_list(
     supplier_id: int,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
     dry_run: bool = Form(True),
     db: AsyncSession = Depends(get_session),
 ):
+    if file is None:
+        raise HTTPException(status_code=400, detail="file field is required")
+
     supplier = await db.get(Supplier, supplier_id)
     if not supplier:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
 
     parser = SUPPLIER_PARSERS.get(supplier.slug)
     if not parser:
-        raise HTTPException(status_code=400, detail="Proveedor no soportado (parser faltante)")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Proveedor '{supplier.slug}' no soportado: parser faltante",
+        )
 
-    ext = (file.filename or "").lower()
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Tipo de archivo no soportado")
     content = await file.read()
-    try:
-        if ext.endswith(".xlsx"):
-            df = pd.read_excel(BytesIO(content))
-        elif ext.endswith(".csv"):
-            df = pd.read_csv(BytesIO(content))
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Formato no soportado. Use .xlsx o .csv",
-            )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error leyendo archivo: {e}")
 
     try:
-        parsed_rows = parser.parse_df(df)
-    except Exception as e:
+        parsed_rows, parser_kpis = parser.parse(content)
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     job = ImportJob(
@@ -142,8 +136,7 @@ async def upload_price_list(
         existing_map = {sp.supplier_product_id: sp for sp in res.scalars()}
 
     kpis = {
-        "total": len(parsed_rows),
-        "errors": 0,
+        **parser_kpis,
         "duplicates_in_file": 0,
         "unchanged": 0,
         "new": 0,
@@ -151,11 +144,22 @@ async def upload_price_list(
     }
 
     for idx, data in enumerate(parsed_rows):
+        status = data.pop("status", "ok")
+        error = data.pop("error_msg", None)
+
         code = data.get("codigo")
-        purchase = data.get("precio_compra")
-        sale = data.get("precio_venta")
-        status = "ok"
-        error = None
+
+        if status != "ok":
+            db.add(
+                ImportJobRow(
+                    job_id=job.id,
+                    row_index=int(idx),
+                    status=status,
+                    error=error,
+                    row_json_normalized=data,
+                )
+            )
+            continue
 
         if not code or code in seen_codes:
             status = "duplicate_in_file"
@@ -163,31 +167,26 @@ async def upload_price_list(
             kpis["duplicates_in_file"] += 1
         else:
             seen_codes.add(code)
-            if purchase in (None, 0) or sale in (None, 0):
-                status = "error"
-                error = "Precios inválidos"
-                kpis["errors"] += 1
-            else:
-                sp = existing_map.get(code)
-                if sp:
-                    prev_p = float(sp.current_purchase_price or 0)
-                    prev_s = float(sp.current_sale_price or 0)
-                    delta_p = round(float(purchase) - prev_p, 2)
-                    delta_s = round(float(sale) - prev_s, 2)
-                    data["delta_compra"] = delta_p
-                    data["delta_venta"] = delta_s
-                    data["delta_pct"] = (
-                        round(delta_s / prev_s * 100, 2) if prev_s else None
-                    )
-                    if delta_p == 0 and delta_s == 0:
-                        status = "unchanged"
-                        kpis["unchanged"] += 1
-                    else:
-                        status = "changed"
-                        kpis["changed"] += 1
+            sp = existing_map.get(code)
+            if sp:
+                prev_p = float(sp.current_purchase_price or 0)
+                prev_s = float(sp.current_sale_price or 0)
+                delta_p = round(float(data["precio_compra"]) - prev_p, 2)
+                delta_s = round(float(data["precio_venta"]) - prev_s, 2)
+                data["delta_compra"] = delta_p
+                data["delta_venta"] = delta_s
+                data["delta_pct"] = (
+                    round(delta_s / prev_s * 100, 2) if prev_s else None
+                )
+                if delta_p == 0 and delta_s == 0:
+                    status = "unchanged"
+                    kpis["unchanged"] += 1
                 else:
-                    status = "new"
-                    kpis["new"] += 1
+                    status = "changed"
+                    kpis["changed"] += 1
+            else:
+                status = "new"
+                kpis["new"] += 1
 
         db.add(
             ImportJobRow(
