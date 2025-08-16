@@ -52,7 +52,8 @@ uvicorn services.api:app --reload
 
 ## Migraciones automáticas
 
-`start.bat` y `scripts/run_api.cmd` ejecutan `alembic upgrade head` antes de iniciar el servidor.
+`start.sh`, `start.bat` y `scripts/run_api.cmd` ejecutan `alembic upgrade head` con el intérprete del entorno virtual antes de iniciar el servidor.
+Si la migración falla, el proceso se detiene para evitar correr con un esquema desactualizado.
 De esta forma la base siempre está en el esquema más reciente sin comandos manuales.
 
 ### Permisos mínimos en esquema
