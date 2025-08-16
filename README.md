@@ -87,6 +87,14 @@ npm run dev
 
 En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8000`, evitando errores de CORS. Durante el arranque pueden mostrarse errores de proxy WebSocket si la API aún no está disponible; una vez arriba, la conexión se restablece sola. El chat abre un WebSocket en `/ws` y, si no está disponible, utiliza `POST /chat`, que admite la variante con o sin barra final para evitar redirecciones 307. Para modificar las URLs se puede crear `frontend/.env.development` con `VITE_WS_URL` y `VITE_API_BASE`.
 
+## Subir listas de precios desde el chat
+
+- Arrastrá y soltá un archivo `.xlsx` o `.csv` sobre la zona punteada encima del chat para abrir el modal de carga.
+- También podés usar el botón **Adjuntar Excel**.
+- El modal muestra nombre y tamaño del archivo y habilita **Subir** solo cuando hay proveedor seleccionado.
+- Se validan formato y tamaño antes de enviar. El límite se define con `VITE_MAX_UPLOAD_MB`.
+- Solo los roles `proveedor`, `colaborador` y `admin` ven la opción de adjuntar. Si el usuario es `proveedor`, su `supplier_id` queda preseleccionado.
+
 ## Autenticación y roles
 
 La API implementa sesiones mediante la cookie `growen_session` y un token CSRF almacenado en `csrf_token`. Todas las mutaciones deben enviar el encabezado `X-CSRF-Token` coincidiendo con dicha cookie.

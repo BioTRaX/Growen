@@ -1,8 +1,12 @@
+import { useAuth } from '../auth/AuthContext'
+
 export default function AppToolbar() {
+  const { state } = useAuth()
   function toggleTheme() {
     const el = document.documentElement
     el.dataset.theme = el.dataset.theme === 'dark' ? 'light' : 'dark'
   }
+  const canUpload = ['proveedor', 'colaborador', 'admin'].includes(state.role)
 
   return (
     <div
@@ -18,9 +22,11 @@ export default function AppToolbar() {
         color: 'var(--text-color)',
       }}
     >
-      <button onClick={() => window.dispatchEvent(new Event('open-upload'))}>
-        Adjuntar Excel
-      </button>
+      {canUpload && (
+        <button onClick={() => window.dispatchEvent(new Event('open-upload'))}>
+          Adjuntar Excel
+        </button>
+      )}
       <button onClick={() => window.dispatchEvent(new Event('open-suppliers'))}>
         Proveedores
       </button>
