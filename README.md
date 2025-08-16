@@ -268,9 +268,9 @@ Levanta API y frontend al mismo tiempo.
 
 ### Windows
 
-Doble clic en `start.bat` → primero llama a `stop.bat`, espera 3 s para liberar puertos y luego abre dos ventanas:
+Doble clic en `start.bat` → primero llama a `scripts\stop.bat`, espera 2 s y luego abre dos ventanas:
 
-`start.bat` ejecuta previamente `fix_deps.bat` (si existe) para asegurar que las dependencias de `pyproject.toml` estén instaladas en `.venv`.
+`start.bat` ejecuta `scripts\fix_deps.bat` para crear la venv, instalar dependencias y dejar listo el frontend.
 
 - Growen API (Uvicorn) en http://127.0.0.1:8000/docs
 - Growen Frontend (Vite) en http://127.0.0.1:5173/
@@ -281,10 +281,11 @@ Requisitos previos:
 - venv creado (`python -m venv .venv`)
 - Node.js/npm instalados
 - `.env` completado (DB_URL, IA, etc.)
+- `frontend/.env` creado a partir de `frontend/.env.example` si se necesita ajustar `VITE_API_URL`.
 
 Para detener:
 
-- Doble clic en `stop.bat` → libera puertos 8000/5173.
+- Doble clic en `scripts\stop.bat` → cierra procesos de Uvicorn y Vite.
 
 Rutas con espacios soportadas (scripts usan `cd /d` y comillas).
 
