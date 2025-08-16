@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { createWS, WSMessage } from '../lib/ws'
 import { chatHttp } from '../lib/http'
+import UploadModal from './UploadModal'
+import ImportViewer from './ImportViewer'
 
 type Msg = { role: 'user' | 'assistant' | 'system'; text: string }
 
@@ -8,6 +10,12 @@ export default function ChatWindow() {
   const [messages, setMessages] = useState<Msg[]>([])
   const [input, setInput] = useState('')
   const wsRef = useRef<WebSocket | null>(null)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [droppedFile, setDroppedFile] = useState<File | null>(null)
+  const [importInfo, setImportInfo] = useState<
+    | { jobId: number; summary: any; kpis: any }
+    | null
+  >(null)
 
   useEffect(() => {
     try {
@@ -46,8 +54,32 @@ export default function ChatWindow() {
     }
   }
 
+  function handleUploaded(info: { jobId: number; summary: any; kpis: any }) {
+    setImportInfo(info)
+    setMessages((p) => [
+      ...p,
+      {
+        role: 'system',
+        text: `✅ Archivo recibido. Inicié dry-run (job ${info.jobId}). Abro visor.`,
+      },
+    ])
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    const f = e.dataTransfer.files?.[0]
+    if (f) {
+      setDroppedFile(f)
+      setUploadOpen(true)
+    }
+  }
+
   return (
-    <div style={{ maxWidth: 800, margin: '40px auto', padding: 16 }}>
+    <div
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={handleDrop}
+      style={{ maxWidth: 800, margin: '40px auto', padding: 16 }}
+    >
       <h1>Growen</h1>
       <div
         style={{
@@ -74,8 +106,31 @@ export default function ChatWindow() {
           placeholder="Escribe un mensaje o /help"
           onKeyDown={(e) => e.key === 'Enter' && send()}
         />
+        <button
+          onClick={() => {
+            setDroppedFile(null)
+            setUploadOpen(true)
+          }}
+        >
+          +
+        </button>
         <button onClick={send}>Enviar</button>
       </div>
+      <UploadModal
+        open={uploadOpen}
+        onClose={() => setUploadOpen(false)}
+        onUploaded={handleUploaded}
+        initialFile={droppedFile}
+      />
+      {importInfo && (
+        <ImportViewer
+          open={true}
+          jobId={importInfo.jobId}
+          summary={importInfo.summary}
+          kpis={importInfo.kpis}
+          onClose={() => setImportInfo(null)}
+        />
+      )}
     </div>
   )
 }
