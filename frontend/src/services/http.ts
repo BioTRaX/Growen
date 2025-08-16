@@ -1,23 +1,11 @@
-import axios from 'axios'
-
+import axios from "axios";
 const http = axios.create({
+  baseURL: import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000",
   withCredentials: true,
-})
-
-http.interceptors.request.use((config) => {
-  if (config.method && config.method.toUpperCase() !== 'GET') {
-    const token = getCookie('csrf_token')
-    if (token) {
-      config.headers['X-CSRF-Token'] = token
-    }
-  }
-  return config
-})
-
-function getCookie(name: string): string | null {
-  const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'))
-  return match ? decodeURIComponent(match[2]) : null
-}
-
-export default http
-
+});
+http.interceptors.request.use((cfg) => {
+  const m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+  if (m) (cfg.headers ??= {})["X-CSRF-Token"] = decodeURIComponent(m[1]);
+  return cfg;
+});
+export default http;
