@@ -6,7 +6,7 @@ from passlib.hash import argon2
 from sqlalchemy.sql import text
 
 revision = "20241106_auth_roles_sessions"
-down_revision = "20241103_imports_tables"
+down_revision = "20241105_auth_roles_sessions"
 branch_labels = None
 depends_on = None
 
