@@ -235,7 +235,9 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `SECRET_KEY`: clave usada para firmar sesiones.
 - `SESSION_EXPIRE_MINUTES`: tiempo de expiración de la sesión.
 - `COOKIE_SECURE`: activa cookies seguras en producción.
-- `ALLOWED_ORIGINS`: orígenes permitidos para CORS.
+- `ALLOWED_ORIGINS`: orígenes permitidos para CORS, separados por coma. Si se
+  incluye `http://localhost` o `http://127.0.0.1` se habilita automáticamente su
+  contraparte con el mismo puerto.
 - `ADMIN_USER`, `ADMIN_PASS`: credenciales del administrador inicial.
 - `MAX_UPLOAD_MB`: tamaño máximo de archivos a subir.
 - `AUTH_ENABLED`: si es `true`, requiere sesión autenticada.
