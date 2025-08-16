@@ -1,4 +1,21 @@
+/* Variables de tema */
+:root {
+  --bg-color: #ffffff;
+  --panel-bg: #ffffff;
+  --text-color: #000000;
+  --primary-color: #7C4DFF;
+  --success-color: #22C55E;
+}
+
+[data-theme='dark'] {
+  --bg-color: #1f2937;
+  --panel-bg: #374151;
+  --text-color: #f3f4f6;
+}
+
 body {
   font-family: sans-serif;
   margin: 0;
+  background: var(--bg-color);
+  color: var(--text-color);
 }
