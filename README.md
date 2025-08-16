@@ -66,7 +66,16 @@ GRANT USAGE, CREATE ON SCHEMA public TO growen;
 
 ## Migraciones idempotentes
 
-Si hay tablas creadas previamente (manual u otras ramas), las migraciones no deben fallar; usamos inspección de esquema para crear/alterar según corresponda.
+Cuando existen tablas creadas manualmente o por otras ramas, las migraciones detectan el esquema real y agregan columnas, claves foráneas e índices faltantes en lugar de fallar con errores como `DuplicateTable` o `UndefinedColumn`. Esto vuelve a las migraciones seguras e idempotentes.
+
+Comandos útiles en `psql` para verificar el estado de una tabla:
+
+```sql
+\d supplier_price_history
+SELECT column_name FROM information_schema.columns
+  WHERE table_name='supplier_price_history'
+  ORDER BY ordinal_position;
+```
 
 ## Instalación Frontend
 
