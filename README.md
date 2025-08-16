@@ -260,10 +260,20 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `ALLOWED_ORIGINS`: orígenes permitidos para CORS, separados por coma. Si se
   incluye `http://localhost` o `http://127.0.0.1` se habilita automáticamente su
   contraparte con el mismo puerto.
+- `LOG_LEVEL`: nivel de logging de la aplicación (`DEBUG`, `INFO`, etc.).
+- `DEBUG_SQL`: si vale `1`, SQLAlchemy mostrará cada consulta ejecutada.
 - `ADMIN_USER`, `ADMIN_PASS`: credenciales del administrador inicial.
 - `MAX_UPLOAD_MB`: tamaño máximo de archivos a subir.
 - `AUTH_ENABLED`: si es `true`, requiere sesión autenticada.
 - `PRODUCTS_PAGE_MAX`: límite máximo de resultados por página.
+
+## Endpoints de diagnóstico
+
+Para verificar el estado del servicio se exponen las siguientes rutas:
+
+- `GET /healthz`: responde `{"status":"ok"}` si la app está viva.
+- `GET /debug/db`: ejecuta `SELECT 1` contra la base de datos.
+- `GET /debug/config`: muestra `ALLOWED_ORIGINS` y la `DB_URL` sin contraseña.
 
 ## Comandos y chat
 
