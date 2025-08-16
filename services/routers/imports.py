@@ -313,7 +313,7 @@ async def get_import(
 async def commit_import(
     job_id: int,
     db: AsyncSession = Depends(get_session),
-    _sess: SessionData = Depends(require_roles("colaborador", "admin")),
+    sess: SessionData = Depends(require_roles("proveedor", "colaborador", "admin")),
 ):
     res = await db.execute(select(ImportJob).where(ImportJob.id == job_id))
     job = res.scalar_one_or_none()
@@ -321,6 +321,8 @@ async def commit_import(
         raise HTTPException(status_code=404, detail="Job no encontrado")
     if job.status != "DRY_RUN":
         raise HTTPException(status_code=400, detail="Job ya aplicado")
+    if sess.role == "proveedor" and sess.user and job.supplier_id != sess.user.supplier_id:
+        raise HTTPException(status_code=403, detail="No autorizado para este proveedor")
 
     res = await db.execute(select(ImportJobRow).where(ImportJobRow.job_id == job_id))
     rows = res.scalars().all()

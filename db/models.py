@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    CheckConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -303,17 +304,24 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    identifier: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
     name: Mapped[Optional[str]] = mapped_column(String(100))
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     supplier_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("suppliers.id", ondelete="SET NULL"),
-        nullable=True,
+        ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('cliente','proveedor','colaborador','admin')",
+            name="ck_users_role",
+        ),
     )
 
     supplier: Mapped[Optional["Supplier"]] = relationship()
@@ -334,5 +342,12 @@ class Session(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     ip: Mapped[Optional[str]] = mapped_column(String(100))
     user_agent: Mapped[Optional[str]] = mapped_column(String(200))
+
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('guest','cliente','proveedor','colaborador','admin')",
+            name="ck_sessions_role",
+        ),
+    )
 
     user: Mapped[Optional["User"]] = relationship()
