@@ -295,3 +295,44 @@ class ImportJobRow(Base):
     row_json_normalized: Mapped[dict] = mapped_column(JSON)
 
     job: Mapped["ImportJob"] = relationship(back_populates="rows")
+
+
+class User(Base):
+    """Usuario del sistema con roles y proveedor opcional."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[Optional[str]] = mapped_column(String(100))
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    supplier_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    supplier: Mapped[Optional["Supplier"]] = relationship()
+
+
+class Session(Base):
+    """Sesiones persistidas para autenticación mediante cookies."""
+
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    csrf_token: Mapped[str] = mapped_column(String(100), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    ip: Mapped[Optional[str]] = mapped_column(String(100))
+    user_agent: Mapped[Optional[str]] = mapped_column(String(200))
+
+    user: Mapped[Optional["User"]] = relationship()
