@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import User
@@ -27,7 +27,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 class LoginIn(BaseModel):
-    email: str
+    identifier: str
     password: str
 
 
@@ -36,7 +36,10 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
     ip = request.client.host if request.client else "unknown"
     check_login_rate_limit(ip)
 
-    res = await db.execute(select(User).where(User.email == payload.email))
+    stmt = select(User).where(
+        or_(User.identifier == payload.identifier, User.email == payload.identifier)
+    )
+    res = await db.execute(stmt)
     user = res.scalar_one_or_none()
     if not user or not verify_pw(payload.password, user.password_hash):
         record_failed_login(ip)
@@ -47,6 +50,7 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
     resp = JSONResponse(
         {
             "id": user.id,
+            "identifier": user.identifier,
             "email": user.email,
             "name": user.name,
             "role": user.role,
@@ -85,6 +89,7 @@ async def me(sess: SessionData = Depends(current_session)):
     if sess.user:
         data["user"] = {
             "id": sess.user.id,
+            "identifier": sess.user.identifier,
             "email": sess.user.email,
             "name": sess.user.name,
             "role": sess.user.role,
@@ -93,25 +98,69 @@ async def me(sess: SessionData = Depends(current_session)):
     return data
 
 
-class RegisterIn(BaseModel):
-    email: str
-    password: str
+class UserCreate(BaseModel):
+    identifier: str
+    email: str | None = None
     name: str | None = None
+    password: str
     role: str
     supplier_id: int | None = None
 
 
+class UserUpdate(BaseModel):
+    email: str | None = None
+    name: str | None = None
+    password: str | None = None
+    role: str | None = None
+    supplier_id: int | None = None
+
+
+@router.get("/users", dependencies=[Depends(require_roles("admin"))])
+async def list_users(
+    q: str = "",
+    role: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    db: AsyncSession = Depends(get_session),
+):
+    stmt = select(User)
+    if q:
+        like = f"%{q}%"
+        stmt = stmt.where(
+            or_(
+                User.identifier.ilike(like),
+                User.email.ilike(like),
+                User.name.ilike(like),
+            )
+        )
+    if role:
+        stmt = stmt.where(User.role == role)
+    stmt = stmt.order_by(User.id).offset((page - 1) * page_size).limit(page_size)
+    res = await db.execute(stmt)
+    users = [
+        {
+            "id": u.id,
+            "identifier": u.identifier,
+            "email": u.email,
+            "name": u.name,
+            "role": u.role,
+            "supplier_id": u.supplier_id,
+        }
+        for u in res.scalars().all()
+    ]
+    return users
+
+
 @router.post(
-    "/register",
+    "/users",
     dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
 )
-async def register_user(
-    payload: RegisterIn, db: AsyncSession = Depends(get_session)
-):
+async def create_user(payload: UserCreate, db: AsyncSession = Depends(get_session)):
     user = User(
+        identifier=payload.identifier,
         email=payload.email,
-        password_hash=hash_pw(payload.password),
         name=payload.name,
+        password_hash=hash_pw(payload.password),
         role=payload.role,
         supplier_id=payload.supplier_id,
     )
@@ -119,6 +168,38 @@ async def register_user(
     await db.commit()
     return {
         "id": user.id,
+        "identifier": user.identifier,
+        "email": user.email,
+        "name": user.name,
+        "role": user.role,
+        "supplier_id": user.supplier_id,
+    }
+
+
+@router.patch(
+    "/users/{user_id}",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+)
+async def update_user(
+    user_id: int, payload: UserUpdate, db: AsyncSession = Depends(get_session)
+):
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if payload.email is not None:
+        user.email = payload.email
+    if payload.name is not None:
+        user.name = payload.name
+    if payload.password is not None:
+        user.password_hash = hash_pw(payload.password)
+    if payload.role is not None:
+        user.role = payload.role
+    if payload.supplier_id is not None:
+        user.supplier_id = payload.supplier_id
+    await db.commit()
+    return {
+        "id": user.id,
+        "identifier": user.identifier,
         "email": user.email,
         "name": user.name,
         "role": user.role,

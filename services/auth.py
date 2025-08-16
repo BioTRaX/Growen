@@ -86,12 +86,12 @@ async def current_session(
 
     sid = request.cookies.get("growen_session")
     if not sid:
-        return SessionData(None, None, "anonymous")
+        return SessionData(None, None, "guest")
 
     res = await db.execute(select(DBSess).where(DBSess.id == sid))
     sess: DBSess | None = res.scalar_one_or_none()
     if not sess or sess.expires_at < datetime.utcnow():
-        return SessionData(None, None, "anonymous")
+        return SessionData(None, None, "guest")
 
     user: User | None = None
     if sess.user_id:

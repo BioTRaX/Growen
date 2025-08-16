@@ -99,13 +99,17 @@ En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8
 
 La API implementa sesiones mediante la cookie `growen_session` y un token CSRF almacenado en `csrf_token`. Todas las mutaciones deben enviar el encabezado `X-CSRF-Token` coincidiendo con dicha cookie.
 
+El login acepta **identificador** o email junto con la contraseña. Al ejecutar las migraciones se crea, si no existe, el usuario inicial `Admin/123456` (también disponible como `admin@growen.local`).
+
 ### Endpoints principales
 
-- `POST /auth/login` valida credenciales y genera una sesión.
+- `POST /auth/login` valida credenciales por identificador o email y genera una sesión.
 - `POST /auth/guest` crea una sesión con rol `guest` sin usuario.
 - `POST /auth/logout` cierra la sesión (requiere CSRF).
 - `GET /auth/me` informa el estado actual.
-- `POST /auth/register` permite a un administrador crear usuarios (requiere CSRF).
+- `GET /auth/users` lista usuarios (solo admin).
+- `POST /auth/users` crea usuarios (solo admin, requiere CSRF).
+- `PATCH /auth/users/{id}` actualiza usuarios (solo admin, requiere CSRF).
 
 ### Roles y permisos
 
@@ -120,7 +124,7 @@ La API implementa sesiones mediante la cookie `growen_session` y un token CSRF a
 ### Variables de entorno relevantes
 
 ```env
-SECRET_KEY=
+SECRET_KEY=change-me
 SESSION_EXPIRE_MINUTES=43200
 AUTH_ENABLED=true
 COOKIE_SECURE=false
