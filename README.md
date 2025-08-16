@@ -111,12 +111,34 @@ La interfaz de chat incluye un botón **+** y la opción de la botonera **Adjunt
 2. El modal exige elegir un proveedor; si no existen proveedores se muestra un estado vacío con el botón **Crear proveedor**.
 3. Tras seleccionar proveedor y archivo, el frontend llama a `POST /suppliers/{supplier_id}/price-list/upload?dry_run=true`.
 4. Growen envía un mensaje de sistema con el `job_id` y abre un visor para revisar el *dry-run*.
-5. Desde el visor se puede explorar la previsualización y los errores paginados y luego ejecutar `POST /imports/{job_id}/commit`.
+5. El visor abre la pestaña **Cambios** por defecto para resaltar las variaciones. Desde allí se pueden explorar los errores
+   paginados y luego ejecutar `POST /imports/{job_id}/commit`.
 
 Errores comunes:
 
 - **400** columnas faltantes.
 - **413** tamaño excedido (límite `MAX_UPLOAD_MB`).
+
+## Productos Canónicos y Equivalencias
+
+Para comparar precios entre proveedores se introduce un catálogo propio de productos canónicos. Cada oferta de un proveedor puede
+vincularse a uno de estos canónicos mediante *equivalencias*.
+
+- **Crear canónico**: `POST /canonical-products` con `name`, `brand` y `specs_json` opcional. El sistema genera `ng_sku` con el
+  formato `NG-000001`.
+- **Listar canónicos**: `GET /canonical-products?q=` permite buscar y paginar el catálogo.
+- **Vincular oferta**: `POST /equivalences` une un `supplier_product` existente con un `canonical_product`.
+- **Ver ofertas**: `GET /canonical-products/{id}/offers` muestra todas las ofertas vinculadas a un canónico para comparar precios.
+
+Variables de entorno relevantes:
+
+```env
+AUTO_CREATE_CANONICAL=true
+FUZZY_SUGGESTION_THRESHOLD=0.87
+SUGGESTION_CANDIDATES=3
+```
+
+Estas opciones controlan la creación automática y las sugerencias durante la importación de listas.
 
 ## Consulta de productos
 

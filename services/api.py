@@ -5,7 +5,7 @@ import os
 
 from agent_core.config import settings
 from ai.router import AIRouter
-from .routers import actions, chat, ws, catalog, imports
+from .routers import actions, chat, ws, catalog, imports, canonical_products
 
 # `redirect_slashes=False` evita redirecciones 307 entre `/ruta` y `/ruta/`,
 # lo que rompe las solicitudes *preflight* de CORS.
@@ -37,6 +37,8 @@ app.include_router(actions.router)
 app.include_router(ws.router)
 app.include_router(catalog.router)
 app.include_router(imports.router)
+app.include_router(canonical_products.canonical_router)
+app.include_router(canonical_products.equivalences_router)
 
 
 @app.get("/health")

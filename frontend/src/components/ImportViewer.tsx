@@ -10,7 +10,7 @@ interface Props {
 }
 
 export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Props) {
-  const [tab, setTab] = useState<'preview' | 'errors'>('preview')
+  const [tab, setTab] = useState<'changes' | 'errors'>('changes')
   const [items, setItems] = useState<any[]>([])
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
@@ -20,7 +20,7 @@ export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Pr
   useEffect(() => {
     if (!open) return
     setLoading(true)
-    const fn = tab === 'preview' ? getImportPreview : getImport
+    const fn = tab === 'changes' ? getImportPreview : getImport
     fn(jobId, page)
       .then((r) => setItems(r.items || []))
       .catch((e) => setError(e.message))
@@ -52,7 +52,7 @@ export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Pr
           <pre>{JSON.stringify(kpis, null, 2)}</pre>
         </div>
         <div style={{ margin: '8px 0', display: 'flex', gap: 8 }}>
-          <button onClick={() => { setTab('preview'); setPage(1) }} disabled={tab === 'preview'}>Preview</button>
+          <button onClick={() => { setTab('changes'); setPage(1) }} disabled={tab === 'changes'}>Cambios</button>
           <button onClick={() => { setTab('errors'); setPage(1) }} disabled={tab === 'errors'}>Errores</button>
         </div>
         {loading ? (

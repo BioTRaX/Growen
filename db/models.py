@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     Numeric,
+    Float,
     String,
     Text,
     UniqueConstraint,
@@ -201,6 +202,9 @@ class SupplierProduct(Base):
 
     supplier: Mapped["Supplier"] = relationship(back_populates="products")
     price_history: Mapped[list["SupplierPriceHistory"]] = relationship(back_populates="supplier_product")
+    equivalence: Mapped[Optional["ProductEquivalence"]] = relationship(
+        back_populates="supplier_product", uselist=False
+    )
 
 
 class SupplierPriceHistory(Base):
@@ -221,6 +225,49 @@ class SupplierPriceHistory(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
     supplier_product: Mapped["SupplierProduct"] = relationship(back_populates="price_history")
+
+
+class CanonicalProduct(Base):
+    __tablename__ = "canonical_products"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ng_sku: Mapped[str] = mapped_column(String(20), unique=True)
+    name: Mapped[str] = mapped_column(String(200))
+    brand: Mapped[Optional[str]] = mapped_column(String(100))
+    specs_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    equivalences: Mapped[list["ProductEquivalence"]] = relationship(
+        back_populates="canonical_product"
+    )
+
+
+class ProductEquivalence(Base):
+    __tablename__ = "product_equivalences"
+    __table_args__ = (
+        UniqueConstraint("supplier_id", "supplier_product_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"))
+    supplier_product_id: Mapped[int] = mapped_column(
+        ForeignKey("supplier_products.id")
+    )
+    canonical_product_id: Mapped[int] = mapped_column(
+        ForeignKey("canonical_products.id")
+    )
+    confidence: Mapped[Optional[float]] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+    supplier: Mapped["Supplier"] = relationship()
+    supplier_product: Mapped["SupplierProduct"] = relationship(
+        back_populates="equivalence"
+    )
+    canonical_product: Mapped["CanonicalProduct"] = relationship(
+        back_populates="equivalences"
+    )
 
 
 class ImportJob(Base):
