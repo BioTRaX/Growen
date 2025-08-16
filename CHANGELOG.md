@@ -7,3 +7,4 @@
 - Add: endpoints `GET/PATCH /canonical-products/{id}`, listado y borrado de `/equivalences`
 - Add: comparador de precios `GET /canonical-products/{id}/offers` con mejor precio marcado
 - Add: modo oscuro básico en el frontend
+- Add: plantilla Excel por proveedor `GET /suppliers/{id}/price-list/template`
