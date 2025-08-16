@@ -69,6 +69,16 @@ npm run dev
 
 En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8000`, evitando errores de CORS. Durante el arranque pueden mostrarse errores de proxy WebSocket si la API aún no está disponible; una vez arriba, la conexión se restablece sola. El chat abre un WebSocket en `/ws` y, si no está disponible, utiliza `POST /chat`, que admite la variante con o sin barra final para evitar redirecciones 307. Para modificar las URLs se puede crear `frontend/.env.development` con `VITE_WS_URL` y `VITE_API_BASE`.
 
+## Botonera
+
+La interfaz presenta una botonera fija sobre el chat con accesos rápidos:
+
+- **Adjuntar Excel** abre el modal de carga de listas de precios.
+- **Proveedores** muestra la gestión básica de proveedores (listar y crear).
+- **Productos** despliega un panel de consulta aún en construcción.
+
+La barra queda visible al hacer scroll y usa un estilo mínimo con sombreado suave.
+
 ## Contrato del Chat (DEV)
 
 - **HTTP**: `POST /chat` con cuerpo `{ "text": "hola" }` → responde `{ "role": "assistant", "text": "..." }`.
@@ -95,12 +105,13 @@ En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios d
 
 ### Adjuntar Excel desde el chat
 
-La interfaz de chat incluye un botón **+** para subir listas de precios sin pasar por la IA.
+La interfaz de chat incluye un botón **+** y la opción de la botonera **Adjuntar Excel** para subir listas de precios sin pasar por la IA.
 
-1. Hacer clic en **+** o arrastrar un archivo `.xlsx`/`.csv` sobre la ventana.
-2. Seleccionar el proveedor y confirmar la subida. El frontend llama a `POST /suppliers/{supplier_id}/price-list/upload?dry_run=true`.
-3. Growen envía un mensaje de sistema con el `job_id` y abre un visor para revisar el *dry-run*.
-4. Desde el visor se puede explorar la previsualización y los errores paginados y luego ejecutar `POST /imports/{job_id}/commit`.
+1. Hacer clic en **Adjuntar Excel** o arrastrar un archivo `.xlsx`/`.csv` sobre la ventana.
+2. El modal exige elegir un proveedor; si no existen proveedores se muestra un estado vacío con el botón **Crear proveedor**.
+3. Tras seleccionar proveedor y archivo, el frontend llama a `POST /suppliers/{supplier_id}/price-list/upload?dry_run=true`.
+4. Growen envía un mensaje de sistema con el `job_id` y abre un visor para revisar el *dry-run*.
+5. Desde el visor se puede explorar la previsualización y los errores paginados y luego ejecutar `POST /imports/{job_id}/commit`.
 
 Errores comunes:
 
@@ -289,6 +300,8 @@ Cada ingestión registra los precios de compra y venta en la tabla `supplier_pri
 El catálogo base ingresa con `stock_qty=0` en `inventory`. La sincronización de stock con proveedores se agregará más adelante.
 
 ## Gestión de proveedores
+
+Desde la botonera puede abrirse un modal que lista los proveedores actuales y permite crear nuevos ingresando **Nombre** y **Slug**. El slug debe ser único y se utiliza para asociar parsers y archivos, por lo que conviene mantenerlo estable.
 
 La API expone endpoints para administrar proveedores externos:
 
