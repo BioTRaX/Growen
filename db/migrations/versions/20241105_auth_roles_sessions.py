@@ -3,7 +3,7 @@ import sqlalchemy as sa
 from sqlalchemy import text
 
 # Revisions
-revision = "20241106_auth_roles_sessions"
+revision = "20241105_auth_roles_sessions"
 down_revision = "20241103_imports_tables"  # <-- ajustar si tu revision anterior tiene otro ID
 branch_labels = None
 depends_on = None
