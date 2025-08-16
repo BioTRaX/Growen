@@ -35,6 +35,7 @@ class Product(Base):
     status: Mapped[Optional[str]] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+    stock: Mapped[int] = mapped_column(Integer, default=0)
 
     variants: Mapped[list["Variant"]] = relationship(back_populates="product")
     images: Mapped[list["Image"]] = relationship(back_populates="product")

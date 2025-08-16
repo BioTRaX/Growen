@@ -103,7 +103,7 @@ async def upload_price_list(
     if not parser:
         raise HTTPException(
             status_code=400,
-            detail=f"Proveedor '{supplier.slug}' no soportado: parser faltante",
+            detail=f"Proveedor no soportado (parser faltante): {supplier.slug}",
         )
 
     filename = (file.filename or "").lower()
@@ -112,9 +112,16 @@ async def upload_price_list(
     content = await file.read()
 
     try:
-        parsed_rows, parser_kpis = parser.parse(content)
+        parsed_rows = parser.parse_bytes(content)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Archivo Excel no válido")
+
+    parser_kpis = {
+        "total": len(parsed_rows),
+        "errors": sum(1 for r in parsed_rows if r.get("status") == "error"),
+    }
 
     job = ImportJob(
         supplier_id=supplier_id, filename=file.filename or "", status="DRY_RUN"

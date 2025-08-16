@@ -18,7 +18,7 @@ export default function AppToolbar() {
       <button onClick={() => window.dispatchEvent(new Event('open-suppliers'))}>
         Proveedores
       </button>
-      <button onClick={() => alert('En construcción')}>
+      <button onClick={() => window.dispatchEvent(new Event('open-products'))}>
         Productos
       </button>
     </div>
