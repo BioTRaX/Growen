@@ -4,7 +4,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Q
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, date
 import pandas as pd
 
 from db.models import (
@@ -14,6 +14,7 @@ from db.models import (
     Category,
     Product,
     SupplierProduct,
+    SupplierPriceHistory,
 )
 from db.session import get_session
 from services.suppliers.parsers import SUPPLIER_PARSERS
@@ -127,29 +128,81 @@ async def upload_price_list(
     db.add(job)
     await db.flush()
 
+    # Preparar estructuras para deduplicar y comparar contra la base
+    seen_codes: set[str] = set()
+    codes = [r.get("codigo") for r in parsed_rows if r.get("codigo")]
+    existing_map: dict[str, SupplierProduct] = {}
+    if codes:
+        res = await db.execute(
+            select(SupplierProduct).where(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.supplier_product_id.in_(codes),
+            )
+        )
+        existing_map = {sp.supplier_product_id: sp for sp in res.scalars()}
+
+    kpis = {
+        "total": len(parsed_rows),
+        "errors": 0,
+        "duplicates_in_file": 0,
+        "unchanged": 0,
+        "new": 0,
+        "changed": 0,
+    }
+
     for idx, data in enumerate(parsed_rows):
+        code = data.get("codigo")
+        purchase = data.get("precio_compra")
+        sale = data.get("precio_venta")
+        status = "ok"
+        error = None
+
+        if not code or code in seen_codes:
+            status = "duplicate_in_file"
+            error = "Código duplicado en archivo"
+            kpis["duplicates_in_file"] += 1
+        else:
+            seen_codes.add(code)
+            if purchase in (None, 0) or sale in (None, 0):
+                status = "error"
+                error = "Precios inválidos"
+                kpis["errors"] += 1
+            else:
+                sp = existing_map.get(code)
+                if sp:
+                    prev_p = float(sp.current_purchase_price or 0)
+                    prev_s = float(sp.current_sale_price or 0)
+                    delta_p = round(float(purchase) - prev_p, 2)
+                    delta_s = round(float(sale) - prev_s, 2)
+                    data["delta_compra"] = delta_p
+                    data["delta_venta"] = delta_s
+                    data["delta_pct"] = (
+                        round(delta_s / prev_s * 100, 2) if prev_s else None
+                    )
+                    if delta_p == 0 and delta_s == 0:
+                        status = "unchanged"
+                        kpis["unchanged"] += 1
+                    else:
+                        status = "changed"
+                        kpis["changed"] += 1
+                else:
+                    status = "new"
+                    kpis["new"] += 1
+
         db.add(
             ImportJobRow(
                 job_id=job.id,
                 row_index=int(idx),
-                status="ok",
-                error=None,
+                status=status,
+                error=error,
                 row_json_normalized=data,
             )
         )
 
-    summary = {"total_rows": len(parsed_rows)}
-    job.summary_json = summary
-
-    if not dry_run:
-        for data in parsed_rows:
-            cat = await _get_or_create_category_path(db, data["categoria_path"])
-            prod = await _upsert_product(db, data["codigo"], data["nombre"], cat)
-            await _upsert_supplier_product(db, supplier_id, data, prod)
-        job.status = "COMMITTED"
+    job.summary_json = kpis
 
     await db.commit()
-    return {"job_id": job.id, "summary": summary}
+    return {"job_id": job.id, "summary": kpis, "kpis": kpis}
 
 
 @router.get("/imports/{job_id}")
@@ -189,17 +242,88 @@ async def commit_import(job_id: int, db: AsyncSession = Depends(get_session)):
         raise HTTPException(status_code=404, detail="Job no encontrado")
     if job.status != "DRY_RUN":
         raise HTTPException(status_code=400, detail="Job ya aplicado")
+
     res = await db.execute(select(ImportJobRow).where(ImportJobRow.job_id == job_id))
     rows = res.scalars().all()
-    counts = {"categories": 0, "products": 0, "supplier_products": 0}
+
+    result = {
+        "inserted": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "skipped_duplicates": 0,
+        "errors": 0,
+        "price_changes": 0,
+    }
+
     for r in rows:
         data = r.row_json_normalized
+        if r.status == "error":
+            result["errors"] += 1
+            continue
+        if r.status == "duplicate_in_file":
+            result["skipped_duplicates"] += 1
+            continue
+        if r.status == "unchanged":
+            result["unchanged"] += 1
+            continue
+
         cat = await _get_or_create_category_path(db, data["categoria_path"])
-        counts["categories"] += 1
         prod = await _upsert_product(db, data["codigo"], data["nombre"], cat)
-        counts["products"] += 1
-        await _upsert_supplier_product(db, job.supplier_id, data, prod)
-        counts["supplier_products"] += 1
+
+        stmt = select(SupplierProduct).where(
+            SupplierProduct.supplier_id == job.supplier_id,
+            SupplierProduct.supplier_product_id == data["codigo"],
+        )
+        sp = (await db.execute(stmt)).scalar_one_or_none()
+        if not sp:
+            sp = SupplierProduct(
+                supplier_id=job.supplier_id,
+                supplier_product_id=data["codigo"],
+            )
+            db.add(sp)
+            result["inserted"] += 1
+        else:
+            result["updated"] += 1
+
+        parts = [
+            p.strip() for p in data.get("categoria_path", "").split(">") if p.strip()
+        ]
+        sp.title = data["nombre"]
+        sp.category_level_1 = parts[0] if len(parts) > 0 else None
+        sp.category_level_2 = parts[1] if len(parts) > 1 else None
+        sp.category_level_3 = parts[2] if len(parts) > 2 else None
+        sp.min_purchase_qty = data.get("compra_minima")
+        sp.last_seen_at = datetime.utcnow()
+        sp.current_purchase_price = data.get("precio_compra")
+        sp.current_sale_price = data.get("precio_venta")
+        sp.internal_product_id = prod.id
+
+        if r.status == "changed":
+            prev_purchase = data.get("precio_compra") - data.get("delta_compra", 0)
+            prev_sale = data.get("precio_venta") - data.get("delta_venta", 0)
+            delta_purchase_pct = (
+                (data.get("delta_compra", 0) / prev_purchase * 100)
+                if prev_purchase
+                else None
+            )
+            delta_sale_pct = (
+                (data.get("delta_venta", 0) / prev_sale * 100)
+                if prev_sale
+                else None
+            )
+            db.add(
+                SupplierPriceHistory(
+                    supplier_product_fk=sp.id,
+                    file_fk=None,
+                    as_of_date=date.today(),
+                    purchase_price=data.get("precio_compra"),
+                    sale_price=data.get("precio_venta"),
+                    delta_purchase_pct=delta_purchase_pct,
+                    delta_sale_pct=delta_sale_pct,
+                )
+            )
+            result["price_changes"] += 1
+
     job.status = "COMMITTED"
     await db.commit()
-    return counts
+    return result
