@@ -1,4 +1,8 @@
-"""Cliente de IA que se conecta a Ollama."""
+"""Cliente de IA que se conecta a Ollama.
+
+La URL del servicio se lee desde la variable de entorno ``OLLAMA_URL``,
+permitiendo apuntar a instancias remotas sin tocar el código.
+"""
 
 import json
 import os
