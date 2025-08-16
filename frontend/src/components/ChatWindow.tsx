@@ -3,6 +3,7 @@ import { createWS, WSMessage } from '../lib/ws'
 import { chatHttp } from '../lib/http'
 import UploadModal from './UploadModal'
 import ImportViewer from './ImportViewer'
+import SuppliersModal from './SuppliersModal'
 
 type Msg = { role: 'user' | 'assistant' | 'system'; text: string }
 
@@ -16,6 +17,7 @@ export default function ChatWindow() {
     | { jobId: number; summary: any; kpis: any }
     | null
   >(null)
+  const [suppliersOpen, setSuppliersOpen] = useState(false)
 
   useEffect(() => {
     try {
@@ -29,6 +31,20 @@ export default function ChatWindow() {
       return () => ws.close()
     } catch (e) {
       console.warn('WS not available', e)
+    }
+  }, [])
+
+  useEffect(() => {
+    const openUpload = () => {
+      setDroppedFile(null)
+      setUploadOpen(true)
+    }
+    const openSuppliers = () => setSuppliersOpen(true)
+    window.addEventListener('open-upload', openUpload)
+    window.addEventListener('open-suppliers', openSuppliers)
+    return () => {
+      window.removeEventListener('open-upload', openUpload)
+      window.removeEventListener('open-suppliers', openSuppliers)
     }
   }, [])
 
@@ -121,6 +137,10 @@ export default function ChatWindow() {
         onClose={() => setUploadOpen(false)}
         onUploaded={handleUploaded}
         initialFile={droppedFile}
+      />
+      <SuppliersModal
+        open={suppliersOpen}
+        onClose={() => setSuppliersOpen(false)}
       />
       {importInfo && (
         <ImportViewer
