@@ -82,7 +82,7 @@ export default function UploadModal({ open, onClose, onUploaded, initialFile }: 
           </div>
         )}
         <div style={{ margin: '8px 0' }}>
-          <input type="file" accept=".xlsx,.csv" onChange={handleFile} />
+          <input type="file" accept=".xlsx" onChange={handleFile} />
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
           <button onClick={onClose}>Cancelar</button>
