@@ -339,7 +339,8 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `DB_URL`: URL de PostgreSQL (si la contraseña tiene caracteres reservados, encodéalos, ej.: `=` → `%3D`).
 - `AI_MODE`: `auto`, `openai` u `ollama`.
 - `AI_ALLOW_EXTERNAL`: si es `false`, solo se usa Ollama.
-- `OLLAMA_HOST`, `OLLAMA_MODEL` (por defecto `llama3.1`).
+- `OLLAMA_URL`: URL base de Ollama (por defecto `http://localhost:11434`).
+- `OLLAMA_MODEL`: modelo de Ollama (por defecto `llama3.1`).
 - `OPENAI_API_KEY`, `OPENAI_MODEL`.
 - `SECRET_KEY`: clave usada para firmar sesiones.
 - `SESSION_EXPIRE_MINUTES`: tiempo de expiración de la sesión.
