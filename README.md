@@ -75,7 +75,7 @@ La interfaz presenta una botonera fija sobre el chat con accesos rápidos:
 
 - **Adjuntar Excel** abre el modal de carga de listas de precios.
 - **Proveedores** muestra la gestión básica de proveedores (listar y crear).
-- **Productos** despliega un panel de consulta aún en construcción.
+- **Productos** abre un panel para buscar en la base y ajustar stock manualmente.
 
 La barra queda visible al hacer scroll y usa un estilo mínimo con sombreado suave.
 
@@ -91,7 +91,7 @@ La interfaz muestra las respuestas del asistente con la etiqueta visual **Growen
 
 La API permite subir archivos de proveedores en formato `.xlsx` para revisar y aplicar nuevas listas de precios.
 
-1. `POST /suppliers/{supplier_id}/price-list/upload` recibe el archivo del proveedor y un parámetro `dry_run` (por defecto `true`). Es obligatorio que el proveedor exista y tenga un *parser* registrado.
+1. `POST /suppliers/{supplier_id}/price-list/upload` recibe el archivo del proveedor (campo `file` en `multipart/form-data`) y un parámetro `dry_run` (por defecto `true`). Es obligatorio que el proveedor exista y tenga un *parser* registrado.
 2. `GET /imports/{job_id}?limit=N` muestra las primeras `N` filas analizadas y los errores detectados (`N` por defecto es `50`).
 3. `POST /imports/{job_id}/commit` aplica los cambios, creando categorías, productos y relaciones en `supplier_products`.
 
@@ -149,7 +149,7 @@ Parámetros soportados:
 
 - `supplier_id`: filtra por proveedor.
 - `category_id`: filtra por categoría interna.
-- `q`: búsqueda parcial por nombre.
+- `q`: búsqueda parcial por nombre del producto o título del proveedor.
 - `page` y `page_size`: paginación (por defecto `1` y `20`).
 - `sort_by`: `updated_at`, `precio_venta`, `precio_compra` o `name`.
 - `order`: `asc` o `desc`.
@@ -170,6 +170,7 @@ Ejemplo de respuesta:
       "precio_venta": 12500.0,
       "compra_minima": 1,
       "category_path": "Carpas>80x80",
+      "stock": 0,
       "updated_at": "2025-08-15T20:33:00Z"
     }
   ]
@@ -178,15 +179,17 @@ Ejemplo de respuesta:
 
 Este endpoint se utiliza para consultar el catálogo existente desde el frontend.
 
+Para modificar el stock manualmente existe `PATCH /products/{id}/stock` con cuerpo `{ "stock": <int> }`.
+
 ## Inicio rápido (1‑clic)
 
 Levanta API y frontend al mismo tiempo.
 
 ### Windows
 
-Doble clic en `start.bat` → abre dos ventanas:
+Doble clic en `start.bat` → primero llama a `stop.bat`, espera 3 s para liberar puertos y luego abre dos ventanas:
 
-`start.bat` ejecuta previamente `fix_deps.bat` para asegurar que las dependencias de `pyproject.toml` estén instaladas en `.venv`.
+`start.bat` ejecuta previamente `fix_deps.bat` (si existe) para asegurar que las dependencias de `pyproject.toml` estén instaladas en `.venv`.
 
 - Growen API (Uvicorn) en http://127.0.0.1:8000/docs
 - Growen Frontend (Vite) en http://127.0.0.1:5173/
@@ -250,7 +253,7 @@ alembic -c ./alembic.ini downgrade -1
 
 Consulta `.env.example` para la lista completa. Variables destacadas:
 
-- `DB_URL`: URL de PostgreSQL.
+- `DB_URL`: URL de PostgreSQL (si la contraseña tiene caracteres reservados, encodéalos, ej.: `=` → `%3D`).
 - `AI_MODE`: `auto`, `openai` u `ollama`.
 - `AI_ALLOW_EXTERNAL`: si es `false`, solo se usa Ollama.
 - `OLLAMA_HOST`, `OLLAMA_MODEL` (por defecto `llama3.1`).
@@ -332,7 +335,8 @@ Cada ingestión registra los precios de compra y venta en la tabla `supplier_pri
 
 ### Stock
 
-El catálogo base ingresa con `stock_qty=0` en `inventory`. La sincronización de stock con proveedores se agregará más adelante.
+Los productos tienen la columna `stock` en `products` con valor inicial `0`.
+La importación de listas de precios no modifica este valor; se ajusta manualmente desde el buscador o vía API.
 
 ## Gestión de proveedores
 

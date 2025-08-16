@@ -7,7 +7,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import (
@@ -293,6 +293,8 @@ async def list_products(
     page_size: int = 20,
     sort_by: str = "updated_at",
     order: str = "desc",
+    *,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Lista productos de proveedores con filtros, orden y paginación."""
@@ -300,6 +302,11 @@ async def list_products(
     max_page = int(os.getenv("PRODUCTS_PAGE_MAX", "100"))
     if page < 1 or page_size < 1 or page_size > max_page:
         raise HTTPException(status_code=400, detail="paginación inválida")
+
+    if os.getenv("AUTH_ENABLED", "false").lower() == "true":
+        role = request.headers.get("x-role")
+        if role not in {"viewer", "manager", "admin"}:
+            raise HTTPException(status_code=403, detail="forbidden")
 
     sp = SupplierProduct
     p = Product
@@ -316,7 +323,9 @@ async def list_products(
     if category_id is not None:
         stmt = stmt.where(p.category_id == category_id)
     if q:
-        stmt = stmt.where(p.title.ilike(f"%{q}%"))
+        stmt = stmt.where(
+            or_(p.title.ilike(f"%{q}%"), sp.title.ilike(f"%{q}%"))
+        )
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = await session.scalar(count_stmt) or 0
@@ -360,6 +369,7 @@ async def list_products(
                 if sp_obj.min_purchase_qty is not None
                 else None,
                 "category_path": cat_path,
+                "stock": p_obj.stock,
                 "updated_at": sp_obj.last_seen_at.isoformat()
                 if sp_obj.last_seen_at
                 else None,
@@ -372,3 +382,28 @@ async def list_products(
         "total": total,
         "items": items,
     }
+
+
+class StockUpdate(BaseModel):
+    stock: int
+
+
+@router.patch("/products/{product_id}/stock")
+async def update_product_stock(
+    product_id: int,
+    payload: StockUpdate,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if payload.stock < 0 or payload.stock > 1_000_000_000:
+        raise HTTPException(status_code=400, detail="stock fuera de rango")
+    if os.getenv("AUTH_ENABLED", "false").lower() == "true":
+        role = request.headers.get("x-role")
+        if role not in {"manager", "admin"}:
+            raise HTTPException(status_code=403, detail="forbidden")
+    prod = await session.get(Product, product_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    prod.stock = payload.stock
+    await session.commit()
+    return {"product_id": product_id, "stock": prod.stock}
