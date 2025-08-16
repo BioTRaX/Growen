@@ -3,32 +3,55 @@ import { useAuth } from '../auth/AuthContext'
 
 export default function Login() {
   const { login, loginAsGuest } = useAuth()
-  const [email, setEmail] = useState('')
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    await login(email, password)
+    setError('')
+    try {
+      await login(identifier, password)
+    } catch (err: any) {
+      const status = err?.response?.status
+      if (status === 401) setError('Credenciales inválidas')
+      else if (status === 429) setError('Demasiados intentos, espera unos minutos')
+      else setError('Error al iniciar sesión')
+    }
   }
 
   return (
-    <div className="login-container">
-      <form onSubmit={handleSubmit} className="login-card">
+    <div
+      className="flex items-center justify-center h-screen"
+      style={{ background: 'var(--bg-color)' }}
+    >
+      <form
+        onSubmit={handleSubmit}
+        className="panel p-4 flex flex-col gap-2"
+        style={{ width: 300 }}
+      >
         <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Email"
+          className="input"
+          value={identifier}
+          onChange={(e) => setIdentifier(e.target.value)}
+          placeholder="Usuario o email"
+          autoFocus
         />
         <input
+          className="input"
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="Contraseña"
         />
-        <button type="submit">Ingresar</button>
+        {error && <div style={{ color: 'var(--primary)', fontSize: 12 }}>{error}</div>}
+        <button className="btn-primary" type="submit">
+          Ingresar
+        </button>
+        <button type="button" onClick={loginAsGuest}>
+          Ingresar como invitado
+        </button>
       </form>
-      <button onClick={loginAsGuest}>Ingresar como invitado</button>
     </div>
   )
 }

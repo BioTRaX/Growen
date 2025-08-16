@@ -22,6 +22,8 @@ if exist "fix_deps.bat" (
   call "fix_deps.bat"
 )
 
+alembic -c alembic.ini upgrade head
+
 REM 5) Lanzar API y Front en ventanas separadas
 start "Growen API" cmd /c "scripts\run_api.cmd"
 start "Growen Frontend" cmd /c "scripts\run_frontend.cmd"
