@@ -1,6 +1,7 @@
 """WebSocket de chat que utiliza la IA de respaldo."""
 
 from datetime import datetime
+import logging
 
 from fastapi import APIRouter, WebSocket
 from sqlalchemy import select
@@ -8,11 +9,12 @@ from sqlalchemy.orm import selectinload
 
 from db.models import Session as DBSess
 from db.session import SessionLocal
-from starlette.websockets import WebSocketDisconnect
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from services.ai.provider import ai_reply
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.websocket("/ws")
@@ -48,10 +50,15 @@ async def ws_chat(socket: WebSocket) -> None:
             reply = await ai_reply(prompt)
             await socket.send_json({"role": "assistant", "text": reply})
     except WebSocketDisconnect:
-        # El cliente cerró la conexión; no es necesario llamar a ``close``.
-        pass
+        # El cliente cerró la conexión; Starlette maneja el cierre y no
+        # es necesario llamar a ``close`` manualmente.
+        logger.warning("Cliente desconectado")
     except Exception as exc:
-        try:
-            await socket.send_json({"role": "system", "text": f"error: {exc}"})
-        except Exception:
-            pass
+        logger.error("Error inesperado en ws_chat: %s", exc)
+        if socket.client_state == WebSocketState.CONNECTED:
+            try:
+                await socket.send_json({"role": "system", "text": f"error: {exc}"})
+            except Exception as send_exc:
+                logger.error(
+                    "No se pudo notificar al cliente del error: %s", send_exc
+                )
