@@ -4,6 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, WebSocket
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from db.models import Session as DBSess
 from db.session import SessionLocal
@@ -18,23 +19,33 @@ router = APIRouter()
 async def ws_chat(socket: WebSocket) -> None:
     """Canal WebSocket principal."""
 
+    # Buscar sesión para personalizar la conversación si el usuario está autenticado.
+    sess = None
     sid = socket.cookies.get("growen_session")
     if sid:
         async with SessionLocal() as db:
             res = await db.execute(
-                select(DBSess).where(
-                    DBSess.id == sid, DBSess.expires_at > datetime.utcnow()
-                )
+                select(DBSess)
+                .options(selectinload(DBSess.user))
+                .where(DBSess.id == sid, DBSess.expires_at > datetime.utcnow())
             )
             sess = res.scalar_one_or_none()
-            if not sess:
-                sid = None
 
     await socket.accept()
     try:
         while True:
             data = await socket.receive_text()
-            reply = await ai_reply(data)
+
+            # Personalizar el prompt con los datos del usuario/rol si hay sesión.
+            prompt = data
+            if sess:
+                if sess.user:
+                    nombre = sess.user.name or sess.user.identifier
+                    prompt = f"{nombre} ({sess.role}) dice: {data}"
+                else:
+                    prompt = f"{sess.role} dice: {data}"
+
+            reply = await ai_reply(prompt)
             await socket.send_json({"role": "assistant", "text": reply})
     except WebSocketDisconnect:
         # El cliente cerró la conexión; no es necesario llamar a ``close``.

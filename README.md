@@ -151,6 +151,7 @@ Un botón en la barra permite alternar el tema y, por defecto, se respeta `prefe
 
 - **HTTP**: `POST /chat` con cuerpo `{ "text": "hola" }` → responde `{ "role": "assistant", "text": "..." }`.
 - **WebSocket**: se envía texto plano y cada mensaje recibido es un JSON `{ "role": "assistant", "text": "..." }`.
+- **Sesión**: si la cookie `growen_session` está presente, el backend incluye el nombre y rol del usuario en el prompt para personalizar la respuesta de la IA.
 - **Proveedor**: Ollama es el motor por defecto (`OLLAMA_MODEL=llama3.1`). El backend intenta primero con `stream=False` y, si la API falla, cae a modo *streaming* acumulando las partes. En ambos casos normaliza la respuesta y remueve prefijos como `ollama:` antes de reenviarla.
 
 La interfaz muestra las respuestas del asistente con la etiqueta visual **Growen**.
