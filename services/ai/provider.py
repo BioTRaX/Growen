@@ -6,11 +6,13 @@ permitiendo apuntar a instancias remotas sin tocar el código.
 
 import json
 import os
+import logging
 
 import httpx
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
+logger = logging.getLogger(__name__)
 
 
 async def ai_reply(prompt: str) -> str:
@@ -47,7 +49,7 @@ async def ai_reply(prompt: str) -> str:
                         text_parts.append(obj.get("response") or "")
                     except json.JSONDecodeError:
                         # Ignorar líneas que no sean JSON válido.
-                        pass
+                        logger.warning("Línea JSON inválida ignorada: %s", line)
             text = "".join(text_parts).strip()
 
     if text.lower().startswith("ollama:"):
