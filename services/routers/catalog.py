@@ -4,8 +4,9 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -89,14 +90,31 @@ async def list_supplier_files(
 
 @router.post("/suppliers")
 async def create_supplier(
-    req: SupplierCreate, session: AsyncSession = Depends(get_session)
-) -> dict:
-    """Crea un nuevo proveedor validando unicidad de slug."""
+    request: Request, session: AsyncSession = Depends(get_session)
+):
+    """Crea un nuevo proveedor validando formato y unicidad de ``slug``."""
 
-    existing = await session.scalar(select(Supplier).where(Supplier.slug == req.slug))
+    if request.headers.get("content-type") != "application/json":
+        raise HTTPException(
+            status_code=415, detail="Content-Type debe ser application/json"
+        )
+    try:
+        payload = SupplierCreate.model_validate(await request.json())
+    except ValidationError:
+        return JSONResponse(
+            status_code=400,
+            content={"code": "invalid_payload", "message": "Faltan campos"},
+        )
+
+    existing = await session.scalar(
+        select(Supplier).where(Supplier.slug == payload.slug)
+    )
     if existing:
-        raise HTTPException(status_code=400, detail="slug ya existe")
-    supplier = Supplier(slug=req.slug, name=req.name)
+        return JSONResponse(
+            status_code=409,
+            content={"code": "slug_conflict", "message": "Slug ya utilizado"},
+        )
+    supplier = Supplier(slug=payload.slug, name=payload.name)
     session.add(supplier)
     await session.commit()
     await session.refresh(supplier)
