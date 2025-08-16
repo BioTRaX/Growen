@@ -87,6 +87,38 @@ npm run dev
 
 En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8000`, evitando errores de CORS. Durante el arranque pueden mostrarse errores de proxy WebSocket si la API aún no está disponible; una vez arriba, la conexión se restablece sola. El chat abre un WebSocket en `/ws` y, si no está disponible, utiliza `POST /chat`, que admite la variante con o sin barra final para evitar redirecciones 307. Para modificar las URLs se puede crear `frontend/.env.development` con `VITE_WS_URL` y `VITE_API_BASE`.
 
+## Autenticación y roles
+
+La API implementa sesiones mediante la cookie `growen_session` y un token CSRF almacenado en `csrf_token`. Todas las mutaciones deben enviar el encabezado `X-CSRF-Token` coincidiendo con dicha cookie.
+
+### Endpoints principales
+
+- `POST /auth/login` valida credenciales y genera una sesión.
+- `POST /auth/guest` crea una sesión con rol `guest` sin usuario.
+- `POST /auth/logout` cierra la sesión (requiere CSRF).
+- `GET /auth/me` informa el estado actual.
+- `POST /auth/register` permite a un administrador crear usuarios (requiere CSRF).
+
+### Roles y permisos
+
+| Rol         | Permisos principales |
+|-------------|---------------------|
+| invitado    | Solo lectura |
+| cliente     | Solo lectura |
+| proveedor   | Subir Excel de su proveedor asignado |
+| colaborador | Subir Excel y aplicar importaciones de cualquier proveedor |
+| admin       | Todos los permisos, incluyendo registrar usuarios |
+
+### Variables de entorno relevantes
+
+```env
+SECRET_KEY=
+SESSION_EXPIRE_MINUTES=43200
+AUTH_ENABLED=true
+COOKIE_SECURE=false
+COOKIE_DOMAIN=
+```
+
 ## Botonera
 
 La interfaz presenta una botonera fija sobre el chat con accesos rápidos:

@@ -8,7 +8,16 @@ from starlette.responses import JSONResponse
 
 from agent_core.config import settings
 from ai.router import AIRouter
-from .routers import actions, chat, ws, catalog, imports, canonical_products, debug
+from .routers import (
+    actions,
+    chat,
+    ws,
+    catalog,
+    imports,
+    canonical_products,
+    debug,
+    auth,
+)
 
 level = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -64,6 +73,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(chat.router)
+app.include_router(auth.router)
 app.include_router(actions.router)
 app.include_router(ws.router)
 app.include_router(catalog.router)

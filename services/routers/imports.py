@@ -20,6 +20,11 @@ from db.models import (
 )
 from db.session import get_session
 from services.suppliers.parsers import SUPPLIER_PARSERS
+from services.auth import (
+    require_roles,
+    require_csrf,
+    SessionData,
+)
 
 router = APIRouter()
 
@@ -141,13 +146,21 @@ async def download_price_list_template(
     )
 
 
-@router.post("/suppliers/{supplier_id}/price-list/upload")
+@router.post(
+    "/suppliers/{supplier_id}/price-list/upload",
+    dependencies=[Depends(require_csrf)],
+)
 async def upload_price_list(
     supplier_id: int,
     file: UploadFile | None = File(None),
     dry_run: bool = Form(True),
+    sess: SessionData = Depends(require_roles("proveedor", "colaborador", "admin")),
     db: AsyncSession = Depends(get_session),
 ):
+    if sess.role == "proveedor" and (
+        not sess.user or sess.user.supplier_id != supplier_id
+    ):
+        raise HTTPException(status_code=403, detail="No autorizado para este proveedor")
     if file is None:
         raise HTTPException(status_code=400, detail="file field is required")
 
@@ -296,8 +309,12 @@ async def get_import(
     return {"job_id": job.id, "status": job.status, "summary": job.summary_json, "rows": rows}
 
 
-@router.post("/imports/{job_id}/commit")
-async def commit_import(job_id: int, db: AsyncSession = Depends(get_session)):
+@router.post("/imports/{job_id}/commit", dependencies=[Depends(require_csrf)])
+async def commit_import(
+    job_id: int,
+    db: AsyncSession = Depends(get_session),
+    _sess: SessionData = Depends(require_roles("colaborador", "admin")),
+):
     res = await db.execute(select(ImportJob).where(ImportJob.id == job_id))
     job = res.scalar_one_or_none()
     if not job:
