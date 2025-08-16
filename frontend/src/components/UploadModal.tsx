@@ -50,7 +50,11 @@ export default function UploadModal({ open, onClose, onUploaded, initialFile }: 
       onUploaded({ jobId: r.job_id, summary: r.summary, kpis: r.kpis })
       onClose()
     } catch (e: any) {
-      setError(e.message)
+      let msg = 'Error al subir archivo'
+      if (e?.response?.data?.detail) msg = e.response.data.detail
+      else if (typeof e?.response?.data === 'string') msg = e.response.data
+      else if (e?.message) msg = e.message
+      setError(msg)
     }
   }
 
