@@ -4,6 +4,7 @@ import { chatHttp } from '../lib/http'
 import UploadModal from './UploadModal'
 import ImportViewer from './ImportViewer'
 import SuppliersModal from './SuppliersModal'
+import ProductsDrawer from './ProductsDrawer'
 
 type Msg = { role: 'user' | 'assistant' | 'system'; text: string }
 
@@ -18,6 +19,7 @@ export default function ChatWindow() {
     | null
   >(null)
   const [suppliersOpen, setSuppliersOpen] = useState(false)
+  const [productsOpen, setProductsOpen] = useState(false)
 
   useEffect(() => {
     try {
@@ -40,11 +42,14 @@ export default function ChatWindow() {
       setUploadOpen(true)
     }
     const openSuppliers = () => setSuppliersOpen(true)
+    const openProducts = () => setProductsOpen(true)
     window.addEventListener('open-upload', openUpload)
     window.addEventListener('open-suppliers', openSuppliers)
+    window.addEventListener('open-products', openProducts)
     return () => {
       window.removeEventListener('open-upload', openUpload)
       window.removeEventListener('open-suppliers', openSuppliers)
+      window.removeEventListener('open-products', openProducts)
     }
   }, [])
 
@@ -141,6 +146,10 @@ export default function ChatWindow() {
       <SuppliersModal
         open={suppliersOpen}
         onClose={() => setSuppliersOpen(false)}
+      />
+      <ProductsDrawer
+        open={productsOpen}
+        onClose={() => setProductsOpen(false)}
       />
       {importInfo && (
         <ImportViewer
