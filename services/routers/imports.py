@@ -1,9 +1,13 @@
 """Endpoints para importar listas de precios de proveedores."""
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, date
+from io import BytesIO
+from openpyxl import Workbook
+from openpyxl.comments import Comment
 
 from db.models import (
     ImportJob,
@@ -83,6 +87,58 @@ async def _upsert_supplier_product(
     sp.last_seen_at = datetime.utcnow()
     sp.internal_product_id = product.id
     await db.flush()
+
+
+@router.get("/suppliers/{supplier_id}/price-list/template")
+async def download_price_list_template(
+    supplier_id: int, db: AsyncSession = Depends(get_session)
+):
+    """Genera y descarga una plantilla Excel para listas de precios."""
+    supplier = await db.get(Supplier, supplier_id)
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Proveedor no encontrado")
+
+    parser = SUPPLIER_PARSERS.get(supplier.slug)
+    if not parser:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Proveedor no soportado (parser faltante): {supplier.slug}",
+        )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "data"
+    headers = [
+        "ID",
+        "Agrupamiento",
+        "Familia",
+        "SubFamilia",
+        "Producto",
+        "Compra Minima",
+        "Stock",
+        "PrecioDeCompra",
+        "PrecioDeVenta",
+    ]
+    ws.append(headers)
+    ws.append(["123", "", "", "", "Ejemplo", 1, 0, 0.0, 0.0])
+    ws["A1"].comment = Comment(
+        "No borres la fila de encabezados. Completa tus productos desde la fila 2.",
+        "growen",
+    )
+
+    stream = BytesIO()
+    wb.save(stream)
+    stream.seek(0)
+    filename = f"plantilla-{supplier.slug}.xlsx"
+    headers_resp = {
+        "Content-Disposition": f"attachment; filename=\"{filename}\""
+    }
+    return StreamingResponse(
+        stream,
+        media_type=
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers_resp,
+    )
 
 
 @router.post("/suppliers/{supplier_id}/price-list/upload")
