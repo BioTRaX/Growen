@@ -64,6 +64,10 @@ ALTER DATABASE growen OWNER TO growen;
 GRANT USAGE, CREATE ON SCHEMA public TO growen;
 ```
 
+## Migraciones idempotentes
+
+Si hay tablas creadas previamente (manual u otras ramas), las migraciones no deben fallar; usamos inspección de esquema para crear/alterar según corresponda.
+
 ## Instalación Frontend
 
 ```bash
