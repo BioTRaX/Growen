@@ -16,6 +16,7 @@ export interface ProductItem {
   category_path: string
   stock: number
   updated_at: string | null
+  canonical_product_id: number | null
 }
 
 export interface ProductSearchResponse {

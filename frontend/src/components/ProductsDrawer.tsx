@@ -7,6 +7,7 @@ import {
   updateStock,
 } from '../services/products'
 import PriceHistoryModal from './PriceHistoryModal'
+import CanonicalOffers from './CanonicalOffers'
 
 interface Props {
   open: boolean
@@ -25,6 +26,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [editing, setEditing] = useState<number | null>(null)
   const [stockVal, setStockVal] = useState('')
   const [historyProduct, setHistoryProduct] = useState<number | null>(null)
+  const [canonicalId, setCanonicalId] = useState<number | null>(null)
 
   useEffect(() => {
     if (open) {
@@ -141,6 +143,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
             <th>Categoría</th>
             <th>Actualizado</th>
             <th>Historial</th>
+            <th>Comparativa</th>
           </tr>
         </thead>
         <tbody>
@@ -183,6 +186,13 @@ export default function ProductsDrawer({ open, onClose }: Props) {
                   Ver
                 </button>
               </td>
+              <td>
+                {it.canonical_product_id && (
+                  <button onClick={() => setCanonicalId(it.canonical_product_id)}>
+                    Ver
+                  </button>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -203,6 +213,9 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           productId={historyProduct}
           onClose={() => setHistoryProduct(null)}
         />
+      )}
+      {canonicalId && (
+        <CanonicalOffers canonicalId={canonicalId} onClose={() => setCanonicalId(null)} />
       )}
     </div>
   )

@@ -5,7 +5,10 @@ const http = axios.create({
 });
 http.interceptors.request.use((cfg) => {
   const m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
-  if (m) (cfg.headers ??= {})["X-CSRF-Token"] = decodeURIComponent(m[1]);
+  if (m) {
+    const headers = (cfg.headers ??= {} as any);
+    headers["X-CSRF-Token"] = decodeURIComponent(m[1]);
+  }
   return cfg;
 });
 export default http;
