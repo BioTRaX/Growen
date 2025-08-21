@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { uploadPriceList } from '../services/imports'
+import { uploadPriceList, downloadTemplate } from '../services/imports'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import CreateSupplierModal from './CreateSupplierModal'
 import { useAuth } from '../auth/AuthContext'
@@ -109,11 +109,17 @@ export default function UploadModal({ open, onClose, onUploaded, preselectedFile
                 </option>
               ))}
             </select>
-            {state.role !== 'proveedor' && (
-              <button style={{ marginTop: 8 }} onClick={() => setCreateOpen(true)}>
-                Crear proveedor
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              {state.role !== 'proveedor' && (
+                <button onClick={() => setCreateOpen(true)}>Crear proveedor</button>
+              )}
+              <button
+                onClick={() => supplierId && downloadTemplate(Number(supplierId))}
+                disabled={!supplierId}
+              >
+                Descargar plantilla
               </button>
-            )}
+            </div>
           </div>
         )}
         <div style={{ margin: '8px 0' }}>
@@ -121,6 +127,7 @@ export default function UploadModal({ open, onClose, onUploaded, preselectedFile
             type="file"
             accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
             onChange={handleFile}
+            disabled={!supplierId}
           />
           {file && (
             <small className="badge-muted">

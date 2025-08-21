@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { commitImport, getImport, getImportPreview } from '../services/imports'
+import { commitImport, getImportPreview } from '../services/imports'
 
 interface Props {
   open: boolean
@@ -16,13 +16,17 @@ export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Pr
   const [loading, setLoading] = useState(false)
   const [committing, setCommitting] = useState(false)
   const [error, setError] = useState('')
+  const [localSummary, setLocalSummary] = useState(summary)
 
   useEffect(() => {
     if (!open) return
     setLoading(true)
-    const fn = tab === 'changes' ? getImportPreview : getImport
-    fn(jobId, page)
-      .then((r) => setItems(r.items || []))
+    const status = tab === 'changes' ? 'new,changed' : 'error,duplicate_in_file'
+    getImportPreview(jobId, status, page)
+      .then((r) => {
+        setItems(r.items || [])
+        if (r.summary) setLocalSummary(r.summary)
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
   }, [open, tab, page, jobId])
@@ -60,6 +64,10 @@ export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Pr
         ) : (
           <pre style={{ maxHeight: 300, overflow: 'auto' }}>{JSON.stringify(items, null, 2)}</pre>
         )}
+        <div>
+          <strong>Resumen:</strong>
+          <pre>{JSON.stringify(localSummary, null, 2)}</pre>
+        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
           <div>
             <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
