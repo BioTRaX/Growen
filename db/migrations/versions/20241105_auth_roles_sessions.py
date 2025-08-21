@@ -1,6 +1,8 @@
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import text
+import os
+from passlib.hash import argon2
 
 # Revisions
 revision = "20241105_auth_roles_sessions"
@@ -222,19 +224,23 @@ def upgrade():
     # -------------------------
     has_admin = bind.execute(text("SELECT 1 FROM users WHERE role='admin' LIMIT 1")).first()
     if not has_admin:
-        # generar hash Argon2id para '123456'
-        try:
-            from passlib.hash import argon2
-            pwd = argon2.using(type="ID").hash("123456")
-        except Exception:
-            # Fallback hash estático
-            pwd = "$argon2id$v=19$m=65536,t=3,p=4$791bC0Fozbk3JoRwLgWAsA$DkljKGxAb6GvtP0dOEDGYURKCC0c5bBRwJS6g/JwMek"
-
-        bind.execute(text("""
+        admin_user = os.getenv("ADMIN_USER", "admin")
+        admin_pass = os.getenv("ADMIN_PASS", "changeme")
+        if admin_pass == "changeme":
+            raise RuntimeError(
+                "ADMIN_PASS no puede permanecer en 'changeme' al ejecutar migraciones"
+            )
+        pwd = argon2.using(type="ID").hash(admin_pass)
+        bind.execute(
+            text(
+                """
             INSERT INTO users (identifier, email, name, password_hash, role)
             SELECT :i, :e, :n, :h, 'admin'
             WHERE NOT EXISTS (SELECT 1 FROM users WHERE role='admin' LIMIT 1)
-        """), dict(i="Admin", e="admin@growen.local", n="Admin", h=pwd))
+        """
+            ),
+            dict(i=admin_user, e=f"{admin_user}@growen.local", n=admin_user, h=pwd),
+        )
 
 
 def downgrade():
