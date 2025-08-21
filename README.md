@@ -187,7 +187,7 @@ En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios d
 
 Las tablas `import_jobs` e `import_job_rows` guardan cada archivo cargado y sus filas normalizadas.
 `supplier_price_history` registra los cambios de precios para auditoría.
-`GET /price-history` permite consultar ese historial filtrando por `supplier_product_id` o `product_id` y admite paginación.
+`GET /price-history` permite consultar ese historial filtrando por `supplier_product_id` o `product_id` y admite paginación. Solo está disponible para los roles `cliente`, `proveedor`, `colaborador` y `admin`.
 
 ### Plantilla Excel por proveedor
 
@@ -240,7 +240,7 @@ Estas opciones controlan la creación automática y las sugerencias durante la i
 
 ## Consulta de productos
 
-`GET /products` lista los productos disponibles con filtros, orden y paginación.
+`GET /products` lista los productos disponibles con filtros, orden y paginación. Requiere los roles `cliente`, `proveedor`, `colaborador` o `admin`.
 
 Parámetros soportados:
 
@@ -280,7 +280,7 @@ Para modificar el stock manualmente existe `PATCH /products/{id}/stock` con cuer
 
 ## Historial de precios
 
-`GET /price-history` devuelve el historial de precios ordenado por fecha. Debe recibirse `supplier_product_id` o `product_id` y se puede paginar con `page` y `page_size`.
+`GET /price-history` devuelve el historial de precios ordenado por fecha. Debe recibirse `supplier_product_id` o `product_id` y se puede paginar con `page` y `page_size`. Requiere los roles `cliente`, `proveedor`, `colaborador` o `admin`.
 
 ## Inicio rápido (1‑clic)
 
