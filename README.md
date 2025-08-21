@@ -44,6 +44,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
 cp .env.example .env
+# reemplazar SECRET_KEY y ADMIN_PASS antes de continuar
 # las variables de entorno se cargan automáticamente desde .env
 # crear base de datos growen en PostgreSQL
 alembic -c ./alembic.ini upgrade head
@@ -102,7 +103,7 @@ En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8
 
 La API implementa sesiones mediante la cookie `growen_session` y un token CSRF almacenado en `csrf_token`. Todas las mutaciones deben enviar el encabezado `X-CSRF-Token` coincidiendo con dicha cookie. Las rutas que modifican datos añaden dependencias `require_roles` para comprobar que el usuario posea el rol autorizado.
 
-El login acepta **identificador** o email junto con la contraseña. Al ejecutar las migraciones se crea, si no existe, el usuario inicial `Admin/123456` (también disponible como `admin@growen.local`).
+El login acepta **identificador** o email junto con la contraseña. Al ejecutar las migraciones se crea, si no existe, un usuario administrador usando `ADMIN_USER` y `ADMIN_PASS` definidos en el entorno. El servidor se niega a iniciar si `ADMIN_PASS` queda en `changeme`.
 
 ### Endpoints principales
 
@@ -127,16 +128,19 @@ El login acepta **identificador** o email junto con la contraseña. Al ejecutar 
 ### Variables de entorno relevantes
 
 ```env
-SECRET_KEY=<generar-valor-seguro>
+SECRET_KEY=changeme
+ADMIN_USER=admin
+ADMIN_PASS=changeme
 SESSION_EXPIRE_MINUTES=43200
 AUTH_ENABLED=true
 COOKIE_SECURE=false
 COOKIE_DOMAIN=
 ```
 
-`SECRET_KEY` es obligatorio para firmar las sesiones. El valor de ejemplo debe
-reemplazarse por uno generado de forma segura, rotarse periódicamente y
-mantenido fuera del control de versiones.
+`SECRET_KEY` y `ADMIN_PASS` deben reemplazarse por valores robustos antes de
+iniciar la aplicación; ésta abortará el arranque si alguno permanece en
+`changeme`. Mantener estas claves fuera del control de versiones y rotarlas
+periódicamente.
 
 ## Botonera
 
@@ -336,7 +340,7 @@ variables definidas en `.env`, por lo que no es necesario configurar la URL en `
 
 ```bash
 cp .env.example .env   # en Windows usar: copy .env.example .env
-# Completar DB_URL en .env
+# Completar DB_URL, SECRET_KEY y ADMIN_PASS en .env
 alembic -c ./alembic.ini upgrade head
 
 # Crear una nueva revisión a partir de los modelos
@@ -359,8 +363,9 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `OLLAMA_URL`: URL base de Ollama (por defecto `http://localhost:11434`).
 - `OLLAMA_MODEL`: modelo de Ollama (por defecto `llama3.1`).
 - `OPENAI_API_KEY`, `OPENAI_MODEL`.
-- `SECRET_KEY`: clave usada para firmar sesiones; generar un valor robusto,
-  rotarlo periódicamente y mantenerlo fuera del control de versiones.
+- `SECRET_KEY`: clave usada para firmar sesiones; debe cambiarse del valor
+  por defecto `changeme`, rotarse periódicamente y mantenerse fuera del
+  control de versiones. El servidor se detiene si no se sobrescribe.
 - `SESSION_EXPIRE_MINUTES`: tiempo de expiración de la sesión.
 - `COOKIE_SECURE`: activa cookies seguras en producción (debe ser `true` en entornos productivos).
 - `ALLOWED_ORIGINS`: orígenes permitidos para CORS, separados por coma. Si se
@@ -368,7 +373,8 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
   contraparte con el mismo puerto.
 - `LOG_LEVEL`: nivel de logging de la aplicación (`DEBUG`, `INFO`, etc.).
 - `DEBUG_SQL`: si vale `1`, SQLAlchemy mostrará cada consulta ejecutada.
-- `ADMIN_USER`, `ADMIN_PASS`: credenciales del administrador inicial.
+- `ADMIN_USER`, `ADMIN_PASS`: credenciales del administrador inicial. Si
+  `ADMIN_PASS` queda en `changeme`, la aplicación aborta el inicio.
 - `MAX_UPLOAD_MB`: tamaño máximo de archivos a subir.
 - `AUTH_ENABLED`: si es `true`, requiere sesión autenticada.
 - `PRODUCTS_PAGE_MAX`: límite máximo de resultados por página.
