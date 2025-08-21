@@ -282,12 +282,16 @@ Levanta API y frontend al mismo tiempo.
 
 ### Windows
 
-Doble clic en `start.bat` → primero llama a `scripts\stop.bat`, espera 2 s y luego abre dos ventanas:
+Ejecutar **desde CMD** con doble clic en `start.bat`. El script realiza estas etapas:
 
-`start.bat` ejecuta `scripts\fix_deps.bat` para crear la venv, instalar dependencias y dejar listo el frontend.
+1. Llama a `scripts\stop.bat` y espera hasta 5 s para liberar procesos anteriores.
+2. Verifica que los puertos **8000** y **5173** estén libres; si alguno está ocupado aborta con un mensaje.
+3. Ejecuta `scripts\fix_deps.bat` para crear la venv, instalar dependencias y preparar el frontend.
+4. Abre dos ventanas:
+   - Growen API (Uvicorn) en http://127.0.0.1:8000/docs
+   - Growen Frontend (Vite) en http://127.0.0.1:5173/
 
-- Growen API (Uvicorn) en http://127.0.0.1:8000/docs
-- Growen Frontend (Vite) en http://127.0.0.1:5173/
+La salida de ambos servicios se guarda en `logs/backend.log` y `logs/frontend.log` para facilitar el diagnóstico.
 
 Requisitos previos:
 
@@ -297,11 +301,9 @@ Requisitos previos:
 - `.env` completado (DB_URL, IA, etc.)
 - `frontend/.env` creado a partir de `frontend/.env.example` si se necesita ajustar `VITE_API_URL`.
 
-Para detener:
+Para detener manualmente los servicios, ejecutar `scripts\stop.bat` desde CMD; cierra los procesos de Uvicorn y Vite.
 
-- Doble clic en `scripts\stop.bat` → cierra procesos de Uvicorn y Vite.
-
-Rutas con espacios soportadas (scripts usan `cd /d` y comillas).
+Rutas con espacios soportadas (los scripts usan `cd /d` y comillas).
 
 PowerShell no requerido (los scripts son CMD puro).
 
