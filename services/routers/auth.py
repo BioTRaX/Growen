@@ -5,8 +5,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime, timedelta
+import secrets
 
-from db.models import User
+from agent_core.config import settings
+from db.models import User, PasswordResetToken
 from db.session import get_session
 from services.auth import (
     hash_pw,
@@ -174,6 +177,55 @@ async def create_user(payload: UserCreate, db: AsyncSession = Depends(get_sessio
         "role": user.role,
         "supplier_id": user.supplier_id,
     }
+
+
+class PasswordResetOut(BaseModel):
+    token: str
+    expires_at: datetime
+
+
+class PasswordResetIn(BaseModel):
+    password: str
+
+
+@router.post(
+    "/users/{user_id}/reset-password",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+)
+async def create_password_reset(
+    user_id: int, db: AsyncSession = Depends(get_session)
+) -> PasswordResetOut:
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    token = secrets.token_urlsafe(32)
+    expires = datetime.utcnow() + timedelta(
+        minutes=settings.password_reset_token_minutes
+    )
+    prt = PasswordResetToken(
+        token=token, user_fk=user.id, expires_at=expires, used=False
+    )
+    db.add(prt)
+    await db.commit()
+    return PasswordResetOut(token=token, expires_at=expires)
+
+
+@router.post("/reset/{token}")
+async def reset_password(
+    token: str, payload: PasswordResetIn, db: AsyncSession = Depends(get_session)
+):
+    stmt = select(PasswordResetToken).where(PasswordResetToken.token == token)
+    res = await db.execute(stmt)
+    prt = res.scalar_one_or_none()
+    if not prt or prt.used or prt.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Token inválido")
+    user = await db.get(User, prt.user_fk)
+    if not user:
+        raise HTTPException(status_code=400, detail="Usuario no encontrado")
+    user.password_hash = hash_pw(payload.password)
+    prt.used = True
+    await db.commit()
+    return {"status": "ok"}
 
 
 @router.patch(

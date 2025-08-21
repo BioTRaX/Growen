@@ -4,6 +4,7 @@ import ProtectedRoute from './auth/ProtectedRoute'
 import Login from './components/Login'
 import AdminPanel from './pages/AdminPanel'
 import Dashboard from './pages/Dashboard'
+import ResetPassword from './pages/ResetPassword'
 
 export default function App() {
   return (
@@ -11,6 +12,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/reset/:token" element={<ResetPassword />} />
           <Route
             path="/"
             element={

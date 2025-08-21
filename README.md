@@ -111,6 +111,15 @@ El login acepta **identificador** o email junto con la contraseña. Al ejecutar 
 - `GET /auth/users` lista usuarios (solo admin).
 - `POST /auth/users` crea usuarios (solo admin, requiere CSRF).
 - `PATCH /auth/users/{id}` actualiza usuarios (solo admin, requiere CSRF).
+- `POST /auth/users/{id}/reset-password` genera un token de reseteo (solo admin, requiere CSRF).
+- `POST /auth/reset/{token}` valida el token y establece la nueva contraseña.
+
+#### Flujo de reseteo de contraseña
+
+1. Un administrador llama a `POST /auth/users/{id}/reset-password` para generar el token.
+2. El token se envía al usuario (vía email o manualmente) y expira tras el tiempo configurado.
+3. El usuario visita la URL del frontend con el token y completa el formulario, que consume `POST /auth/reset/{token}`.
+4. Al validar el token y actualizar el hash, el token queda marcado como usado.
 
 ### Roles y permisos
 
@@ -127,6 +136,7 @@ El login acepta **identificador** o email junto con la contraseña. Al ejecutar 
 ```env
 SECRET_KEY=<generar-valor-seguro>
 SESSION_EXPIRE_MINUTES=43200
+PASSWORD_RESET_TOKEN_MINUTES=30
 AUTH_ENABLED=true
 COOKIE_SECURE=false
 COOKIE_DOMAIN=

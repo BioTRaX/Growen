@@ -33,6 +33,16 @@ export default function AdminPanel() {
     listSuppliers().then(setSuppliers).catch(() => {})
   }, [])
 
+  const updateUser = async (id: number, data: any) => {
+    await http.patch(`/auth/users/${id}`, data)
+    refresh()
+  }
+
+  const resetPassword = async (id: number) => {
+    const r = await http.post(`/auth/users/${id}/reset-password`)
+    alert(`Token de reseteo: ${r.data.token}`)
+  }
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     await http.post('/auth/users', {
@@ -113,6 +123,7 @@ export default function AdminPanel() {
             <th>Email</th>
             <th>Rol</th>
             <th>Proveedor</th>
+            <th>Acciones</th>
           </tr>
         </thead>
         <tbody>
@@ -121,8 +132,41 @@ export default function AdminPanel() {
               <td>{u.id}</td>
               <td>{u.identifier}</td>
               <td>{u.email}</td>
-              <td>{u.role}</td>
-              <td>{u.supplier_id ?? ''}</td>
+              <td>
+                <select
+                  className="select"
+                  value={u.role}
+                  onChange={(e) => updateUser(u.id, { role: e.target.value })}
+                >
+                  <option value="cliente">cliente</option>
+                  <option value="proveedor">proveedor</option>
+                  <option value="colaborador">colaborador</option>
+                  <option value="admin">admin</option>
+                </select>
+              </td>
+              <td>
+                <select
+                  className="select"
+                  value={u.supplier_id ?? ''}
+                  onChange={(e) =>
+                    updateUser(u.id, {
+                      supplier_id: e.target.value ? Number(e.target.value) : null,
+                    })
+                  }
+                >
+                  <option value="">(ninguno)</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </td>
+              <td>
+                <button className="btn" onClick={() => resetPassword(u.id)}>
+                  Resetear contraseña
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
