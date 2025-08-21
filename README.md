@@ -69,6 +69,8 @@ GRANT USAGE, CREATE ON SCHEMA public TO growen;
 
 Cuando existen tablas creadas manualmente o por otras ramas, las migraciones detectan el esquema real y agregan columnas, claves foráneas e índices faltantes en lugar de fallar con errores como `DuplicateTable` o `UndefinedColumn`. Esto vuelve a las migraciones seguras e idempotentes.
 
+La revisión inicial `init_schema` usa `sa.inspect` para crear tablas solo cuando faltan y eliminarlas únicamente si existen, evitando fallas en upgrades o downgrades.
+
 Comandos útiles en `psql` para verificar el estado de una tabla:
 
 ```sql
