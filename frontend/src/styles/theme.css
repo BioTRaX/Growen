@@ -72,6 +72,11 @@ body {
   background: var(--table-row-hover);
 }
 
+.best-price {
+  color: var(--success);
+  font-weight: bold;
+}
+
 .btn-primary {
   background: var(--primary);
   color: #fff;

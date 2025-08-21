@@ -17,6 +17,7 @@ from db.models import (
     SupplierPriceHistory,
     SupplierProduct,
     Product,
+    ProductEquivalence,
 )
 from db.session import get_session
 from services.auth import require_csrf, require_roles
@@ -324,11 +325,13 @@ async def list_products(
     sp = SupplierProduct
     p = Product
     s = Supplier
+    eq = ProductEquivalence
 
     stmt = (
-        select(sp, p, s)
+        select(sp, p, s, eq)
         .join(s, sp.supplier_id == s.id)
         .join(p, sp.internal_product_id == p.id)
+        .outerjoin(eq, eq.supplier_product_id == sp.id)
     )
 
     if supplier_id is not None:
@@ -361,7 +364,7 @@ async def list_products(
     rows = result.all()
 
     items = []
-    for sp_obj, p_obj, s_obj in rows:
+    for sp_obj, p_obj, s_obj, eq_obj in rows:
         cat_path = await _category_path(session, p_obj.category_id)
         items.append(
             {
@@ -386,6 +389,7 @@ async def list_products(
                 "updated_at": sp_obj.last_seen_at.isoformat()
                 if sp_obj.last_seen_at
                 else None,
+                "canonical_product_id": eq_obj.canonical_product_id if eq_obj else None,
             }
         )
 
