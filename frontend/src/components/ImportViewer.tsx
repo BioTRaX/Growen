@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { commitImport, getImportPreview } from '../services/imports'
+import CanonicalOffers from './CanonicalOffers'
 
 interface Props {
   open: boolean
@@ -17,6 +18,7 @@ export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Pr
   const [committing, setCommitting] = useState(false)
   const [error, setError] = useState('')
   const [localSummary, setLocalSummary] = useState(summary)
+  const [canonicalId, setCanonicalId] = useState<number | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -62,7 +64,18 @@ export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Pr
         {loading ? (
           <div>Cargando...</div>
         ) : (
-          <pre style={{ maxHeight: 300, overflow: 'auto' }}>{JSON.stringify(items, null, 2)}</pre>
+          <div style={{ maxHeight: 300, overflow: 'auto' }}>
+            {items.map((it) => (
+              <div key={it.row_index} style={{ marginBottom: 8 }}>
+                <pre>{JSON.stringify(it, null, 2)}</pre>
+                {it.data?.canonical_product_id && (
+                  <button onClick={() => setCanonicalId(it.data.canonical_product_id)}>
+                    Comparar precios
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
         )}
         <div>
           <strong>Resumen:</strong>
@@ -86,6 +99,9 @@ export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Pr
           </div>
         </div>
       </div>
+      {canonicalId && (
+        <CanonicalOffers canonicalId={canonicalId} onClose={() => setCanonicalId(null)} />
+      )}
     </div>
   )
 }
