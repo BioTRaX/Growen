@@ -10,3 +10,4 @@
 - Add: modo oscuro básico en el frontend
 - Add: plantilla Excel por proveedor `GET /suppliers/{id}/price-list/template`
 - fix: restaurar migración `20241105_auth_roles_sessions` renombrando archivo y `revision` para mantener la cadena de dependencias
+- fix: evitar errores creando o borrando tablas ya existentes en `init_schema` mediante `sa.inspect`
