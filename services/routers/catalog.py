@@ -298,7 +298,12 @@ async def _category_path(session: AsyncSession, category_id: int | None) -> str 
     return ">".join(reversed(parts)) if parts else None
 
 
-@router.get("/products")
+@router.get(
+    "/products",
+    dependencies=[
+        Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))
+    ],
+)
 async def list_products(
     supplier_id: Optional[int] = None,
     category_id: Optional[int] = None,
@@ -308,7 +313,6 @@ async def list_products(
     sort_by: str = "updated_at",
     order: str = "desc",
     *,
-    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Lista productos de proveedores con filtros, orden y paginación."""
@@ -316,11 +320,6 @@ async def list_products(
     max_page = int(os.getenv("PRODUCTS_PAGE_MAX", "100"))
     if page < 1 or page_size < 1 or page_size > max_page:
         raise HTTPException(status_code=400, detail="paginación inválida")
-
-    if os.getenv("AUTH_ENABLED", "false").lower() == "true":
-        role = request.headers.get("x-role")
-        if role not in {"viewer", "manager", "admin"}:
-            raise HTTPException(status_code=403, detail="forbidden")
 
     sp = SupplierProduct
     p = Product
@@ -442,7 +441,12 @@ class PriceHistoryResponse(BaseModel):
     items: List[PriceHistoryItem]
 
 
-@router.get("/price-history")
+@router.get(
+    "/price-history",
+    dependencies=[
+        Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))
+    ],
+)
 async def get_price_history(
     supplier_product_id: Optional[int] = Query(None),
     product_id: Optional[int] = Query(None),
