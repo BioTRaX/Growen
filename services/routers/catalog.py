@@ -19,6 +19,7 @@ from db.models import (
     Product,
 )
 from db.session import get_session
+from services.auth import require_csrf, require_roles
 
 router = APIRouter(tags=["catalog"])
 
@@ -88,7 +89,10 @@ async def list_supplier_files(
     ]
 
 
-@router.post("/suppliers")
+@router.post(
+    "/suppliers",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+)
 async def create_supplier(
     request: Request, session: AsyncSession = Depends(get_session)
 ):
@@ -126,7 +130,10 @@ async def create_supplier(
     }
 
 
-@router.patch("/suppliers/{supplier_id}")
+@router.patch(
+    "/suppliers/{supplier_id}",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+)
 async def update_supplier(
     supplier_id: int, req: SupplierUpdate, session: AsyncSession = Depends(get_session)
 ) -> dict:
@@ -203,7 +210,10 @@ async def search_categories(q: str, session: AsyncSession = Depends(get_session)
     ]
 
 
-@router.post("/categories/generate-from-supplier-file")
+@router.post(
+    "/categories/generate-from-supplier-file",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+)
 async def generate_categories(
     req: CategoryGenRequest, session: AsyncSession = Depends(get_session)
 ) -> dict:
@@ -388,19 +398,17 @@ class StockUpdate(BaseModel):
     stock: int
 
 
-@router.patch("/products/{product_id}/stock")
+@router.patch(
+    "/products/{product_id}/stock",
+    dependencies=[Depends(require_csrf), Depends(require_roles("manager", "admin"))],
+)
 async def update_product_stock(
     product_id: int,
     payload: StockUpdate,
-    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     if payload.stock < 0 or payload.stock > 1_000_000_000:
         raise HTTPException(status_code=400, detail="stock fuera de rango")
-    if os.getenv("AUTH_ENABLED", "false").lower() == "true":
-        role = request.headers.get("x-role")
-        if role not in {"manager", "admin"}:
-            raise HTTPException(status_code=403, detail="forbidden")
     prod = await session.get(Product, product_id)
     if not prod:
         raise HTTPException(status_code=404, detail="Producto no encontrado")

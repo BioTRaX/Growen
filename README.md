@@ -98,7 +98,7 @@ En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8
 
 ## Autenticación y roles
 
-La API implementa sesiones mediante la cookie `growen_session` y un token CSRF almacenado en `csrf_token`. Todas las mutaciones deben enviar el encabezado `X-CSRF-Token` coincidiendo con dicha cookie.
+La API implementa sesiones mediante la cookie `growen_session` y un token CSRF almacenado en `csrf_token`. Todas las mutaciones deben enviar el encabezado `X-CSRF-Token` coincidiendo con dicha cookie. Las rutas que modifican datos añaden dependencias `require_roles` para comprobar que el usuario posea el rol autorizado.
 
 El login acepta **identificador** o email junto con la contraseña. Al ejecutar las migraciones se crea, si no existe, el usuario inicial `Admin/123456` (también disponible como `admin@growen.local`).
 
@@ -125,12 +125,16 @@ El login acepta **identificador** o email junto con la contraseña. Al ejecutar 
 ### Variables de entorno relevantes
 
 ```env
-SECRET_KEY=change-me
+SECRET_KEY=<generar-valor-seguro>
 SESSION_EXPIRE_MINUTES=43200
 AUTH_ENABLED=true
 COOKIE_SECURE=false
 COOKIE_DOMAIN=
 ```
+
+`SECRET_KEY` es obligatorio para firmar las sesiones. El valor de ejemplo debe
+reemplazarse por uno generado de forma segura, rotarse periódicamente y
+mantenido fuera del control de versiones.
 
 ## Botonera
 
@@ -167,7 +171,7 @@ La API permite subir archivos de proveedores en formato `.xlsx` para revisar y a
 3. `POST /imports/{job_id}/commit` aplica los cambios, creando categorías, productos y relaciones en `supplier_products`.
 
 Cada proveedor tiene su propio formato de planilla. Los *parsers* disponibles se registran en `SUPPLIER_PARSERS`.
-Para depurar los parsers habilitados se puede llamar a `GET /debug/imports/parsers`.
+Para depurar los parsers habilitados se puede llamar a `GET /debug/imports/parsers`, disponible solo para administradores y deshabilitado en producción.
 
 | Proveedor | Campos requeridos | Campos normalizados |
 |-----------|------------------|---------------------|
@@ -343,9 +347,10 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `OLLAMA_URL`: URL base de Ollama (por defecto `http://localhost:11434`).
 - `OLLAMA_MODEL`: modelo de Ollama (por defecto `llama3.1`).
 - `OPENAI_API_KEY`, `OPENAI_MODEL`.
-- `SECRET_KEY`: clave usada para firmar sesiones.
+- `SECRET_KEY`: clave usada para firmar sesiones; generar un valor robusto,
+  rotarlo periódicamente y mantenerlo fuera del control de versiones.
 - `SESSION_EXPIRE_MINUTES`: tiempo de expiración de la sesión.
-- `COOKIE_SECURE`: activa cookies seguras en producción.
+- `COOKIE_SECURE`: activa cookies seguras en producción (debe ser `true` en entornos productivos).
 - `ALLOWED_ORIGINS`: orígenes permitidos para CORS, separados por coma. Si se
   incluye `http://localhost` o `http://127.0.0.1` se habilita automáticamente su
   contraparte con el mismo puerto.
@@ -358,11 +363,12 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 
 ## Endpoints de diagnóstico
 
-Para verificar el estado del servicio se exponen las siguientes rutas:
+Para verificar el estado del servicio se exponen las siguientes rutas, disponibles únicamente para administradores y omitidas en producción:
 
 - `GET /healthz`: responde `{"status":"ok"}` si la app está viva.
 - `GET /debug/db`: ejecuta `SELECT 1` contra la base de datos.
 - `GET /debug/config`: muestra `ALLOWED_ORIGINS` y la `DB_URL` sin contraseña.
+- `GET /debug/imports/parsers`: enumera los parsers registrados para las importaciones.
 
 ## Comandos y chat
 
