@@ -14,6 +14,7 @@ from db.models import (
     SupplierProduct,
 )
 from db.session import get_session
+from services.auth import require_csrf, require_roles
 
 canonical_router = APIRouter(prefix="/canonical-products", tags=["catalog"])
 equivalences_router = APIRouter(prefix="/equivalences", tags=["catalog"])
@@ -31,7 +32,10 @@ class CanonicalUpdate(BaseModel):
     specs_json: dict | None = None
 
 
-@canonical_router.post("")
+@canonical_router.post(
+    "",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+)
 async def create_canonical_product(
     req: CanonicalCreate, session: AsyncSession = Depends(get_session)
 ) -> dict:
@@ -103,7 +107,10 @@ async def get_canonical_product(
     }
 
 
-@canonical_router.patch("/{canonical_id}")
+@canonical_router.patch(
+    "/{canonical_id}",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+)
 async def update_canonical_product(
     canonical_id: int,
     req: CanonicalUpdate,
@@ -176,7 +183,10 @@ async def list_equivalences(
     }
 
 
-@equivalences_router.post("")
+@equivalences_router.post(
+    "",
+    dependencies=[Depends(require_csrf), Depends(require_roles("manager", "admin"))],
+)
 async def upsert_equivalence(
     req: EquivalenceCreate, session: AsyncSession = Depends(get_session)
 ) -> dict:
@@ -212,7 +222,10 @@ async def upsert_equivalence(
     }
 
 
-@equivalences_router.delete("/{equivalence_id}")
+@equivalences_router.delete(
+    "/{equivalence_id}",
+    dependencies=[Depends(require_csrf), Depends(require_roles("manager", "admin"))],
+)
 async def delete_equivalence(
     equivalence_id: int, session: AsyncSession = Depends(get_session)
 ) -> dict:
