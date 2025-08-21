@@ -181,6 +181,7 @@ En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios d
 
 Las tablas `import_jobs` e `import_job_rows` guardan cada archivo cargado y sus filas normalizadas.
 `supplier_price_history` registra los cambios de precios para auditoría.
+`GET /price-history` permite consultar ese historial filtrando por `supplier_product_id` o `product_id` y admite paginación.
 
 ### Plantilla Excel por proveedor
 
@@ -266,6 +267,10 @@ Ejemplo de respuesta:
 Este endpoint se utiliza para consultar el catálogo existente desde el frontend.
 
 Para modificar el stock manualmente existe `PATCH /products/{id}/stock` con cuerpo `{ "stock": <int> }`.
+
+## Historial de precios
+
+`GET /price-history` devuelve el historial de precios ordenado por fecha. Debe recibirse `supplier_product_id` o `product_id` y se puede paginar con `page` y `page_size`.
 
 ## Inicio rápido (1‑clic)
 
@@ -359,6 +364,7 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `MAX_UPLOAD_MB`: tamaño máximo de archivos a subir.
 - `AUTH_ENABLED`: si es `true`, requiere sesión autenticada.
 - `PRODUCTS_PAGE_MAX`: límite máximo de resultados por página.
+- `PRICE_HISTORY_PAGE_SIZE`: tamaño por defecto al paginar el historial de precios.
 
 ## Endpoints de diagnóstico
 
