@@ -280,6 +280,44 @@ async def upload_price_list(
     return {"job_id": job.id, "summary": kpis, "kpis": kpis}
 
 
+@router.get("/imports/{job_id}/preview")
+async def preview_import(
+    job_id: int,
+    status: str | None = Query(None, description="Estados separados por coma"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_session),
+):
+    """Lista filas paginadas filtradas por ``status``."""
+    res = await db.execute(select(ImportJob).where(ImportJob.id == job_id))
+    job = res.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+
+    stmt = select(ImportJobRow).where(ImportJobRow.job_id == job_id)
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+        if statuses:
+            stmt = stmt.where(ImportJobRow.status.in_(statuses))
+
+    stmt = (
+        stmt.order_by(ImportJobRow.row_index)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    res = await db.execute(stmt)
+    items = [
+        {
+            "row_index": r.row_index,
+            "status": r.status,
+            "error": r.error,
+            "data": r.row_json_normalized,
+        }
+        for r in res.scalars()
+    ]
+    return {"items": items, "summary": job.summary_json}
+
+
 @router.get("/imports/{job_id}")
 async def get_import(
     job_id: int,
