@@ -23,6 +23,9 @@ from services.auth import require_csrf, require_roles
 
 router = APIRouter(tags=["catalog"])
 
+# Tamaño de página por defecto para el historial de precios
+DEFAULT_PRICE_HISTORY_PAGE_SIZE = int(os.getenv("PRICE_HISTORY_PAGE_SIZE", "20"))
+
 
 # ------------------------------- Proveedores -------------------------------
 
@@ -415,3 +418,84 @@ async def update_product_stock(
     prod.stock = payload.stock
     await session.commit()
     return {"product_id": product_id, "stock": prod.stock}
+
+
+# --------------------------- Historial de precios --------------------------
+
+
+class PriceHistoryItem(BaseModel):
+    as_of_date: str
+    purchase_price: Optional[float]
+    sale_price: Optional[float]
+    delta_purchase_pct: Optional[float]
+    delta_sale_pct: Optional[float]
+
+
+class PriceHistoryResponse(BaseModel):
+    page: int
+    page_size: int
+    total: int
+    items: List[PriceHistoryItem]
+
+
+@router.get("/price-history")
+async def get_price_history(
+    supplier_product_id: Optional[int] = Query(None),
+    product_id: Optional[int] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(DEFAULT_PRICE_HISTORY_PAGE_SIZE, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+) -> PriceHistoryResponse:
+    """Devuelve el historial de precios ordenado por fecha."""
+
+    if not supplier_product_id and not product_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Debe indicar supplier_product_id o product_id",
+        )
+
+    if supplier_product_id:
+        base_query = select(SupplierPriceHistory).where(
+            SupplierPriceHistory.supplier_product_fk == supplier_product_id
+        )
+    else:
+        base_query = (
+            select(SupplierPriceHistory)
+            .join(SupplierProduct)
+            .where(SupplierProduct.internal_product_id == product_id)
+        )
+
+    total = await session.scalar(
+        select(func.count()).select_from(base_query.subquery())
+    )
+
+    result = await session.execute(
+        base_query.order_by(SupplierPriceHistory.as_of_date.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = result.scalars().all()
+
+    return PriceHistoryResponse(
+        page=page,
+        page_size=page_size,
+        total=total or 0,
+        items=[
+            PriceHistoryItem(
+                as_of_date=r.as_of_date.isoformat(),
+                purchase_price=float(r.purchase_price)
+                if r.purchase_price is not None
+                else None,
+                sale_price=float(r.sale_price)
+                if r.sale_price is not None
+                else None,
+                delta_purchase_pct=float(r.delta_purchase_pct)
+                if r.delta_purchase_pct is not None
+                else None,
+                delta_sale_pct=float(r.delta_sale_pct)
+                if r.delta_sale_pct is not None
+                else None,
+            )
+            for r in rows
+        ],
+    )

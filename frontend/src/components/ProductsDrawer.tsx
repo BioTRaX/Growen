@@ -6,6 +6,7 @@ import {
   ProductItem,
   updateStock,
 } from '../services/products'
+import PriceHistoryModal from './PriceHistoryModal'
 
 interface Props {
   open: boolean
@@ -23,6 +24,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [total, setTotal] = useState(0)
   const [editing, setEditing] = useState<number | null>(null)
   const [stockVal, setStockVal] = useState('')
+  const [historyProduct, setHistoryProduct] = useState<number | null>(null)
 
   useEffect(() => {
     if (open) {
@@ -138,6 +140,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
             <th>Stock</th>
             <th>Categoría</th>
             <th>Actualizado</th>
+            <th>Historial</th>
           </tr>
         </thead>
         <tbody>
@@ -175,6 +178,11 @@ export default function ProductsDrawer({ open, onClose }: Props) {
               </td>
               <td>{it.category_path}</td>
               <td>{it.updated_at ? new Date(it.updated_at).toLocaleString() : ''}</td>
+              <td>
+                <button onClick={() => setHistoryProduct(it.product_id)}>
+                  Ver
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -190,6 +198,12 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           Siguiente
         </button>
       </div>
+      {historyProduct && (
+        <PriceHistoryModal
+          productId={historyProduct}
+          onClose={() => setHistoryProduct(null)}
+        />
+      )}
     </div>
   )
 }
