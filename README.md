@@ -218,6 +218,10 @@ vincularse a uno de estos canónicos mediante *equivalencias*.
 - **Eliminar equivalencia**: `DELETE /equivalences/{id}`.
 - **Comparador**: `GET /canonical-products/{id}/offers` ordena las ofertas por precio de venta y marca la mejor con `mejor_precio`.
 
+## Comparativa de precios
+
+El endpoint `GET /canonical-products/{id}/offers` devuelve todas las ofertas vinculadas a un canónico ordenadas por precio, destacando el mejor con el campo `mejor_precio`. Desde la interfaz se accede a esta tabla desde el visor de importación y el panel de productos cuando el artículo tiene una equivalencia canónica.
+
 Variables de entorno relevantes:
 
 ```env
