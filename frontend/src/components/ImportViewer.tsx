@@ -6,14 +6,15 @@ interface Props {
   open: boolean
   jobId: number
   summary: any
-  kpis: any
   onClose: () => void
 }
 
-export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Props) {
+export default function ImportViewer({ open, jobId, summary, onClose }: Props) {
   const [tab, setTab] = useState<'changes' | 'errors'>('changes')
   const [items, setItems] = useState<any[]>([])
   const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [pages, setPages] = useState(1)
   const [loading, setLoading] = useState(false)
   const [committing, setCommitting] = useState(false)
   const [error, setError] = useState('')
@@ -27,6 +28,8 @@ export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Pr
     getImportPreview(jobId, status, page)
       .then((r) => {
         setItems(r.items || [])
+        setTotal(r.total || 0)
+        setPages(r.pages || 1)
         if (r.summary) setLocalSummary(r.summary)
       })
       .catch((e) => setError(e.message))
@@ -55,11 +58,19 @@ export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Pr
         {error && <div style={{ color: 'red' }}>{error}</div>}
         <div>
           <strong>KPIs:</strong>
-          <pre>{JSON.stringify(kpis, null, 2)}</pre>
+          <ul>
+            {Object.entries(localSummary || {}).map(([k, v]) => (
+              <li key={k}>{k}: {v as number}</li>
+            ))}
+          </ul>
         </div>
         <div style={{ margin: '8px 0', display: 'flex', gap: 8 }}>
-          <button onClick={() => { setTab('changes'); setPage(1) }} disabled={tab === 'changes'}>Cambios</button>
-          <button onClick={() => { setTab('errors'); setPage(1) }} disabled={tab === 'errors'}>Errores</button>
+          <button onClick={() => { setTab('changes'); setPage(1) }} disabled={tab === 'changes'}>
+            Cambios ({(localSummary?.new || 0) + (localSummary?.changed || 0)})
+          </button>
+          <button onClick={() => { setTab('errors'); setPage(1) }} disabled={tab === 'errors'}>
+            Errores ({(localSummary?.errors || 0) + (localSummary?.duplicates_in_file || 0)})
+          </button>
         </div>
         {loading ? (
           <div>Cargando...</div>
@@ -77,17 +88,16 @@ export default function ImportViewer({ open, jobId, summary, kpis, onClose }: Pr
             ))}
           </div>
         )}
-        <div>
-          <strong>Resumen:</strong>
-          <pre>{JSON.stringify(localSummary, null, 2)}</pre>
-        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
           <div>
             <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
               Anterior
             </button>
-            <span style={{ margin: '0 8px' }}>Página {page}</span>
-            <button onClick={() => setPage((p) => p + 1)}>Siguiente</button>
+            <span style={{ margin: '0 8px' }}>Página {page} de {pages}</span>
+            <button onClick={() => setPage((p) => Math.min(pages, p + 1))} disabled={page >= pages}>
+              Siguiente
+            </button>
+            <span style={{ marginLeft: 8 }}>Total: {total}</span>
           </div>
           <div>
             <button onClick={onClose} style={{ marginRight: 8 }}>

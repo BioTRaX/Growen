@@ -16,7 +16,7 @@ export default function ChatWindow() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [droppedFile, setDroppedFile] = useState<File | null>(null)
   const [importInfo, setImportInfo] = useState<
-    | { jobId: number; summary: any; kpis: any }
+    | { jobId: number; summary: any }
     | null
   >(null)
   const [suppliersOpen, setSuppliersOpen] = useState(false)
@@ -76,7 +76,7 @@ export default function ChatWindow() {
     }
   }
 
-  function handleUploaded(info: { jobId: number; summary: any; kpis: any }) {
+  function handleUploaded(info: { jobId: number; summary: any }) {
     setImportInfo(info)
     setMessages((p) => [
       ...p,
@@ -150,7 +150,6 @@ export default function ChatWindow() {
           open={true}
           jobId={importInfo.jobId}
           summary={importInfo.summary}
-          kpis={importInfo.kpis}
           onClose={() => setImportInfo(null)}
         />
       )}
