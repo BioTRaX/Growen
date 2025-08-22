@@ -94,6 +94,43 @@ async def _upsert_supplier_product(
     await db.flush()
 
 
+@router.get("/suppliers/price-list/template")
+async def download_generic_price_list_template() -> StreamingResponse:
+    """Genera y descarga una plantilla Excel genérica para listas de precios."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "data"
+    headers = [
+        "ID",
+        "Agrupamiento",
+        "Familia",
+        "SubFamilia",
+        "Producto",
+        "Compra Minima",
+        "Stock",
+        "PrecioDeCompra",
+        "PrecioDeVenta",
+    ]
+    ws.append(headers)
+    ws.append(["123", "", "", "", "Ejemplo", 1, 0, 0.0, 0.0])
+    ws["A1"].comment = Comment(
+        "No borres la fila de encabezados. Completa tus productos desde la fila 2.",
+        "growen",
+    )
+
+    stream = BytesIO()
+    wb.save(stream)
+    stream.seek(0)
+    headers_resp = {
+        "Content-Disposition": 'attachment; filename="plantilla-generica.xlsx"'
+    }
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers_resp,
+    )
+
+
 @router.get("/suppliers/{supplier_id}/price-list/template")
 async def download_price_list_template(
     supplier_id: int, db: AsyncSession = Depends(get_session)
