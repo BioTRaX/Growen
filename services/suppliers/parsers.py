@@ -1,64 +1,117 @@
-from io import BytesIO
-import pandas as pd
+"""Parsers de listas de precios de proveedores.
 
-REQUIRED = {"ID", "Producto", "PrecioDeCompra", "PrecioDeVenta"}
-OPTIONAL = {"Agrupamiento", "Familia", "SubFamilia", "Compra Minima", "Stock"}
+Este módulo expone un parser genérico basado en archivos Excel/CSV
+configurable mediante archivos YAML ubicados en ``config/suppliers``.
+También permite agregar parsers personalizados a través de
+``entry_points`` del grupo ``growen.suppliers.parsers``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from importlib.metadata import entry_points
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Dict
+
+import pandas as pd
+import yaml
 
 
 class BaseSupplierParser:
+    """Interfaz mínima que deben implementar todos los parsers."""
+
     slug: str
 
-    def parse_bytes(self, b: bytes) -> list[dict]:
+    def parse_bytes(self, b: bytes) -> list[dict]:  # pragma: no cover - interface
         raise NotImplementedError
 
 
-class SantaPlantaParser(BaseSupplierParser):
-    slug = "santa-planta"
+@dataclass
+class GenericExcelParser(BaseSupplierParser):
+    """Parser configurable por YAML para planillas simples.
+
+    Cada archivo ``*.yml`` describe cómo mapear las columnas externas a
+    campos internos y qué transformaciones aplicar. El atributo ``slug``
+    se toma del propio YAML o del nombre del archivo.
+    """
+
+    slug: str
+    config: Dict[str, Any]
 
     def parse_bytes(self, b: bytes) -> list[dict]:
-        try:
-            df = pd.read_excel(BytesIO(b), sheet_name="data")
-        except Exception:
-            sheets = pd.read_excel(BytesIO(b), sheet_name=None)
-            def normalize_cols(c):
-                return [str(x).strip() for x in c]
-            for name, sdf in sheets.items():
-                cols = set(normalize_cols(sdf.columns))
-                if REQUIRED.issubset(cols):
-                    df = sdf
-                    break
-            else:
-                raise ValueError(
-                    "Hoja 'data' no encontrada y no se halló hoja con columnas requeridas"
-                )
+        cfg = self.config
 
+        stream = BytesIO(b)
+        ftype = cfg.get("file_type", "xlsx").lower()
+        if ftype == "xlsx":
+            df = pd.read_excel(
+                stream,
+                sheet_name=cfg.get("sheet_name"),
+                header=cfg.get("header_row", 0),
+            )
+        elif ftype == "csv":
+            df = pd.read_csv(
+                stream,
+                delimiter=cfg.get("delimiter", ","),
+                encoding=cfg.get("encoding", "utf-8"),
+                header=cfg.get("header_row", 0),
+            )
+        else:  # pragma: no cover - validado por configuración
+            raise ValueError("Tipo de archivo no soportado")
+
+        # normalizar encabezados
         df.columns = [str(c).strip() for c in df.columns]
-        missing = REQUIRED - set(df.columns)
+
+        # resolver mapeos de columnas
+        col_map: Dict[str, str] = {}
+        for internal, options in cfg.get("columns", {}).items():
+            for opt in options:
+                if opt in df.columns:
+                    col_map[opt] = internal
+                    break
+        df = df.rename(columns=col_map)
+
+        required = {"supplier_product_id", "title", "purchase_price", "sale_price"}
+        missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Faltan columnas: {', '.join(sorted(missing))}")
 
-        rows = []
+        # aplicar transformaciones básicas
+        for field, opts in cfg.get("transform", {}).items():
+            if opts.get("replace_comma_decimal") and field in df.columns:
+                df[field] = df[field].map(
+                    lambda v: str(v).replace(",", ".") if pd.notna(v) else v
+                )
+
+        defaults = cfg.get("defaults", {})
+
+        rows: list[dict] = []
         for _, r in df.iterrows():
-            codigo = str(r["ID"]).strip() if pd.notna(r.get("ID")) else ""
-            nombre = str(r["Producto"]).strip() if pd.notna(r.get("Producto")) else ""
-            agr = str(r.get("Agrupamiento") or "").strip()
-            fam = str(r.get("Familia") or "").strip()
-            sub = str(r.get("SubFamilia") or "").strip()
-            path = " > ".join([x for x in [agr, fam, sub] if x])
+            codigo = str(r.get("supplier_product_id") or "").strip()
+            nombre = str(r.get("title") or "").strip()
+
+            cat_parts = [
+                str(r.get("category_level_1") or "").strip(),
+                str(r.get("category_level_2") or "").strip(),
+                str(r.get("category_level_3") or "").strip(),
+            ]
+            categoria_path = " > ".join([p for p in cat_parts if p])
 
             try:
-                pc = float(r.get("PrecioDeCompra") or 0)
-            except Exception:
+                pc = float(r.get("purchase_price") or 0)
+            except Exception:  # pragma: no cover - defensivo
                 pc = 0.0
             try:
-                pv = float(r.get("PrecioDeVenta") or 0)
-            except Exception:
+                pv = float(r.get("sale_price") or 0)
+            except Exception:  # pragma: no cover - defensivo
                 pv = 0.0
 
             try:
-                cm = int(r.get("Compra Minima") or 1)
-            except Exception:
-                cm = 1
+                cm_raw = r.get("min_purchase_qty")
+                cm = int(cm_raw if pd.notna(cm_raw) else defaults.get("min_qty", 1))
+            except Exception:  # pragma: no cover - defensivo
+                cm = int(defaults.get("min_qty", 1))
 
             status, err = "ok", None
             if not codigo or not nombre:
@@ -70,7 +123,7 @@ class SantaPlantaParser(BaseSupplierParser):
                 {
                     "codigo": codigo,
                     "nombre": nombre,
-                    "categoria_path": path,
+                    "categoria_path": categoria_path,
                     "compra_minima": cm,
                     "precio_compra": pc,
                     "precio_venta": pv,
@@ -78,7 +131,36 @@ class SantaPlantaParser(BaseSupplierParser):
                     "error_msg": err,
                 }
             )
+
         return rows
 
 
-SUPPLIER_PARSERS = {SantaPlantaParser.slug: SantaPlantaParser()}
+def _load_yaml_parsers() -> dict[str, BaseSupplierParser]:
+    """Crea instancias del parser genérico para cada YAML configurado."""
+
+    parsers: dict[str, BaseSupplierParser] = {}
+    config_dir = Path("config/suppliers")
+    for yml in config_dir.glob("*.yml"):
+        with open(yml, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        slug = cfg.get("slug") or yml.stem
+        parsers[slug] = GenericExcelParser(slug=slug, config=cfg)
+    return parsers
+
+
+# parsers declarados por YAML
+SUPPLIER_PARSERS = _load_yaml_parsers()
+
+
+# parsers extra que se registren mediante entry_points
+try:  # pragma: no cover - dependemos de la versión de importlib
+    eps = entry_points(group="growen.suppliers.parsers")
+except TypeError:  # pragma: no cover - compatibilidad
+    eps = entry_points().get("growen.suppliers.parsers", [])
+
+for ep in eps:
+    obj = ep.load()
+    parser = obj() if isinstance(obj, type) else obj
+    if isinstance(parser, BaseSupplierParser):
+        SUPPLIER_PARSERS[parser.slug] = parser
+

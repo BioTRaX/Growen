@@ -186,12 +186,13 @@ La API permite subir archivos de proveedores en formato `.xlsx` para revisar y a
 2. `GET /imports/{job_id}/preview?status=new,changed&page=1&page_size=50` lista las filas normalizadas filtradas por `status` y paginadas. La respuesta devuelve `{items, summary}` y permite inspeccionar también `status=error,duplicate_in_file` para los fallos.
 3. `POST /imports/{job_id}/commit` aplica los cambios, creando categorías, productos y relaciones en `supplier_products`.
 
-Cada proveedor tiene su propio formato de planilla. Los *parsers* disponibles se registran en `SUPPLIER_PARSERS`.
+Cada proveedor define su mapeo en `config/suppliers/*.yml`. Por cada archivo se genera automáticamente un `GenericExcelParser`.
+También pueden agregarse parsers especializados instalando paquetes que expongan un `entry_point` en el grupo `growen.suppliers.parsers`.
 Para depurar los parsers habilitados se puede llamar a `GET /debug/imports/parsers`, disponible solo para administradores y deshabilitado en producción.
 
-| Proveedor | Campos requeridos | Campos normalizados |
-|-----------|------------------|---------------------|
-| `santa-planta` | ID, Producto, PrecioDeCompra, PrecioDeVenta | codigo, nombre, categoria_path, compra_minima, precio_compra, precio_venta |
+| Proveedor | Configuración |
+|-----------|---------------|
+| `santa-planta` | `config/suppliers/santa-planta.yml` |
 
 En modo *dry-run* se puede revisar el contenido antes de confirmar los cambios definitivos.
 
