@@ -46,7 +46,10 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
     reset_login_attempts(ip)
-    sess, csrf = await create_session(db, user.role, request, user)
+    prev = await current_session(request, db)
+    sess, csrf = await create_session(
+        db, user.role, request, user, prev_session=prev.session
+    )
     resp = JSONResponse(
         {
             "id": user.id,
@@ -63,7 +66,10 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
 
 @router.post("/guest")
 async def login_guest(request: Request, db: AsyncSession = Depends(get_session)):
-    sess, csrf = await create_session(db, "guest", request)
+    prev = await current_session(request, db)
+    sess, csrf = await create_session(
+        db, "guest", request, prev_session=prev.session
+    )
     resp = JSONResponse({"role": "guest"})
     await set_session_cookies(resp, sess.id, csrf)
     return resp
@@ -71,13 +77,12 @@ async def login_guest(request: Request, db: AsyncSession = Depends(get_session))
 
 @router.post("/logout", dependencies=[Depends(require_csrf)])
 async def logout(request: Request, db: AsyncSession = Depends(get_session)):
-    sess = await current_session(request, db)
-    if sess.session:
-        await db.delete(sess.session)
-        await db.commit()
+    prev = await current_session(request, db)
+    new_sess, csrf = await create_session(
+        db, "guest", request, prev_session=prev.session
+    )
     resp = JSONResponse({"status": "ok"})
-    resp.delete_cookie("growen_session")
-    resp.delete_cookie("csrf_token")
+    await set_session_cookies(resp, new_sess.id, csrf)
     return resp
 
 
