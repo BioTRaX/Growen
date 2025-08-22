@@ -7,7 +7,7 @@ import { useAuth } from '../auth/AuthContext'
 interface Props {
   open: boolean
   onClose: () => void
-  onUploaded: (info: { jobId: number; summary: any; kpis: any }) => void
+  onUploaded: (info: { jobId: number; summary: any }) => void
   preselectedFile?: File | null
 }
 
@@ -61,7 +61,7 @@ export default function UploadModal({ open, onClose, onUploaded, preselectedFile
     }
     try {
       const r = await uploadPriceList(Number(supplierId), file)
-      onUploaded({ jobId: r.job_id, summary: r.summary, kpis: r.kpis })
+      onUploaded({ jobId: r.job_id, summary: r.summary })
       onClose()
     } catch (e: any) {
       const msg =
