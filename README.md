@@ -133,6 +133,7 @@ ADMIN_USER=admin
 ADMIN_PASS=changeme
 SESSION_EXPIRE_MINUTES=43200
 AUTH_ENABLED=true
+# se ignora en producción; allí siempre es true
 COOKIE_SECURE=false
 COOKIE_DOMAIN=
 ```
@@ -367,7 +368,7 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
   por defecto `changeme`, rotarse periódicamente y mantenerse fuera del
   control de versiones. El servidor se detiene si no se sobrescribe.
 - `SESSION_EXPIRE_MINUTES`: tiempo de expiración de la sesión.
-- `COOKIE_SECURE`: activa cookies seguras en producción (debe ser `true` en entornos productivos).
+- `COOKIE_SECURE`: activa cookies seguras; se ignora en producción donde siempre están habilitadas.
 - `ALLOWED_ORIGINS`: orígenes permitidos para CORS, separados por coma. Si se
   incluye `http://localhost` o `http://127.0.0.1` se habilita automáticamente su
   contraparte con el mismo puerto.
