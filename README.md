@@ -183,7 +183,7 @@ Flujo básico: **upload → preview → commit**.
 La API permite subir archivos de proveedores en formato `.xlsx` para revisar y aplicar nuevas listas de precios.
 
 1. `POST /suppliers/{supplier_id}/price-list/upload` recibe el archivo del proveedor (campo `file` en `multipart/form-data`) y un parámetro `dry_run` (por defecto `true`). Es obligatorio que el proveedor exista y tenga un *parser* registrado.
-2. `GET /imports/{job_id}/preview?status=new,changed&page=1&page_size=50` lista las filas normalizadas filtradas por `status` y paginadas. La respuesta devuelve `{items, summary}` y permite inspeccionar también `status=error,duplicate_in_file` para los fallos.
+2. `GET /imports/{job_id}/preview?status=new,changed&page=1&page_size=50` lista las filas normalizadas filtradas por `status` y paginadas. La respuesta devuelve `{items, summary, total, pages}` y permite inspeccionar también `status=error,duplicate_in_file` para los fallos.
 3. `POST /imports/{job_id}/commit` aplica los cambios, creando categorías, productos y relaciones en `supplier_products`.
 
 Cada proveedor define su mapeo en `config/suppliers/*.yml`. Por cada archivo se genera automáticamente un `GenericExcelParser`.
@@ -213,8 +213,8 @@ La interfaz de chat incluye un botón **+** y la opción de la botonera **Adjunt
 1. Hacer clic en **Adjuntar Excel** o arrastrar un archivo `.xlsx` sobre la ventana.
 2. El modal exige elegir un proveedor; si no existen proveedores se muestra un estado vacío con el botón **Crear proveedor**.
 3. Tras seleccionar proveedor y archivo, el frontend llama a `POST /suppliers/{supplier_id}/price-list/upload?dry_run=true`.
-4. Growen envía un mensaje de sistema con el `job_id` y abre un visor que pagina las filas llamando a `GET /imports/{job_id}/preview`.
-5. El visor abre la pestaña **Cambios** por defecto para resaltar las variaciones; desde allí se pueden filtrar errores y finalmente ejecutar `POST /imports/{job_id}/commit`.
+4. Growen envía un mensaje de sistema con el `job_id` y abre un visor que pagina las filas llamando a `GET /imports/{job_id}/preview`, mostrando el total de filas y el número de páginas devueltos por la API.
+5. El visor abre la pestaña **Cambios** por defecto para resaltar las variaciones y muestra el recuento en cada pestaña; desde allí se pueden filtrar errores y finalmente ejecutar `POST /imports/{job_id}/commit`.
 
 Errores comunes:
 
