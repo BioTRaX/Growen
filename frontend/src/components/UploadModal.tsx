@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react'
-import { uploadPriceList, downloadTemplate } from '../services/imports'
+import {
+  uploadPriceList,
+  downloadTemplate,
+  downloadGenericTemplate,
+} from '../services/imports'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import CreateSupplierModal from './CreateSupplierModal'
 import { useAuth } from '../auth/AuthContext'
@@ -92,7 +96,12 @@ export default function UploadModal({ open, onClose, onUploaded, preselectedFile
         {suppliers.length === 0 ? (
           <div style={{ margin: '8px 0' }}>
             <p>No hay proveedores aún.</p>
-            <button onClick={() => setCreateOpen(true)}>Crear proveedor</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setCreateOpen(true)}>Crear proveedor</button>
+              <button onClick={downloadGenericTemplate}>
+                Descargar plantilla genérica
+              </button>
+            </div>
           </div>
         ) : (
           <div style={{ margin: '8px 0' }}>
@@ -113,6 +122,9 @@ export default function UploadModal({ open, onClose, onUploaded, preselectedFile
               {state.role !== 'proveedor' && (
                 <button onClick={() => setCreateOpen(true)}>Crear proveedor</button>
               )}
+              <button onClick={downloadGenericTemplate}>
+                Descargar plantilla genérica
+              </button>
               <button
                 onClick={() => supplierId && downloadTemplate(Number(supplierId))}
                 disabled={!supplierId}

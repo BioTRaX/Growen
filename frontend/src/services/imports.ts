@@ -42,6 +42,19 @@ export async function downloadTemplate(supplierId: number): Promise<void> {
   a.remove()
 }
 
+export async function downloadGenericTemplate(): Promise<void> {
+  const url = `${base}/suppliers/price-list/template`
+  const res = await fetch(url, { credentials: 'include' })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const blob = await res.blob()
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `plantilla-generica.xlsx`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
 export async function commitImport(jobId: number): Promise<any> {
   const res = await http.post(`/imports/${jobId}/commit`)
   return res.data
