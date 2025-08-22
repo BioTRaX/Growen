@@ -134,7 +134,7 @@ La lista completa de rutas y roles se encuentra en [docs/roles-endpoints.md](doc
 SECRET_KEY=changeme
 ADMIN_USER=admin
 ADMIN_PASS=changeme
-SESSION_EXPIRE_MINUTES=43200
+SESSION_EXPIRE_MINUTES=1440 # 1 día
 AUTH_ENABLED=true
 # se ignora en producción; allí siempre es true
 COOKIE_SECURE=false
@@ -145,6 +145,12 @@ COOKIE_DOMAIN=
 iniciar la aplicación; ésta abortará el arranque si alguno permanece en
 `changeme`. Mantener estas claves fuera del control de versiones y rotarlas
 periódicamente.
+
+`SESSION_EXPIRE_MINUTES` define cuánto tiempo permanece válida una sesión.
+El valor sugerido de `1440` mantiene la sesión durante un día. Valores más
+altos reducen la frecuencia de inicio de sesión pero aumentan el riesgo en
+caso de robo de cookies; valores más bajos obligan a reautenticarse más seguido
+y elevan la seguridad.
 
 ## Botonera
 
@@ -370,7 +376,10 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `SECRET_KEY`: clave usada para firmar sesiones; debe cambiarse del valor
   por defecto `changeme`, rotarse periódicamente y mantenerse fuera del
   control de versiones. El servidor se detiene si no se sobrescribe.
-- `SESSION_EXPIRE_MINUTES`: tiempo de expiración de la sesión.
+- `SESSION_EXPIRE_MINUTES`: tiempo de expiración de la sesión en minutos (por
+  defecto 1440 = 1 día). Incrementarlo prolonga las sesiones pero aumenta el
+  riesgo ante robo de cookies; reducirlo fuerza reautenticaciones más frecuentes
+  y eleva la seguridad.
 - `COOKIE_SECURE`: activa cookies seguras; se ignora en producción donde siempre están habilitadas.
 - `ALLOWED_ORIGINS`: orígenes permitidos para CORS, separados por coma. Si se
   incluye `http://localhost` o `http://127.0.0.1` se habilita automáticamente su
