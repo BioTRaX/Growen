@@ -200,11 +200,12 @@ Las tablas `import_jobs` e `import_job_rows` guardan cada archivo cargado y sus 
 `supplier_price_history` registra los cambios de precios para auditoría.
 `GET /price-history` permite consultar ese historial filtrando por `supplier_product_id` o `product_id` y admite paginación. Solo está disponible para los roles `cliente`, `proveedor`, `colaborador` y `admin`.
 
-### Plantilla Excel por proveedor
+### Plantillas Excel
 
-`GET /suppliers/{supplier_id}/price-list/template` genera un archivo `.xlsx` con la hoja `data` y los encabezados esperados:
+`GET /suppliers/price-list/template` devuelve una plantilla genérica con la hoja `data` y los encabezados:
 `ID`, `Agrupamiento`, `Familia`, `SubFamilia`, `Producto`, `Compra Minima`, `Stock`, `PrecioDeCompra`, `PrecioDeVenta`.
-La celda `A1` incluye una nota con instrucciones y la fila 2 trae un ejemplo. Desde el modal de carga puede descargarse esta plantilla antes de completar los datos.
+`GET /suppliers/{supplier_id}/price-list/template` genera la misma estructura pero permite personalizar el nombre del archivo según el proveedor.
+La celda `A1` incluye una nota con instrucciones y la fila 2 trae un ejemplo. Desde el modal de carga pueden descargarse ambas variantes antes de completar los datos.
 
 ### Adjuntar Excel desde el chat
 

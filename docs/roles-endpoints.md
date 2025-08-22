@@ -32,6 +32,7 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /equivalences | Ninguno |
 | POST | /equivalences | manager, admin (requiere CSRF) |
 | DELETE | /equivalences/{equivalence_id} | manager, admin (requiere CSRF) |
+| GET | /suppliers/price-list/template | Ninguno |
 | GET | /suppliers/{supplier_id}/price-list/template | Ninguno |
 | POST | /suppliers/{supplier_id}/price-list/upload | proveedor, colaborador, admin (requiere CSRF) |
 | GET | /imports/{job_id}/preview | Ninguno |
