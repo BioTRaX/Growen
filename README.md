@@ -126,6 +126,8 @@ El login acepta **identificador** o email junto con la contraseña. Al ejecutar 
 | colaborador | Subir Excel y aplicar importaciones de cualquier proveedor |
 | admin       | Todos los permisos, incluyendo registrar usuarios |
 
+La lista completa de rutas y roles se encuentra en [docs/roles-endpoints.md](docs/roles-endpoints.md).
+
 ### Variables de entorno relevantes
 
 ```env
