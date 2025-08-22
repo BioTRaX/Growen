@@ -3,7 +3,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from datetime import datetime, date
 from io import BytesIO
 from openpyxl import Workbook
@@ -299,6 +299,8 @@ async def preview_import(
         statuses = [s.strip() for s in status.split(",") if s.strip()]
         if statuses:
             stmt = stmt.where(ImportJobRow.status.in_(statuses))
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar() or 0
 
     stmt = (
         stmt.order_by(ImportJobRow.row_index)
@@ -315,7 +317,13 @@ async def preview_import(
         }
         for r in res.scalars()
     ]
-    return {"items": items, "summary": job.summary_json}
+    pages = (total + page_size - 1) // page_size
+    return {
+        "items": items,
+        "summary": job.summary_json,
+        "total": total,
+        "pages": pages,
+    }
 
 
 @router.get("/imports/{job_id}")
