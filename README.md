@@ -101,15 +101,15 @@ En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8
 
 ## Autenticación y roles
 
-La API implementa sesiones mediante la cookie `growen_session` y un token CSRF almacenado en `csrf_token`. Todas las mutaciones deben enviar el encabezado `X-CSRF-Token` coincidiendo con dicha cookie. Las rutas que modifican datos añaden dependencias `require_roles` para comprobar que el usuario posea el rol autorizado.
+La API implementa sesiones mediante la cookie `growen_session` y un token CSRF almacenado en `csrf_token`. Cada vez que se inicia o cierra sesión se generan nuevos valores para ambas cookies, evitando la fijación de sesiones. Todas las mutaciones deben enviar el encabezado `X-CSRF-Token` coincidiendo con dicha cookie. Las rutas que modifican datos añaden dependencias `require_roles` para comprobar que el usuario posea el rol autorizado.
 
 El login acepta **identificador** o email junto con la contraseña. Al ejecutar las migraciones se crea, si no existe, un usuario administrador usando `ADMIN_USER` y `ADMIN_PASS` definidos en el entorno. El servidor se niega a iniciar si `ADMIN_PASS` queda en `changeme`.
 
 ### Endpoints principales
 
-- `POST /auth/login` valida credenciales por identificador o email y genera una sesión.
-- `POST /auth/guest` crea una sesión con rol `guest` sin usuario.
-- `POST /auth/logout` cierra la sesión (requiere CSRF).
+- `POST /auth/login` valida credenciales por identificador o email y genera una sesión nueva.
+- `POST /auth/guest` crea una sesión con rol `guest` sin usuario, regenerando el token.
+- `POST /auth/logout` cierra la sesión, crea una nueva sesión de invitado y regenera el token (requiere CSRF).
 - `GET /auth/me` informa el estado actual.
 - `GET /auth/users` lista usuarios (solo admin).
 - `POST /auth/users` crea usuarios (solo admin, requiere CSRF).

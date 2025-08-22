@@ -41,7 +41,14 @@ class SessionData:
 
 
 async def set_session_cookies(resp: Response, sid: str, csrf: str) -> None:
-    """Configura cookies de sesión y CSRF."""
+    """Configura cookies de sesión y CSRF.
+
+    Antes de establecer nuevas cookies se eliminan las existentes para evitar
+    que un identificador previo quede activo y pueda reutilizarse."""
+
+    # Eliminar posibles cookies antiguas para prevenir fijación de sesión
+    resp.delete_cookie("growen_session")
+    resp.delete_cookie("csrf_token")
 
     max_age = settings.session_expire_minutes * 60
     secure = settings.cookie_secure
@@ -61,9 +68,20 @@ async def set_session_cookies(resp: Response, sid: str, csrf: str) -> None:
 
 
 async def create_session(
-    db: AsyncSession, role: str, request: Request, user: User | None = None
+    db: AsyncSession,
+    role: str,
+    request: Request,
+    user: User | None = None,
+    prev_session: DBSess | None = None,
 ) -> tuple[DBSess, str]:
-    """Genera una nueva sesión persistida y devuelve el objeto y token CSRF."""
+    """Genera una nueva sesión persistida y devuelve el objeto y token CSRF.
+
+    Si se proporciona ``prev_session`` la elimina previamente para garantizar que
+    el identificador de sesión se regenere en operaciones como login o logout."""
+
+    if prev_session:
+        await db.delete(prev_session)
+        await db.commit()
 
     sid = secrets.token_hex(32)
     csrf = secrets.token_urlsafe(24)
