@@ -44,7 +44,9 @@ async def set_session_cookies(resp: Response, sid: str, csrf: str) -> None:
     """Configura cookies de sesión y CSRF."""
 
     max_age = settings.session_expire_minutes * 60
-    secure = settings.cookie_secure or settings.env == "production"
+    secure = settings.cookie_secure
+    if settings.env == "production":
+        secure = True
     cookie_args = {
         "httponly": True,
         "samesite": "lax",
