@@ -114,6 +114,7 @@ El login acepta **identificador** o email junto con la contraseña. Al ejecutar 
 - `GET /auth/users` lista usuarios (solo admin).
 - `POST /auth/users` crea usuarios (solo admin, requiere CSRF).
 - `PATCH /auth/users/{id}` actualiza usuarios (solo admin, requiere CSRF).
+- `POST /auth/users/{id}/reset-password` regenera la contraseña (solo admin, requiere CSRF).
 
 ### Roles y permisos
 
