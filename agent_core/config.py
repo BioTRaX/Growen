@@ -1,4 +1,5 @@
 """Configuración central del agente."""
+
 from __future__ import annotations
 
 import os
@@ -22,7 +23,9 @@ class Settings:
     secret_key: str = os.getenv("SECRET_KEY", "changeme")
     admin_user: str = os.getenv("ADMIN_USER", "admin")
     admin_pass: str = os.getenv("ADMIN_PASS", "changeme")
-    session_expire_minutes: int = int(os.getenv("SESSION_EXPIRE_MINUTES", "43200"))
+    session_expire_minutes: int = int(
+        os.getenv("SESSION_EXPIRE_MINUTES", "1440")
+    )  # duración de la sesión en minutos (1 día por defecto)
     auth_enabled: bool = os.getenv("AUTH_ENABLED", "false").lower() == "true"
     cookie_secure: bool = os.getenv("COOKIE_SECURE", "false").lower() == "true"
     cookie_domain: str | None = os.getenv("COOKIE_DOMAIN") or None
