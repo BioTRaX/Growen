@@ -1,5 +1,7 @@
 """Endpoints de autenticación y gestión de usuarios."""
 
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -115,7 +117,6 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     email: str | None = None
     name: str | None = None
-    password: str | None = None
     role: str | None = None
     supplier_id: int | None = None
 
@@ -195,8 +196,6 @@ async def update_user(
         user.email = payload.email
     if payload.name is not None:
         user.name = payload.name
-    if payload.password is not None:
-        user.password_hash = hash_pw(payload.password)
     if payload.role is not None:
         user.role = payload.role
     if payload.supplier_id is not None:
@@ -210,4 +209,18 @@ async def update_user(
         "role": user.role,
         "supplier_id": user.supplier_id,
     }
+
+
+@router.post(
+    "/users/{user_id}/reset-password",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+)
+async def reset_password(user_id: int, db: AsyncSession = Depends(get_session)):
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    new_password = secrets.token_urlsafe(8)
+    user.password_hash = hash_pw(new_password)
+    await db.commit()
+    return {"password": new_password}
 
