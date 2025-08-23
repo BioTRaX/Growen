@@ -74,11 +74,12 @@ class BaseSupplierParser:
 
 @dataclass
 class GenericExcelParser(BaseSupplierParser):
-    """Parser configurable por YAML para planillas simples.
+    """Parser configurable por YAML para planillas Excel o CSV simples.
 
     Cada archivo ``*.yml`` describe cómo mapear las columnas externas a
     campos internos y qué transformaciones aplicar. El atributo ``slug``
-    se toma del propio YAML o del nombre del archivo.
+    se toma del propio YAML o del nombre del archivo. El tipo de archivo
+    se define mediante ``file_type`` (``xlsx`` o ``csv``).
     """
 
     slug: str
@@ -103,7 +104,7 @@ class GenericExcelParser(BaseSupplierParser):
                 header=cfg.get("header_row", 0),
             )
         else:  # pragma: no cover - validado por configuración
-            raise ValueError("Tipo de archivo no soportado")
+            raise ValueError("Tipo de archivo no soportado: use 'xlsx' o 'csv'")
 
         # normalizar encabezados
         df.columns = [str(c).strip() for c in df.columns]

@@ -229,7 +229,8 @@ async def upload_price_list(
         )
 
     filename = (file.filename or "").lower()
-    if not filename.endswith(".xlsx"):
+    # Admitimos tanto planillas Excel como archivos CSV
+    if not (filename.endswith(".xlsx") or filename.endswith(".csv")):
         raise HTTPException(status_code=400, detail="Tipo de archivo no soportado")
     content = await file.read()
 
@@ -238,7 +239,8 @@ async def upload_price_list(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception:
-        raise HTTPException(status_code=400, detail="Archivo Excel no válido")
+        # Mensaje genérico ya que puede tratarse de Excel o CSV
+        raise HTTPException(status_code=400, detail="Archivo de precios no válido")
 
     parser_kpis = {
         "total": len(parsed_rows),
