@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { FixedSizeList as List, ListChildComponentProps } from 'react-window'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import { listCategories, Category } from '../services/categories'
 import {
@@ -27,6 +28,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [stockVal, setStockVal] = useState('')
   const [historyProduct, setHistoryProduct] = useState<number | null>(null)
   const [canonicalId, setCanonicalId] = useState<number | null>(null)
+  const ROW_HEIGHT = 48
 
   useEffect(() => {
     if (open) {
@@ -132,7 +134,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
       <div style={{ fontSize: 12, marginBottom: 8 }}>
         {total} resultados
       </div>
-      <table className="table w-full">
+      <table className="table w-full" style={{ marginBottom: 0 }}>
         <thead>
           <tr>
             <th>Producto</th>
@@ -146,57 +148,77 @@ export default function ProductsDrawer({ open, onClose }: Props) {
             <th>Comparativa</th>
           </tr>
         </thead>
-        <tbody>
-          {items.map((it) => (
-            <tr key={it.product_id}>
-              <td>{it.name}</td>
-              <td>{it.supplier.name}</td>
-              <td>{it.precio_venta ?? ''}</td>
-              <td>{it.precio_compra ?? ''}</td>
-              <td>
-                {editing === it.product_id ? (
-                  <span>
-                    <input
-                      type="number"
-                      value={stockVal}
-                      onChange={(e) => setStockVal(e.target.value)}
-                      style={{ width: 60 }}
-                    />
-                    <button onClick={() => saveStock(it.product_id)}>Guardar</button>
-                  </span>
-                ) : (
-                  <span>
-                    {it.stock}
-                    <button
-                      onClick={() => {
-                        setEditing(it.product_id)
-                        setStockVal(String(it.stock))
-                      }}
-                      style={{ marginLeft: 4 }}
-                    >
-                      ✎
-                    </button>
-                  </span>
-                )}
-              </td>
-              <td>{it.category_path}</td>
-              <td>{it.updated_at ? new Date(it.updated_at).toLocaleString() : ''}</td>
-              <td>
-                <button onClick={() => setHistoryProduct(it.product_id)}>
-                  Ver
-                </button>
-              </td>
-              <td>
-                {it.canonical_product_id && (
-                  <button onClick={() => setCanonicalId(it.canonical_product_id)}>
-                    Ver
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
       </table>
+      <List
+        height={400}
+        itemCount={items.length}
+        itemSize={ROW_HEIGHT}
+        width={"100%"}
+      >
+        {({ index, style }: ListChildComponentProps) => {
+          const it = items[index]
+          return (
+            <table
+              key={it.product_id}
+              className="table w-full"
+              style={{ ...style, marginBottom: 0 }}
+            >
+              <tbody>
+                <tr>
+                  <td>{it.name}</td>
+                  <td>{it.supplier.name}</td>
+                  <td>{it.precio_venta ?? ''}</td>
+                  <td>{it.precio_compra ?? ''}</td>
+                  <td>
+                    {editing === it.product_id ? (
+                      <span>
+                        <input
+                          type="number"
+                          value={stockVal}
+                          onChange={(e) => setStockVal(e.target.value)}
+                          style={{ width: 60 }}
+                        />
+                        <button onClick={() => saveStock(it.product_id)}>Guardar</button>
+                      </span>
+                    ) : (
+                      <span>
+                        {it.stock}
+                        <button
+                          onClick={() => {
+                            setEditing(it.product_id)
+                            setStockVal(String(it.stock))
+                          }}
+                          style={{ marginLeft: 4 }}
+                        >
+                          ✎
+                        </button>
+                      </span>
+                    )}
+                  </td>
+                  <td>{it.category_path}</td>
+                  <td>
+                    {it.updated_at
+                      ? new Date(it.updated_at).toLocaleString()
+                      : ''}
+                  </td>
+                  <td>
+                    <button onClick={() => setHistoryProduct(it.product_id)}>
+                      Ver
+                    </button>
+                  </td>
+                  <td>
+                    {it.canonical_product_id && (
+                      <button onClick={() => setCanonicalId(it.canonical_product_id)}>
+                        Ver
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          )
+        }}
+      </List>
       <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
         <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
           Anterior
