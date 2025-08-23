@@ -429,7 +429,7 @@ class StockUpdate(BaseModel):
 
 @router.patch(
     "/products/{product_id}/stock",
-    dependencies=[Depends(require_csrf), Depends(require_roles("manager", "admin"))],
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
 )
 async def update_product_stock(
     product_id: int,
