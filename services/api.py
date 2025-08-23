@@ -47,27 +47,9 @@ async def log_requests(request: Request, call_next):
     logger.info("%s %s -> %s (%.2fms)", request.method, request.url.path, resp.status_code, dur)
     return resp
 
-
-def _expand_local(origins: list[str]) -> list[str]:
-    """Duplica ``localhost``/``127.0.0.1`` para evitar errores de CORS."""
-    out: set[str] = set()
-    for o in origins:
-        o = o.strip()
-        if not o:
-            continue
-        out.add(o)
-        if o.startswith("http://localhost:"):
-            out.add(o.replace("http://localhost:", "http://127.0.0.1:"))
-        if o.startswith("http://127.0.0.1:"):
-            out.add(o.replace("http://127.0.0.1:", "http://localhost:"))
-    return list(out)
-
-
-allowed = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
-allowed = _expand_local(allowed)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed,
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],

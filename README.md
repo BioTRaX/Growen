@@ -391,9 +391,9 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
   riesgo ante robo de cookies; reducirlo fuerza reautenticaciones más frecuentes
   y eleva la seguridad.
 - `COOKIE_SECURE`: activa cookies seguras; se ignora en producción donde siempre están habilitadas.
-- `ALLOWED_ORIGINS`: orígenes permitidos para CORS, separados por coma. Si se
-  incluye `http://localhost` o `http://127.0.0.1` se habilita automáticamente su
-  contraparte con el mismo puerto.
+- `ALLOWED_ORIGINS`: orígenes permitidos para CORS, separados por coma. En
+  desarrollo se completan automáticamente los pares `localhost`/`127.0.0.1`; en
+  producción se debe especificar cada dominio explícitamente.
 - `LOG_LEVEL`: nivel de logging de la aplicación (`DEBUG`, `INFO`, etc.).
 - `DEBUG_SQL`: si vale `1`, SQLAlchemy mostrará cada consulta ejecutada.
  - `ADMIN_USER`, `ADMIN_PASS`: credenciales del administrador inicial definidas en `.env` (copiado desde `.env.example`). Si
