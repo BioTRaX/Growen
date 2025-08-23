@@ -100,7 +100,12 @@ async def _upsert_supplier_product(
     await db.flush()
 
 
-@router.get("/suppliers/price-list/template")
+@router.get(
+    "/suppliers/price-list/template",
+    dependencies=[
+        Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))
+    ],
+)
 async def download_generic_price_list_template() -> StreamingResponse:
     """Genera y descarga una plantilla Excel genérica para listas de precios."""
     wb = Workbook()
@@ -137,7 +142,12 @@ async def download_generic_price_list_template() -> StreamingResponse:
     )
 
 
-@router.get("/suppliers/{supplier_id}/price-list/template")
+@router.get(
+    "/suppliers/{supplier_id}/price-list/template",
+    dependencies=[
+        Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))
+    ],
+)
 async def download_price_list_template(
     supplier_id: int, db: AsyncSession = Depends(get_session)
 ):
@@ -333,7 +343,12 @@ async def upload_price_list(
     return {"job_id": job.id, "summary": kpis, "kpis": kpis}
 
 
-@router.get("/imports/{job_id}/preview")
+@router.get(
+    "/imports/{job_id}/preview",
+    dependencies=[
+        Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))
+    ],
+)
 async def preview_import(
     job_id: int,
     status: str | None = Query(None, description="Estados separados por coma"),
@@ -382,7 +397,12 @@ async def preview_import(
     }
 
 
-@router.get("/imports/{job_id}")
+@router.get(
+    "/imports/{job_id}",
+    dependencies=[
+        Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))
+    ],
+)
 async def get_import(
     job_id: int,
     limit: int = Query(50, ge=1, le=500),

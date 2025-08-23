@@ -15,12 +15,12 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | POST | /auth/users | admin (requiere CSRF) |
 | PATCH | /auth/users/{user_id} | admin (requiere CSRF) |
 | POST | /auth/users/{user_id}/reset-password | admin (requiere CSRF) |
-| GET | /suppliers | Ninguno |
-| GET | /suppliers/{supplier_id}/files | Ninguno |
+| GET | /suppliers | cliente, proveedor, colaborador, admin |
+| GET | /suppliers/{supplier_id}/files | cliente, proveedor, colaborador, admin |
 | POST | /suppliers | admin (requiere CSRF) |
 | PATCH | /suppliers/{supplier_id} | admin (requiere CSRF) |
-| GET | /categories | Ninguno |
-| GET | /categories/search | Ninguno |
+| GET | /categories | cliente, proveedor, colaborador, admin |
+| GET | /categories/search | cliente, proveedor, colaborador, admin |
 | POST | /categories/generate-from-supplier-file | admin (requiere CSRF) |
 | GET | /products | cliente, proveedor, colaborador, admin |
 | PATCH | /products/{product_id}/stock | colaborador, admin (requiere CSRF) |
@@ -33,11 +33,11 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /equivalences | Ninguno |
 | POST | /equivalences | colaborador, admin (requiere CSRF) |
 | DELETE | /equivalences/{equivalence_id} | colaborador, admin (requiere CSRF) |
-| GET | /suppliers/price-list/template | Ninguno |
-| GET | /suppliers/{supplier_id}/price-list/template | Ninguno |
+| GET | /suppliers/price-list/template | cliente, proveedor, colaborador, admin |
+| GET | /suppliers/{supplier_id}/price-list/template | cliente, proveedor, colaborador, admin |
 | POST | /suppliers/{supplier_id}/price-list/upload | proveedor, colaborador, admin (requiere CSRF) |
-| GET | /imports/{job_id}/preview | Ninguno |
-| GET | /imports/{job_id} | Ninguno |
+| GET | /imports/{job_id}/preview | cliente, proveedor, colaborador, admin |
+| GET | /imports/{job_id} | cliente, proveedor, colaborador, admin |
 | POST | /imports/{job_id}/commit | proveedor, colaborador, admin (requiere CSRF) |
 | GET | /actions/ | Ninguno |
 | POST | /chat | Ninguno |

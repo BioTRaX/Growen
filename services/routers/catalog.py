@@ -41,7 +41,12 @@ class SupplierUpdate(BaseModel):
     name: str
 
 
-@router.get("/suppliers")
+@router.get(
+    "/suppliers",
+    dependencies=[
+        Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))
+    ],
+)
 async def list_suppliers(
     session: AsyncSession = Depends(get_session),
 ) -> List[dict]:
@@ -70,7 +75,12 @@ async def list_suppliers(
     ]
 
 
-@router.get("/suppliers/{supplier_id}/files")
+@router.get(
+    "/suppliers/{supplier_id}/files",
+    dependencies=[
+        Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))
+    ],
+)
 async def list_supplier_files(
     supplier_id: int, session: AsyncSession = Depends(get_session)
 ) -> List[dict]:
@@ -175,7 +185,12 @@ def _build_category_path(cat: Category, lookup: dict[int, Category]) -> str:
     return ">".join(reversed(parts))
 
 
-@router.get("/categories")
+@router.get(
+    "/categories",
+    dependencies=[
+        Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))
+    ],
+)
 async def list_categories(
     session: AsyncSession = Depends(get_session),
 ) -> List[dict]:
@@ -195,8 +210,15 @@ async def list_categories(
     ]
 
 
-@router.get("/categories/search")
-async def search_categories(q: str, session: AsyncSession = Depends(get_session)) -> List[dict]:
+@router.get(
+    "/categories/search",
+    dependencies=[
+        Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))
+    ],
+)
+async def search_categories(
+    q: str, session: AsyncSession = Depends(get_session)
+) -> List[dict]:
     """Busca categorías por nombre o path parcial."""
 
     result = await session.execute(
