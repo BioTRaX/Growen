@@ -60,9 +60,9 @@ export default function ImportViewer({ open, jobId, summary, onClose }: Props) {
 
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ background: '#fff', padding: 20, borderRadius: 8, width: '80%', maxHeight: '80%', overflow: 'auto' }}>
+      <div style={{ background: 'var(--panel-bg)', color: 'var(--text-color)', padding: 20, borderRadius: 8, width: '80%', maxHeight: '80%', overflow: 'auto' }}>
         <h3>Revisión de importación #{jobId}</h3>
-        {error && <div style={{ color: 'red' }}>{error}</div>}
+        {error && <div style={{ color: 'var(--text-color)' }}>{error}</div>}
         <div>
           <strong>KPIs:</strong>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -70,7 +70,8 @@ export default function ImportViewer({ open, jobId, summary, onClose }: Props) {
               <div
                 key={k}
                 style={{
-                  background: '#f0f0f0',
+                  background: 'var(--panel-bg)',
+                  color: 'var(--text-color)',
                   padding: '4px 8px',
                   borderRadius: 4,
                   minWidth: 80,
