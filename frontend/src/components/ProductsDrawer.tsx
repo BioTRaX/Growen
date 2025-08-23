@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
-import { FixedSizeList as List, ListChildComponentProps } from 'react-window'
+import {
+  FixedSizeList as List,
+  ListChildComponentProps,
+} from 'react-window'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import { listCategories, Category } from '../services/categories'
 import {
@@ -24,6 +27,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [items, setItems] = useState<ProductItem[]>([])
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
   const [stockVal, setStockVal] = useState('')
   const [historyProduct, setHistoryProduct] = useState<number | null>(null)
@@ -40,6 +44,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   useEffect(() => {
     if (!open) return
     const t = setTimeout(() => {
+      setLoading(true)
       searchProducts({
         q,
         supplier_id: supplierId ? Number(supplierId) : undefined,
@@ -47,10 +52,11 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         page,
       })
         .then((r) => {
-          setItems(r.items)
+          setItems((prev) => (page === 1 ? r.items : [...prev, ...r.items]))
           setTotal(r.total)
         })
         .catch(() => {})
+        .finally(() => setLoading(false))
     }, 300)
     return () => clearTimeout(t)
   }, [q, supplierId, categoryId, page, open])
@@ -97,6 +103,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           value={q}
           onChange={(e) => {
             setPage(1)
+            setItems([])
             setQ(e.target.value)
           }}
         />
@@ -105,6 +112,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           value={supplierId}
           onChange={(e) => {
             setSupplierId(e.target.value)
+            setItems([])
             setPage(1)
           }}
         >
@@ -120,6 +128,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           value={categoryId}
           onChange={(e) => {
             setCategoryId(e.target.value)
+            setItems([])
             setPage(1)
           }}
         >
@@ -154,6 +163,15 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         itemCount={items.length}
         itemSize={ROW_HEIGHT}
         width={"100%"}
+        onItemsRendered={({ visibleStopIndex }) => {
+          if (
+            visibleStopIndex >= items.length - 5 &&
+            !loading &&
+            items.length < total
+          ) {
+            setPage((p) => p + 1)
+          }
+        }}
       >
         {({ index, style }: ListChildComponentProps) => {
           const it = items[index]
@@ -219,17 +237,6 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           )
         }}
       </List>
-      <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-        <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-          Anterior
-        </button>
-        <button
-          disabled={page * 20 >= total}
-          onClick={() => setPage((p) => p + 1)}
-        >
-          Siguiente
-        </button>
-      </div>
       {historyProduct && (
         <PriceHistoryModal
           productId={historyProduct}
