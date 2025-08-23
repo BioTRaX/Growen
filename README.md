@@ -7,7 +7,7 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - **Backend**: FastAPI + WebSocket.
 - **Base de datos**: PostgreSQL 15 (Alembic para migraciones).
 - **IA**: ruteo automático entre Ollama (local) y OpenAI.
-- **Frontend**: React + Vite.
+- **Frontend**: React + Vite con listas virtualizadas mediante `react-window`.
 - **Adapters**: stubs de Tiendanube.
 
 ## Requisitos
