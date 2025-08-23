@@ -17,9 +17,15 @@ from db.models import (
     Product,
     SupplierProduct,
     SupplierPriceHistory,
+    CanonicalProduct,
+    ProductEquivalence,
 )
 from db.session import get_session
-from services.suppliers.parsers import SUPPLIER_PARSERS
+from services.suppliers.parsers import (
+    SUPPLIER_PARSERS,
+    AUTO_CREATE_CANONICAL,
+    suggest_canonicals,
+)
 from services.auth import (
     require_roles,
     require_csrf,
@@ -248,6 +254,10 @@ async def upload_price_list(
         )
         existing_map = {sp.supplier_product_id: sp for sp in res.scalars()}
 
+    # Mapa de productos canónicos existentes para sugerencias por similitud
+    res = await db.execute(select(CanonicalProduct.id, CanonicalProduct.name))
+    canonical_map = {cid: name for cid, name in res.all()}
+
     kpis = {
         **parser_kpis,
         "duplicates_in_file": 0,
@@ -300,6 +310,12 @@ async def upload_price_list(
             else:
                 status = "new"
                 kpis["new"] += 1
+
+        # Sugerir canónico por similitud y marcar creación automática
+        suggestions = suggest_canonicals(data["nombre"], canonical_map)
+        data["canonical_suggestions"] = suggestions
+        if AUTO_CREATE_CANONICAL and not suggestions:
+            data["auto_create_canonical"] = True
 
         db.add(
             ImportJobRow(
@@ -464,6 +480,44 @@ async def commit_import(
         sp.current_purchase_price = data.get("precio_compra")
         sp.current_sale_price = data.get("precio_venta")
         sp.internal_product_id = prod.id
+
+        # Enlazar con canónicos existentes o crear nuevos según configuración
+        suggestions = data.get("canonical_suggestions", [])
+        if suggestions:
+            canonical_id = suggestions[0]["id"]
+            stmt_eq = select(ProductEquivalence).where(
+                ProductEquivalence.supplier_id == job.supplier_id,
+                ProductEquivalence.supplier_product_id == sp.id,
+            )
+            eq = (await db.execute(stmt_eq)).scalar_one_or_none()
+            if eq:
+                eq.canonical_product_id = canonical_id
+                eq.source = "auto"
+                eq.confidence = suggestions[0]["score"]
+            else:
+                db.add(
+                    ProductEquivalence(
+                        supplier_id=job.supplier_id,
+                        supplier_product_id=sp.id,
+                        canonical_product_id=canonical_id,
+                        source="auto",
+                        confidence=suggestions[0]["score"],
+                    )
+                )
+        elif data.get("auto_create_canonical") and AUTO_CREATE_CANONICAL:
+            cp = CanonicalProduct(name=data["nombre"])
+            db.add(cp)
+            await db.flush()
+            cp.ng_sku = f"NG-{cp.id:06d}"
+            db.add(
+                ProductEquivalence(
+                    supplier_id=job.supplier_id,
+                    supplier_product_id=sp.id,
+                    canonical_product_id=cp.id,
+                    source="auto",
+                    confidence=1.0,
+                )
+            )
 
         if r.status == "changed":
             prev_purchase = data.get("precio_compra") - data.get("delta_compra", 0)
