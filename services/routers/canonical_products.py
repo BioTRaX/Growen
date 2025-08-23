@@ -185,7 +185,7 @@ async def list_equivalences(
 
 @equivalences_router.post(
     "",
-    dependencies=[Depends(require_csrf), Depends(require_roles("manager", "admin"))],
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
 )
 async def upsert_equivalence(
     req: EquivalenceCreate, session: AsyncSession = Depends(get_session)
@@ -224,7 +224,7 @@ async def upsert_equivalence(
 
 @equivalences_router.delete(
     "/{equivalence_id}",
-    dependencies=[Depends(require_csrf), Depends(require_roles("manager", "admin"))],
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
 )
 async def delete_equivalence(
     equivalence_id: int, session: AsyncSession = Depends(get_session)
