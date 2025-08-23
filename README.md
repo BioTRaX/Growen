@@ -89,7 +89,7 @@ npm install
 npm run dev
 ```
 
-En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8000`, evitando errores de CORS. Durante el arranque pueden mostrarse errores de proxy WebSocket si la API aún no está disponible; una vez arriba, la conexión se restablece sola. El chat abre un WebSocket en `/ws` y, si no está disponible, utiliza `POST /chat`, que admite la variante con o sin barra final para evitar redirecciones 307. Para modificar las URLs se puede crear `frontend/.env.development` con `VITE_WS_URL` y `VITE_API_BASE`.
+En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8000`, evitando errores de CORS. Durante el arranque pueden mostrarse errores de proxy WebSocket si la API aún no está disponible; una vez arriba, la conexión se restablece sola. El chat abre un WebSocket en `/ws` y, si no está disponible, utiliza `POST /chat`, que admite la variante con o sin barra final para evitar redirecciones 307. El servidor envía un ping cada 30 s y corta la sesión tras 60 s sin recibir datos; el frontend ignora esos pings, cierra limpiamente y reintenta con backoff exponencial si la conexión se pierde. Para modificar las URLs se puede crear `frontend/.env.development` con `VITE_WS_URL` y `VITE_API_BASE`.
 
 ## Subir listas de precios desde el chat
 
@@ -170,7 +170,7 @@ Un botón en la barra permite alternar el tema y, por defecto, se respeta `prefe
 ## Contrato del Chat (DEV)
 
 - **HTTP**: `POST /chat` con cuerpo `{ "text": "hola" }` → responde `{ "role": "assistant", "text": "..." }`.
-- **WebSocket**: se envía texto plano y cada mensaje recibido es un JSON `{ "role": "assistant", "text": "..." }`.
+- **WebSocket**: se envía texto plano y cada mensaje recibido es un JSON `{ "role": "assistant", "text": "..." }`. El servidor agrega pings periódicos `{ "role": "ping" }` para mantener viva la conexión y la cierra tras 60 s sin actividad; el cliente los descarta y reintenta con backoff exponencial si se pierde el canal.
 - **Sesión**: si la cookie `growen_session` está presente, el backend incluye el nombre y rol del usuario en el prompt para personalizar la respuesta de la IA.
 - **Proveedor**: Ollama es el motor por defecto (`OLLAMA_MODEL=llama3.1`). El backend intenta primero con `stream=False` y, si la API falla, cae a modo *streaming* acumulando las partes. En ambos casos normaliza la respuesta y remueve prefijos como `ollama:` antes de reenviarla.
 
