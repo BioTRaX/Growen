@@ -26,22 +26,34 @@ export interface ProductSearchResponse {
   items: ProductItem[]
 }
 
+function csrfHeaders(): Record<string, string> {
+  const m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/)
+  return m ? { 'X-CSRF-Token': decodeURIComponent(m[1]) } : {}
+}
+
 export async function searchProducts(params: ProductSearchParams): Promise<ProductSearchResponse> {
   const base = import.meta.env.VITE_API_URL as string
   const url = new URL(base + '/products', window.location.origin)
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v))
   })
-  const res = await fetch(url.toString(), { credentials: 'include' })
+  const res = await fetch(url.toString(), {
+    credentials: 'include',
+    headers: csrfHeaders(),
+  })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
 
 export async function updateStock(productId: number, stock: number): Promise<{ product_id: number; stock: number }> {
   const base = import.meta.env.VITE_API_URL as string
+  const headers = {
+    ...csrfHeaders(),
+    'Content-Type': 'application/json',
+  }
   const res = await fetch(`${base}/products/${productId}/stock`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     credentials: 'include',
     body: JSON.stringify({ stock }),
   })
