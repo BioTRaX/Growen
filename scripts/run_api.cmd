@@ -1,26 +1,54 @@
 @echo off
+setlocal ENABLEDELAYEDEXPANSION
+
+rem Rutas base del repositorio
 cd /d "%~dp0\.."
+set "ROOT=%CD%"
+set "SCRIPTS=%ROOT%\scripts"
+set "VENV=%ROOT%\.venv\Scripts"
+if not defined LOG_DIR set "LOG_DIR=%ROOT%\logs"
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+set "LOG_FILE=%LOG_DIR%\run_api.log"
 
-if not exist ".venv\Scripts\activate.bat" (
-  echo [ERROR] No existe .venv\Scripts\activate.bat
-  echo Cree el venv: python -m venv .venv
-  echo Active: .venv\Scripts\activate.bat
-  echo Instale deps: pip install -e .
+call :log "[INFO] Cerrando procesos previos..."
+if exist "%SCRIPTS%\stop.bat" call "%SCRIPTS%\stop.bat"
+timeout /t 5 /nobreak >NUL
+
+call :log "[INFO] Verificando puerto 8000..."
+netstat -ano | findstr :8000 >NUL
+if !ERRORLEVEL! EQU 0 (
+  call :log "[ERROR] El puerto 8000 esta en uso. Abortando."
   pause
   exit /b 1
 )
 
-call ".venv\Scripts\activate.bat"
-
-REM aplicar migraciones antes de iniciar
-python -m alembic upgrade head || (
-  echo [ERROR] Fallo al aplicar migraciones
+call :log "[INFO] Instalando dependencias..."
+call "%SCRIPTS%\fix_deps.bat"
+if !ERRORLEVEL! NEQ 0 (
+  call :log "[ERROR] Fallo la instalacion de dependencias"
   pause
   exit /b 1
 )
 
-echo [INFO] Lanzando backend (Uvicorn)...
-uvicorn services.api:app --host 127.0.0.1 --port 8000 --reload --log-level info --access-log
+call :log "[INFO] Ejecutando migraciones..."
+pushd "%ROOT%"
+call "%VENV%\python.exe" -m alembic upgrade head >> "%LOG_FILE%" 2>&1
+if !ERRORLEVEL! NEQ 0 (
+  call :log "[ERROR] Fallo al aplicar migraciones"
+  popd
+  pause
+  exit /b 1
+)
+popd
 
-echo [INFO] Backend finalizado.
-pause
+call :log "[INFO] Iniciando backend..."
+start "Growen API" cmd /k "\"%VENV%\\python.exe\" -m uvicorn services.api:app --host 127.0.0.1 --port 8000 --reload --log-level info --access-log >> \"%LOG_DIR%\\backend.log\" 2>&1"
+
+endlocal
+exit /b 0
+
+:log
+set "ts=!DATE! !TIME!"
+>>"%LOG_FILE%" echo [!ts!] %~1
+echo [!ts!] %~1
+exit /b 0
