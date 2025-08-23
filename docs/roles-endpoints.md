@@ -23,7 +23,7 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /categories/search | Ninguno |
 | POST | /categories/generate-from-supplier-file | admin (requiere CSRF) |
 | GET | /products | cliente, proveedor, colaborador, admin |
-| PATCH | /products/{product_id}/stock | manager, admin (requiere CSRF) |
+| PATCH | /products/{product_id}/stock | colaborador, admin (requiere CSRF) |
 | GET | /price-history | cliente, proveedor, colaborador, admin |
 | POST | /canonical-products | admin (requiere CSRF) |
 | GET | /canonical-products | Ninguno |
@@ -31,8 +31,8 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | PATCH | /canonical-products/{canonical_id} | admin (requiere CSRF) |
 | GET | /canonical-products/{canonical_id}/offers | Ninguno |
 | GET | /equivalences | Ninguno |
-| POST | /equivalences | manager, admin (requiere CSRF) |
-| DELETE | /equivalences/{equivalence_id} | manager, admin (requiere CSRF) |
+| POST | /equivalences | colaborador, admin (requiere CSRF) |
+| DELETE | /equivalences/{equivalence_id} | colaborador, admin (requiere CSRF) |
 | GET | /suppliers/price-list/template | Ninguno |
 | GET | /suppliers/{supplier_id}/price-list/template | Ninguno |
 | POST | /suppliers/{supplier_id}/price-list/upload | proveedor, colaborador, admin (requiere CSRF) |
