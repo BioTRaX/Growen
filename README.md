@@ -157,8 +157,20 @@ La interfaz presenta una botonera fija sobre el chat con accesos rápidos:
 - **Adjuntar Excel** abre el modal de carga de listas de precios.
 - **Proveedores** muestra la gestión básica de proveedores (listar y crear).
 - **Productos** abre un panel para buscar en la base, ajustar stock y gestionar canónicos: permite editar fichas canónicas y vincular equivalencias manualmente. Los resultados se cargan bajo demanda al desplazarse gracias a `react-window`.
+- **Usuarios** despliega el panel de administración para listar, crear, editar y restablecer contraseñas. Solo es visible para el rol `admin`.
 
 La barra queda visible al hacer scroll y usa un estilo mínimo con sombreado suave.
+
+## Panel de usuarios
+
+El panel accesible en `/admin` consume los endpoints de autenticación para gestionar cuentas:
+
+- `GET /auth/users` lista los usuarios existentes con su rol.
+- `POST /auth/users` crea nuevas cuentas asignando nombre, email y rol.
+- `PATCH /auth/users/{user_id}` permite actualizar el rol o desactivar usuarios.
+- `POST /auth/users/{user_id}/reset-password` genera una contraseña temporal y la devuelve en la respuesta.
+
+Todas estas operaciones requieren el rol `admin` y envían encabezado `X-CSRF-Token`.
 
 ## Modo oscuro
 
@@ -221,20 +233,35 @@ Errores comunes:
 - **400** columnas faltantes.
 - **413** tamaño excedido (límite `MAX_UPLOAD_MB`).
 
-## Productos Canónicos y Equivalencias
+### Flujo del visor de importaciones
 
-Para comparar precios entre proveedores se introduce un catálogo propio de productos canónicos. Cada oferta de un proveedor puede
-vincularse a uno de estos canónicos mediante *equivalencias*.
-El frontend ofrece los componentes **CanonicalForm** y **EquivalenceLinker** para crear o editar canónicos y asociar ofertas directamente desde la interfaz.
+El visor trabaja de forma paginada llamando a `GET /imports/{job_id}/preview`.
 
-- **Crear canónico**: `POST /canonical-products` con `name`, `brand` y `specs_json` opcional. El sistema genera `ng_sku` con el
-  formato `NG-000001`.
+1. La pestaña **Cambios** solicita `status=new,changed` para concentrar las filas a aplicar.
+2. **Errores** y **Duplicados en archivo** reutilizan el mismo endpoint variando `status`.
+3. Cada respuesta entrega `{items, summary, total, pages, page}` con los totales por tipo de fila.
+4. Desde cada fila pueden crearse productos canónicos o equivalencias antes de confirmar.
+5. Al finalizar la revisión se envía `POST /imports/{job_id}/commit` para persistir los ajustes.
+
+## Productos canónicos (`/canonical-products`)
+
+Para comparar precios entre proveedores se mantiene un catálogo propio de productos canónicos.
+Cada oferta puede asociarse a uno de ellos mediante equivalencias (ver sección siguiente).
+El frontend incluye el formulario **CanonicalForm** para crear o editar estos registros.
+
+- **Crear canónico**: `POST /canonical-products` con `name`, `brand` y `specs_json` opcional. El sistema genera `ng_sku` con el formato `NG-000001`.
 - **Buscar canónicos**: `GET /canonical-products?q=&page=` permite paginar y filtrar.
 - **Detalle/edición**: `GET /canonical-products/{id}` y `PATCH /canonical-products/{id}` devuelven y actualizan un canónico.
+- **Comparador**: `GET /canonical-products/{id}/offers` ordena las ofertas por precio de venta y marca la mejor con `mejor_precio`.
+
+## Equivalencias (`/equivalences`)
+
+Las equivalencias enlazan una oferta de proveedor (`supplier_product`) con un producto canónico para habilitar la comparación de precios.
+El componente **EquivalenceLinker** permite gestionar estos vínculos desde la interfaz.
+
 - **Vincular oferta**: `POST /equivalences` une un `supplier_product` existente con un `canonical_product`.
 - **Listar equivalencias**: `GET /equivalences?supplier_id=&canonical_product_id=` soporta filtros y paginación.
 - **Eliminar equivalencia**: `DELETE /equivalences/{id}`.
-- **Comparador**: `GET /canonical-products/{id}/offers` ordena las ofertas por precio de venta y marca la mejor con `mejor_precio`.
 
 ## Comparativa de precios
 
@@ -296,7 +323,10 @@ Para modificar el stock manualmente existe `PATCH /products/{id}/stock` con cuer
 
 ## Historial de precios
 
-`GET /price-history` devuelve el historial de precios ordenado por fecha. Debe recibirse `supplier_product_id` o `product_id` y se puede paginar con `page` y `page_size`. Requiere los roles `cliente`, `proveedor`, `colaborador` o `admin`.
+`GET /price-history` devuelve el historial de precios ordenado por fecha.
+Debe indicarse `supplier_product_id` o `product_id` y se puede paginar con `page` y `page_size`.
+La respuesta incluye `purchase_price`, `sale_price` y sus variaciones porcentuales (`delta_purchase_pct`, `delta_sale_pct`).
+Solo los roles `cliente`, `proveedor`, `colaborador` o `admin` pueden consultarlo y el panel de productos enlaza a esta vista para auditoría.
 
 ## Inicio rápido (1‑clic)
 
