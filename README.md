@@ -510,6 +510,10 @@ La política por defecto utiliza:
 
 Instala [Ollama](https://ollama.com/download) y descarga el modelo configurado. Para deshabilitar proveedores externos establece `AI_ALLOW_EXTERNAL=false`.
 
+## Pruebas manuales E2E
+
+Para comprobar las mutaciones desde el navegador se documentan pruebas manuales en [tests/manual/e2e-mutations.md](tests/manual/e2e-mutations.md).
+
 ## CLI
 
 ```bash
