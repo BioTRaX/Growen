@@ -30,6 +30,7 @@ export default function ImportViewer({ open, jobId, summary, onClose }: Props) {
         setItems(r.items || [])
         setTotal(r.total || 0)
         setPages(r.pages || 1)
+        if (r.page && r.page !== page) setPage(r.page)
         if (r.summary) setLocalSummary(r.summary)
       })
       .catch((e) => setError(e.message))
@@ -58,11 +59,23 @@ export default function ImportViewer({ open, jobId, summary, onClose }: Props) {
         {error && <div style={{ color: 'red' }}>{error}</div>}
         <div>
           <strong>KPIs:</strong>
-          <ul>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {Object.entries(localSummary || {}).map(([k, v]) => (
-              <li key={k}>{k}: {v as number}</li>
+              <div
+                key={k}
+                style={{
+                  background: '#f0f0f0',
+                  padding: '4px 8px',
+                  borderRadius: 4,
+                  minWidth: 80,
+                  textAlign: 'center',
+                }}
+              >
+                <div style={{ fontSize: 12 }}>{k}</div>
+                <div style={{ fontWeight: 'bold' }}>{v as number}</div>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
         <div style={{ margin: '8px 0', display: 'flex', gap: 8 }}>
           <button onClick={() => { setTab('changes'); setPage(1) }} disabled={tab === 'changes'}>
