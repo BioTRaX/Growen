@@ -12,6 +12,8 @@ import {
 } from '../services/products'
 import PriceHistoryModal from './PriceHistoryModal'
 import CanonicalOffers from './CanonicalOffers'
+import CanonicalForm from './CanonicalForm'
+import EquivalenceLinker from './EquivalenceLinker'
 
 interface Props {
   open: boolean
@@ -32,6 +34,10 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [stockVal, setStockVal] = useState('')
   const [historyProduct, setHistoryProduct] = useState<number | null>(null)
   const [canonicalId, setCanonicalId] = useState<number | null>(null)
+  const [editCanonicalId, setEditCanonicalId] = useState<number | null>(null)
+  const [equivData, setEquivData] = useState<
+    { supplierId: number; supplierProductId: number } | null
+  >(null)
   const ROW_HEIGHT = 48
 
   useEffect(() => {
@@ -154,6 +160,8 @@ export default function ProductsDrawer({ open, onClose }: Props) {
             <th>Categoría</th>
             <th>Actualizado</th>
             <th>Historial</th>
+            <th>Canónico</th>
+            <th>Equivalencia</th>
             <th>Comparativa</th>
           </tr>
         </thead>
@@ -225,6 +233,29 @@ export default function ProductsDrawer({ open, onClose }: Props) {
                     </button>
                   </td>
                   <td>
+                    {it.canonical_product_id ? (
+                      <button
+                        onClick={() => setEditCanonicalId(it.canonical_product_id)}
+                      >
+                        Editar
+                      </button>
+                    ) : (
+                      <button onClick={() => setEditCanonicalId(0)}>Nuevo</button>
+                    )}
+                  </td>
+                  <td>
+                    <button
+                      onClick={() =>
+                        setEquivData({
+                          supplierId: it.supplier.id,
+                          supplierProductId: it.product_id,
+                        })
+                      }
+                    >
+                      Vincular
+                    </button>
+                  </td>
+                  <td>
                     {it.canonical_product_id && (
                       <button onClick={() => setCanonicalId(it.canonical_product_id)}>
                         Ver
@@ -245,6 +276,19 @@ export default function ProductsDrawer({ open, onClose }: Props) {
       )}
       {canonicalId && (
         <CanonicalOffers canonicalId={canonicalId} onClose={() => setCanonicalId(null)} />
+      )}
+      {editCanonicalId !== null && (
+        <CanonicalForm
+          canonicalId={editCanonicalId || undefined}
+          onClose={() => setEditCanonicalId(null)}
+        />
+      )}
+      {equivData && (
+        <EquivalenceLinker
+          supplierId={equivData.supplierId}
+          supplierProductId={equivData.supplierProductId}
+          onClose={() => setEquivData(null)}
+        />
       )}
     </div>
   )

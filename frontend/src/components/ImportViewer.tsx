@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { commitImport, getImportPreview } from '../services/imports'
 import CanonicalOffers from './CanonicalOffers'
+import CanonicalForm from './CanonicalForm'
+import EquivalenceLinker from './EquivalenceLinker'
 
 interface Props {
   open: boolean
@@ -20,6 +22,10 @@ export default function ImportViewer({ open, jobId, summary, onClose }: Props) {
   const [error, setError] = useState('')
   const [localSummary, setLocalSummary] = useState(summary)
   const [canonicalId, setCanonicalId] = useState<number | null>(null)
+  const [editCanonicalId, setEditCanonicalId] = useState<number | null>(null)
+  const [equivData, setEquivData] = useState<
+    { supplierId: number; supplierProductId: number } | null
+  >(null)
 
   useEffect(() => {
     if (!open) return
@@ -92,11 +98,39 @@ export default function ImportViewer({ open, jobId, summary, onClose }: Props) {
             {items.map((it) => (
               <div key={it.row_index} style={{ marginBottom: 8 }}>
                 <pre>{JSON.stringify(it, null, 2)}</pre>
-                {it.data?.canonical_product_id && (
-                  <button onClick={() => setCanonicalId(it.data.canonical_product_id)}>
-                    Comparar precios
-                  </button>
-                )}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {it.data?.canonical_product_id && (
+                    <>
+                      <button
+                        onClick={() => setCanonicalId(it.data.canonical_product_id)}
+                      >
+                        Comparar precios
+                      </button>
+                      <button
+                        onClick={() => setEditCanonicalId(it.data.canonical_product_id)}
+                      >
+                        Editar canónico
+                      </button>
+                    </>
+                  )}
+                  {!it.data?.canonical_product_id && (
+                    <button onClick={() => setEditCanonicalId(0)}>
+                      Nuevo canónico
+                    </button>
+                  )}
+                  {it.data?.supplier_id && it.data?.supplier_product_id && (
+                    <button
+                      onClick={() =>
+                        setEquivData({
+                          supplierId: it.data.supplier_id,
+                          supplierProductId: it.data.supplier_product_id,
+                        })
+                      }
+                    >
+                      Vincular equivalencia
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -124,6 +158,19 @@ export default function ImportViewer({ open, jobId, summary, onClose }: Props) {
       </div>
       {canonicalId && (
         <CanonicalOffers canonicalId={canonicalId} onClose={() => setCanonicalId(null)} />
+      )}
+      {editCanonicalId !== null && (
+        <CanonicalForm
+          canonicalId={editCanonicalId || undefined}
+          onClose={() => setEditCanonicalId(null)}
+        />
+      )}
+      {equivData && (
+        <EquivalenceLinker
+          supplierId={equivData.supplierId}
+          supplierProductId={equivData.supplierProductId}
+          onClose={() => setEquivData(null)}
+        />
       )}
     </div>
   )

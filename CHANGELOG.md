@@ -12,3 +12,4 @@
 - Add: plantilla Excel genérica `GET /suppliers/price-list/template`
 - fix: restaurar migración `20241105_auth_roles_sessions` renombrando archivo y `revision` para mantener la cadena de dependencias
 - fix: evitar errores creando o borrando tablas ya existentes en `init_schema` mediante `sa.inspect`
+- Add: componentes `CanonicalForm` y `EquivalenceLinker` integrados en `ImportViewer` y `ProductsDrawer`
