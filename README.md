@@ -205,7 +205,7 @@ Las tablas `import_jobs` e `import_job_rows` guardan cada archivo cargado y sus 
 `GET /suppliers/price-list/template` devuelve una plantilla genérica con la hoja `data` y los encabezados:
 `ID`, `Agrupamiento`, `Familia`, `SubFamilia`, `Producto`, `Compra Minima`, `Stock`, `PrecioDeCompra`, `PrecioDeVenta`.
 `GET /suppliers/{supplier_id}/price-list/template` genera la misma estructura pero permite personalizar el nombre del archivo según el proveedor.
-La celda `A1` incluye una nota con instrucciones y la fila 2 trae un ejemplo. Desde el modal de carga pueden descargarse ambas variantes antes de completar los datos.
+La celda `A1` incluye una nota con instrucciones y la fila 2 trae un ejemplo. En el modal de carga hay un botón **Descargar plantilla genérica** que llama a `GET /suppliers/price-list/template` y otro **Descargar plantilla** que usa `GET /suppliers/{supplier_id}/price-list/template` para obtener el archivo específico antes de completar los datos.
 
 ### Adjuntar Excel desde el chat
 
