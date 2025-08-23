@@ -134,7 +134,7 @@ La lista completa de rutas y roles se encuentra en [docs/roles-endpoints.md](doc
 SECRET_KEY=changeme
 ADMIN_USER=admin
 ADMIN_PASS=changeme
-SESSION_EXPIRE_MINUTES=1440 # 1 día
+SESSION_EXPIRE_MINUTES=1440 # duración de la sesión en minutos (1 día recomendado)
 AUTH_ENABLED=true
 # se ignora en producción; allí siempre es true
 COOKIE_SECURE=false
@@ -147,10 +147,10 @@ iniciar la aplicación; ésta abortará el arranque si alguno permanece en
 periódicamente.
 
 `SESSION_EXPIRE_MINUTES` define cuánto tiempo permanece válida una sesión.
-El valor sugerido de `1440` mantiene la sesión durante un día. Valores más
-altos reducen la frecuencia de inicio de sesión pero aumentan el riesgo en
-caso de robo de cookies; valores más bajos obligan a reautenticarse más seguido
-y elevan la seguridad.
+El valor recomendado de `1440` mantiene la sesión durante un día. Al expirar,
+el usuario debe volver a autenticarse. Valores más altos reducen la frecuencia
+de inicio de sesión pero incrementan el riesgo ante robo de cookies; valores
+más bajos obligan a reautenticarse con mayor frecuencia y elevan la seguridad.
 
 ## Botonera
 
