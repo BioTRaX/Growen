@@ -1,6 +1,7 @@
 """WebSocket de chat que utiliza la IA de respaldo."""
 
 from datetime import datetime
+import asyncio
 import logging
 
 from fastapi import APIRouter, WebSocket
@@ -15,6 +16,23 @@ from services.ai.provider import ai_reply
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Intervalos en segundos para mantener la conexión
+PING_INTERVAL = 30
+READ_TIMEOUT = 60
+
+
+async def _ping(socket: WebSocket) -> None:
+    """Envía pings periódicos para sostener la conexión."""
+    while True:
+        await asyncio.sleep(PING_INTERVAL)
+        if socket.client_state != WebSocketState.CONNECTED:
+            break
+        try:
+            await socket.send_json({"role": "ping", "text": ""})
+        except Exception as exc:  # pragma: no cover - logueo defensivo
+            logger.debug("No se pudo enviar ping: %s", exc)
+            break
 
 
 @router.websocket("/ws")
@@ -34,9 +52,16 @@ async def ws_chat(socket: WebSocket) -> None:
             sess = res.scalar_one_or_none()
 
     await socket.accept()
+    ping_task = asyncio.create_task(_ping(socket))
     try:
         while True:
-            data = await socket.receive_text()
+            try:
+                data = await asyncio.wait_for(
+                    socket.receive_text(), timeout=READ_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Timeout de lectura en ws_chat")
+                break
 
             # Personalizar el prompt con los datos del usuario/rol si hay sesión.
             prompt = data
@@ -62,3 +87,7 @@ async def ws_chat(socket: WebSocket) -> None:
                 logger.error(
                     "No se pudo notificar al cliente del error: %s", send_exc
                 )
+    finally:
+        ping_task.cancel()
+        if socket.client_state == WebSocketState.CONNECTED:
+            await socket.close()
