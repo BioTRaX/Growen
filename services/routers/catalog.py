@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from enum import Enum
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -284,6 +285,18 @@ async def generate_categories(
 # ------------------------------- Productos -------------------------------
 
 
+class ProductSortBy(str, Enum):
+    updated_at = "updated_at"
+    precio_venta = "precio_venta"
+    precio_compra = "precio_compra"
+    name = "name"
+
+
+class SortOrder(str, Enum):
+    asc = "asc"
+    desc = "desc"
+
+
 async def _category_path(session: AsyncSession, category_id: int | None) -> str | None:
     if not category_id:
         return None
@@ -321,6 +334,16 @@ async def list_products(
     if page < 1 or page_size < 1 or page_size > max_page:
         raise HTTPException(status_code=400, detail="paginación inválida")
 
+    try:
+        sort_by_enum = ProductSortBy(sort_by)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="sort_by inválido")
+
+    try:
+        order_enum = SortOrder(order)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="order inválido")
+
     sp = SupplierProduct
     p = Product
     s = Supplier
@@ -346,13 +369,13 @@ async def list_products(
     total = await session.scalar(count_stmt) or 0
 
     sort_map = {
-        "updated_at": sp.last_seen_at,
-        "precio_venta": sp.current_sale_price,
-        "precio_compra": sp.current_purchase_price,
-        "name": p.title,
+        ProductSortBy.updated_at: sp.last_seen_at,
+        ProductSortBy.precio_venta: sp.current_sale_price,
+        ProductSortBy.precio_compra: sp.current_purchase_price,
+        ProductSortBy.name: p.title,
     }
-    sort_col = sort_map.get(sort_by, sp.last_seen_at)
-    sort_col = sort_col.asc() if order == "asc" else sort_col.desc()
+    sort_col = sort_map[sort_by_enum]
+    sort_col = sort_col.asc() if order_enum == SortOrder.asc else sort_col.desc()
 
     stmt = (
         stmt.order_by(sort_col)
