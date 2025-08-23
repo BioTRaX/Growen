@@ -54,9 +54,23 @@ uvicorn services.api:app --reload
 
 ## Migraciones automáticas
 
-`start.sh`, `start.bat` y `scripts/run_api.cmd` invocan `scripts\stop.bat`, luego `scripts\fix_deps.bat` y finalmente `alembic upgrade head` con el intérprete del entorno virtual antes de iniciar el servidor.
-Si la migración falla, el proceso se detiene para evitar correr con un esquema desactualizado.
+`start.sh`, `start.bat` y `scripts/run_api.cmd` invocan `scripts\stop.bat`, luego `scripts\fix_deps.bat` y posteriormente `scripts\run_migrations.cmd`, que ejecuta `alembic upgrade head` con logging detallado.
+Si la migración falla, `run_migrations.cmd` muestra la ruta del log en `logs\migrations` y el proceso se detiene para evitar correr con un esquema desactualizado.
 De esta forma la base siempre está en el esquema más reciente sin comandos manuales.
+
+### Diagnóstico de migraciones
+
+El script `python scripts/debug_migrations.py` genera un reporte en `logs/migrations/report_<timestamp>.txt` con:
+
+- `alembic current`
+- `alembic heads`
+- `alembic history --verbose -n 30`
+
+También verifica la conexión a la base y avisa si hay múltiples *heads*.
+El código de salida es 0 si todo está correcto o 1 si detecta anomalías.
+
+Los logs detallados de Alembic se guardan en `logs/migrations/alembic_<timestamp>.log`.
+El nivel de detalle se ajusta con `ALEMBIC_LOG_LEVEL` en `.env`. `DEBUG_MIGRATIONS=1` agrega verbosidad al reporte.
 
 ### Permisos mínimos en esquema
 
@@ -81,6 +95,20 @@ SELECT column_name FROM information_schema.columns
   WHERE table_name='supplier_price_history'
   ORDER BY ordinal_position;
 ```
+
+#### Problemas comunes
+
+- **Múltiples heads**: ejecutar `python scripts/debug_migrations.py` para identificar las revisiones y crear una migración de *merge* si es necesario.
+- **UndefinedTable / UndefinedColumn**: revisar `logs/migrations/alembic_<timestamp>.log`; puede indicar que falta una migración previa.
+- **DuplicateTable / DuplicateIndex**: las migraciones actuales son idempotentes; reejecutarlas no debería fallar.
+- **Seeds inválidos**: asegurarse de que las columnas requeridas existan antes de insertar datos.
+
+Orden de ejecución recomendado:
+
+1. `scripts\stop.bat`
+2. `scripts\fix_deps.bat`
+3. `scripts\run_migrations.cmd`
+4. Inicio de backend y frontend
 
 ## Instalación Frontend
 

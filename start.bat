@@ -25,7 +25,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 call :log "[INFO] Cerrando procesos previos..."
 if exist "%SCRIPTS%\stop.bat" call "%SCRIPTS%\stop.bat"
-timeout /t 5 /nobreak >NUL
+timeout /t 2 /nobreak >NUL
 
 call :log "[INFO] Verificando puertos 8000 y 5173..."
 for %%P in (8000 5173) do (
@@ -46,15 +46,12 @@ if !ERRORLEVEL! NEQ 0 (
 )
 
 call :log "[INFO] Ejecutando migraciones..."
-pushd "%ROOT%"
-call "%VENV%\python.exe" -m alembic upgrade head >> "%LOG_FILE%" 2>&1
+call "%SCRIPTS%\run_migrations.cmd" >> "%LOG_FILE%" 2>&1
 if !ERRORLEVEL! NEQ 0 (
-  call :log "[ERROR] Fallo al aplicar migraciones"
-  popd
+  call :log "[ERROR] Fallo al aplicar migraciones. Revisar logs/migrations"
   pause
   exit /b 1
 )
-popd
 
 call :log "[INFO] Iniciando backend..."
 start "Growen API" cmd /k "\"%VENV%\\python.exe\" -m uvicorn services.api:app --host 127.0.0.1 --port 8000 >> \"%LOG_DIR%\\backend.log\" 2>&1"

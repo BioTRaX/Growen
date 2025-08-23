@@ -1,7 +1,13 @@
 import os
+import logging
+import traceback
+from datetime import datetime
+from pathlib import Path
 from logging.config import fileConfig
 
 from alembic import context
+from alembic.script import ScriptDirectory
+from alembic.runtime.migration import MigrationContext
 from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
@@ -12,6 +18,26 @@ config = context.config
 # Logging (si alembic.ini tiene secciones de logging)
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# === Preparar logging detallado ===
+log_level = os.getenv("ALEMBIC_LOG_LEVEL", "INFO").upper()
+logs_dir = Path("logs") / "migrations"
+logs_dir.mkdir(parents=True, exist_ok=True)
+ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_file = logs_dir / f"alembic_{ts}.log"
+logging.basicConfig(
+    level=getattr(logging, log_level, logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger("alembic.env")
+logger.info("Usando nivel de log %s", log_level)
+logger.info("Archivo de log: %s", log_file)
+
+script = ScriptDirectory.from_config(config)
 
 # === Cargar variables desde .env ===
 load_dotenv()
@@ -49,8 +75,18 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    connectable = create_engine(db_url, future=True, poolclass=NullPool)
+    log_sql = context.get_x_argument(asbool=True, name="log_sql")
+    connectable = create_engine(
+        db_url, future=True, poolclass=NullPool, echo=log_sql
+    )
     with connectable.connect() as connection:
+        current_rev = MigrationContext.configure(connection).get_current_revision()
+        heads = script.get_heads()
+        logger.info("Revisión actual: %s", current_rev)
+        logger.info("Heads: %s", ", ".join(heads))
+        hist = [rev.revision for rev in list(script.walk_revisions())[:30]]
+        logger.info("Historial reciente: %s", ", ".join(hist))
+
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
@@ -59,8 +95,13 @@ def run_migrations_online() -> None:
             include_schemas=True,
         )
 
-        with context.begin_transaction():
-            context.run_migrations()
+        try:
+            with context.begin_transaction():
+                context.run_migrations()
+            logger.info("Migraciones aplicadas con éxito")
+        except Exception:  # pragma: no cover - logging
+            logger.error("Error al ejecutar migraciones:\n%s", traceback.format_exc())
+            raise
 
 
 if context.is_offline_mode():
