@@ -225,10 +225,10 @@ def upgrade():
     has_admin = bind.execute(text("SELECT 1 FROM users WHERE role='admin' LIMIT 1")).first()
     if not has_admin:
         admin_user = os.getenv("ADMIN_USER", "admin")
-        admin_pass = os.getenv("ADMIN_PASS", "changeme")
-        if admin_pass == "changeme":
+        admin_pass = os.getenv("ADMIN_PASS", "REEMPLAZAR_ADMIN_PASS")
+        if admin_pass == "REEMPLAZAR_ADMIN_PASS":
             raise RuntimeError(
-                "ADMIN_PASS no puede permanecer en 'changeme' al ejecutar migraciones"
+                "ADMIN_PASS no puede permanecer en el placeholder 'REEMPLAZAR_ADMIN_PASS' al ejecutar migraciones"
             )
         pwd = argon2.using(type="ID").hash(admin_pass)
         bind.execute(

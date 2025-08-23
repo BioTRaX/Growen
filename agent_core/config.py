@@ -6,6 +6,10 @@ import os
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
+# Marcadores que deben sustituirse en producción
+SECRET_KEY_PLACEHOLDER = "REEMPLAZAR_SECRET_KEY"
+ADMIN_PASS_PLACEHOLDER = "REEMPLAZAR_ADMIN_PASS"
+
 # Carga automática de variables definidas en .env
 load_dotenv()
 
@@ -20,9 +24,9 @@ class Settings:
     )
     ai_mode: str = os.getenv("AI_MODE", "auto")
     ai_allow_external: bool = os.getenv("AI_ALLOW_EXTERNAL", "true").lower() == "true"
-    secret_key: str = os.getenv("SECRET_KEY", "changeme")
+    secret_key: str = os.getenv("SECRET_KEY", SECRET_KEY_PLACEHOLDER)
     admin_user: str = os.getenv("ADMIN_USER", "admin")
-    admin_pass: str = os.getenv("ADMIN_PASS", "changeme")
+    admin_pass: str = os.getenv("ADMIN_PASS", ADMIN_PASS_PLACEHOLDER)
     session_expire_minutes: int = int(
         os.getenv("SESSION_EXPIRE_MINUTES", "1440")
     )  # duración de la sesión en minutos (1 día por defecto)
@@ -31,13 +35,13 @@ class Settings:
     cookie_domain: str | None = os.getenv("COOKIE_DOMAIN") or None
 
     def __post_init__(self) -> None:
-        if self.secret_key == "changeme":
+        if self.secret_key == SECRET_KEY_PLACEHOLDER:
             raise RuntimeError(
-                "SECRET_KEY debe sobrescribirse; no puede permanecer en 'changeme'"
+                "SECRET_KEY debe sobrescribirse; reemplace el placeholder 'REEMPLAZAR_SECRET_KEY'"
             )
-        if self.admin_pass == "changeme":
+        if self.admin_pass == ADMIN_PASS_PLACEHOLDER:
             raise RuntimeError(
-                "ADMIN_PASS debe sobrescribirse; no puede permanecer en 'changeme'"
+                "ADMIN_PASS debe sobrescribirse; reemplace el placeholder 'REEMPLAZAR_ADMIN_PASS'"
             )
 
 
