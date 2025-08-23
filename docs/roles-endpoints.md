@@ -49,3 +49,5 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /debug/imports/parsers* | admin |
 
 Las rutas marcadas con * solo están disponibles cuando `ENV` es distinto de `production`.
+
+El canal `/ws` envía un ping JSON cada 30 s y se cierra tras 60 s sin recibir mensajes.
