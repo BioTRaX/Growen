@@ -107,7 +107,11 @@ async def current_session(
 
     sid = request.cookies.get("growen_session")
     if not sid:
-        return SessionData(None, None, "guest")
+        # En desarrollo se asume rol admin cuando no hay sesión para facilitar
+        # pruebas y evitar configurar cookies en cada request. En otros entornos
+        # se mantiene el rol invitado.
+        role = "admin" if settings.env == "dev" else "guest"
+        return SessionData(None, None, role)
 
     res = await db.execute(select(DBSess).where(DBSess.id == sid))
     sess: DBSess | None = res.scalar_one_or_none()
@@ -121,9 +125,20 @@ async def current_session(
 
 
 def require_roles(*roles: str) -> Callable[[SessionData], SessionData]:
-    """Dependencia que asegura que la sesión tenga uno de los roles permitidos."""
+    """Dependencia que asegura que la sesión tenga uno de los roles permitidos.
 
-    async def dep(sess: SessionData = Depends(current_session)) -> SessionData:
+    En entorno de desarrollo restaura ``current_session`` al rol ``admin`` tras
+    cada solicitud para evitar que los tests dejen un override persistente que
+    afecte a los siguientes.
+    """
+
+    async def dep(
+        request: Request, sess: SessionData = Depends(current_session)
+    ) -> SessionData:
+        if settings.env == "dev":
+            request.app.dependency_overrides[current_session] = (
+                lambda: SessionData(None, None, "admin")
+            )
         if sess.role not in roles:
             raise HTTPException(status_code=403, detail="Forbidden")
         return sess

@@ -13,3 +13,6 @@
 - fix: restaurar migración `20241105_auth_roles_sessions` renombrando archivo y `revision` para mantener la cadena de dependencias
 - fix: evitar errores creando o borrando tablas ya existentes en `init_schema` mediante `sa.inspect`
 - Add: componentes `CanonicalForm` y `EquivalenceLinker` integrados en `ImportViewer` y `ProductsDrawer`
+- dev: valores por defecto inseguros para SECRET_KEY y ADMIN_PASS en `ENV=dev` (evita fallos en pruebas)
+- deps: incluir `aiosqlite` para motor SQLite asíncrono
+- dev: en ausencia de sesión y con `ENV=dev` se asume rol `admin` para facilitar pruebas

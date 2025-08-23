@@ -44,7 +44,8 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
 cp .env.example .env
-# reemplazar los placeholders SECRET_KEY, ADMIN_USER y ADMIN_PASS antes de continuar
+# en producción reemplazar los placeholders SECRET_KEY, ADMIN_USER y ADMIN_PASS
+# en desarrollo se usan valores de prueba si se omiten
 # las variables de entorno se cargan automáticamente desde .env
 # crear base de datos growen en PostgreSQL
 alembic -c ./alembic.ini upgrade head
@@ -103,7 +104,9 @@ En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8
 
 La API implementa sesiones mediante la cookie `growen_session` y un token CSRF almacenado en `csrf_token`. Cada vez que se inicia o cierra sesión se generan nuevos valores para ambas cookies, evitando la fijación de sesiones. Todas las mutaciones deben enviar el encabezado `X-CSRF-Token` coincidiendo con dicha cookie. Las rutas que modifican datos añaden dependencias `require_roles` para comprobar que el usuario posea el rol autorizado.
 
- El login acepta **identificador** o email junto con la contraseña. Al ejecutar las migraciones se crea, si no existe, un usuario administrador usando `ADMIN_USER` y `ADMIN_PASS` definidos en `.env` (ver `.env.example`). El servidor se niega a iniciar si `ADMIN_PASS` queda en el placeholder `REEMPLAZAR_ADMIN_PASS`.
+Si no hay cookie de sesión y el entorno es `dev`, se asume rol `admin` por defecto para agilizar pruebas; en otros entornos el rol por omisión es `guest`.
+
+El login acepta **identificador** o email junto con la contraseña. Al ejecutar las migraciones se crea, si no existe, un usuario administrador usando `ADMIN_USER` y `ADMIN_PASS` definidos en `.env` (ver `.env.example`). En producción el servidor se niega a iniciar si `ADMIN_PASS` queda en el placeholder `REEMPLAZAR_ADMIN_PASS`.
 
 ### Endpoints principales
 
@@ -132,7 +135,8 @@ La lista completa de rutas y roles se encuentra en [docs/roles-endpoints.md](doc
 
 ```env
 SECRET_KEY=REEMPLAZAR_SECRET_KEY
-# ADMIN_USER y ADMIN_PASS se definen en .env (ver .env.example); cambie los placeholders
+# ADMIN_USER y ADMIN_PASS se definen en .env (ver .env.example);
+# en producción cambie los placeholders
 SESSION_EXPIRE_MINUTES=1440 # duración de la sesión en minutos (1 día recomendado)
 AUTH_ENABLED=true
 # se ignora en producción; allí siempre es true
@@ -140,9 +144,9 @@ COOKIE_SECURE=false
 COOKIE_DOMAIN=
 ```
 
-`SECRET_KEY` y las credenciales iniciales (`ADMIN_USER` y `ADMIN_PASS`, definidas en `.env`) deben reemplazarse por valores robustos antes de
-iniciar la aplicación; ésta abortará el arranque si `ADMIN_PASS` permanece en el placeholder `REEMPLAZAR_ADMIN_PASS`. Mantener estas claves fuera del control de versiones y rotarlas
-periódicamente.
+`SECRET_KEY` y las credenciales iniciales (`ADMIN_USER` y `ADMIN_PASS`, definidas en `.env`) deben reemplazarse por valores robustos en producción.
+En entornos de desarrollo se usarán valores de prueba si se dejan en los placeholders, pero conviene ajustarlos igualmente.
+Mantener estas claves fuera del control de versiones y rotarlas periódicamente.
 
 `SESSION_EXPIRE_MINUTES` define cuánto tiempo permanece válida una sesión.
 El valor recomendado de `1440` mantiene la sesión durante un día. Al expirar,
@@ -390,7 +394,7 @@ variables definidas en `.env`, por lo que no es necesario configurar la URL en `
 
 ```bash
 cp .env.example .env   # en Windows usar: copy .env.example .env
-# Completar DB_URL, SECRET_KEY y las credenciales ADMIN_USER/ADMIN_PASS (reemplazar placeholders) en .env
+# Completar DB_URL y, en producción, definir SECRET_KEY y las credenciales ADMIN_USER/ADMIN_PASS reemplazando los placeholders
 alembic -c ./alembic.ini upgrade head
 
 # Crear una nueva revisión a partir de los modelos
@@ -413,9 +417,10 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `OLLAMA_URL`: URL base de Ollama (por defecto `http://localhost:11434`).
 - `OLLAMA_MODEL`: modelo de Ollama (por defecto `llama3.1`).
 - `OPENAI_API_KEY`, `OPENAI_MODEL`.
-- `SECRET_KEY`: clave usada para firmar sesiones; reemplace el placeholder
-  `REEMPLAZAR_SECRET_KEY`, rote el valor periódicamente y manténgalo fuera del
-  control de versiones. El servidor se detiene si no se sobrescribe.
+- `SECRET_KEY`: clave usada para firmar sesiones; en producción reemplace el
+  placeholder `REEMPLAZAR_SECRET_KEY`, rote el valor periódicamente y manténgalo
+  fuera del control de versiones. En desarrollo se usa un valor de prueba si no
+  se define uno propio.
 - `SESSION_EXPIRE_MINUTES`: tiempo de expiración de la sesión en minutos (por
   defecto 1440 = 1 día). Incrementarlo prolonga las sesiones pero aumenta el
   riesgo ante robo de cookies; reducirlo fuerza reautenticaciones más frecuentes
@@ -426,8 +431,9 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
   producción se debe especificar cada dominio explícitamente.
 - `LOG_LEVEL`: nivel de logging de la aplicación (`DEBUG`, `INFO`, etc.).
 - `DEBUG_SQL`: si vale `1`, SQLAlchemy mostrará cada consulta ejecutada.
- - `ADMIN_USER`, `ADMIN_PASS`: credenciales del administrador inicial definidas en `.env` (copiado desde `.env.example`). Si
-   `ADMIN_PASS` queda en el placeholder `REEMPLAZAR_ADMIN_PASS`, la aplicación aborta el inicio.
+- `ADMIN_USER`, `ADMIN_PASS`: credenciales del administrador inicial definidas en `.env`
+  (copiado desde `.env.example`). En producción la aplicación aborta el inicio si
+  `ADMIN_PASS` queda en el placeholder `REEMPLAZAR_ADMIN_PASS`.
 - `MAX_UPLOAD_MB`: tamaño máximo de archivos a subir.
 - `AUTH_ENABLED`: si es `true`, requiere sesión autenticada.
 - `PRODUCTS_PAGE_MAX`: límite máximo de resultados por página.

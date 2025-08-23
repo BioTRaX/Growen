@@ -26,6 +26,7 @@ dependencies = [
     "python-magic-bin>=0.4.14; platform_system == 'Windows'",
     "slowapi>=0.1.9",
     "rapidfuzz>=3.9.0",
+    "aiosqlite>=0.20.0",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +34,7 @@ dev = [
     "ruff>=0.4.2",
     "black>=24.3.0",
     "pytest>=8.1.0",
+    "pytest-asyncio>=0.23",
     "python-dotenv>=1.0.0",
 ]
 
