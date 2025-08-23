@@ -29,6 +29,7 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /canonical-products | Ninguno |
 | GET | /canonical-products/{canonical_id} | Ninguno |
 | PATCH | /canonical-products/{canonical_id} | admin (requiere CSRF) |
+| GET | /canonical-products/{canonical_id}/offers | Ninguno |
 | GET | /equivalences | Ninguno |
 | POST | /equivalences | manager, admin (requiere CSRF) |
 | DELETE | /equivalences/{equivalence_id} | manager, admin (requiere CSRF) |
@@ -41,6 +42,7 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /actions/ | Ninguno |
 | POST | /chat | Ninguno |
 | WebSocket | /ws | Ninguno |
+| POST | /webhooks/tiendanube/ | Ninguno |
 | GET | /healthz* | admin |
 | GET | /debug/db* | admin |
 | GET | /debug/config* | admin |
