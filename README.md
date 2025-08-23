@@ -417,6 +417,8 @@ En el chat o vía API se pueden usar:
 - `/sync pull --dry-run`
 - `/sync push --dry-run`
 - `/stock adjust --sku=SKU --qty=5`
+- `/import last --apply`
+- `/search maceta`
 
 La ruta `GET /actions` devuelve acciones rápidas.
 
