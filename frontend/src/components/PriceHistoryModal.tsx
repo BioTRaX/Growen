@@ -35,7 +35,7 @@ export default function PriceHistoryModal({ productId, supplierProductId, onClos
         justifyContent: 'center',
       }}
     >
-      <div style={{ background: '#fff', padding: 20, borderRadius: 8, width: 500 }}>
+      <div style={{ background: 'var(--panel-bg)', color: 'var(--text-color)', padding: 20, borderRadius: 8, width: 500 }}>
         <button onClick={onClose} style={{ float: 'right' }}>
           Cerrar
         </button>

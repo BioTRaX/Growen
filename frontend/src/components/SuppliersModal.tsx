@@ -26,9 +26,9 @@ export default function SuppliersModal({ open, onClose }: Props) {
 
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ background: '#fff', padding: 20, borderRadius: 8, width: 400 }}>
+      <div style={{ background: 'var(--panel-bg)', color: 'var(--text-color)', padding: 20, borderRadius: 8, width: 400 }}>
         <h3>Proveedores</h3>
-        {error && <div style={{ color: 'red' }}>{error}</div>}
+        {error && <div style={{ color: 'var(--text-color)' }}>{error}</div>}
         {suppliers.length === 0 ? (
           <div>No hay proveedores aún</div>
         ) : (
