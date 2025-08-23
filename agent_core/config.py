@@ -52,13 +52,23 @@ class Settings:
 
     def __post_init__(self) -> None:
         if self.secret_key == SECRET_KEY_PLACEHOLDER:
-            raise RuntimeError(
-                "SECRET_KEY debe sobrescribirse; reemplace el placeholder 'REEMPLAZAR_SECRET_KEY'"
-            )
+            if self.env == "dev":
+                # En desarrollo se usa una clave predecible para simplificar pruebas
+                # y evitar fallos al ejecutar la suite sin variables de entorno.
+                self.secret_key = "dev-secret-key"
+            else:
+                raise RuntimeError(
+                    "SECRET_KEY debe sobrescribirse; reemplace el placeholder 'REEMPLAZAR_SECRET_KEY'"
+                )
         if self.admin_pass == ADMIN_PASS_PLACEHOLDER:
-            raise RuntimeError(
-                "ADMIN_PASS debe sobrescribirse; reemplace el placeholder 'REEMPLAZAR_ADMIN_PASS'"
-            )
+            if self.env == "dev":
+                # Contraseña por defecto solo válida para entornos de desarrollo.
+                # En producción el arranque abortará si no se define un valor seguro.
+                self.admin_pass = "dev-admin-pass"
+            else:
+                raise RuntimeError(
+                    "ADMIN_PASS debe sobrescribirse; reemplace el placeholder 'REEMPLAZAR_ADMIN_PASS'"
+                )
 
         raw = os.getenv("ALLOWED_ORIGINS", "").split(",")
         origins = [o.strip() for o in raw if o.strip()]
