@@ -3,7 +3,8 @@
 Este módulo expone un parser genérico basado en archivos Excel/CSV
 configurable mediante archivos YAML ubicados en ``config/suppliers``.
 También permite agregar parsers personalizados a través de
-``entry_points`` del grupo ``growen.suppliers.parsers``.
+``entry_points`` del grupo ``growen.suppliers.parsers`` y expone
+``SUPPLIER_PARSERS`` con todas las instancias registradas.
 """
 
 from __future__ import annotations
@@ -16,6 +17,9 @@ from typing import Any, Dict
 
 import pandas as pd
 import yaml
+
+# objetos visibles al importar el módulo
+__all__ = ["BaseSupplierParser", "GenericExcelParser", "SUPPLIER_PARSERS"]
 
 
 class BaseSupplierParser:
