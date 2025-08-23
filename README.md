@@ -204,6 +204,7 @@ Las tablas `import_jobs` e `import_job_rows` guardan cada archivo cargado y sus 
 `GET /suppliers/price-list/template` devuelve una plantilla genérica con la hoja `data` y los encabezados:
 `ID`, `Agrupamiento`, `Familia`, `SubFamilia`, `Producto`, `Compra Minima`, `Stock`, `PrecioDeCompra`, `PrecioDeVenta`.
 `GET /suppliers/{supplier_id}/price-list/template` genera la misma estructura pero permite personalizar el nombre del archivo según el proveedor.
+Ambas rutas requieren un rol válido (`cliente`, `proveedor`, `colaborador` o `admin`).
 La celda `A1` incluye una nota con instrucciones y la fila 2 trae un ejemplo. En el modal de carga hay un botón **Descargar plantilla genérica** que llama a `GET /suppliers/price-list/template` y otro **Descargar plantilla** que usa `GET /suppliers/{supplier_id}/price-list/template` para obtener el archivo específico antes de completar los datos.
 
 ### Adjuntar Excel desde el chat
@@ -477,10 +478,10 @@ Desde la botonera puede abrirse un modal que lista los proveedores actuales y pe
 
 La API expone endpoints para administrar proveedores externos:
 
-- `GET /suppliers` lista todos los proveedores con la cantidad de archivos cargados.
+- `GET /suppliers` lista todos los proveedores con la cantidad de archivos cargados. Requiere rol `cliente`, `proveedor`, `colaborador` o `admin`.
 - `POST /suppliers` crea un nuevo proveedor validando que el `slug` sea único.
 - `PATCH /suppliers/{id}` actualiza el nombre de un proveedor existente.
-- `GET /suppliers/{id}/files` muestra los archivos cargados por un proveedor.
+- `GET /suppliers/{id}/files` muestra los archivos cargados por un proveedor. Requiere rol `cliente`, `proveedor`, `colaborador` o `admin`.
 
 Estos recursos facilitan la organización de las distintas listas de precio y su historial.
 
