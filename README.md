@@ -309,12 +309,12 @@ Ejecutar **desde CMD** con doble clic en `start.bat`. El script realiza estas et
 
 1. Llama a `scripts\stop.bat` y espera hasta 5 s para liberar procesos anteriores.
 2. Verifica que los puertos **8000** y **5173** estén libres; si alguno está ocupado aborta con un mensaje.
-3. Ejecuta `scripts\fix_deps.bat` para crear la venv, instalar dependencias y preparar el frontend.
+3. Comprueba que existan `python` y `npm`, luego ejecuta `scripts\fix_deps.bat` para crear la venv, instalar dependencias y preparar el frontend.
 4. Abre dos ventanas:
    - Growen API (Uvicorn) en http://127.0.0.1:8000/docs
    - Growen Frontend (Vite) en http://127.0.0.1:5173/
 
-La salida de ambos servicios se guarda en `logs/backend.log` y `logs/frontend.log` para facilitar el diagnóstico.
+La salida de ambos servicios se guarda en `logs/backend.log` y `logs/frontend.log` para facilitar el diagnóstico. Además, las acciones de los scripts quedan registradas con timestamp en `logs/start.log`, `logs/stop.log` y `logs/fix_deps.log`.
 
 Requisitos previos:
 
@@ -324,7 +324,9 @@ Requisitos previos:
 - `.env` completado (DB_URL, IA, etc.)
 - `frontend/.env` creado a partir de `frontend/.env.example` si se necesita ajustar `VITE_API_URL`.
 
-Para detener manualmente los servicios, ejecutar `scripts\stop.bat` desde CMD; cierra los procesos de Uvicorn y Vite.
+El script verifica automáticamente que `python` y `npm` estén disponibles antes de iniciar.
+
+Para detener manualmente los servicios, ejecutar `scripts\stop.bat` desde CMD; cierra los procesos de Uvicorn y Vite y escribe su log en `logs/stop.log`.
 
 Rutas con espacios soportadas (los scripts usan `cd /d` y comillas).
 
