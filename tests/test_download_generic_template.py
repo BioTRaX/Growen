@@ -6,10 +6,14 @@ from openpyxl import load_workbook
 from fastapi.testclient import TestClient
 
 os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["SECRET_KEY"] = "test"
+os.environ["ADMIN_PASS"] = "test"
+os.environ["AUTH_ENABLED"] = "true"
 
 from services.api import app  # noqa: E402
 from db.base import Base  # noqa: E402
 from db.session import engine  # noqa: E402
+from services.auth import SessionData, current_session  # noqa: E402
 
 
 async def _init_db() -> None:
@@ -20,6 +24,7 @@ async def _init_db() -> None:
 asyncio.get_event_loop().run_until_complete(_init_db())
 
 client = TestClient(app)
+app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
 
 
 def test_download_generic_template() -> None:
@@ -41,3 +46,10 @@ def test_download_generic_template() -> None:
         "PrecioDeVenta",
     ]
     assert [cell.value for cell in ws[1]] == headers
+
+
+def test_download_generic_template_unauthorized() -> None:
+    app.dependency_overrides[current_session] = lambda: SessionData(None, None, "guest")
+    resp = client.get("/suppliers/price-list/template")
+    assert resp.status_code == 403
+    app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")

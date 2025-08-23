@@ -3,11 +3,15 @@ import asyncio
 
 # Configurar DB en memoria antes de importar la app
 os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["SECRET_KEY"] = "test"
+os.environ["ADMIN_PASS"] = "test"
+os.environ["AUTH_ENABLED"] = "true"
 
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.api import app
+from services.auth import SessionData, current_session, require_csrf
 from db.base import Base
 from db.session import engine, SessionLocal
 from db.models import Supplier, SupplierFile
@@ -21,6 +25,8 @@ async def _init_db() -> None:
 asyncio.get_event_loop().run_until_complete(_init_db())
 
 client = TestClient(app)
+app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
+app.dependency_overrides[require_csrf] = lambda: None
 
 
 def test_supplier_crud() -> None:
@@ -79,3 +85,10 @@ def test_supplier_missing_fields() -> None:
         "/suppliers", data="no-json", headers={"Content-Type": "text/plain"}
     )
     assert resp.status_code == 415
+
+
+def test_list_suppliers_unauthorized() -> None:
+    app.dependency_overrides[current_session] = lambda: SessionData(None, None, "guest")
+    resp = client.get("/suppliers")
+    assert resp.status_code == 403
+    app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
