@@ -12,6 +12,10 @@
   --table-header: #1b2030;
   --table-row: #121620;
   --table-row-hover: #1a1f2d;
+
+  /* Variables de alias para componentes */
+  --panel-bg: var(--panel);
+  --text-color: var(--text);
 }
 
 [data-theme="dark"] {
@@ -27,9 +31,9 @@ body {
 }
 
 .panel {
-  background: var(--panel);
+  background: var(--panel-bg);
   border: 1px solid var(--border);
-  color: var(--text);
+  color: var(--text-color);
   border-radius: 12px;
 }
 

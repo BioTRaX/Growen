@@ -47,9 +47,9 @@ export default function CreateSupplierModal({ open, onClose, onCreated }: Props)
 
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ background: '#fff', padding: 20, borderRadius: 8, width: 300 }}>
+      <div style={{ background: 'var(--panel-bg)', color: 'var(--text-color)', padding: 20, borderRadius: 8, width: 300 }}>
         <h4>Nuevo proveedor</h4>
-        {error && <div style={{ color: 'red' }}>{error}</div>}
+        {error && <div style={{ color: 'var(--text-color)' }}>{error}</div>}
         <div style={{ margin: '8px 0' }}>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre" style={{ width: '100%', padding: 8 }} />
         </div>
