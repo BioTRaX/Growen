@@ -6,17 +6,26 @@ export interface Supplier {
 
 const base = import.meta.env.VITE_API_URL as string
 
+function csrfHeaders(): Record<string, string> {
+  const m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/)
+  return m ? { 'X-CSRF-Token': decodeURIComponent(m[1]) } : {}
+}
+
 export async function listSuppliers(): Promise<Supplier[]> {
-  const r = await fetch(`${base}/suppliers`, { credentials: 'include' })
+  const r = await fetch(`${base}/suppliers`, {
+    credentials: 'include',
+    headers: csrfHeaders(),
+  })
   if (!r.ok) throw new Error('Error de red')
   return r.json()
 }
 
 export async function createSupplier(payload: { name: string; slug: string }): Promise<Supplier> {
+  const headers = { ...csrfHeaders(), 'Content-Type': 'application/json' }
   const r = await fetch(`${base}/suppliers`, {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(payload),
   })
   if (r.status === 409) throw new Error('slug existente')
