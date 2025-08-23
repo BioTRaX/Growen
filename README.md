@@ -249,7 +249,9 @@ FUZZY_SUGGESTION_THRESHOLD=0.87
 SUGGESTION_CANDIDATES=3
 ```
 
-Estas opciones controlan la creación automática y las sugerencias durante la importación de listas.
+Estas opciones controlan la creación automática y las sugerencias durante la
+importación de listas. Las coincidencias se calculan con `rapidfuzz` y solo se
+aceptan si superan el umbral `FUZZY_SUGGESTION_THRESHOLD`.
 
 ## Consulta de productos
 

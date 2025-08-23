@@ -15,11 +15,52 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict
 
+import os
+from rapidfuzz import fuzz, process
 import pandas as pd
 import yaml
 
 # objetos visibles al importar el módulo
-__all__ = ["BaseSupplierParser", "GenericExcelParser", "SUPPLIER_PARSERS"]
+__all__ = [
+    "BaseSupplierParser",
+    "GenericExcelParser",
+    "SUPPLIER_PARSERS",
+    "AUTO_CREATE_CANONICAL",
+    "FUZZY_SUGGESTION_THRESHOLD",
+    "suggest_canonicals",
+]
+
+# valores de configuración provenientes de variables de entorno
+AUTO_CREATE_CANONICAL = os.getenv("AUTO_CREATE_CANONICAL", "true").lower() == "true"
+FUZZY_SUGGESTION_THRESHOLD = float(os.getenv("FUZZY_SUGGESTION_THRESHOLD", "0.87"))
+SUGGESTION_CANDIDATES = int(os.getenv("SUGGESTION_CANDIDATES", "3"))
+
+
+def suggest_canonicals(name: str, choices: dict[int, str]) -> list[dict]:
+    """Obtiene sugerencias de canónicos similares con ``rapidfuzz``.
+
+    Se compara ``name`` con cada entrada de ``choices`` y se devuelven
+    las mejores coincidencias cuyo puntaje supera ``FUZZY_SUGGESTION_THRESHOLD``.
+
+    Args:
+        name: nombre a comparar.
+        choices: diccionario ``{id: nombre}`` de canónicos existentes.
+
+    Returns:
+        Lista de diccionarios con ``id``, ``name`` y ``score`` (0 a 1).
+    """
+
+    matches = process.extract(
+        name,
+        choices,
+        scorer=fuzz.WRatio,
+        score_cutoff=FUZZY_SUGGESTION_THRESHOLD * 100,
+        limit=SUGGESTION_CANDIDATES,
+    )
+    return [
+        {"id": key, "name": choices[key], "score": score / 100}
+        for _, score, key in matches
+    ]
 
 
 class BaseSupplierParser:
