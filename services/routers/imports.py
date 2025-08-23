@@ -338,6 +338,9 @@ async def preview_import(
             stmt = stmt.where(ImportJobRow.status.in_(statuses))
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar() or 0
+    pages = (total + page_size - 1) // page_size
+    if pages and page > pages:
+        page = pages
 
     stmt = (
         stmt.order_by(ImportJobRow.row_index)
@@ -354,12 +357,12 @@ async def preview_import(
         }
         for r in res.scalars()
     ]
-    pages = (total + page_size - 1) // page_size
     return {
         "items": items,
         "summary": job.summary_json,
         "total": total,
         "pages": pages,
+        "page": page,
     }
 
 
