@@ -53,7 +53,7 @@ uvicorn services.api:app --reload
 
 ## Migraciones automáticas
 
-`start.sh`, `start.bat` y `scripts/run_api.cmd` ejecutan `alembic upgrade head` con el intérprete del entorno virtual antes de iniciar el servidor.
+`start.sh`, `start.bat` y `scripts/run_api.cmd` invocan `scripts\stop.bat`, luego `scripts\fix_deps.bat` y finalmente `alembic upgrade head` con el intérprete del entorno virtual antes de iniciar el servidor.
 Si la migración falla, el proceso se detiene para evitar correr con un esquema desactualizado.
 De esta forma la base siempre está en el esquema más reciente sin comandos manuales.
 
@@ -331,6 +331,8 @@ Para detener manualmente los servicios, ejecutar `scripts\stop.bat` desde CMD; c
 Rutas con espacios soportadas (los scripts usan `cd /d` y comillas).
 
 PowerShell no requerido (los scripts son CMD puro).
+
+Para iniciar solo el backend en Windows se puede ejecutar `scripts\run_api.cmd`. Este script detiene procesos previos, instala dependencias, aplica migraciones y guarda la salida de Uvicorn en `logs/backend.log`.
 
 ### Debian/Ubuntu
 
