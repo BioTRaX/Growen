@@ -158,7 +158,7 @@ La interfaz presenta una botonera fija sobre el chat con accesos rápidos:
 
 - **Adjuntar Excel** abre el modal de carga de listas de precios.
 - **Proveedores** muestra la gestión básica de proveedores (listar y crear).
- - **Productos** abre un panel para buscar en la base y ajustar stock manualmente; los resultados se cargan bajo demanda al desplazarse gracias a `react-window`.
+- **Productos** abre un panel para buscar en la base, ajustar stock y gestionar canónicos: permite editar fichas canónicas y vincular equivalencias manualmente. Los resultados se cargan bajo demanda al desplazarse gracias a `react-window`.
 
 La barra queda visible al hacer scroll y usa un estilo mínimo con sombreado suave.
 
@@ -183,7 +183,7 @@ Flujo básico: **upload → preview → commit**.
 La API permite subir archivos de proveedores en formato `.xlsx` para revisar y aplicar nuevas listas de precios.
 
 1. `POST /suppliers/{supplier_id}/price-list/upload` recibe el archivo del proveedor (campo `file` en `multipart/form-data`) y un parámetro `dry_run` (por defecto `true`). Es obligatorio que el proveedor exista y tenga un *parser* registrado.
-2. `GET /imports/{job_id}/preview?status=new,changed&page=1&page_size=50` lista las filas normalizadas filtradas por `status` y paginadas. La respuesta devuelve `{items, summary, total, pages, page}` y permite inspeccionar también `status=error,duplicate_in_file` para los fallos.
+2. `GET /imports/{job_id}/preview?status=new,changed&page=1&page_size=50` lista las filas normalizadas filtradas por `status` y paginadas. La respuesta devuelve `{items, summary, total, pages, page}` y permite inspeccionar también `status=error,duplicate_in_file` para los fallos. Durante esta vista previa es posible crear o editar productos canónicos y vincular equivalencias manualmente desde cada fila.
 3. `POST /imports/{job_id}/commit` aplica los cambios, creando categorías, productos y relaciones en `supplier_products`.
 
 Cada proveedor define su mapeo en `config/suppliers/*.yml`. Por cada archivo se genera automáticamente un `GenericExcelParser`.
@@ -226,6 +226,7 @@ Errores comunes:
 
 Para comparar precios entre proveedores se introduce un catálogo propio de productos canónicos. Cada oferta de un proveedor puede
 vincularse a uno de estos canónicos mediante *equivalencias*.
+El frontend ofrece los componentes **CanonicalForm** y **EquivalenceLinker** para crear o editar canónicos y asociar ofertas directamente desde la interfaz.
 
 - **Crear canónico**: `POST /canonical-products` con `name`, `brand` y `specs_json` opcional. El sistema genera `ng_sku` con el
   formato `NG-000001`.
