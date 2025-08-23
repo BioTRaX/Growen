@@ -158,7 +158,7 @@ La interfaz presenta una botonera fija sobre el chat con accesos rápidos:
 
 - **Adjuntar Excel** abre el modal de carga de listas de precios.
 - **Proveedores** muestra la gestión básica de proveedores (listar y crear).
-- **Productos** abre un panel para buscar en la base y ajustar stock manualmente.
+ - **Productos** abre un panel para buscar en la base y ajustar stock manualmente; los resultados se cargan bajo demanda al desplazarse gracias a `react-window`.
 
 La barra queda visible al hacer scroll y usa un estilo mínimo con sombreado suave.
 
