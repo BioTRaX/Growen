@@ -263,6 +263,8 @@ Parámetros soportados:
 - `sort_by`: `updated_at`, `precio_venta`, `precio_compra` o `name`.
 - `order`: `asc` o `desc`.
 
+Si se envían otros valores en `sort_by` u `order`, la API responde `400 Bad Request`.
+
 Ejemplo de respuesta:
 
 ```json
