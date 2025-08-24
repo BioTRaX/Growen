@@ -453,7 +453,7 @@ alembic -c ./alembic.ini downgrade -1
 
 Consulta `.env.example` para la lista completa. Variables destacadas:
 
-- `DB_URL`: URL de PostgreSQL (obligatoria; la aplicación no arranca si falta. Si la contraseña tiene caracteres reservados, encodéalos, ej.: `=` → `%3D`).
+- `DB_URL`: URL de PostgreSQL (obligatoria; la aplicación no arranca si falta. Si la contraseña tiene caracteres reservados, encodéalos, ej.: `=` → `%3D`. Si tu contraseña tiene caracteres raros, ponela sin encodar en variables separadas y construí la URL con `SQLAlchemy URL.create()`; pero si usás `DB_URL` ya encodada, el `env.py` ahora la maneja bien.).
 - `AI_MODE`: `auto`, `openai` u `ollama`.
 - `AI_ALLOW_EXTERNAL`: si es `false`, solo se usa Ollama.
 - `OLLAMA_URL`: URL base de Ollama (por defecto `http://localhost:11434`).
