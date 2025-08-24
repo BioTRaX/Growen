@@ -8,7 +8,7 @@ from logging.config import fileConfig
 from alembic import context
 from alembic.script import ScriptDirectory
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import create_engine
+from sqlalchemy import engine_from_config
 from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
 
@@ -58,6 +58,10 @@ except Exception:
     target_metadata = None
 
 
+def _coerce_bool(val) -> bool:
+    return str(val).lower() in {"1", "true", "t", "yes", "y", "on"}
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
     context.configure(
@@ -75,10 +79,29 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    log_sql = context.get_x_argument(asbool=True, name="log_sql")
-    connectable = create_engine(
-        db_url, future=True, poolclass=NullPool, echo=log_sql
+    try:
+        x_args = context.get_x_argument(as_dictionary=True)
+    except TypeError:  # compatibilidad con Alembic antiguo
+        raw_args = context.get_x_argument()
+        x_args = {}
+        for arg in raw_args:
+            if "=" in arg:
+                k, v = arg.split("=", 1)
+                x_args[k] = v
+            else:
+                x_args[arg] = None
+
+    log_sql = _coerce_bool(x_args.get("log_sql"))
+    config.set_main_option("sqlalchemy.url", db_url)
+    if log_sql:
+        config.set_main_option("sqlalchemy.echo", "true")
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section),
+        prefix="sqlalchemy.",
+        poolclass=NullPool,
+        future=True,
     )
+    logger.info("sqlalchemy.echo activado: %s", log_sql)
     with connectable.connect() as connection:
         current_rev = MigrationContext.configure(connection).get_current_revision()
         heads = script.get_heads()
