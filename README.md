@@ -112,6 +112,13 @@ Orden de ejecución recomendado:
 
 ## Troubleshooting
 
+Al iniciar la API con `scripts\run_api.cmd`, el script registra cada paso en `logs\run_api.log` y Uvicorn redirige su salida a `logs\backend.log`. Estos archivos permiten diagnosticar fallas de arranque y pueden inspeccionarse con `type` o cualquier editor de texto:
+
+```cmd
+type logs\run_api.log
+type logs\backend.log
+```
+
 ### Migraciones
 
 - Este repositorio ya incluye el árbol de Alembic; **no** ejecutes `alembic init`.
