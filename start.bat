@@ -51,12 +51,10 @@ if errorlevel 1 (
 )
 
 call :log "[INFO] Iniciando backend..."
-start "Growen API" cmd /k "\"%VENV%\\python.exe\" -m uvicorn services.api:app --host 127.0.0.1 --port 8000 >> \"%LOG_DIR%\\backend.log\" 2>&1"
+start "Growen API" cmd /k ""%VENV%\python.exe" -m uvicorn services.api:app --host 127.0.0.1 --port 8000 >> "%LOG_DIR%\backend.log" 2>&1"
 
 call :log "[INFO] Iniciando frontend..."
-pushd "%ROOT%frontend"
-start "Growen Frontend" cmd /k "npm run dev >> \"%LOG_DIR%\\frontend.log\" 2>&1"
-popd
+start "Growen Frontend" cmd /k "pushd ""%ROOT%frontend"" && npm run dev >> ""%LOG_DIR%\frontend.log"" 2>&1"
 
 endlocal
 exit /b 0

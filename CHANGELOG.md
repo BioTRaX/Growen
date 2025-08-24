@@ -16,3 +16,4 @@
 - dev: valores por defecto inseguros para SECRET_KEY y ADMIN_PASS en `ENV=dev` (evita fallos en pruebas)
 - deps: incluir `aiosqlite` para motor SQLite asíncrono
 - dev: en ausencia de sesión y con `ENV=dev` se asume rol `admin` para facilitar pruebas
+- fix: corregir comillas en `scripts/start.bat` y `start.bat` para rutas con espacios
