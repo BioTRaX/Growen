@@ -110,6 +110,18 @@ Orden de ejecución recomendado:
 3. `scripts\run_migrations.cmd`
 4. Inicio de backend y frontend
 
+## Troubleshooting
+
+### Migraciones
+
+- Cada ejecución de `scripts\run_migrations.cmd` genera un archivo en `logs\migrations\alembic_YYYYMMDD_HHMMSS.log` con todo el `stdout` y `stderr` de Alembic.
+- Si el arranque se detiene por un error de migración, revisar la ruta indicada y solucionar el problema antes de volver a ejecutar `start.bat`.
+- Al invocar Alembic manualmente, las opciones globales como `--raiseerr` y `-x log_sql=1` deben ubicarse **antes** del subcomando. Ejemplo:
+
+```
+alembic --raiseerr -x log_sql=1 -c alembic.ini upgrade head
+```
+
 ## Instalación Frontend
 
 ```bash
