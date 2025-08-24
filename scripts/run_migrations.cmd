@@ -1,37 +1,55 @@
 @echo off
 setlocal enabledelayedexpansion
 
-REM Raíz del repo (carpeta del script)
+REM Raíz del repo (carpeta padre de /scripts)
 set "ROOT=%~dp0.."
-REM Normalizar barra final
 for %%I in ("%ROOT%") do set "ROOT=%%~fI"
 
 REM Carpeta de logs
 set "LOGDIR=%ROOT%\logs\migrations"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 
-REM Timestamp seguro usando WMIC (formato yyyymmdd_HHMMSS)
+REM Timestamp seguro (yyyymmdd_HHMMSS) usando WMIC si está disponible
 for /f %%i in ('wmic os get localdatetime ^| find "."') do set "TS=%%i"
-set "TS=%TS:~0,8%_%TS:~8,6%"
-REM TODO: si WMIC no está disponible, usar date /t y time /t como fallback.
-
+if not defined TS (
+  REM Fallback simple si WMIC no está
+  set "TS=%DATE:~-4%%DATE:~3,2%%DATE:~0,2%_%TIME:~0,2%%TIME:~3,2%%TIME:~6,2%"
+  set "TS=%TS: =0%"
+)
 set "MIGLOG=%LOGDIR%\alembic_%TS%.log"
 
-REM Resolver Python del venv
+REM Python del venv
 set "PYTHON=%ROOT%\.venv\Scripts\python.exe"
 if not exist "%PYTHON%" (
   echo [ERROR] No se encontró Python del entorno virtual en "%PYTHON%"
   exit /b 1
 )
 
-REM Ejecutar migraciones con opciones GLOBALES antes del subcomando
+REM Chequeo de carpetas clave
+if not exist "%ROOT%\db\migrations" (
+  echo [ERROR] No existe "%ROOT%\db\migrations"
+  echo         Verifique que el repo tenga las migraciones. Abortando.
+  exit /b 1
+)
+if not exist "%ROOT%\db\migrations\env.py" (
+  echo [ERROR] No existe "%ROOT%\db\migrations\env.py"
+  echo         El arbol de Alembic está incompleto. Abortando.
+  exit /b 1
+)
+
+REM Cambiar directorio al root del repo (importante para rutas relativas)
+pushd "%ROOT%"
+
 echo [INFO] Ejecutando: alembic --raiseerr -x log_sql=1 -c "%ROOT%\alembic.ini" upgrade head
 "%PYTHON%" -m alembic --raiseerr -x log_sql=1 -c "%ROOT%\alembic.ini" upgrade head 1>>"%MIGLOG%" 2>&1
+set "ERR=%ERRORLEVEL%"
 
-if errorlevel 1 (
+popd
+
+if not "%ERR%"=="0" (
   echo [ERROR] Fallo al aplicar migraciones. Revise el log:
   echo        "%MIGLOG%"
-  exit /b 1
+  exit /b %ERR%
 )
 
 echo [INFO] Migraciones aplicadas con éxito. Log:
