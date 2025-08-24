@@ -54,7 +54,7 @@ uvicorn services.api:app --reload
 
 ## Migraciones automáticas
 
-`start.sh`, `start.bat` y `scripts/run_api.cmd` invocan `scripts\stop.bat`, luego `scripts\fix_deps.bat` y posteriormente `scripts\run_migrations.cmd`, que ejecuta `alembic upgrade head` con logging detallado.
+`start.sh`, `scripts/start.bat` y `scripts/run_api.cmd` invocan `scripts\stop.bat`, luego `scripts\fix_deps.bat` y posteriormente `scripts\run_migrations.cmd`, que ejecuta `alembic upgrade head` con logging detallado.
 Si la migración falla, `run_migrations.cmd` muestra la ruta del log en `logs\migrations` y el proceso se detiene para evitar correr con un esquema desactualizado.
 De esta forma la base siempre está en el esquema más reciente sin comandos manuales.
 
@@ -118,7 +118,7 @@ Orden de ejecución recomendado:
 - `alembic.ini` define `script_location = %(here)s/db/migrations`, por lo que las rutas se resuelven respecto al archivo y no al directorio actual.
 - Si `alembic_version.version_num` quedó en `VARCHAR(32)`, el arranque la ensancha automáticamente a `VARCHAR(255)` para soportar identificadores de revisión largos.
 - Cada ejecución de `scripts\run_migrations.cmd` genera un archivo en `logs\migrations\alembic_YYYYMMDD_HHMMSS.log` con todo el `stdout` y `stderr` de Alembic.
-- Si el arranque se detiene por un error de migración, revisar la ruta indicada y solucionar el problema antes de volver a ejecutar `start.bat`.
+- Si el arranque se detiene por un error de migración, revisar la ruta indicada y solucionar el problema antes de volver a ejecutar `scripts\start.bat`.
 - Al invocar Alembic manualmente, las opciones globales como `--raiseerr` y `-x log_sql=1` deben ubicarse **antes** del subcomando. `log_sql=1` activa `sqlalchemy.echo` para registrar cada consulta. Ejemplo:
 
 ```
@@ -381,16 +381,13 @@ Levanta API y frontend al mismo tiempo.
 
 ### Windows
 
-Ejecutar **desde CMD** con doble clic en `start.bat`. El script realiza estas etapas:
+Ejecutar **desde CMD** con doble clic en `scripts\start.bat`. El script realiza estas etapas:
 
-1. Llama a `scripts\stop.bat` y espera hasta 5 s para liberar procesos anteriores.
-2. Verifica que los puertos **8000** y **5173** estén libres; si alguno está ocupado aborta con un mensaje.
-3. Comprueba que existan `python` y `npm`, luego ejecuta `scripts\fix_deps.bat` para crear la venv, instalar dependencias y preparar el frontend.
-4. Abre dos ventanas:
+1. Llama a `scripts\stop.bat` para liberar los puertos **8000** y **5173**.
+2. Aplica las migraciones mediante `scripts\migrate.bat` y guarda el log en `logs\migrations\alembic_YYYYMMDD_HHMMSS.log`.
+3. Abre dos ventanas:
    - Growen API (Uvicorn) en http://127.0.0.1:8000/docs
    - Growen Frontend (Vite) en http://127.0.0.1:5173/
-
-La salida de ambos servicios se guarda en `logs/backend.log` y `logs/frontend.log` para facilitar el diagnóstico. Además, las acciones de los scripts quedan registradas con timestamp en `logs/start.log`, `logs/stop.log` y `logs/fix_deps.log`.
 
 Requisitos previos:
 
@@ -400,15 +397,20 @@ Requisitos previos:
 - `.env` completado (DB_URL, IA, etc.)
 - `frontend/.env` creado a partir de `frontend/.env.example` si se necesita ajustar `VITE_API_URL`.
 
-El script verifica automáticamente que `python` y `npm` estén disponibles antes de iniciar.
-
-Para detener manualmente los servicios, ejecutar `scripts\stop.bat` desde CMD; cierra los procesos de Uvicorn y Vite y escribe su log en `logs/stop.log`.
-
-Rutas con espacios soportadas (los scripts usan `cd /d` y comillas).
+Para detener manualmente los servicios, ejecutar `scripts\stop.bat` desde CMD.
 
 PowerShell no requerido (los scripts son CMD puro).
 
-Para iniciar solo el backend en Windows se puede ejecutar `scripts\run_api.cmd`. Este script detiene procesos previos, instala dependencias, aplica migraciones y guarda la salida de Uvicorn en `logs/backend.log`.
+Para iniciar solo el backend en Windows se puede ejecutar `scripts\run_api.cmd`, que detiene procesos previos, instala dependencias, aplica migraciones y guarda la salida de Uvicorn en `logs/backend.log`.
+
+### Arranque en Windows (rutas con espacios)
+
+Los `.bat` están preparados para ejecutarse desde rutas como `C:\\Nice Grow\\Agentes\\Growen` sin errores de sintaxis:
+
+- Todas las rutas se envuelven entre comillas.
+- Se usa `pushd`/`popd` en lugar de `cd` para cambiar de directorio.
+- `scripts\start.bat` encadena `stop` → `migrate` → `api + frontend` en ventanas separadas.
+- Para registrar cada consulta SQL en el log de migraciones ejecutar `scripts\start.bat /sql`.
 
 ### Debian/Ubuntu
 
