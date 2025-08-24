@@ -34,9 +34,7 @@ class Settings:
     """Parámetros de configuración leídos de variables de entorno."""
 
     env: str = os.getenv("ENV", "dev")
-    db_url: str = os.getenv(
-        "DB_URL", "postgresql+psycopg://growen:growen@localhost:5432/growen"
-    )
+    db_url: str = os.getenv("DB_URL", "")
     ai_mode: str = os.getenv("AI_MODE", "auto")
     ai_allow_external: bool = os.getenv("AI_ALLOW_EXTERNAL", "true").lower() == "true"
     secret_key: str = os.getenv("SECRET_KEY", SECRET_KEY_PLACEHOLDER)
@@ -51,6 +49,8 @@ class Settings:
     allowed_origins: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if not self.db_url:
+            raise RuntimeError("DB_URL debe definirse en el entorno")
         if self.secret_key == SECRET_KEY_PLACEHOLDER:
             if self.env == "dev":
                 # En desarrollo se usa una clave predecible para simplificar pruebas
