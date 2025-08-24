@@ -42,7 +42,7 @@ if !ERRORLEVEL! NEQ 0 (
 popd
 
 call :log "[INFO] Iniciando backend..."
-start "Growen API" cmd /k "\"%VENV%\\python.exe\" -m uvicorn services.api:app --host 127.0.0.1 --port 8000 --reload --log-level info --access-log >> \"%LOG_DIR%\\backend.log\" 2>&1"
+start "Growen API" cmd /k ""%VENV%\python.exe" -m uvicorn services.api:app --host 127.0.0.1 --port 8000 --reload --log-level info --access-log >> "%LOG_DIR%\backend.log" 2>&1"
 
 endlocal
 exit /b 0
