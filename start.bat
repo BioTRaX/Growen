@@ -3,7 +3,6 @@ setlocal ENABLEDELAYEDEXPANSION
 
 rem Rutas base del repositorio
 set "ROOT=%~dp0"
-set "SCRIPTS=%ROOT%scripts"
 set "VENV=%ROOT%.venv\Scripts"
 if not defined LOG_DIR set "LOG_DIR=%ROOT%logs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
@@ -24,7 +23,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 call :log "[INFO] Cerrando procesos previos..."
-if exist "%SCRIPTS%\stop.bat" call "%SCRIPTS%\stop.bat"
+if exist "%~dp0stop.bat" call "%~dp0stop.bat"
 timeout /t 2 /nobreak >NUL
 
 call :log "[INFO] Verificando puertos 8000 y 5173..."
@@ -38,19 +37,17 @@ for %%P in (8000 5173) do (
 )
 
 call :log "[INFO] Instalando dependencias..."
-call "%SCRIPTS%\fix_deps.bat"
-if !ERRORLEVEL! NEQ 0 (
+call "%~dp0fix_deps.bat"
+if errorlevel 1 (
   call :log "[ERROR] Fallo la instalacion de dependencias"
-  pause
   exit /b 1
 )
 
 call :log "[INFO] Ejecutando migraciones..."
-call "%SCRIPTS%\run_migrations.cmd" >> "%LOG_FILE%" 2>&1
-if !ERRORLEVEL! NEQ 0 (
-  call :log "[ERROR] Fallo al aplicar migraciones. Revisar logs/migrations"
-  pause
-  exit /b 1
+call "%~dp0scripts\run_migrations.cmd"
+if errorlevel 1 (
+  call :log "[ERROR] No se iniciará el servidor debido a errores de migración."
+  goto :eof
 )
 
 call :log "[INFO] Iniciando backend..."
