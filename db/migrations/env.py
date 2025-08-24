@@ -12,6 +12,9 @@ from sqlalchemy import engine_from_config, text
 from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
 
+# Logger estandar para todas las operaciones del módulo
+logger = logging.getLogger("alembic.env")
+
 # Config Alembic
 config = context.config
 
@@ -33,7 +36,6 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
-logger = logging.getLogger("alembic.env")
 logger.info("Usando nivel de log %s", log_level)
 logger.info("Archivo de log: %s", log_file)
 
@@ -87,9 +89,9 @@ def _ensure_alembic_version_column(conn):
                 "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"
             )
         )
-        context.log.info("Ajustado alembic_version.version_num a VARCHAR(255)")
+        logger.info("Ajustado alembic_version.version_num a VARCHAR(255)")
     else:
-        context.log.info(
+        logger.info(
             "alembic_version.version_num ya es suficientemente amplio (len=%s)",
             curr_len,
         )
@@ -140,18 +142,22 @@ def run_migrations_online() -> None:
         future=True,
     )
     with connectable.connect() as connection:
+        # Transacción corta AISLADA para preflight
+        try:
+            with connection.begin():
+                _ensure_alembic_version_column(connection)
+            logger.info("Preflight alembic_version OK")
+        except Exception as e:
+            logger.warning(
+                "Preflight alembic_version omitido o ya aplicado: %s", e
+            )
+
         current_rev = MigrationContext.configure(connection).get_current_revision()
         heads = script.get_heads()
         logger.info("Revisión actual: %s", current_rev)
         logger.info("Heads: %s", ", ".join(heads))
         hist = [rev.revision for rev in list(script.walk_revisions())[:30]]
         logger.info("Historial reciente: %s", ", ".join(hist))
-        try:
-            _ensure_alembic_version_column(connection)
-        except Exception as e:  # pragma: no cover - logging
-            context.log.warn(
-                "No se pudo verificar/ajustar alembic_version.version_num: %s", e
-            )
 
         context.configure(
             connection=connection,
