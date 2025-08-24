@@ -92,16 +92,20 @@ def run_migrations_online() -> None:
                 x_args[arg] = None
 
     log_sql = _coerce_bool(x_args.get("log_sql"))
-    config.set_main_option("sqlalchemy.url", db_url)
+    section = config.get_section(config.config_ini_section) or {}
+    section["sqlalchemy.url"] = db_url
     if log_sql:
-        config.set_main_option("sqlalchemy.echo", "true")
+        section["sqlalchemy.echo"] = "true"
+    logger.info(
+        "sqlalchemy.url inyectada via sección de config (sin set_main_option)"
+    )
+    logger.info("sqlalchemy.echo activado: %s", log_sql)
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section),
+        section,
         prefix="sqlalchemy.",
         poolclass=NullPool,
         future=True,
     )
-    logger.info("sqlalchemy.echo activado: %s", log_sql)
     with connectable.connect() as connection:
         current_rev = MigrationContext.configure(connection).get_current_revision()
         heads = script.get_heads()
