@@ -116,6 +116,7 @@ Orden de ejecución recomendado:
 
 - Este repositorio ya incluye el árbol de Alembic; **no** ejecutes `alembic init`.
 - `alembic.ini` define `script_location = %(here)s/db/migrations`, por lo que las rutas se resuelven respecto al archivo y no al directorio actual.
+- Si `alembic_version.version_num` quedó en `VARCHAR(32)`, el arranque la ensancha automáticamente a `VARCHAR(255)` para soportar identificadores de revisión largos.
 - Cada ejecución de `scripts\run_migrations.cmd` genera un archivo en `logs\migrations\alembic_YYYYMMDD_HHMMSS.log` con todo el `stdout` y `stderr` de Alembic.
 - Si el arranque se detiene por un error de migración, revisar la ruta indicada y solucionar el problema antes de volver a ejecutar `start.bat`.
 - Al invocar Alembic manualmente, las opciones globales como `--raiseerr` y `-x log_sql=1` deben ubicarse **antes** del subcomando. `log_sql=1` activa `sqlalchemy.echo` para registrar cada consulta. Ejemplo:
