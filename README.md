@@ -401,7 +401,7 @@ Para detener manualmente los servicios, ejecutar `scripts\stop.bat` desde CMD.
 
 PowerShell no requerido (los scripts son CMD puro).
 
-Para iniciar solo el backend en Windows se puede ejecutar `scripts\run_api.cmd`, que detiene procesos previos, instala dependencias, aplica migraciones y guarda la salida de Uvicorn en `logs/backend.log`.
+Para iniciar solo el backend en Windows se puede ejecutar `scripts\run_api.cmd`, que detiene procesos previos, instala dependencias, aplica migraciones y guarda la salida de Uvicorn en `logs/backend.log`.  El script también escribe información de depuración, como rutas base y códigos de retorno, en `logs/run_api.log`.
 
 ### Arranque en Windows (rutas con espacios)
 

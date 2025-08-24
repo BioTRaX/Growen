@@ -10,12 +10,20 @@ if not defined LOG_DIR set "LOG_DIR=%ROOT%\logs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 set "LOG_FILE=%LOG_DIR%\run_api.log"
 
+call :log "[DEBUG] ROOT=%ROOT%"
+call :log "[DEBUG] VENV=%VENV%"
+call :log "[DEBUG] LOG_DIR=%LOG_DIR%"
+
 call :log "[INFO] Cerrando procesos previos..."
-if exist "%SCRIPTS%\stop.bat" call "%SCRIPTS%\stop.bat"
+if exist "%SCRIPTS%\stop.bat" (
+  call "%SCRIPTS%\stop.bat"
+  call :log "[DEBUG] ERRORLEVEL=!ERRORLEVEL!"
+)
 timeout /t 5 /nobreak >NUL
 
 call :log "[INFO] Verificando puerto 8000..."
 netstat -ano | findstr :8000 >NUL
+call :log "[DEBUG] ERRORLEVEL=!ERRORLEVEL!"
 if !ERRORLEVEL! EQU 0 (
   call :log "[ERROR] El puerto 8000 esta en uso. Abortando."
   pause
@@ -24,6 +32,7 @@ if !ERRORLEVEL! EQU 0 (
 
 call :log "[INFO] Instalando dependencias..."
 call "%SCRIPTS%\fix_deps.bat"
+call :log "[DEBUG] ERRORLEVEL=!ERRORLEVEL!"
 if !ERRORLEVEL! NEQ 0 (
   call :log "[ERROR] Fallo la instalacion de dependencias"
   pause
@@ -33,6 +42,7 @@ if !ERRORLEVEL! NEQ 0 (
 call :log "[INFO] Ejecutando migraciones..."
 pushd "%ROOT%"
 call "%VENV%\python.exe" -m alembic upgrade head >> "%LOG_FILE%" 2>&1
+call :log "[DEBUG] ERRORLEVEL=!ERRORLEVEL!"
 if !ERRORLEVEL! NEQ 0 (
   call :log "[ERROR] Fallo al aplicar migraciones"
   popd
@@ -43,6 +53,7 @@ popd
 
 call :log "[INFO] Iniciando backend..."
 start "Growen API" cmd /k ""%VENV%\python.exe" -m uvicorn services.api:app --host 127.0.0.1 --port 8000 --reload --log-level info --access-log >> "%LOG_DIR%\backend.log" 2>&1"
+call :log "[DEBUG] ERRORLEVEL=!ERRORLEVEL!"
 
 endlocal
 exit /b 0
