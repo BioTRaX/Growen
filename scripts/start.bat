@@ -27,14 +27,14 @@ if exist "%ROOT%\scripts\migrate.bat" (
 
 REM 3) Lanzar API (Uvicorn) en otra ventana
 start "Growen API" cmd /k ^
-  "pushd \"%ROOT%\" && ^
+  "pushd ""%ROOT%"" && ^
    if exist .venv\Scripts\activate.bat (call .venv\Scripts\activate.bat) else (echo [WARN] .venv no encontrado) && ^
    set UVICORN_RELOAD_DELAY=0.25 && ^
    python -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000"
 
 REM 4) Lanzar Frontend (Vite) en otra ventana
 start "Growen Frontend" cmd /k ^
-  "pushd \"%ROOT%\frontend\" && ^
+  "pushd ""%ROOT%\frontend"" && ^
    if exist package.json (call npm i --no-fund --loglevel=error) else (echo [ERROR] package.json no encontrado & exit /b 1) && ^
    npm run dev"
 
