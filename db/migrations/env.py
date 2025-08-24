@@ -8,7 +8,7 @@ from logging.config import fileConfig
 from alembic import context
 from alembic.script import ScriptDirectory
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import engine_from_config
+from sqlalchemy import engine_from_config, text
 from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
 
@@ -62,6 +62,39 @@ def _coerce_bool(val) -> bool:
     return str(val).lower() in {"1", "true", "t", "yes", "y", "on"}
 
 
+def _ensure_alembic_version_column(conn):
+    """Amplía alembic_version.version_num a VARCHAR(255) si es muy corto."""
+    q = text(
+        """
+        SELECT character_maximum_length
+        FROM information_schema.columns
+        WHERE table_name = 'alembic_version'
+          AND column_name = 'version_num'
+          AND table_schema = current_schema()
+        LIMIT 1
+        """
+    )
+    res = conn.execute(q).scalar()
+    if res is None:
+        return
+    try:
+        curr_len = int(res)
+    except (TypeError, ValueError):
+        curr_len = None
+    if curr_len is not None and curr_len < 64:
+        conn.execute(
+            text(
+                "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"
+            )
+        )
+        context.log.info("Ajustado alembic_version.version_num a VARCHAR(255)")
+    else:
+        context.log.info(
+            "alembic_version.version_num ya es suficientemente amplio (len=%s)",
+            curr_len,
+        )
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
     context.configure(
@@ -113,6 +146,12 @@ def run_migrations_online() -> None:
         logger.info("Heads: %s", ", ".join(heads))
         hist = [rev.revision for rev in list(script.walk_revisions())[:30]]
         logger.info("Historial reciente: %s", ", ".join(hist))
+        try:
+            _ensure_alembic_version_column(connection)
+        except Exception as e:  # pragma: no cover - logging
+            context.log.warn(
+                "No se pudo verificar/ajustar alembic_version.version_num: %s", e
+            )
 
         context.configure(
             connection=connection,
