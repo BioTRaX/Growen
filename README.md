@@ -102,7 +102,10 @@ SELECT column_name FROM information_schema.columns
 - **UndefinedTable / UndefinedColumn**: revisar `logs/migrations/alembic_<timestamp>.log`; puede indicar que falta una migración previa.
 - **DuplicateTable / DuplicateIndex**: las migraciones actuales son idempotentes; reejecutarlas no debería fallar.
 - **Seeds inválidos**: asegurarse de que las columnas requeridas existan antes de insertar datos.
-- **Acceso denegado al iniciar en Windows**: versiones anteriores de `start.bat` no escapaban correctamente rutas con espacios, lo que impedía abrir el frontend. Actualizá el repositorio y ejecutá el script desde la raíz del proyecto.
+- **Acceso denegado al iniciar en Windows**: `start.bat` abre procesos con `start` y `cmd /k`. Para que Windows respete rutas con espacios, las líneas usan comillas dobles consecutivas, por ejemplo:
+   - API: `cmd /k ""%VENV%\python.exe" ... >> "%LOG_DIR%\backend.log" 2>&1"`
+   - Frontend: `cmd /k "pushd ""%ROOT%frontend"" && npm run dev >> "%LOG_DIR%\frontend.log" 2>&1"`
+   Quitar alguna de esas comillas provoca errores como “Acceso denegado” o que el comando se ejecute en el directorio equivocado. Mantené el patrón intacto y ejecutá el script desde la raíz del proyecto.
 
 Orden de ejecución recomendado:
 
