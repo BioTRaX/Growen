@@ -1,4 +1,14 @@
 """Aplicación FastAPI principal del agente."""
+
+# --- Windows psycopg async fix: usar SelectorEventLoop ---
+import sys, asyncio
+if sys.platform.startswith("win"):
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except Exception:
+        pass
+# --- fin fix ---
+
 import logging
 import os
 import time
@@ -17,6 +27,7 @@ from .routers import (
     canonical_products,
     debug,
     auth,
+    health,
 )
 
 level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -47,11 +58,13 @@ async def log_requests(request: Request, call_next):
     logger.info("%s %s -> %s (%.2fms)", request.method, request.url.path, resp.status_code, dur)
     return resp
 
+origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins,
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 app.include_router(chat.router)
@@ -62,6 +75,7 @@ app.include_router(catalog.router)
 app.include_router(imports.router)
 app.include_router(canonical_products.canonical_router)
 app.include_router(canonical_products.equivalences_router)
+app.include_router(health.router)
 app.include_router(debug.router, tags=["debug"])
 
 
