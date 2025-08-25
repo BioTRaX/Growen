@@ -30,7 +30,7 @@ start "Growen API" cmd /k ^
   "pushd ""%ROOT%"" && ^
    if exist .venv\Scripts\activate.bat (call .venv\Scripts\activate.bat) else (echo [WARN] .venv no encontrado) && ^
    set UVICORN_RELOAD_DELAY=0.25 && ^
-   python -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000"
+   python -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000 --loop asyncio --http h11"
 
 REM 4) Lanzar Frontend (Vite) en otra ventana
 start "Growen Frontend" cmd /k ^
