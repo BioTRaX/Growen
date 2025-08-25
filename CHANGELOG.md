@@ -17,3 +17,6 @@
 - deps: incluir `aiosqlite` para motor SQLite asíncrono
 - dev: en ausencia de sesión y con `ENV=dev` se asume rol `admin` para facilitar pruebas
 - fix: corregir comillas en `scripts/start.bat` y `start.bat` para rutas con espacios
+- fix: soporte de `psycopg` asíncrono en Windows usando `WindowsSelectorEventLoopPolicy`
+- fix: migración idempotente que agrega `users.identifier` si falta y actualiza el modelo
+- fix: formulario de login centrado y autenticación/guest integrados con `AuthContext`

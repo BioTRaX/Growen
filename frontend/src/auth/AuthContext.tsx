@@ -45,13 +45,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   }, [])
 
   const login = async (identifier: string, password: string) => {
-    const resp = await http.post('/auth/login', { identifier, password })
-    setState({ user: resp.data, role: resp.data.role, isAuthenticated: true })
+    await http.post('/auth/login', { identifier, password })
+    await refreshMe()
   }
 
   const loginAsGuest = async () => {
-    const resp = await http.post('/auth/guest')
-    setState({ role: resp.data.role, isAuthenticated: true })
+    await http.post('/auth/guest')
+    await refreshMe()
   }
 
   const logout = async () => {
