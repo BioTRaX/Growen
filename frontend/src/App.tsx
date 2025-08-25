@@ -1,20 +1,20 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import { AuthProvider } from './auth/AuthContext'
-import ProtectedRoute from './auth/ProtectedRoute'
-import Login from './components/Login'
-import AdminPanel from './pages/AdminPanel'
-import Dashboard from './pages/Dashboard'
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider } from "./auth/AuthContext";
+import ProtectedRoute from "./auth/ProtectedRoute";
+import Login from "./pages/Login";
+import AdminPanel from "./pages/AdminPanel";
+import Dashboard from "./pages/Dashboard";
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
+    <BrowserRouter>
+      <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
             path="/"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute roles={["guest", "client", "supplier", "collab", "admin"]}>
                 <Dashboard />
               </ProtectedRoute>
             }
@@ -22,13 +22,14 @@ export default function App() {
           <Route
             path="/admin"
             element={
-              <ProtectedRoute roles={['admin']}>
+              <ProtectedRoute roles={["admin"]}>
                 <AdminPanel />
               </ProtectedRoute>
             }
           />
+          <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
-      </BrowserRouter>
-    </AuthProvider>
-  )
+      </AuthProvider>
+    </BrowserRouter>
+  );
 }

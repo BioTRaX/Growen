@@ -494,7 +494,13 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 
 ## Endpoints de diagnóstico
 
-Para verificar el estado del servicio se exponen las siguientes rutas, disponibles únicamente para administradores y omitidas en producción:
+Rutas públicas de salud:
+
+- `GET /health`: responde `{"status":"ok"}` si la app está viva.
+- `GET /health/ai`: informa los proveedores de IA disponibles.
+- `GET /healthz/db`: realiza `SELECT 1` contra la base y devuelve `{"db":"ok"}`.
+
+Rutas de diagnóstico para administradores (omitidas en producción):
 
 - `GET /healthz`: responde `{"status":"ok"}` si la app está viva.
 - `GET /debug/db`: ejecuta `SELECT 1` contra la base de datos.
