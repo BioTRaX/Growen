@@ -7,6 +7,7 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 |--------|------|------------------|
 | GET | /health | Ninguno |
 | GET | /health/ai | Ninguno |
+| GET | /healthz/db | Ninguno |
 | POST | /auth/login | Ninguno |
 | POST | /auth/guest | Ninguno |
 | POST | /auth/logout | Ninguno (requiere CSRF) |
