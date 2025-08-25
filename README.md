@@ -102,6 +102,7 @@ SELECT column_name FROM information_schema.columns
 - **UndefinedTable / UndefinedColumn**: revisar `logs/migrations/alembic_<timestamp>.log`; puede indicar que falta una migración previa.
 - **DuplicateTable / DuplicateIndex**: las migraciones actuales son idempotentes; reejecutarlas no debería fallar.
 - **Seeds inválidos**: asegurarse de que las columnas requeridas existan antes de insertar datos.
+- **Acceso denegado al iniciar en Windows**: versiones anteriores de `start.bat` no escapaban correctamente rutas con espacios, lo que impedía abrir el frontend. Actualizá el repositorio y ejecutá el script desde la raíz del proyecto.
 
 Orden de ejecución recomendado:
 
