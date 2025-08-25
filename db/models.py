@@ -304,7 +304,9 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    identifier: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    identifier: Mapped[Optional[str]] = mapped_column(
+        String(64), unique=True, index=True, nullable=True
+    )
     email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
     name: Mapped[Optional[str]] = mapped_column(String(100))
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)

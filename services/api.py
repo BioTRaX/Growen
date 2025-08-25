@@ -1,13 +1,13 @@
 """Aplicación FastAPI principal del agente."""
 
-# --- Windows psycopg async fix: usar SelectorEventLoop ---
+# --- Windows psycopg async fix (no-op en otros SO) ---
 import sys, asyncio
 if sys.platform.startswith("win"):
     try:
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     except Exception:
         pass
-# --- fin fix ---
+# --- end fix ---
 
 import logging
 import os

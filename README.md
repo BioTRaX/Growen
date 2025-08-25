@@ -160,7 +160,7 @@ La API implementa sesiones mediante la cookie `growen_session` y un token CSRF a
 
 Si no hay cookie de sesión y el entorno es `dev`, se asume rol `admin` por defecto para agilizar pruebas; en otros entornos el rol por omisión es `guest`.
 
-El login acepta **identificador** o email junto con la contraseña. Al ejecutar las migraciones se crea, si no existe, un usuario administrador usando `ADMIN_USER` y `ADMIN_PASS` definidos en `.env` (ver `.env.example`). En producción el servidor se niega a iniciar si `ADMIN_PASS` queda en el placeholder `REEMPLAZAR_ADMIN_PASS`.
+El login acepta **identificador** o email junto con la contraseña. Una migración idempotente agrega la columna `identifier` si falta y la rellena a partir del correo; esto permite que bases antiguas sigan funcionando. Al ejecutar las migraciones se crea, si no existe, un usuario administrador usando `ADMIN_USER` y `ADMIN_PASS` definidos en `.env` (ver `.env.example`). En producción el servidor se niega a iniciar si `ADMIN_PASS` queda en el placeholder `REEMPLAZAR_ADMIN_PASS`.
 
 ### Endpoints principales
 

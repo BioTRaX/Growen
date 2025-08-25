@@ -1,25 +1,25 @@
 import { useState } from "react";
-import http from "../services/http";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 
 export default function Login() {
   const [u, setU] = useState("");
   const [p, setP] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const { login, loginAsGuest } = useAuth();
+  const navigate = useNavigate();
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr(null);
     setLoading(true);
     try {
-      await http.post("/auth/login", { identifier: u, password: p });
-      window.location.href = "/";
+      await login(u, p);
+      navigate("/");
     } catch (e: any) {
-      const msg =
-        e?.response?.data?.detail ||
-        e?.response?.data?.message ||
-        "Error al iniciar sesión";
-      setErr(msg);
+      const status = e?.response?.status;
+      setErr(status === 401 ? "Usuario o contraseña inválidos" : "Error del servidor");
     } finally {
       setLoading(false);
     }
@@ -29,21 +29,26 @@ export default function Login() {
     setErr(null);
     setLoading(true);
     try {
-      await http.post("/auth/guest");
-      window.location.href = "/";
+      await loginAsGuest();
+      navigate("/");
     } catch (e: any) {
-      const msg =
-        e?.response?.data?.detail ||
-        e?.response?.data?.message ||
-        "No se pudo ingresar como invitado";
-      setErr(msg);
+      setErr("Error del servidor");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#0f1115] text-white flex items-center justify-center">
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "var(--bg, #0f1115)",
+        color: "#fff",
+      }}
+    >
       <div className="w-full max-w-sm rounded-2xl p-6 bg-[#1a1d24] shadow-lg border border-[#2a2f3a]">
         <h1 className="text-xl font-semibold mb-4 text-center">Growen</h1>
 
