@@ -1,7 +1,7 @@
 export type ChatResponse = { role: string; text: string }
 
 export async function chatHttp(text: string): Promise<ChatResponse> {
-  const base = (import.meta.env.VITE_API_BASE as string) || ''
+  const { baseURL: base } = await import('../services/http') as any
   const res = await fetch(`${base}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

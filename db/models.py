@@ -233,7 +233,8 @@ class CanonicalProduct(Base):
     __tablename__ = "canonical_products"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    ng_sku: Mapped[str] = mapped_column(String(20), unique=True)
+    # ng_sku se genera post-inserción; es nullable a nivel DB
+    ng_sku: Mapped[Optional[str]] = mapped_column(String(20), unique=True, nullable=True)
     name: Mapped[str] = mapped_column(String(200))
     brand: Mapped[Optional[str]] = mapped_column(String(100))
     specs_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

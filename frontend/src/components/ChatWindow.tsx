@@ -6,6 +6,7 @@ import ImportViewer from './ImportViewer'
 import SuppliersModal from './SuppliersModal'
 import ProductsDrawer from './ProductsDrawer'
 import DragDropZone from './DragDropZone'
+import { useAuth } from '../auth/AuthContext'
 
 type Msg = { role: 'user' | 'assistant' | 'system'; text: string }
 
@@ -21,6 +22,8 @@ export default function ChatWindow() {
   >(null)
   const [suppliersOpen, setSuppliersOpen] = useState(false)
   const [productsOpen, setProductsOpen] = useState(false)
+  const { state } = useAuth()
+  const canUpload = ['proveedor', 'colaborador', 'admin'].includes(state.role)
 
   useEffect(() => {
     try {
@@ -39,6 +42,13 @@ export default function ChatWindow() {
 
   useEffect(() => {
     const openUpload = () => {
+      if (!canUpload) {
+        setMessages((p) => [
+          ...p,
+          { role: 'system', text: 'Acción no permitida para invitado.' },
+        ])
+        return
+      }
       setDroppedFile(null)
       setUploadOpen(true)
     }
@@ -52,7 +62,12 @@ export default function ChatWindow() {
       window.removeEventListener('open-suppliers', openSuppliers)
       window.removeEventListener('open-products', openProducts)
     }
-  }, [])
+  }, [canUpload])
+
+  // Si el rol cambia a invitado mientras el modal está abierto, ciérralo
+  useEffect(() => {
+    if (!canUpload && uploadOpen) setUploadOpen(false)
+  }, [canUpload, uploadOpen])
 
   async function send() {
     const text = input.trim()
@@ -90,12 +105,21 @@ export default function ChatWindow() {
   return (
     <div style={{ maxWidth: 800, margin: '40px auto', padding: 16 }}>
       <h1>Growen</h1>
-      <DragDropZone
-        onFileDropped={(f) => {
-          setDroppedFile(f)
-          setUploadOpen(true)
-        }}
-      />
+      {canUpload && (
+        <DragDropZone
+          onFileDropped={(f) => {
+            if (!canUpload) {
+              setMessages((p) => [
+                ...p,
+                { role: 'system', text: 'No tenés permisos para subir archivos.' },
+              ])
+              return
+            }
+            setDroppedFile(f)
+            setUploadOpen(true)
+          }}
+        />
+      )}
       <div
         style={{
           border: '1px solid #ddd',
@@ -121,18 +145,27 @@ export default function ChatWindow() {
           placeholder="Escribe un mensaje o /help"
           onKeyDown={(e) => e.key === 'Enter' && send()}
         />
-        <button
-          onClick={() => {
-            setDroppedFile(null)
-            setUploadOpen(true)
-          }}
-        >
-          +
-        </button>
+        {canUpload && (
+          <button
+            onClick={() => {
+              if (!canUpload) {
+                setMessages((p) => [
+                  ...p,
+                  { role: 'system', text: 'No tenés permisos para subir archivos.' },
+                ])
+                return
+              }
+              setDroppedFile(null)
+              setUploadOpen(true)
+            }}
+          >
+            +
+          </button>
+        )}
         <button onClick={send}>Enviar</button>
       </div>
       <UploadModal
-        open={uploadOpen}
+        open={canUpload && uploadOpen}
         onClose={() => setUploadOpen(false)}
         onUploaded={handleUploaded}
         preselectedFile={droppedFile}

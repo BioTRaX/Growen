@@ -3,8 +3,7 @@ export interface Supplier {
   name: string
   slug: string
 }
-
-const base = import.meta.env.VITE_API_URL as string
+import { baseURL as base } from './http'
 
 function csrfHeaders(): Record<string, string> {
   const m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/)

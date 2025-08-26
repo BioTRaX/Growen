@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 import sqlalchemy as sa
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC = [sys.executable, "-m", "alembic", "-c", str(ROOT / "alembic.ini")]
@@ -35,6 +36,8 @@ def write(section: str, text: str) -> None:
 
 
 def main() -> int:
+    # Cargar .env para obtener DB_URL si no está en el entorno
+    load_dotenv()
     anomalies = False
     # Conexión a DB
     db_url = os.getenv("DB_URL")

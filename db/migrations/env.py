@@ -11,6 +11,7 @@ from alembic.runtime.migration import MigrationContext
 from sqlalchemy import engine_from_config, text
 from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
+from urllib.parse import urlsplit
 
 # Logger estandar para todas las operaciones del módulo
 logger = logging.getLogger("alembic.env")
@@ -42,12 +43,29 @@ logger.info("Archivo de log: %s", log_file)
 script = ScriptDirectory.from_config(config)
 
 # === Cargar variables desde .env ===
-load_dotenv()
+# Cargar .env explícitamente desde la raíz del repo (dos niveles hacia arriba)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+dotenv_path = REPO_ROOT / ".env"
+load_dotenv(dotenv_path)
+logger.info("Archivo .env: %s (exists=%s)", dotenv_path, dotenv_path.exists())
 
 # === Cargar DB_URL desde entorno ===
 db_url = os.getenv("DB_URL")
 if not db_url:
     raise RuntimeError("DB_URL no definida en entorno/.env")
+else:
+    # Log seguro del DB_URL sin credenciales
+    try:
+        parts = urlsplit(db_url)
+        netloc = parts.netloc
+        if "@" in netloc and ":" in netloc.split("@")[0]:
+            user = netloc.split("@")[0].split(":")[0]
+            host = netloc.split("@")[1]
+            netloc = f"{user}:***@{host}"
+        safe = parts._replace(netloc=netloc).geturl()
+        logger.info("DB_URL: %s", safe)
+    except Exception:
+        logger.info("DB_URL: (formato no imprimible)")
 
 # === Importar metadatos del proyecto ===
 try:
@@ -142,10 +160,16 @@ def run_migrations_online() -> None:
         future=True,
     )
     with connectable.connect() as connection:
-        # Transacción corta AISLADA para preflight
+        # Forzar uso del esquema 'public' para evitar escribir en esquemas por-usuario
         try:
-            with connection.begin():
-                _ensure_alembic_version_column(connection)
+            curr_sp = connection.exec_driver_sql("show search_path").scalar()
+            connection.exec_driver_sql("set search_path to public")
+            logger.info("search_path anterior: %s -> nuevo: public", curr_sp)
+        except Exception as e:
+            logger.warning("No se pudo fijar search_path=public: %s", e)
+        # Preflight sin iniciar otra transacción explícita para evitar conflictos
+        try:
+            _ensure_alembic_version_column(connection)
             logger.info("Preflight alembic_version OK")
         except Exception as e:
             logger.warning(
@@ -170,6 +194,12 @@ def run_migrations_online() -> None:
         try:
             with context.begin_transaction():
                 context.run_migrations()
+            # Asegurar commit explícito del connection si hay una transacción implícita abierta
+            try:
+                connection.commit()
+                logger.info("Commit explícito aplicado tras migraciones")
+            except Exception as e:
+                logger.warning("No se pudo aplicar commit explícito: %s", e)
             logger.info("Migraciones aplicadas con éxito")
         except Exception:  # pragma: no cover - logging
             logger.error("Error al ejecutar migraciones:\n%s", traceback.format_exc())

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import http from '../services/http'
 import { listSuppliers, Supplier } from '../services/suppliers'
 
@@ -12,6 +13,7 @@ interface User {
 }
 
 export default function AdminPanel() {
+  const nav = useNavigate()
   const [users, setUsers] = useState<User[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [form, setForm] = useState({
@@ -29,6 +31,8 @@ export default function AdminPanel() {
     role: '',
     supplier_id: '',
   })
+  const [err, setErr] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
 
   async function refresh() {
     const r = await http.get<User[]>('/auth/users')
@@ -42,16 +46,25 @@ export default function AdminPanel() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    await http.post('/auth/users', {
-      identifier: form.identifier,
-      email: form.email || undefined,
-      name: form.name || undefined,
-      password: form.password,
-      role: form.role,
-      supplier_id: form.supplier_id ? Number(form.supplier_id) : undefined,
-    })
-    setForm({ identifier: '', email: '', name: '', password: '', role: 'cliente', supplier_id: '' })
-    refresh()
+    setErr(null)
+    setCreating(true)
+    try {
+      await http.post('/auth/users', {
+        identifier: form.identifier,
+        email: form.email || undefined,
+        name: form.name || undefined,
+        password: form.password,
+        role: form.role,
+        supplier_id: form.supplier_id ? Number(form.supplier_id) : undefined,
+      })
+      setForm({ identifier: '', email: '', name: '', password: '', role: 'cliente', supplier_id: '' })
+      refresh()
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail || 'No se pudo crear el usuario'
+      setErr(msg)
+    } finally {
+      setCreating(false)
+    }
   }
 
   const startEdit = (u: User) => {
@@ -84,7 +97,12 @@ export default function AdminPanel() {
 
   return (
     <div className="panel p-4" style={{ color: 'var(--text-color)' }}>
-      <h2>Control Panel</h2>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <h2>Control Panel</h2>
+        <button className="btn-secondary" type="button" onClick={() => (nav ? nav('/') : null)}>
+          Volver
+        </button>
+      </div>
       <form onSubmit={submit} className="flex flex-col gap-2 mb-4">
         <input
           className="input"
@@ -135,9 +153,10 @@ export default function AdminPanel() {
             </option>
           ))}
         </select>
-        <button className="btn-primary" type="submit">
-          Crear usuario
+        <button className="btn-primary" type="submit" disabled={creating}>
+          {creating ? 'Creando...' : 'Crear usuario'}
         </button>
+        {err && <div style={{color:'#fca5a5'}}>{err}</div>}
       </form>
 
       {edit && (

@@ -23,8 +23,9 @@ timeout /t 5 /nobreak >NUL
 
 call :log "[INFO] Verificando puerto 8000..."
 netstat -ano | findstr :8000 >NUL
-call :log "[DEBUG] ERRORLEVEL=!ERRORLEVEL!"
-if !ERRORLEVEL! EQU 0 (
+set "_PORTCHK=!ERRORLEVEL!"
+call :log "[DEBUG] FINDSTR ERRORLEVEL=!_PORTCHK!"
+if !_PORTCHK! EQU 0 (
   call :log "[ERROR] El puerto 8000 esta en uso. Abortando."
   pause
   exit /b 1
@@ -52,7 +53,7 @@ if !ERRORLEVEL! NEQ 0 (
 popd
 
 call :log "[INFO] Iniciando backend..."
-start "Growen API" cmd /k ""%VENV%\python.exe" -m uvicorn services.api:app --host 127.0.0.1 --port 8000 --reload --log-level info --access-log >> "%LOG_DIR%\backend.log" 2>&1"
+start "Growen API" cmd /k ""%VENV%\python.exe" -m services.runserver >> "%LOG_DIR%\backend.log" 2>&1"
 call :log "[DEBUG] ERRORLEVEL=!ERRORLEVEL!"
 
 endlocal

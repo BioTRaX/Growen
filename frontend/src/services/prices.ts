@@ -20,7 +20,7 @@ export interface PriceHistoryResponse {
   items: PriceHistoryItem[]
 }
 
-const base = import.meta.env.VITE_API_URL as string
+import { baseURL as base } from './http'
 
 export async function getPriceHistory(
   params: PriceHistoryParams,

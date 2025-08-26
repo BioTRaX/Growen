@@ -1,6 +1,7 @@
 """Endpoints para importar listas de precios de proveedores."""
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
+import logging
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -33,6 +34,7 @@ from services.auth import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 async def _get_or_create_category_path(db: AsyncSession, path: str) -> Category:
@@ -339,9 +341,17 @@ async def upload_price_list(
             )
         )
 
-    job.summary_json = kpis
-
+    # Primero confirmamos job y filas; luego intentamos guardar el resumen.
     await db.commit()
+
+    # Persistir summary en job si la columna existe; si falla, continuar.
+    try:
+        job.summary_json = kpis
+        await db.commit()
+    except Exception as e:
+        logger.exception("Error al persistir summary_json en import_jobs: %s", e)
+        await db.rollback()
+        # Continuamos sin interrumpir el flujo de importación (el cliente recibe KPIs igualmente)
     return {"job_id": job.id, "summary": kpis, "kpis": kpis}
 
 
@@ -527,9 +537,11 @@ async def commit_import(
                     )
                 )
         elif data.get("auto_create_canonical") and AUTO_CREATE_CANONICAL:
+            # Crear canónico permitiendo ng_sku nulo en inserción y generándolo luego
             cp = CanonicalProduct(name=data["nombre"])
             db.add(cp)
             await db.flush()
+            # Generar ng_sku luego de tener id
             cp.ng_sku = f"NG-{cp.id:06d}"
             db.add(
                 ProductEquivalence(

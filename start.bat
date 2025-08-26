@@ -24,12 +24,13 @@ if %ERRORLEVEL% NEQ 0 (
 
 call :log "[INFO] Cerrando procesos previos..."
 if exist "%~dp0stop.bat" call "%~dp0stop.bat"
-timeout /t 2 /nobreak >NUL
+REM pequeña espera para evitar condiciones de carrera al liberar puertos
+timeout /t 1 /nobreak >NUL
 
 call :log "[INFO] Verificando puertos 8000 y 5173..."
 for %%P in (8000 5173) do (
-  netstat -ano | findstr :%%P >NUL
-  if !ERRORLEVEL! EQU 0 (
+  call :wait_port_free %%P 5
+  if errorlevel 1 (
     call :log "[ERROR] El puerto %%P esta en uso. Abortando."
     pause
     exit /b 1
@@ -58,6 +59,26 @@ start "Growen Frontend" cmd /k "pushd ""%ROOT%frontend"" && npm run dev >> "%LOG
 
 endlocal
 exit /b 0
+
+:wait_port_free
+REM Uso: call :wait_port_free <port> [retries]
+setlocal EnableDelayedExpansion
+set "_PORT=%~1"
+set "_TRIES=%~2"
+if not defined _TRIES set "_TRIES=5"
+set "_I=0"
+:_lp
+set /a _I+=1
+netstat -ano | findstr ":%_PORT%" >NUL
+if errorlevel 1 (
+  endlocal & exit /b 0
+) else (
+  if %_I% GEQ %_TRIES% (
+    endlocal & exit /b 1
+  )
+  timeout /t 1 /nobreak >NUL
+  goto _lp
+)
 
 :log
 set "ts=!DATE! !TIME!"

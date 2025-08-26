@@ -26,13 +26,14 @@ export interface ProductSearchResponse {
   items: ProductItem[]
 }
 
+import { baseURL as base } from './http'
+
 function csrfHeaders(): Record<string, string> {
   const m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/)
   return m ? { 'X-CSRF-Token': decodeURIComponent(m[1]) } : {}
 }
 
 export async function searchProducts(params: ProductSearchParams): Promise<ProductSearchResponse> {
-  const base = import.meta.env.VITE_API_URL as string
   const url = new URL(base + '/products', window.location.origin)
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v))
@@ -46,7 +47,6 @@ export async function searchProducts(params: ProductSearchParams): Promise<Produ
 }
 
 export async function updateStock(productId: number, stock: number): Promise<{ product_id: number; stock: number }> {
-  const base = import.meta.env.VITE_API_URL as string
   const headers = {
     ...csrfHeaders(),
     'Content-Type': 'application/json',
