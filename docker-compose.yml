@@ -4,7 +4,7 @@ services:
     image: postgres:15
     environment:
       POSTGRES_USER: growen
-      POSTGRES_PASSWORD: growen
+  POSTGRES_PASSWORD: "GrowenBot=01"
       POSTGRES_DB: growen
     ports:
       - "5432:5432"

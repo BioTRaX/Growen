@@ -25,14 +25,34 @@ if exist "%ROOT%\scripts\migrate.bat" (
   )
 )
 
-REM 3) Lanzar API (Uvicorn) en otra ventana
+REM 3) Esperar hasta que los puertos 8000/5173 esten libres (max 10s)
+set "_wait=0"
+:WAIT_PORTS
+set "_busy=0"
+for %%P in (8000 5173) do (
+  for /f "tokens=*" %%L in ('netstat -ano -p TCP ^| findstr /R ":%%P .*LISTENING"') do set "_busy=1"
+)
+if "!_busy!"=="1" (
+  if "!_wait!"=="0" echo [INFO] Verificando puertos 8000 y 5173...
+  set /a _wait+=1
+  if !_wait! GTR 20 (
+    echo [ERROR] Alguno de los puertos sigue ocupado. Abortando.
+    exit /b 1
+  )
+  timeout /t 1 /nobreak >nul
+  goto :WAIT_PORTS
+)
+
+echo [INFO] Puertos libres. Continuando...
+
+REM 4) Lanzar API (Uvicorn) en otra ventana usando el runner con fix de Windows
 start "Growen API" cmd /k ^
   "pushd ""%ROOT%"" && ^
    if exist .venv\Scripts\activate.bat (call .venv\Scripts\activate.bat) else (echo [WARN] .venv no encontrado) && ^
    set UVICORN_RELOAD_DELAY=0.25 && ^
-   python -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000 --loop asyncio --http h11"
+   python -m services.runserver"
 
-REM 4) Lanzar Frontend (Vite) en otra ventana
+REM 5) Lanzar Frontend (Vite) en otra ventana
 start "Growen Frontend" cmd /k ^
   "pushd ""%ROOT%\frontend"" && ^
    if exist package.json (call npm i --no-fund --loglevel=error) else (echo [ERROR] package.json no encontrado & exit /b 1) && ^

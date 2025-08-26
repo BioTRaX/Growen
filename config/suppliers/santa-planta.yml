@@ -1,8 +1,11 @@
 supplier_name: "Santa Planta"
 slug: "santa-planta"
+# El archivo original es Excel (.xlsx)
 file_type: "xlsx"
-sheet_name: "data"
-header_row: 1
+# Tomar la primera hoja del libro
+sheet_name: 0
+# Encabezados en la primera fila
+header_row: 0
 columns:
   supplier_product_id: ["ID"]
   title: ["Producto"]
@@ -15,9 +18,13 @@ columns:
   sale_price: ["PrecioDeVenta"]
 transform:
   purchase_price:
-    replace_comma_decimal: false
+    # Permite manejar planillas/csv con coma decimal
+    replace_comma_decimal: true
   sale_price:
-    replace_comma_decimal: false
+    replace_comma_decimal: true
+encoding: "utf-8"
+# Si el proveedor envía CSV como alternativa, usa ';' como separador
+delimiter: ";"
 defaults:
   status: "draft"
   stock_qty: 0

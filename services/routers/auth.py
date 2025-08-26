@@ -5,7 +5,7 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import User
@@ -38,8 +38,12 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
     ip = request.client.host if request.client else "unknown"
     check_login_rate_limit(ip)
 
+    ident = (payload.identifier or "").strip()
     stmt = select(User).where(
-        or_(User.identifier == payload.identifier, User.email == payload.identifier)
+        or_(
+            func.lower(User.identifier) == ident.lower(),
+            func.lower(User.email) == ident.lower(),
+        )
     )
     res = await db.execute(stmt)
     user = res.scalar_one_or_none()
@@ -62,7 +66,7 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
             "supplier_id": user.supplier_id,
         }
     )
-    await set_session_cookies(resp, sess.id, csrf)
+    await set_session_cookies(resp, sess.id, csrf, request)
     return resp
 
 
@@ -73,7 +77,7 @@ async def login_guest(request: Request, db: AsyncSession = Depends(get_session))
         db, "guest", request, prev_session=prev.session
     )
     resp = JSONResponse({"role": "guest"})
-    await set_session_cookies(resp, sess.id, csrf)
+    await set_session_cookies(resp, sess.id, csrf, request)
     return resp
 
 
@@ -84,7 +88,7 @@ async def logout(request: Request, db: AsyncSession = Depends(get_session)):
         db, "guest", request, prev_session=prev.session
     )
     resp = JSONResponse({"status": "ok"})
-    await set_session_cookies(resp, new_sess.id, csrf)
+    await set_session_cookies(resp, new_sess.id, csrf, request)
     return resp
 
 

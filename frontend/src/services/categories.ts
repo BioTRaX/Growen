@@ -1,6 +1,5 @@
 export interface Category { id: number; name: string }
-
-const base = import.meta.env.VITE_API_URL as string
+import { baseURL as base } from './http'
 
 export async function listCategories(): Promise<Category[]> {
   const res = await fetch(`${base}/categories`, { credentials: 'include' })

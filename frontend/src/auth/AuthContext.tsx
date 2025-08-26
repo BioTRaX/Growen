@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import http from '../services/http'
 
 export type Role = 'guest' | 'cliente' | 'proveedor' | 'colaborador' | 'admin'
@@ -30,6 +31,7 @@ const AuthContext = createContext<AuthContextShape | undefined>(undefined)
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [state, setState] = useState<AuthState>({ role: 'guest', isAuthenticated: false })
+  const navigate = useNavigate()
 
   const refreshMe = async () => {
     const resp = await http.get('/auth/me')
@@ -45,18 +47,39 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   }, [])
 
   const login = async (identifier: string, password: string) => {
-    await http.post('/auth/login', { identifier, password })
-    await refreshMe()
+    const resp = await http.post('/auth/login', { identifier, password })
+    const user = resp.data
+    // Reflejar estado inmediatamente según respuesta del backend
+    setState({ user, role: user.role, isAuthenticated: true })
+    // Confirmar en segundo plano; solo aplicamos si está autenticado
+    try {
+      const me = await http.get('/auth/me')
+      if (me.data?.is_authenticated) {
+        setState({ user: me.data.user, role: me.data.role, isAuthenticated: true })
+      }
+    } catch {}
+    navigate('/')
   }
 
   const loginAsGuest = async () => {
-    await http.post('/auth/guest')
-    await refreshMe()
+    try {
+      await http.post('/auth/guest')
+    } finally {
+      await refreshMe()
+      navigate('/guest', { replace: true })
+    }
   }
 
   const logout = async () => {
-    await http.post('/auth/logout')
-    setState({ role: 'guest', isAuthenticated: false, user: undefined })
+    try {
+      await http.post('/auth/logout')
+    } catch (e: any) {
+      // If CSRF blocks logout (403), drop client-side state anyway
+      if (e?.response?.status !== 403) throw e
+    } finally {
+      setState({ role: 'guest', isAuthenticated: false, user: undefined })
+      navigate('/login', { replace: true })
+    }
   }
 
   return (

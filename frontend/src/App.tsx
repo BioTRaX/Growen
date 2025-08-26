@@ -4,6 +4,7 @@ import ProtectedRoute from "./auth/ProtectedRoute";
 import Login from "./pages/Login";
 import AdminPanel from "./pages/AdminPanel";
 import Dashboard from "./pages/Dashboard";
+import Stock from "./pages/Stock";
 
 export default function App() {
   return (
@@ -12,10 +13,26 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
+            path="/guest"
+            element={
+              <ProtectedRoute roles={["guest", "cliente", "proveedor", "colaborador", "admin"]}>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/"
             element={
-              <ProtectedRoute roles={["guest", "client", "supplier", "collab", "admin"]}>
+              <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
                 <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/stock"
+            element={
+              <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
+                <Stock />
               </ProtectedRoute>
             }
           />

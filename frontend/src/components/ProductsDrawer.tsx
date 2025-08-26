@@ -38,7 +38,25 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [equivData, setEquivData] = useState<
     { supplierId: number; supplierProductId: number } | null
   >(null)
-  const ROW_HEIGHT = 48
+  // Fixed row height for virtualized list to avoid overlap
+  const ROW_HEIGHT = 56
+  const [listHeight, setListHeight] = useState<number>(400)
+
+  useEffect(() => {
+    function recalc() {
+      const headerH = 56
+      const titleH = 32
+      const filterH = 56
+      const metaH = 24
+      const theadH = 44
+      const padding = 24 + 24
+      const h = window.innerHeight - (headerH + titleH + filterH + metaH + theadH + padding)
+      setListHeight(Math.max(240, h))
+    }
+    recalc()
+    window.addEventListener('resize', recalc)
+    return () => window.removeEventListener('resize', recalc)
+  }, [])
 
   useEffect(() => {
     if (open) {
@@ -91,17 +109,22 @@ export default function ProductsDrawer({ open, onClose }: Props) {
       style={{
         position: 'fixed',
         top: 0,
+        left: 0,
         right: 0,
         bottom: 0,
-        width: '80%',
-        maxWidth: 800,
-        overflow: 'auto',
+        width: '100%',
+        maxWidth: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        zIndex: 20,
       }}
     >
-      <button onClick={onClose} style={{ float: 'right' }}>
-        Cerrar
-      </button>
-      <h3>Consultar base</h3>
+      {/* Header actions */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <button className="btn-dark btn-lg" onClick={onClose}>Volver</button>
+      </div>
+      <h3 style={{ marginTop: 0 }}>Consultar base</h3>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
         <input
           className="input w-full"
@@ -149,25 +172,25 @@ export default function ProductsDrawer({ open, onClose }: Props) {
       <div style={{ fontSize: 12, marginBottom: 8 }}>
         {total} resultados
       </div>
-      <table className="table w-full" style={{ marginBottom: 0 }}>
+  <table className="table w-full table-fixed" style={{ marginBottom: 0 }}>
         <thead>
           <tr>
-            <th>Producto</th>
-            <th>Proveedor</th>
-            <th>Precio venta</th>
-            <th>Compra</th>
-            <th>Stock</th>
-            <th>Categoría</th>
-            <th>Actualizado</th>
-            <th>Historial</th>
-            <th>Canónico</th>
-            <th>Equivalencia</th>
-            <th>Comparativa</th>
+    <th style={{ textAlign: 'left' }}>Producto</th>
+    <th style={{ textAlign: 'left' }}>Proveedor</th>
+    <th className="text-center">Precio venta</th>
+    <th className="text-center">Compra</th>
+    <th className="text-center">Stock</th>
+    <th className="text-center">Categoría</th>
+    <th className="text-center">Actualizado</th>
+    <th className="text-center">Historial</th>
+    <th className="text-center">Canónico</th>
+    <th className="text-center">Equivalencia</th>
+    <th className="text-center">Comparativa</th>
           </tr>
         </thead>
       </table>
       <List
-        height={400}
+        height={listHeight}
         itemCount={items.length}
         itemSize={ROW_HEIGHT}
         width={"100%"}
@@ -184,18 +207,15 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         {({ index, style }: ListChildComponentProps) => {
           const it = items[index]
           return (
-            <table
-              key={it.product_id}
-              className="table w-full"
-              style={{ ...style, marginBottom: 0 }}
-            >
-              <tbody>
-                <tr>
-                  <td>{it.name}</td>
-                  <td>{it.supplier.name}</td>
-                  <td>{it.precio_venta ?? ''}</td>
-                  <td>{it.precio_compra ?? ''}</td>
-                  <td>
+            <div key={it.product_id} style={{ ...style, height: ROW_HEIGHT, overflow: 'hidden' }}>
+              <table className="table w-full table-fixed" style={{ marginBottom: 0 }}>
+                <tbody>
+                  <tr>
+                  <td style={{ textAlign: 'left', maxWidth: 300 }} className="truncate">{it.name}</td>
+      <td style={{ textAlign: 'left' }}>{it.supplier.name}</td>
+      <td className="text-center">{it.precio_venta ?? ''}</td>
+      <td className="text-center">{it.precio_compra ?? ''}</td>
+      <td className="text-center">
                     {editing === it.product_id ? (
                       <span>
                         <input
@@ -204,7 +224,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
                           onChange={(e) => setStockVal(e.target.value)}
                           style={{ width: 60 }}
                         />
-                        <button onClick={() => saveStock(it.product_id)}>Guardar</button>
+        <button onClick={() => saveStock(it.product_id)}>Guardar</button>
                       </span>
                     ) : (
                       <span>
@@ -221,18 +241,18 @@ export default function ProductsDrawer({ open, onClose }: Props) {
                       </span>
                     )}
                   </td>
-                  <td>{it.category_path}</td>
-                  <td>
+                  <td className="text-center truncate" style={{ maxWidth: 280 }}>{it.category_path}</td>
+      <td className="text-center">
                     {it.updated_at
                       ? new Date(it.updated_at).toLocaleString()
                       : ''}
                   </td>
-                  <td>
+      <td className="text-center">
                     <button onClick={() => setHistoryProduct(it.product_id)}>
                       Ver
                     </button>
                   </td>
-                  <td>
+      <td className="text-center">
                     {it.canonical_product_id ? (
                       <button
                         onClick={() => setEditCanonicalId(it.canonical_product_id)}
@@ -243,7 +263,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
                       <button onClick={() => setEditCanonicalId(0)}>Nuevo</button>
                     )}
                   </td>
-                  <td>
+      <td className="text-center">
                     <button
                       onClick={() =>
                         setEquivData({
@@ -255,16 +275,17 @@ export default function ProductsDrawer({ open, onClose }: Props) {
                       Vincular
                     </button>
                   </td>
-                  <td>
+      <td className="text-center">
                     {it.canonical_product_id && (
                       <button onClick={() => setCanonicalId(it.canonical_product_id)}>
                         Ver
                       </button>
                     )}
                   </td>
-                </tr>
-              </tbody>
-            </table>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           )
         }}
       </List>

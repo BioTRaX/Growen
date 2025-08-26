@@ -1,6 +1,11 @@
 :root {
   --bg: #0f1115;
   --panel: #151821;
+.truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
   --text: #e6e8ee;
   --muted: #9aa3b2;
   --border: #23283a;
@@ -15,6 +20,7 @@
 
   /* Variables de alias para componentes */
   --panel-bg: var(--panel);
+  vertical-align: middle;
   --text-color: var(--text);
 }
 
@@ -50,9 +56,48 @@ body {
   color: var(--input-placeholder);
 }
 
+.input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+/* Login helpers */
+.login-panel {
+  width: 100%;
+  max-width: 380px;
+  border-radius: 16px;
+  padding: 1.25rem;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.text-center { text-align: center; }
+.mt-3 { margin-top: .75rem; }
+.mb-4 { margin-bottom: 1rem; }
+.w-100 { width: 100%; }
+.fw-600 { font-weight: 600; }
+.fs-xl { font-size: 1.25rem; }
+
+.link-muted {
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.link-muted:hover { color: var(--primary); }
+
 .table {
   width: 100%;
   border-collapse: collapse;
+}
+
+.table-fixed {
+  table-layout: fixed;
 }
 
 .table th {
@@ -94,6 +139,36 @@ body {
   cursor: not-allowed;
 }
 
+.btn-secondary {
+  background: transparent;
+  color: var(--text);
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+}
+.btn-secondary:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* Large dark buttons akin to admin panel styling */
+.btn-lg {
+  padding: 0.75rem 1.25rem;
+  font-size: 1rem;
+  border-radius: 8px;
+}
+
+.btn-dark {
+  background: var(--table-header);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-dark:hover {
+  border-color: var(--primary);
+  color: var(--text);
+  box-shadow: 0 0 0 2px rgba(124,77,255,0.25);
+}
+
 .badge-muted {
   background: #222a3a;
   color: var(--muted);
@@ -117,6 +192,10 @@ body {
 
 .text-sm {
   font-size: 0.875rem;
+}
+
+.nowrap {
+  white-space: nowrap;
 }
 
 .border-dashed {

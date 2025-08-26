@@ -18,7 +18,7 @@ export interface CanonicalProduct {
   specs_json: Record<string, any> | null
 }
 
-const base = import.meta.env.VITE_API_URL as string
+import { baseURL as base } from './http'
 
 export async function getCanonicalProduct(
   id: number,

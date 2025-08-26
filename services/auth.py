@@ -40,7 +40,7 @@ class SessionData:
     role: str
 
 
-async def set_session_cookies(resp: Response, sid: str, csrf: str) -> None:
+async def set_session_cookies(resp: Response, sid: str, csrf: str, request: Request | None = None) -> None:
     """Configura cookies de sesión y CSRF.
 
     Antes de establecer nuevas cookies se eliminan las existentes para evitar
@@ -54,6 +54,16 @@ async def set_session_cookies(resp: Response, sid: str, csrf: str) -> None:
     secure = settings.cookie_secure
     if settings.env == "production":
         secure = True
+    # En localhost nunca marcamos Secure si el esquema es HTTP, para que el
+    # navegador acepte las cookies durante el desarrollo aunque haya una
+    # configuración errónea de COOKIE_SECURE o ENV.
+    try:
+        host = request.url.hostname if request else None
+        scheme = request.url.scheme if request else "http"
+        if host in {"localhost", "127.0.0.1"} and scheme == "http":
+            secure = False
+    except Exception:
+        pass
     cookie_args = {
         "httponly": True,
         "samesite": "lax",

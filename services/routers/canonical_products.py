@@ -42,6 +42,7 @@ async def create_canonical_product(
     """Crea un producto canónico y genera un ``ng_sku`` único."""
     cp = CanonicalProduct(name=req.name, brand=req.brand, specs_json=req.specs_json)
     session.add(cp)
+    # Insert first to get an id, then set ng_sku and commit
     await session.flush()
     cp.ng_sku = f"NG-{cp.id:06d}"
     await session.commit()
