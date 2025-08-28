@@ -9,14 +9,12 @@ for %%T in ("Growen API","Growen Frontend") do (
 
 REM Intentar matar por puerto con PowerShell (locale-agnóstico)
 for %%P in (8000 5173) do (
-	powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-NetTCPConnection -State Listen -LocalPort %%P -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction Stop } catch {} }" >nul 2>&1
+	powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-NetTCPConnection -State Listen -LocalPort %%P -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction Stop } catch {} }" >nul 2>&1
 )
 
 REM Fallback a netstat si PS falló o no existe el cmdlet
 for %%P in (8000 5173) do (
-	for /f "tokens=5" %%I in ('netstat -ano -p TCP ^| findstr /R ":%%P "') do (
-		taskkill /PID %%I /F >nul 2>&1
-	)
+	for /f "tokens=5" %%I in ('netstat -ano -p TCP ^| findstr /R /C:":%%P " ^| findstr /I "LISTENING ESCUCHA"') do taskkill /PID %%I /F >nul 2>&1
 )
 
 REM Matar procesos huérfanos típicos (por si quedaron desanclados)
@@ -29,7 +27,7 @@ set "__tries=0"
 set /a __tries+=1
 set "__busy=0"
 for %%P in (8000 5173) do (
-	netstat -ano | findstr ":%%P" >nul 2>&1 && set "__busy=1"
+	netstat -ano -p TCP | findstr /R /C:":%%P " | findstr /I "LISTENING ESCUCHA" >nul 2>&1 && set "__busy=1"
 )
 if "!__busy!"=="1" (
 	if !__tries! LSS 8 (

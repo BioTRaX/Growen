@@ -69,10 +69,28 @@ if not defined _TRIES set "_TRIES=5"
 set "_I=0"
 :_lp
 set /a _I+=1
-netstat -ano | findstr ":%_PORT%" >NUL
-if errorlevel 1 (
+REM 1) Intentar con PowerShell (exact TCP LISTEN)
+set "__COUNT="
+for /f %%E in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "@(Get-NetTCPConnection -State Listen -LocalPort %_PORT% -ErrorAction SilentlyContinue).Count"') do set "__COUNT=%%E"
+if not defined __COUNT set "__COUNT=0"
+if "!__COUNT!"=="0" (
   endlocal & exit /b 0
 ) else (
+  REM Intentar matar propietarios del puerto (PS)
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-NetTCPConnection -State Listen -LocalPort %_PORT% -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction Stop } catch {} }" >NUL 2>&1
+  if %_I% GEQ %_TRIES% (
+    endlocal & exit /b 1
+  )
+)
+
+REM 2) Fallback netstat (solo TCP y estado LISTENING/ESCUCHA, puerto exacto)
+set "__BUSY=0"
+for /f "delims=" %%L in ('netstat -ano -p TCP ^| findstr /R /C:":%_PORT% " ^| findstr /I "LISTENING ESCUCHA"') do set "__BUSY=1"
+if "!__BUSY!"=="0" (
+  endlocal & exit /b 0
+) else (
+  REM Matar por netstat si persiste
+  for /f "tokens=5" %%I in ('netstat -ano -p TCP ^| findstr /R /C:":%_PORT% " ^| findstr /I "LISTENING ESCUCHA"') do taskkill /PID %%I /F >NUL 2>&1
   if %_I% GEQ %_TRIES% (
     endlocal & exit /b 1
   )

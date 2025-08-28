@@ -15,6 +15,7 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - Python 3.11+
 - Node.js LTS
 - PostgreSQL 15
+- Opcional (dev/pruebas): SQLite 3 con `aiosqlite` (ya incluido en dependencias)
 - Opcional: Docker y Docker Compose
 - El backend usa httpx para llamadas a proveedores (Ollama / APIs); ya viene incluido.
 
@@ -26,6 +27,8 @@ Este repositorio mantiene sus módulos en la raíz, así que es necesario declar
 ```toml
 [tool.setuptools.packages.find]
 include = ["agent_core", "ai", "cli", "adapters", "services", "db"]
+```
+
 ```bash
 # Crear una nueva revisión a partir de los modelos
 alembic -c ./alembic.ini revision -m "descripcion" --autogenerate
@@ -293,7 +296,7 @@ Errores comunes:
 
 ### Flujo del visor de importaciones
 
-El visor trabaja de forma paginada llamando a `GET /imports/{job_id}/preview`.
+El visor trabaja de forma paginada llamando a `GET /imports/{job_id}/preview`. Como atajo, `GET /imports/{job_id}` devuelve `status`, `summary` y las primeras filas para hidratar vistas iniciales sin paginaci��n.
 
 1. La pestaña **Cambios** solicita `status=new,changed` para concentrar las filas a aplicar.
 2. **Errores** y **Duplicados en archivo** reutilizan el mismo endpoint variando `status`.
@@ -423,6 +426,8 @@ Los `.bat` están preparados para ejecutarse desde rutas como `C:\\Nice Grow\\Ag
 - `scripts\start.bat` encadena `stop` → `migrate` → `api + frontend` en ventanas separadas.
 - Para registrar cada consulta SQL en el log de migraciones ejecutar `scripts\start.bat /sql`.
 
+Nota de compatibilidad (psycopg as��ncrono): en Windows la aplicaci��n establece `WindowsSelectorEventLoopPolicy` al iniciar para evitar errores del conector as��ncrono de PostgreSQL.
+
 ### Debian/Ubuntu
 
 ```bash
@@ -468,11 +473,14 @@ alembic -c ./alembic.ini downgrade -1
 Consulta `.env.example` para la lista completa. Variables destacadas:
 
 - `DB_URL`: URL de PostgreSQL (obligatoria; la aplicación no arranca si falta. Si la contraseña tiene caracteres reservados, encodéalos, ej.: `=` → `%3D`. Si tu contraseña tiene caracteres raros, ponela sin encodar en variables separadas y construí la URL con `SQLAlchemy URL.create()`; pero si usás `DB_URL` ya encodada, el `env.py` ahora la maneja bien.).
+- `ENV`: entorno de ejecuci��n (`dev`, `production`). En `dev` se completan or��genes locales y se flexibilizan claves por defecto para facilitar pruebas.
 - `AI_MODE`: `auto`, `openai` u `ollama`.
 - `AI_ALLOW_EXTERNAL`: si es `false`, solo se usa Ollama.
 - `OLLAMA_URL`: URL base de Ollama (por defecto `http://localhost:11434`).
 - `OLLAMA_MODEL`: modelo de Ollama (por defecto `llama3.1`).
 - `OPENAI_API_KEY`, `OPENAI_MODEL`.
+- `AI_MAX_TOKENS_SHORT`, `AI_MAX_TOKENS_LONG`: l��mites de tokens para respuestas cortas/largas.
+- `AI_TIMEOUT_OLLAMA_MS`, `AI_TIMEOUT_OPENAI_MS`: timeouts de peticiones a proveedores.
 - `SECRET_KEY`: clave usada para firmar sesiones; en producción reemplace el
   placeholder `REEMPLAZAR_SECRET_KEY`, rote el valor periódicamente y manténgalo
   fuera del control de versiones. En desarrollo se usa un valor de prueba si no
@@ -509,6 +517,20 @@ Rutas de diagnóstico para administradores (omitidas en producción):
 - `GET /debug/db`: ejecuta `SELECT 1` contra la base de datos.
 - `GET /debug/config`: muestra `ALLOWED_ORIGINS` y la `DB_URL` sin contraseña.
 - `GET /debug/imports/parsers`: enumera los parsers registrados para las importaciones.
+
+## Registro de solicitudes
+
+La API incluye un middleware que registra cada solicitud HTTP con metodo, ruta, codigo de respuesta y tiempo de respuesta. Las excepciones se capturan y se registran con traza.
+
+- Configuracion: `LOG_LEVEL` controla el nivel de detalle; `DEBUG_SQL=1` muestra las consultas SQL.
+- Ubicacion de logs: los scripts de arranque redirigen Uvicorn a `logs/backend.log` y dejan trazas de migraciones en `logs/migrations/`.
+
+Notas adicionales de entorno:
+
+- `HOST`, `PORT`: host y puerto del servidor de desarrollo.
+- `ALEMBIC_LOG_LEVEL` y `DEBUG_MIGRATIONS`: controlan el detalle de logs de migraciones y diagnosticos.
+- En `ENV=dev`, si `SECRET_KEY` y `ADMIN_PASS` quedan en placeholders se usan valores de prueba; en produccion el arranque aborta si no se reemplazan.
+- SQLite opcional (dev/pruebas): `DB_URL=sqlite+aiosqlite:///ruta.db`.
 
 ## Comandos y chat
 
