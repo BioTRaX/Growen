@@ -25,12 +25,15 @@ if exist "%ROOT%\scripts\migrate.bat" (
   )
 )
 
-REM 3) Esperar hasta que los puertos 8000/5173 esten libres (max 10s)
+REM 3) Esperar (y liberar) puertos 8000/5173 hasta que esten libres (max 10s)
 set "_wait=0"
 :WAIT_PORTS
 set "_busy=0"
 for %%P in (8000 5173) do (
-  for /f "tokens=*" %%L in ('netstat -ano -p TCP ^| findstr /R ":%%P .*LISTENING"') do set "_busy=1"
+  for /f "tokens=5" %%I in ('netstat -ano -p TCP ^| findstr /R /C:":%%P " ^| findstr /I "LISTENING ESCUCHA"') do (
+    set "_busy=1"
+    taskkill /PID %%I /F >nul 2>&1
+  )
 )
 if "!_busy!"=="1" (
   if "!_wait!"=="0" echo [INFO] Verificando puertos 8000 y 5173...
