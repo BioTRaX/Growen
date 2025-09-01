@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: test_santaplanta_mapping.py
+# NG-HEADER: Ubicación: tests/test_santaplanta_mapping.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import pandas as pd
 import yaml
 from services.ingest import mapping

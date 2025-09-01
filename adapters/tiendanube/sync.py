@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: sync.py
+# NG-HEADER: Ubicación: adapters/tiendanube/sync.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Sincronización simulada con Tiendanube."""
 from __future__ import annotations
 

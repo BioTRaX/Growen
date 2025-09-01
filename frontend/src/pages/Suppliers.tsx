@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: Suppliers.tsx
+// NG-HEADER: Ubicación: frontend/src/pages/Suppliers.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import AppToolbar from '../components/AppToolbar'
 import { Supplier, listSuppliers } from '../services/suppliers'

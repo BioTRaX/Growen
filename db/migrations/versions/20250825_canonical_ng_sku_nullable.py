@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: 20250825_canonical_ng_sku_nullable.py
+# NG-HEADER: Ubicación: db/migrations/versions/20250825_canonical_ng_sku_nullable.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """make canonical_products.ng_sku nullable to allow post-insert generation
 
 Revision ID: 20250825_canonical_ng_sku_nullable

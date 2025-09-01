@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: auth.py
+# NG-HEADER: Ubicación: services/routers/auth.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Endpoints de autenticación y gestión de usuarios."""
 
 import secrets

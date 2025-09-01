@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: 20250831_images_extend_metadata.py
+# NG-HEADER: Ubicación: db/migrations/versions/20250831_images_extend_metadata.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """extend images with metadata and path
 
 Revision ID: 20250831_images_extend_metadata

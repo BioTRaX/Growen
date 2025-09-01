@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: UploadModal.tsx
+// NG-HEADER: Ubicación: frontend/src/components/UploadModal.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import {
   uploadPriceList,

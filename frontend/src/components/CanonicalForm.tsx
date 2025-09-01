@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: CanonicalForm.tsx
+// NG-HEADER: Ubicación: frontend/src/components/CanonicalForm.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import {
   createCanonicalProduct,

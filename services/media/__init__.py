@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: __init__.py
+# NG-HEADER: Ubicación: services/media/__init__.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Media helpers: paths, naming, and simple file ops."""
 from __future__ import annotations
 

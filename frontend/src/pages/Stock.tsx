@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: Stock.tsx
+// NG-HEADER: Ubicación: frontend/src/pages/Stock.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import { useNavigate } from 'react-router-dom'

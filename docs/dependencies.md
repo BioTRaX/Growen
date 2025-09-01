@@ -1,3 +1,7 @@
+<!-- NG-HEADER: Nombre de archivo: dependencies.md -->
+<!-- NG-HEADER: Ubicación: docs/dependencies.md -->
+<!-- NG-HEADER: Descripción: Pendiente de descripción -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 Dependencies and Setup
 ======================
 

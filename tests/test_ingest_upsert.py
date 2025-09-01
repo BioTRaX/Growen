@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: test_ingest_upsert.py
+# NG-HEADER: Ubicación: tests/test_ingest_upsert.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import pandas as pd
 import pytest
 from sqlalchemy import select, func

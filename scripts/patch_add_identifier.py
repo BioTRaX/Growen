@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: patch_add_identifier.py
+# NG-HEADER: Ubicación: scripts/patch_add_identifier.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 from agent_core.config import settings
 from sqlalchemy import create_engine, text
 

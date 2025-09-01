@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: env.py
+# NG-HEADER: Ubicación: db/migrations/env.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 import logging
 import traceback

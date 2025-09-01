@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: models.py
+# NG-HEADER: Ubicación: db/models.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Modelos principales de la base de datos."""
 from __future__ import annotations
 

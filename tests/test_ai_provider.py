@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: test_ai_provider.py
+# NG-HEADER: Ubicación: tests/test_ai_provider.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import asyncio
 import json
 import logging

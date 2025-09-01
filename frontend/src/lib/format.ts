@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: format.ts
+// NG-HEADER: Ubicación: frontend/src/lib/format.ts
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 export function formatARS(n: number | null | undefined): string {
   if (n == null) return ''
   try {

@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: 20250831_images_pipeline_tables.py
+# NG-HEADER: Ubicación: db/migrations/versions/20250831_images_pipeline_tables.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """images pipeline tables and flags
 
 Revision ID: 20250831_images_pipeline_tables
