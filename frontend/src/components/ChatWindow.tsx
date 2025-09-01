@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: ChatWindow.tsx
+// NG-HEADER: Ubicación: frontend/src/components/ChatWindow.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useRef, useState } from 'react'
 import { createWS, WSMessage } from '../lib/ws'
 import { chatHttp } from '../lib/http'

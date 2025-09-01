@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: vite.config.ts
+// NG-HEADER: Ubicación: frontend/vite.config.ts
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 

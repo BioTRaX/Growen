@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: canonical_products.py
+# NG-HEADER: Ubicación: services/routers/canonical_products.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Endpoints para productos canónicos y equivalencias."""
 from __future__ import annotations
 

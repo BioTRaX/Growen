@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: App.tsx
+// NG-HEADER: Ubicación: frontend/src/App.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthContext";
 import ProtectedRoute from "./auth/ProtectedRoute";

@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: 20250825_merge_heads.py
+# NG-HEADER: Ubicación: db/migrations/versions/20250825_merge_heads.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """merge heads: supplier_price_history_idx + add_identifier_to_users
 
 Revision ID: 20250825_merge_heads

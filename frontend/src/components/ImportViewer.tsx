@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: ImportViewer.tsx
+// NG-HEADER: Ubicación: frontend/src/components/ImportViewer.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import { commitImport, getImportPreview } from '../services/imports'
 import CanonicalOffers from './CanonicalOffers'

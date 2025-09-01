@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: clear_logs.py
+# NG-HEADER: Ubicación: scripts/clear_logs.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 from pathlib import Path
 import sys

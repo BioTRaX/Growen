@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: catalog.py
+# NG-HEADER: Ubicación: services/routers/catalog.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Endpoints para gestionar proveedores y categorías."""
 from __future__ import annotations
 

@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: DragDropZone.tsx
+// NG-HEADER: Ubicación: frontend/src/components/DragDropZone.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useState } from 'react'
 
 type Props = { onFileDropped: (file: File) => void }

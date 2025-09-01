@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: parsers.py
+# NG-HEADER: Ubicación: services/suppliers/parsers.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Parsers de listas de precios de proveedores.
 
 Este módulo expone un parser genérico basado en archivos Excel/CSV

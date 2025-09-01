@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: EquivalenceLinker.tsx
+// NG-HEADER: Ubicación: frontend/src/components/EquivalenceLinker.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useState } from 'react'
 import { upsertEquivalence } from '../services/equivalences'
 

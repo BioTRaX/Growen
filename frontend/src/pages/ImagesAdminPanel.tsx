@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: ImagesAdminPanel.tsx
+// NG-HEADER: Ubicación: frontend/src/pages/ImagesAdminPanel.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import http from '../services/http'
 import { Link } from 'react-router-dom'

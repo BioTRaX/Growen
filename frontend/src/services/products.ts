@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: products.ts
+// NG-HEADER: Ubicación: frontend/src/services/products.ts
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 export interface ProductSearchParams {
   q?: string
   supplier_id?: number

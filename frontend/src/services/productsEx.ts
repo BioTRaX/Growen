@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: productsEx.ts
+// NG-HEADER: Ubicación: frontend/src/services/productsEx.ts
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { baseURL as base } from './http'
 
 function csrfHeaders(): Record<string, string> {

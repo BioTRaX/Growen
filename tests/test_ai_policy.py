@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: test_ai_policy.py
+# NG-HEADER: Ubicación: tests/test_ai_policy.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 from ai.policy import choose
 from ai.types import Task
 from agent_core.config import Settings
