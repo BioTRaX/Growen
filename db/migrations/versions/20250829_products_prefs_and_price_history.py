@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: 20250829_products_prefs_and_price_history.py
+# NG-HEADER: Ubicación: db/migrations/versions/20250829_products_prefs_and_price_history.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """user prefs, price history, audit, canonical sale_price
 
 Revision ID: 20250829_products_prefs_and_price_history

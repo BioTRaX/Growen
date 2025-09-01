@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: main.tsx
+// NG-HEADER: Ubicación: frontend/src/main.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";

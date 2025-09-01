@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: imports.ts
+// NG-HEADER: Ubicación: frontend/src/services/imports.ts
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import http, { baseURL as base } from './http'
 
 export async function uploadPriceList(

@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: Purchases.tsx
+// NG-HEADER: Ubicación: frontend/src/pages/Purchases.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import AppToolbar from '../components/AppToolbar'

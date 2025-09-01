@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: test_santaplanta_apply.py
+# NG-HEADER: Ubicación: tests/test_santaplanta_apply.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import hashlib
 import pandas as pd
 import pytest

@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: 20241010_add_stock_column.py
+# NG-HEADER: Ubicación: db/migrations/versions/20241010_add_stock_column.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 from alembic import op
 import sqlalchemy as sa
 

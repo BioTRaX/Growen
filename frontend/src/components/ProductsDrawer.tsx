@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: ProductsDrawer.tsx
+// NG-HEADER: Ubicación: frontend/src/components/ProductsDrawer.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 // File consolidated below; removed duplicate earlier implementation
 import { useEffect, useMemo, useState } from 'react'
 import { FixedSizeList as List, ListChildComponentProps } from 'react-window'

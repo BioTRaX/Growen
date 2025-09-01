@@ -1,3 +1,7 @@
+<!-- NG-HEADER: Nombre de archivo: JOBS_TNUBE.md -->
+<!-- NG-HEADER: Ubicación: docs/JOBS_TNUBE.md -->
+<!-- NG-HEADER: Descripción: Pendiente de descripción -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 Automatización de imágenes (Paso 2)
 ===================================
 

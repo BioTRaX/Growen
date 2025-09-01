@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: purchases.ts
+// NG-HEADER: Ubicación: frontend/src/services/purchases.ts
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import http from './http'
 
 export type PurchaseLine = {

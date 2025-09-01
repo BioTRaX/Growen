@@ -1,3 +1,7 @@
+<!-- NG-HEADER: Nombre de archivo: MEDIA.md -->
+<!-- NG-HEADER: Ubicación: docs/MEDIA.md -->
+<!-- NG-HEADER: Descripción: Pendiente de descripción -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 Media y galería de productos
 ============================
 

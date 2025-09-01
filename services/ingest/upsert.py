@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: upsert.py
+# NG-HEADER: Ubicación: services/ingest/upsert.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Inserta o actualiza productos y variantes."""
 from __future__ import annotations
 

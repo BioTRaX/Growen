@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: ProductDetail.tsx
+// NG-HEADER: Ubicación: frontend/src/pages/ProductDetail.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import http from '../services/http'

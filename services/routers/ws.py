@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: ws.py
+# NG-HEADER: Ubicación: services/routers/ws.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """WebSocket de chat que utiliza la IA de respaldo."""
 
 from datetime import datetime

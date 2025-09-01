@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: SuppliersModal.tsx
+// NG-HEADER: Ubicación: frontend/src/components/SuppliersModal.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import CreateSupplierModal from './CreateSupplierModal'

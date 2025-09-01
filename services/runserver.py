@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: runserver.py
+# NG-HEADER: Ubicación: services/runserver.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Local development server runner.
 
 Ensures Windows uses the Selector event loop policy before Uvicorn starts,

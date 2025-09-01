@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: types.py
+# NG-HEADER: Ubicación: ai/types.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Tipos y constantes relacionados con tareas de IA."""
 from enum import Enum
 
