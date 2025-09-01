@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: generate_requirements.py
+# NG-HEADER: Ubicación: scripts/generate_requirements.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import tomllib
 from pathlib import Path
 

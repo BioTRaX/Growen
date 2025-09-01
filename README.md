@@ -18,6 +18,7 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - Opcional (dev/pruebas): SQLite 3 con `aiosqlite` (ya incluido en dependencias)
 - Opcional: Docker y Docker Compose
 - El backend usa httpx para llamadas a proveedores (Ollama / APIs); ya viene incluido.
+- OCR: `ocrmypdf` (requiere Tesseract, Ghostscript y Poppler). TODO: agregar "doctor" para validar instalación.
 
 ## Instalación local
 
@@ -713,3 +714,14 @@ Contribuciones y feedback son bienvenidos.
 
 - Resumen en `AuditLog(action='purchase_import')` y eventos en `ImportLog` por etapa.
 - UI: botón "Ver logs" abre un drawer con timeline, copiar `correlation_id` y descargar JSON (`GET /purchases/{id}/logs?format=json`).
+
+## Documentación adicional
+
+- [Importación de PDF](docs/IMPORT_PDF.md)
+- [Crawler de imágenes](docs/IMAGES.md)
+- [Seguridad](docs/SECURITY.md)
+
+## Lineamientos de agentes
+
+Consulta [AGENTS.md](AGENTS.md) para la estructura de prompts, el uso del encabezado NG-HEADER y el checklist de PRs.
+

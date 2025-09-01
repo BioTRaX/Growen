@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: nlu.py
+# NG-HEADER: Ubicación: agent_core/nlu.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Utilidades de NLU básicas."""
 from __future__ import annotations
 

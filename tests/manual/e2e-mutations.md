@@ -1,3 +1,7 @@
+<!-- NG-HEADER: Nombre de archivo: e2e-mutations.md -->
+<!-- NG-HEADER: Ubicación: tests/manual/e2e-mutations.md -->
+<!-- NG-HEADER: Descripción: Pendiente de descripción -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Pruebas manuales E2E de mutaciones
 
 ## Crear proveedor

@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: chat.py
+# NG-HEADER: Ubicación: services/routers/chat.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Endpoint de chat síncrono que consulta la IA."""
 
 from fastapi import APIRouter

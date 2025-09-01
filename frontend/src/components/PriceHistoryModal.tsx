@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: PriceHistoryModal.tsx
+// NG-HEADER: Ubicación: frontend/src/components/PriceHistoryModal.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import { getPriceHistory, PriceHistoryItem } from '../services/prices'
 

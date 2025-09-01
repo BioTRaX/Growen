@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: PurchaseDetail.tsx
+// NG-HEADER: Ubicación: frontend/src/pages/PurchaseDetail.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom'
 import { PATHS } from '../routes/paths'

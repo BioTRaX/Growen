@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: rules_engine.py
+# NG-HEADER: Ubicación: agent_core/rules_engine.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Motor de reglas simple para evaluar condiciones del agente."""
 from typing import Any, Callable
 

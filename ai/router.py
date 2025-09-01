@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: router.py
+# NG-HEADER: Ubicación: ai/router.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Fachada para enrutar peticiones de IA."""
 
 from __future__ import annotations

@@ -1,3 +1,7 @@
+<!-- NG-HEADER: Nombre de archivo: IMAGES_STEP2.md -->
+<!-- NG-HEADER: Ubicación: docs/IMAGES_STEP2.md -->
+<!-- NG-HEADER: Descripción: Pendiente de descripción -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 Images pipeline – Step 2
 
 Env

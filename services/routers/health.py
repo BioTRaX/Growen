@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: health.py
+# NG-HEADER: Ubicación: services/routers/health.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession

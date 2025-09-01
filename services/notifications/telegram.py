@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: telegram.py
+# NG-HEADER: Ubicación: services/notifications/telegram.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
 import os

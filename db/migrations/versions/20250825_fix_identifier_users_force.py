@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: 20250825_fix_identifier_users_force.py
+# NG-HEADER: Ubicación: db/migrations/versions/20250825_fix_identifier_users_force.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """force add identifier to users if still missing
 
 This migration is a safety net in case previous revisions didn't add the

@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: policy.py
+# NG-HEADER: Ubicación: ai/policy.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Política de selección de proveedores IA."""
 from __future__ import annotations
 

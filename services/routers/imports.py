@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: imports.py
+# NG-HEADER: Ubicación: services/routers/imports.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Endpoints para importar listas de precios de proveedores."""
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query

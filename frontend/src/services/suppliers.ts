@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: suppliers.ts
+// NG-HEADER: Ubicación: frontend/src/services/suppliers.ts
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 export interface Supplier {
   id: number
   name: string

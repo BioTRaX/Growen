@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: BulkSalePriceModal.tsx
+// NG-HEADER: Ubicación: frontend/src/components/BulkSalePriceModal.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useMemo, useState } from 'react'
 import { BulkMode, bulkUpdateSalePrice } from '../services/productsEx'
 import { showToast } from './Toast'
