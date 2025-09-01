@@ -125,6 +125,7 @@ if os.getenv("RUN_DOCTOR_ON_BOOT", "1") == "1":
         code = run_doctor(fail_on_error=fail)
         if code != 0 and fail:
             # Fail fast in production contexts
+            logger.critical("Doctor failed on boot, exiting.")
             raise SystemExit("Doctor failed on boot")
     except SystemExit:
         raise

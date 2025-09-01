@@ -19,6 +19,29 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - Opcional: Docker y Docker Compose
 - El backend usa httpx para llamadas a proveedores (Ollama / APIs); ya viene incluido.
 
+### Requisitos para importación de PDFs (OCR)
+
+Para la funcionalidad completa de importación de remitos en PDF, que incluye Reconocimiento Óptico de Caracteres (OCR), se requieren las siguientes dependencias de sistema:
+
+- **ocrmypdf**: para aplicar la capa de OCR a los PDFs.
+- **tesseract**: el motor de OCR. Se recomienda instalar el idioma español.
+- **ghostscript**: para procesar archivos PDF y PostScript.
+- **poppler**: utilidades para renderizar PDFs (usado por `pdf2image`).
+
+En Windows, se pueden instalar con `scoop` o `choco`. En Debian/Ubuntu:
+```bash
+sudo apt-get update
+sudo apt-get install -y ocrmypdf tesseract-ocr tesseract-ocr-spa ghostscript poppler-utils
+```
+
+Para verificar que todas las dependencias están correctamente instaladas y accesibles en el `PATH` del sistema, se puede usar el script "doctor":
+
+```bash
+python tools/doctor.py
+```
+
+O a través del endpoint de la API (disponible solo para administradores en entorno de desarrollo): `GET /admin/import/doctor`.
+
 ## Instalación local
 
 Antes de instalar dependencias, `pyproject.toml` debe listar los paquetes o usar un directorio `src/`.
@@ -556,6 +579,13 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `PRODUCTS_PAGE_MAX`: límite máximo de resultados por página.
 - `PRICE_HISTORY_PAGE_SIZE`: tamaño por defecto al paginar el historial de precios.
 
+### Variables para importación de PDFs
+
+- `IMPORT_OCR_LANG`: Idioma para Tesseract OCR (por defecto `spa`).
+- `IMPORT_OCR_TIMEOUT`: Timeout en segundos para el proceso de OCR (por defecto `180`).
+- `IMPORT_PDF_TEXT_MIN_CHARS`: Mínimo de caracteres de texto a extraer de un PDF para considerarlo válido sin OCR (por defecto `100`).
+- `IMPORT_ALLOW_EMPTY_DRAFT`: Si es `true` (default), al importar un PDF sin líneas detectables, se crea una compra en `BORRADOR` vacía. Si es `false`, se devuelve un error `422`.
+
 ## Endpoints de diagnóstico
 
 Rutas públicas de salud:
@@ -570,6 +600,7 @@ Rutas de diagnóstico para administradores (omitidas en producción):
 - `GET /debug/db`: ejecuta `SELECT 1` contra la base de datos.
 - `GET /debug/config`: muestra `ALLOWED_ORIGINS` y la `DB_URL` sin contraseña.
 - `GET /debug/imports/parsers`: enumera los parsers registrados para las importaciones.
+- `GET /admin/import/doctor`: verifica la presencia de dependencias externas para OCR (`ocrmypdf`, `tesseract`, etc.).
 
 ## Registro de solicitudes
 
@@ -705,11 +736,13 @@ python -m cli.ng db-init
 Contribuciones y feedback son bienvenidos.
 ## Importar remitos (Santa Planta)
 
-- Pipeline de parsing con fallback: pdfplumber → camelot → OCR (ocrmypdf) → reintentos.
-- Endpoint: `POST /purchases/import/santaplanta?supplier_id=ID&debug=0|1&force_ocr=0|1`
-- Respuesta: `purchase_id`, `correlation_id`, `parsed.totals` y, con `debug=1`, muestras `debug.samples`.
+El sistema incluye un pipeline robusto para importar remitos en formato PDF del proveedor Santa Planta, creando una compra en estado `BORRADOR`.
 
-### Logs de import
-
-- Resumen en `AuditLog(action='purchase_import')` y eventos en `ImportLog` por etapa.
-- UI: botón "Ver logs" abre un drawer con timeline, copiar `correlation_id` y descargar JSON (`GET /purchases/{id}/logs?format=json`).
+- **Endpoint**: `POST /purchases/import/santaplanta?supplier_id=ID&force_ocr=0|1`
+- **Pipeline de parsing**: El sistema intenta extraer datos secuencialmente con `pdfplumber` (para PDFs con texto) y `camelot` (para PDFs basados en tablas). Si no se obtiene un mínimo de texto (`IMPORT_PDF_TEXT_MIN_CHARS`), se invoca automáticamente a `ocrmypdf` para aplicar OCR. La opción `force_ocr=1` fuerza la ejecución de OCR desde el inicio.
+- **Política de borrador vacío**: Si tras todos los intentos no se detectan líneas, el comportamiento depende de la variable `IMPORT_ALLOW_EMPTY_DRAFT`:
+    - `true` (default): Se crea una compra vacía en estado `BORRADOR` y se devuelve un status `200 OK`. La UI mostrará una advertencia.
+    - `false`: Se devuelve un error `422 Unprocessable Entity` con un mensaje explicativo.
+- **Respuesta**: La respuesta de la API incluye `purchase_id`, un `correlation_id` para seguimiento, y los totales parseados (`parsed.totals`).
+- **Logs de importación**: Cada paso del proceso de importación (ej. "iniciando ocr", "parseando con camelot") se registra en `ImportLog`. El resultado final (éxito o fracaso) se guarda en `AuditLog`.
+- **UI**: Desde la interfaz de compras, un botón "Ver logs" permite abrir un panel con el timeline de eventos, copiar el `correlation_id` y descargar el log completo en formato JSON (`GET /purchases/{id}/logs?format=json`).

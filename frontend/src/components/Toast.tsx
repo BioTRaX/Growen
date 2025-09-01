@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-type Toast = { type: 'success' | 'error'; text: string }
+type Toast = { type: 'success' | 'error' | 'warning'; text: string }
 
 let push: ((t: Toast | null) => void) | null = null
 
@@ -19,16 +19,24 @@ export default function ToastContainer() {
     return () => clearTimeout(id)
   }, [toast])
   if (!toast) return null
+
+  const colors = {
+    success: '#4caf50',
+    error: '#f44336',
+    warning: '#ff9800',
+  }
+
   return (
     <div
       style={{
         position: 'fixed',
         bottom: 20,
         right: 20,
-        background: toast.type === 'success' ? '#4caf50' : '#f44336',
+        background: colors[toast.type],
         color: '#fff',
         padding: '8px 12px',
         borderRadius: 4,
+        zIndex: 100,
       }}
     >
       {toast.text}

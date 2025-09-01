@@ -1,4 +1,4 @@
-import http from './http'
+﻿import http from './http'
 
 export type PurchaseLine = {
   id?: number
@@ -67,10 +67,16 @@ export async function cancelPurchase(id: number, note: string) {
   return r.data
 }
 
-export async function importSantaPlanta(supplier_id: number, file: File, debug: boolean = false) {
+export async function importSantaPlanta(supplier_id: number, file: File, debug: boolean = false, forceOcr: boolean = false) {
   const fd = new FormData()
   fd.append('file', file)
-  const r = await http.post(`/purchases/import/santaplanta`, fd, { params: { supplier_id, debug: debug ? 1 : 0 } })
+  const r = await http.post(`/purchases/import/santaplanta`, fd, {
+    params: {
+      supplier_id,
+      debug: debug ? 1 : 0,
+      force_ocr: forceOcr ? 1 : 0,
+    }
+  })
   return r.data as { purchase_id: number; status: string; filename: string; correlation_id?: string; parsed?: any; debug?: any }
 }
 
@@ -82,3 +88,4 @@ export async function deletePurchase(id: number) {
   const r = await http.delete(`/purchases/${id}`)
   return r.data as { status: string }
 }
+
