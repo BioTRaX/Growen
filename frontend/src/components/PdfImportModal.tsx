@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import { importSantaPlanta } from '../services/purchases'
 import ToastContainer, { showToast } from './Toast'
@@ -25,23 +25,32 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
   if (!open) return null
 
   async function process() {
-    if (!supplierId) { showToast('error', 'Elegí proveedor'); return }
-    if (!file) { showToast('error', 'Adjuntá un PDF'); return }
+    if (!supplierId) { showToast('error', 'ElegÃ­ proveedor'); return }
+    if (!file) { showToast('error', 'AdjuntÃ¡ un PDF'); return }
     setLoading(true)
     setErrorMsg(null); setErrorCid(null); setErrorDetail(null)
     try {
-      const res = await importSantaPlanta(Number(supplierId), file, debug)
-      showToast('success', 'Importado, abriendo compra...')
+      const res = await importSantaPlanta(Number(supplierId), file, debug, forceOCR)
+      const correlationId = res.headers?.['x-correlation-id']
+      
+      if (res.status === 200 && res.data.detail?.includes("se creÃ³ un borrador")) {
+        showToast('warning', `${res.data.detail} (ID: ${correlationId || 'N/A'})`)
+      } else {
+        showToast('success', `Importado, abriendo compra... (ID: ${correlationId || 'N/A'})`)
+      }
+      
       onClose()
-      onSuccess((res as any).purchase_id || (res as any).id)
+      onSuccess((res.data as any).purchase_id || (res.data as any).id)
+
     } catch (e: any) {
       const detail = e?.response?.data
+      const correlationId = e?.response?.headers?.['x-correlation-id']
       const msg = (typeof detail === 'string') ? detail : (detail?.detail || 'No se pudo importar')
-      const cid = typeof detail === 'object' ? (detail?.correlation_id || detail?.detail?.correlation_id) : undefined
+      
       setErrorMsg(String(msg))
-      setErrorCid(cid || null)
+      setErrorCid(correlationId || null)
       setErrorDetail(detail || null)
-      showToast('error', cid ? `${msg} (id: ${cid})` : String(msg))
+      showToast('error', correlationId ? `${msg} (id: ${correlationId})` : String(msg))
     } finally { setLoading(false) }
   }
 
@@ -60,11 +69,11 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
         </div>
         <div className="row" style={{ gap: 8, marginTop: 8, alignItems: 'center' }}>
           <label><input type="checkbox" checked={debug} onChange={e => setDebug(e.target.checked)} /> Modo debug</label>
-          <label><input type="checkbox" checked={forceOCR} onChange={e => setForceOCR(e.target.checked)} disabled /> Forzar OCR (requiere binarios)</label>
+          <label><input type="checkbox" checked={forceOCR} onChange={e => setForceOCR(e.target.checked)} /> Forzar OCR</label>
         </div>
         {errorMsg && (
           <div style={{ marginTop: 10, color: '#e74c3c' }}>
-            <div>{errorMsg}{errorCid ? ` (id: ${errorCid})` : ''}</div>
+            <div>{errorMsg}{errorCid ? <span> (ID: <a href={`/purchases/logs/by-correlation/${errorCid}`} target="_blank" rel="noopener noreferrer">{errorCid}</a>)</span> : ''}</div>
             {errorDetail?.events && (
               <button className="btn-secondary" style={{ marginTop: 6 }} onClick={() => alert(JSON.stringify(errorDetail, null, 2))}>Ver detalle</button>
             )}
@@ -78,8 +87,8 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
         {loading && (
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8 }}>
             <div className="panel" style={{ padding: 16 }}>
-              <div style={{ fontWeight: 600 }}>Procesando PDF…</div>
-              <div className="text-sm" style={{ opacity: 0.8 }}>No cierres esta ventana. Si tarda, activá “Modo debug”.</div>
+              <div style={{ fontWeight: 600 }}>Procesando PDFâ€¦</div>
+              <div className="text-sm" style={{ opacity: 0.8 }}>No cierres esta ventana. Si tarda, activÃ¡ â€œModo debugâ€.</div>
             </div>
           </div>
         )}
@@ -87,4 +96,5 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
     </div>
   )
 }
+
 

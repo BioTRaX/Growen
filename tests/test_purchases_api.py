@@ -64,3 +64,63 @@ def test_import_santaplanta_pdf_creates_draft(tmp_path):
     files = {"file": ("remito_sp.pdf", io.BytesIO(dummy_pdf), "application/pdf")}
     r = client.post(f"/purchases/import/santaplanta?supplier_id={idx}", files=files)
     assert r.status_code in (200, 409)  # 409 si el test se ejecuta dos veces con mismo filename
+
+
+def test_import_santaplanta_pdf_policy(tmp_path):
+    # Crear proveedor
+    resp = client.post("/suppliers", json={"slug": "sp_policy", "name": "Santa Planta Policy"})
+    assert resp.status_code in (200, 201)
+    idx = client.get("/suppliers").json()[0]["id"]
+
+    # PDF mínimo (garantizado sin líneas extraíbles)
+    dummy_pdf = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj<</Type/Catalog>>endobj\ntrailer<>\n%%EOF"
+    files = {"file": ("remito_policy.pdf", io.BytesIO(dummy_pdf), "application/pdf")}
+
+    # --- Política: IMPORT_ALLOW_EMPTY_DRAFT = true (default) ---
+    os.environ["IMPORT_ALLOW_EMPTY_DRAFT"] = "true"
+    r_allow = client.post(f"/purchases/import/santaplanta?supplier_id={idx}", files=files)
+    assert r_allow.status_code == 200
+    assert r_allow.json()["status"] == "BORRADOR"
+    assert "purchase_id" in r_allow.json()
+
+    # --- Política: IMPORT_ALLOW_EMPTY_DRAFT = false ---
+    os.environ["IMPORT_ALLOW_EMPTY_DRAFT"] = "false"
+    # Re-abrir el BytesIO para la nueva request
+    files_false = {"file": ("remito_policy_false.pdf", io.BytesIO(dummy_pdf), "application/pdf")}
+    r_disallow = client.post(f"/purchases/import/santaplanta?supplier_id={idx}", files=files_false)
+    assert r_disallow.status_code == 422
+    assert "No se detectaron líneas" in r_disallow.json()["detail"]["detail"]
+
+    # Limpiar variable de entorno
+    del os.environ["IMPORT_ALLOW_EMPTY_DRAFT"]
+
+
+def test_import_santaplanta_pdf_force_ocr(tmp_path, monkeypatch):
+    # Crear proveedor
+    resp = client.post("/suppliers", json={"slug": "sp_ocr", "name": "Santa Planta OCR"})
+    assert resp.status_code in (200, 201)
+    idx = client.get("/suppliers").json()[0]["id"]
+
+    # Mock de run_ocrmypdf para no depender del binario
+    def mock_ocr(*args, **kwargs):
+        # Simula que OCR se ejecutó y creó un archivo de salida
+        # El contenido no importa, solo que exista
+        output_path = args[1]
+        with open(output_path, "wb") as f:
+            f.write(b"%PDF-1.4\n%OCR'd\n1 0 obj<</Type/Catalog>>endobj\ntrailer<>\n%%EOF")
+        return True, "stdout mock", "stderr mock"
+
+    monkeypatch.setattr("services.importers.santaplanta_pipeline.run_ocrmypdf", mock_ocr)
+
+    dummy_pdf = b"%PDF-1.4\n%no text\n1 0 obj<</Type/Catalog>>endobj\ntrailer<>\n%%EOF"
+    files = {"file": ("remito_ocr.pdf", io.BytesIO(dummy_pdf), "application/pdf")}
+    
+    # Llamada con force_ocr=1
+    r = client.post(f"/purchases/import/santaplanta?supplier_id={idx}&force_ocr=1", files=files)
+    
+    # Como el mock de OCR no produce líneas, el resultado depende de la política de empty draft
+    if os.getenv("IMPORT_ALLOW_EMPTY_DRAFT", "true").lower() == "true":
+        assert r.status_code == 200
+        assert r.json()["status"] == "BORRADOR"
+    else:
+        assert r.status_code == 422

@@ -30,3 +30,11 @@ beautifulsoup4>=4.12.3
 clamd>=1.0.2
 dramatiq[redis]>=1.15.0
 rembg>=2.0.57
+
+# PDF/OCR processing
+pdfplumber
+camelot-py[cv]
+ocrmypdf
+pdf2image
+pytesseract
+opencv-python-headless

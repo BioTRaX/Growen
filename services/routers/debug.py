@@ -46,6 +46,53 @@ if os.getenv("ENV", "dev") != "production":
             "db_url": safe,
         }
 
+    @router.get("/debug/imports/doctor", dependencies=admin_only)
+    async def debug_import_doctor() -> dict[str, object]:
+        """Ejecuta el doctor de dependencias de importación y devuelve el resultado."""
+        from tools.doctor import run_doctor
+        import io
+        from contextlib import redirect_stdout
+        import re
+
+        f = io.StringIO()
+        with redirect_stdout(f):
+            all_ok = run_doctor()
+        
+        output = f.getvalue()
+        
+        # Parsear la salida para un JSON estructurado
+        results = []
+        for line in output.splitlines():
+            if line.startswith("---") or not line.strip():
+                continue
+            status, _, rest = line.partition(":")
+            details = rest.strip()
+            tool_match = re.search(r"'(.*?)'", details)
+            tool = tool_match.group(1) if tool_match else "unknown"
+            
+            version_match = re.search(r"Versión: (.*)", details)
+            version = version_match.group(1) if version_match else None
+            
+            path_match = re.search(r"en '(.*?)'", details)
+            path = path_match.group(1) if path_match else None
+
+            error_match = re.search(r"no se encontró|tardó demasiado|Error al verificar", details)
+            error = details if error_match else None
+
+            results.append({
+                "tool": tool,
+                "status": status.strip(),
+                "version": version,
+                "path": path,
+                "error": error
+            })
+
+        return {
+            "all_ok": all_ok,
+            "raw_output": output,
+            "results": results
+        }
+
     @router.get("/debug/imports/parsers", dependencies=admin_only)
     async def debug_import_parsers() -> dict[str, list[str]]:
         """Lista los parsers de proveedores registrados."""

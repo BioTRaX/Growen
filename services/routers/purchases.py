@@ -1,9 +1,9 @@
-"""Compras (purchases) API endpoints.
+﻿"""Compras (purchases) API endpoints.
 
 Estados de compra: BORRADOR -> VALIDADA -> CONFIRMADA -> ANULADA.
-Incluye: crear/editar, validación, confirmación (impacta stock y buy_price),
-anulación, listado con filtros, importación Santa Planta (PDF) y export de
-líneas SIN_VINCULAR.
+Incluye: crear/editar, validaciÃ³n, confirmaciÃ³n (impacta stock y buy_price),
+anulaciÃ³n, listado con filtros, importaciÃ³n Santa Planta (PDF) y export de
+lÃ­neas SIN_VINCULAR.
 """
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ from services.importers.santaplanta_pipeline import parse_remito
 import httpx
 import hashlib
 import uuid
+from agent_core.config import settings
 
 router = APIRouter(prefix="/purchases", tags=["purchases"]) 
 
@@ -81,11 +82,11 @@ async def update_purchase(purchase_id: int, payload: dict, db: AsyncSession = De
                 try:
                     p.remito_date = date.fromisoformat(payload[k])
                 except ValueError:
-                    raise HTTPException(status_code=400, detail="remito_date inválida")
+                    raise HTTPException(status_code=400, detail="remito_date invÃ¡lida")
             else:
                 setattr(p, k, payload[k])
 
-    # Líneas: upsert/delete
+    # LÃ­neas: upsert/delete
     lines: list[dict[str, Any]] = payload.get("lines") or []
     for ln in lines:
         op = (ln.get("op") or "upsert").lower()
@@ -99,7 +100,7 @@ async def update_purchase(purchase_id: int, payload: dict, db: AsyncSession = De
         if lid:
             obj = await db.get(PurchaseLine, int(lid))
             if not obj or obj.purchase_id != p.id:
-                raise HTTPException(status_code=404, detail="Línea no encontrada")
+                raise HTTPException(status_code=404, detail="LÃ­nea no encontrada")
         else:
             obj = PurchaseLine(purchase_id=p.id)
             db.add(obj)
@@ -138,15 +139,15 @@ async def list_purchases(
             df = date.fromisoformat(date_from)
             stmt = stmt.where(Purchase.remito_date >= df)
         except Exception:
-            raise HTTPException(status_code=400, detail="date_from inválida")
+            raise HTTPException(status_code=400, detail="date_from invÃ¡lida")
     if date_to:
         try:
             dt = date.fromisoformat(date_to)
             stmt = stmt.where(Purchase.remito_date <= dt)
         except Exception:
-            raise HTTPException(status_code=400, detail="date_to inválida")
+            raise HTTPException(status_code=400, detail="date_to invÃ¡lida")
     if product_name:
-        # Join con líneas para buscar por título
+        # Join con lÃ­neas para buscar por tÃ­tulo
         sub = select(PurchaseLine.purchase_id).where(PurchaseLine.title.ilike(f"%{product_name}%")).subquery()
         stmt = stmt.where(Purchase.id.in_(select(sub.c.purchase_id)))
 
@@ -253,7 +254,7 @@ async def validate_purchase(purchase_id: int, db: AsyncSession = Depends(get_ses
         l.state = "OK" if linked else "SIN_VINCULAR"
         if not linked:
             unmatched += 1
-    # Requiere al menos 1 línea para quedar VALIDADA
+    # Requiere al menos 1 lÃ­nea para quedar VALIDADA
     p.status = "VALIDADA" if (unmatched == 0 and total_lines > 0) else "BORRADOR"
     await db.commit()
     return {"status": "ok", "unmatched": unmatched, "lines": total_lines}
@@ -342,12 +343,12 @@ async def confirm_purchase(purchase_id: int, db: AsyncSession = Depends(get_sess
     )
     await db.commit()
 
-    # Notificación Telegram opcional
+    # NotificaciÃ³n Telegram opcional
     token = os.getenv("PURCHASE_TELEGRAM_TOKEN")
     chat_id = os.getenv("PURCHASE_TELEGRAM_CHAT_ID")
     if token and chat_id:
         try:
-            text = f"Compra confirmada: proveedor {p.supplier_id}, remito {p.remito_number}, líneas {len(p.lines)}"
+            text = f"Compra confirmada: proveedor {p.supplier_id}, remito {p.remito_number}, lÃ­neas {len(p.lines)}"
             async with httpx.AsyncClient(timeout=5.0) as client:
                 await client.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": text})
         except Exception:
@@ -428,7 +429,7 @@ async def import_santaplanta_pdf(
         with open(tmp_pdf, "wb") as fh:
             fh.write(content)
 
-        # Log start (sin purchase_id aún)
+        # Log start (sin purchase_id aÃºn)
         try:
             db.add(
                 AuditLog(
@@ -460,7 +461,7 @@ async def import_santaplanta_pdf(
             force_ocr=bool(force_ocr),
             debug=debug_flag,
         )
-        log.info(f"Import[{correlation_id}]: Pipeline finalizado. Remito={res.remito_number}, Fecha={res.remito_date}, Líneas detectadas={len(res.lines) if res.lines else 0}")
+        log.info(f"Import[{correlation_id}]: Pipeline finalizado. Remito={res.remito_number}, Fecha={res.remito_date}, LÃ­neas detectadas={len(res.lines) if res.lines else 0}")
 
         remito_number = res.remito_number or file.filename
         remito_date_str = res.remito_date
@@ -469,40 +470,72 @@ async def import_santaplanta_pdf(
         except Exception:
             remito_dt = date.today()
 
+        # --- PolÃ­tica de BORRADOR vacÃ­o ---
+        ALLOW_EMPTY = os.getenv("IMPORT_ALLOW_EMPTY_DRAFT","true").lower() in ("1","true","yes")
         if not res.lines:
-            try:
-                db.add(
-                    AuditLog(
-                        action="purchase_import_no_lines",
-                        table="purchases",
-                        entity_id=None,
-                        meta={
-                            "correlation_id": correlation_id,
-                            "supplier_id": supplier_id,
-                            "filename": file.filename,
-                            "sha256": sha256,
-                            "remito": res.remito_number,
-                            "fecha": res.remito_date,
-                            "events": (res.events[:20] if res.events else []),
-                        },
-                        user_id=None,
-                        ip=None,
-                    )
-                )
+            if ALLOW_EMPTY:
+                # Crear compra vacía (BORRADOR), adjuntar PDF y devolver 200
+                p = Purchase(supplier_id=supplier_id, remito_number=remito_number, remito_date=remito_dt)
+                db.add(p)
+                await db.flush()
+                root = Path("data") / "purchases" / str(p.id)
+                root.mkdir(parents=True, exist_ok=True)
+                pdf_path = root / file.filename
+                with open(pdf_path, "wb") as fh:
+                    fh.write(content)
+                db.add(PurchaseAttachment(purchase_id=p.id, filename=file.filename, mime=file.content_type, size=len(content), path=str(pdf_path)))
+                db.add(AuditLog(action="purchase_import", table="purchases", entity_id=p.id, meta={
+                    "correlation_id": correlation_id,
+                    "filename": file.filename,
+                    "sha256": sha256,
+                    "remito_number": remito_number,
+                    "remito_date": remito_dt.isoformat(),
+                    "lines_detected": 0,
+                    "note": "empty_draft_allowed"
+                }))
                 await db.commit()
-            except Exception:
-                pass
-            detail = {
-                "detail": "No se detectaron líneas. Revisá el PDF del proveedor.",
-                "correlation_id": correlation_id,
-                "remito": res.remito_number,
-                "fecha": res.remito_date,
-            }
-            if debug:
-                detail["events"] = res.events[:20] if res.events else []
-                if res.debug:
-                    detail["debug"] = {"samples": res.debug.get("samples")}
-            raise HTTPException(status_code=422, detail=detail)
+                await db.refresh(p)
+                return {
+                    "purchase_id": p.id,
+                    "status": p.status,
+                    "filename": file.filename,
+                    "correlation_id": correlation_id,
+                    "parsed": {"remito": remito_number, "fecha": remito_dt.isoformat(), "lines": 0, "totals": {"subtotal": 0, "iva": 0, "total": 0}, "hash": f"sha256:{sha256}"},
+                    "unmatched_count": 0,
+                    "debug": (res.debug if debug_flag else None),
+                }
+            else:
+                try:
+                    db.add(
+                        AuditLog(
+                            action="purchase_import_no_lines",
+                            table="purchases",
+                            entity_id=None,
+                            meta={
+                                "correlation_id": correlation_id,
+                                "supplier_id": supplier_id,
+                                "filename": file.filename,
+                                "sha256": sha256,
+                                "remito": res.remito_number,
+                                "fecha": res.remito_date,
+                                "events": (res.events[:20] if res.events else []),
+                            },
+                        )
+                    )
+                    await db.commit()
+                except Exception:
+                    pass
+                detail = {
+                    "detail": "No se detectaron líneas. Revisá el PDF del proveedor.",
+                    "correlation_id": correlation_id,
+                    "remito": res.remito_number,
+                    "fecha": res.remito_date,
+                }
+                if debug_flag:
+                    detail["events"] = res.events[:20] if res.events else []
+                    if res.debug:
+                        detail["debug"] = {"samples": res.debug.get("samples")}
+                raise HTTPException(status_code=422, detail=detail)
 
         # Idempotencia: UNIQUE (supplier_id, remito_number)
         exists = await db.scalar(select(Purchase).where(Purchase.supplier_id==supplier_id, Purchase.remito_number==remito_number))
@@ -548,8 +581,8 @@ async def import_santaplanta_pdf(
 
         db.add(PurchaseAttachment(purchase_id=p.id, filename=file.filename, mime=file.content_type, size=len(content), path=str(pdf_path)))
 
-        # Crear líneas con matching por supplier_sku -> supplier_products.supplier_product_id
-        # Convertir líneas normalizadas del parser
+        # Crear lÃ­neas con matching por supplier_sku -> supplier_products.supplier_product_id
+        # Convertir lÃ­neas normalizadas del parser
         lines = [
             {
                 "supplier_sku": ln.supplier_sku,
@@ -565,7 +598,7 @@ async def import_santaplanta_pdf(
         ]
         for ln in lines:
             sku = (ln.get("supplier_sku") or "").strip()
-            title = (ln.get("title") or "").strip() or sku or "(sin título)"
+            title = (ln.get("title") or "").strip() or sku or "(sin tÃ­tulo)"
             qty = Decimal(str(ln.get("qty") or 0))
             unit_cost = Decimal(str(ln.get("unit_cost") or 0))
             line_discount = Decimal(str(ln.get("line_discount") or 0))
@@ -576,7 +609,7 @@ async def import_santaplanta_pdf(
                 if sp:
                     supplier_item_id = sp.id
                     product_id = sp.internal_product_id
-            # Tolerante: si no hay SKU o no matchea, intentar por título (búsqueda simple)
+            # Tolerante: si no hay SKU o no matchea, intentar por tÃ­tulo (bÃºsqueda simple)
             if not supplier_item_id and title and len(title) >= 6:
                 # Buscar candidatos por palabra clave larga para limitar universo
                 try:
@@ -589,7 +622,7 @@ async def import_santaplanta_pdf(
                 ).limit(15)
                 cands = (await db.execute(cand_q)).scalars().all()
                 if cands:
-                    # Elegir el más parecido con difflib, con umbral 0.85 y ambigüedad controlada
+                    # Elegir el mÃ¡s parecido con difflib, con umbral 0.85 y ambigÃ¼edad controlada
                     try:
                         import difflib
                         scored = []
@@ -647,7 +680,7 @@ async def import_santaplanta_pdf(
                 ip=None,
             )
         )
-        # Persistir eventos detallados si el modelo está disponible
+        # Persistir eventos detallados si el modelo estÃ¡ disponible
         try:
             for ev in res.events:
                 db.add(
@@ -664,7 +697,7 @@ async def import_santaplanta_pdf(
             pass
         await db.commit()
         await db.refresh(p)
-        # Calcular totales simples desde líneas
+        # Calcular totales simples desde lÃ­neas
         try:
             sub = float(res.totals.get("subtotal") or 0)
         except Exception:
@@ -674,7 +707,8 @@ async def import_santaplanta_pdf(
         vat = float(p.vat_rate or 0)
         iva = sub * (vat / 100.0)
         total = sub + iva
-        return {
+        
+        response_data = {
             "purchase_id": p.id,
             "status": p.status,
             "filename": file.filename,
@@ -689,16 +723,22 @@ async def import_santaplanta_pdf(
             "unmatched_count": 0,
             "debug": (res.debug if debug_flag else None),
         }
-    except HTTPException:
-        # Re-raise known API errors without logging stack
+        return JSONResponse(content=response_data, headers={"X-Correlation-ID": correlation_id})
+
+    except HTTPException as e:
+        # Re-raise known API errors, asegurando correlation_id en headers
+        cid = locals().get("correlation_id", "unknown")
+        e.headers = e.headers or {}
+        e.headers["X-Correlation-ID"] = cid
         raise
     except Exception as e:
         # Log full context to backend.log to help diagnose
+        cid = locals().get("correlation_id", "unknown")
         try:
-            log.exception("Error importando Santaplanta PDF: supplier_id=%s, filename=%s", supplier_id, getattr(file, "filename", "?"))
+            log.exception("Error importando Santaplanta PDF: supplier_id=%s, filename=%s, correlation_id=%s", supplier_id, getattr(file, "filename", "?"), cid)
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail="No se pudo importar el remito; revisá backend.log para más detalles")
+        raise HTTPException(status_code=500, detail="No se pudo importar el remito; revisÃ¡ backend.log para mÃ¡s detalles", headers={"X-Correlation-ID": cid})
 
 
 @router.get("/{purchase_id}/unmatched/export")
@@ -742,14 +782,14 @@ async def export_unmatched(purchase_id: int, fmt: str = Query("csv"), db: AsyncS
         w.writerows(rows)
         data = sio.getvalue().encode("utf-8")
         return StreamingResponse(BytesIO(data), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=unmatched_{purchase_id}.csv"})
-    return JSONResponse({"detail": "formato inválido"}, status_code=400)
+    return JSONResponse({"detail": "formato invÃ¡lido"}, status_code=400)
 
 
 @router.delete("/{purchase_id}", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def delete_purchase(purchase_id: int, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session)):
-    """Elimina una compra si está en estado seguro (BORRADOR o ANULADA).
+    """Elimina una compra si estÃ¡ en estado seguro (BORRADOR o ANULADA).
 
-    Nota: elimina también líneas y adjuntos (cascade) y borra los archivos del
+    Nota: elimina tambiÃ©n lÃ­neas y adjuntos (cascade) y borra los archivos del
     disco si existen bajo data/purchases/{id}.
     """
     # Eager-load children to support explicit delete across DBs sin cascade
@@ -798,7 +838,7 @@ async def delete_purchase(purchase_id: int, db: AsyncSession = Depends(get_sessi
         # no bloquear por problemas de archivos
         pass
 
-    # Eliminar explícitamente hijos por compatibilidad con motores que no honran ondelete
+    # Eliminar explÃ­citamente hijos por compatibilidad con motores que no honran ondelete
     try:
         for l in list(p.lines or []):
             await db.delete(l)
@@ -863,3 +903,5 @@ async def download_attachment(purchase_id: int, attachment_id: int, db: AsyncSes
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
     headers = {"Content-Disposition": f"inline; filename=\"{att.filename}\""}
     return FileResponse(str(pth), media_type=att.mime or "application/octet-stream", headers=headers)
+
+

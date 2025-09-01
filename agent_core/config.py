@@ -48,6 +48,12 @@ class Settings:
     cookie_domain: str | None = os.getenv("COOKIE_DOMAIN") or None
     allowed_origins: list[str] = field(default_factory=list)
 
+    # Configuracion de importacion de PDFs
+    import_ocr_lang: str = os.getenv("IMPORT_OCR_LANG", "spa+eng")
+    import_ocr_timeout: int = int(os.getenv("IMPORT_OCR_TIMEOUT", "180"))
+    import_pdf_text_min_chars: int = int(os.getenv("IMPORT_PDF_TEXT_MIN_CHARS", "200"))
+    import_allow_empty_draft: bool = os.getenv("IMPORT_ALLOW_EMPTY_DRAFT", "true").lower() == "true"
+
     def __post_init__(self) -> None:
         if not self.db_url:
             raise RuntimeError("DB_URL debe definirse en el entorno")
