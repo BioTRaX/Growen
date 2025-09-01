@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: persona.py
+# NG-HEADER: Ubicación: ai/persona.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Global system prompt persona for the assistant (Argentine Spanish + light sarcasm).
 
 Safety baseline is always respected: never insult or target individuals or groups,

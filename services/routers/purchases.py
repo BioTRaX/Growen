@@ -1,4 +1,8 @@
-﻿"""Compras (purchases) API endpoints.
+# NG-HEADER: Nombre de archivo: purchases.py
+# NG-HEADER: Ubicación: services/routers/purchases.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+"""Compras (purchases) API endpoints.
 
 Estados de compra: BORRADOR -> VALIDADA -> CONFIRMADA -> ANULADA.
 Incluye: crear/editar, validaciÃ³n, confirmaciÃ³n (impacta stock y buy_price),

@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: check-deps.js
+// NG-HEADER: Ubicación: frontend/tools/check-deps.js
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 /* Simple dependency checker for Growen frontend */
 const { execSync } = require('node:child_process');
 const fs = require('node:fs');

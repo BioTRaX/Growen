@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: api.py
+# NG-HEADER: Ubicación: services/api.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Aplicación FastAPI principal del agente."""
 
 # --- Windows psycopg async fix (no-op en otros SO) ---

@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: AuthContext.tsx
+// NG-HEADER: Ubicación: frontend/src/auth/AuthContext.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { createContext, useContext, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import http from '../services/http'

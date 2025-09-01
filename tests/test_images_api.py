@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: test_images_api.py
+# NG-HEADER: Ubicación: tests/test_images_api.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 import io
 import asyncio

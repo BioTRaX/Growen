@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: session.py
+# NG-HEADER: Ubicación: db/session.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Sesión asíncrona para SQLAlchemy."""
 import asyncio
 import os

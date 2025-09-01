@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: ng.py
+# NG-HEADER: Ubicación: cli/ng.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """CLI principal de Growen usando Typer."""
 from __future__ import annotations
 

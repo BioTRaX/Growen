@@ -1,4 +1,8 @@
-﻿import { useEffect, useState } from 'react'
+// NG-HEADER: Nombre de archivo: PdfImportModal.tsx
+// NG-HEADER: Ubicación: frontend/src/components/PdfImportModal.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
+import { useEffect, useState } from 'react'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import { importSantaPlanta } from '../services/purchases'
 import ToastContainer, { showToast } from './Toast'

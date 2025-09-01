@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: openai_provider.py
+# NG-HEADER: Ubicación: ai/providers/openai_provider.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Proveedor remoto OpenAI."""
 from __future__ import annotations
 

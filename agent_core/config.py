@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: config.py
+# NG-HEADER: Ubicación: agent_core/config.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Configuración central del agente."""
 
 from __future__ import annotations

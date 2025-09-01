@@ -1,3 +1,7 @@
+<!-- NG-HEADER: Nombre de archivo: CHANGELOG.md -->
+<!-- NG-HEADER: Ubicación: CHANGELOG.md -->
+<!-- NG-HEADER: Descripción: Pendiente de descripción -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
 ## [Unreleased]

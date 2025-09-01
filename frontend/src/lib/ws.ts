@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: ws.ts
+// NG-HEADER: Ubicación: frontend/src/lib/ws.ts
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 export type WSMessage = { role: string; text: string }
 
 export function createWS(onMessage: (m: WSMessage) => void) {

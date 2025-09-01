@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: Login.tsx
+// NG-HEADER: Ubicación: frontend/src/components/Login.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 

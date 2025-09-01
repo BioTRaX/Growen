@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: AppToolbar.tsx
+// NG-HEADER: Ubicación: frontend/src/components/AppToolbar.tsx
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useAuth } from '../auth/AuthContext'
 import { useNavigate } from 'react-router-dom'
 import { PATHS } from '../routes/paths'
