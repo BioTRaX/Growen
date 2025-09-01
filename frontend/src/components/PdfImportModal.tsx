@@ -29,15 +29,15 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
   if (!open) return null
 
   async function process() {
-    if (!supplierId) { showToast('error', 'ElegÃ­ proveedor'); return }
-    if (!file) { showToast('error', 'AdjuntÃ¡ un PDF'); return }
+    if (!supplierId) { showToast('error', 'Elegí proveedor'); return }
+    if (!file) { showToast('error', 'Adjuntá un PDF'); return }
     setLoading(true)
     setErrorMsg(null); setErrorCid(null); setErrorDetail(null)
     try {
       const res = await importSantaPlanta(Number(supplierId), file, debug, forceOCR)
       const correlationId = res.headers?.['x-correlation-id']
       
-      if (res.status === 200 && res.data.detail?.includes("se creÃ³ un borrador")) {
+      if (res.status === 200 && res.data.detail?.includes("se creó un borrador")) {
         showToast('warning', `${res.data.detail} (ID: ${correlationId || 'N/A'})`)
       } else {
         showToast('success', `Importado, abriendo compra... (ID: ${correlationId || 'N/A'})`)
@@ -91,8 +91,8 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
         {loading && (
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8 }}>
             <div className="panel" style={{ padding: 16 }}>
-              <div style={{ fontWeight: 600 }}>Procesando PDFâ€¦</div>
-              <div className="text-sm" style={{ opacity: 0.8 }}>No cierres esta ventana. Si tarda, activÃ¡ â€œModo debugâ€.</div>
+              <div style={{ fontWeight: 600 }}>Procesando PDF…</div>
+              <div className="text-sm" style={{ opacity: 0.8 }}>No cierres esta ventana. Si tarda, activá “Modo debug”.</div>
             </div>
           </div>
         )}
