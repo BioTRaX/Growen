@@ -99,6 +99,24 @@ SELECT column_name FROM information_schema.columns
   ORDER BY ordinal_position;
 ```
 
+## Compras (BORRADOR → VALIDADA → CONFIRMADA → ANULADA)
+
+- Endpoints: `POST /purchases`, `PUT /purchases/{id}`, `POST /purchases/{id}/validate`, `POST /purchases/{id}/confirm`, `POST /purchases/{id}/cancel`, `GET /purchases`, `GET /purchases/{id}`, `POST /purchases/import/santaplanta`, `GET /purchases/{id}/unmatched/export`.
+- Importación Santa Planta (PDF): parser heurístico que crea una compra en estado BORRADOR, adjunta el PDF y realiza matching preferente por SKU proveedor (fallback por título a futuro).
+- Confirmación: incrementa stock de producto, actualiza `current_purchase_price` del `supplier_product` y registra `price_history` (entity_type `supplier`). Audita la operación.
+- Filtros: proveedor, fecha (rango), estado, depósito, remito y búsqueda por nombre de producto.
+- Export: líneas `SIN_VINCULAR` en CSV o XLSX (si está disponible `openpyxl`).
+- Frontend: `/compras`, `/compras/nueva`, `/compras/:id`; autoguardado cada 30s; atajos Enter/Ctrl+S/Esc; tips y chicanas visibles.
+- Notificaciones opcionales por Telegram en confirmación: variables `PURCHASE_TELEGRAM_TOKEN` y `PURCHASE_TELEGRAM_CHAT_ID`.
+
+Archivo de ejemplo: `samples/santaplanta_compra.csv` (cabeceras: `supplier_name,remito_number,remito_date,supplier_sku,title,qty,unit_cost,line_discount,global_discount,vat_rate,note`).
+
+## Tono argentino + sarcástico (seguro)
+
+- Prompt global: `ai/persona.py` impone estilo rioplatense, directo y con humor sarcástico leve, con salvaguardas (sin insultos ni odio/violencia).
+- Router de IA: `ai/router.py` inyecta `SYSTEM_PROMPT` por defecto para todos los proveedores.
+- Errores del sistema: middleware en `services/api.py` devuelve mensajes de error con tono breve y claro.
+
 #### Problemas comunes
 
 - **Múltiples heads**: ejecutar `python scripts/debug_migrations.py` para identificar las revisiones y crear una migración de *merge* si es necesario.
@@ -147,7 +165,42 @@ npm install
 npm run dev
 ```
 
-En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8000`, evitando errores de CORS. Durante el arranque pueden mostrarse errores de proxy WebSocket si la API aún no está disponible; una vez arriba, la conexión se restablece sola. El chat abre un WebSocket en `/ws` y, si no está disponible, utiliza `POST /chat`, que admite la variante con o sin barra final para evitar redirecciones 307. El servidor envía un ping cada 30 s y corta la sesión tras 60 s sin recibir datos; el frontend ignora esos pings, cierra limpiamente y reintenta con backoff exponencial si la conexión se pierde. Para modificar las URLs se puede crear `frontend/.env.development` con `VITE_WS_URL` y `VITE_API_BASE`.
+En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8000`, evitando errores de CORS. Durante el arranque pueden mostrarse errores de proxy WebSocket si la API aún no está disponible; una vez arriba, la conexión se restablece sola. El chat abre un WebSocket en `/ws` y, si no está disponible, utiliza `POST /chat`, que admite la variante con o sin barra final para evitar redirecciones 307. El servidor envía un ping cada 30 s y corta la sesión tras 60 s sin recibir datos; el frontend ignora esos pings, cierra limpiamente y reintenta con backoff exponencial si la conexión se pierde. Para modificar las URLs se puede crear `frontend/.env.development` con `VITE_WS_URL` y `VITE_API_BASE`.
+
+### Producción: SPA fallback
+
+El backend sirve el build de Vite directamente y aplica un fallback de SPA para que al refrescar rutas del cliente (por ejemplo `/productos` o `/stock`) no se produzca `404`.
+
+- Activos estáticos del bundle: `GET /assets/*` (montados con `StaticFiles`).
+- Rutas API y documentación se registran antes; el fallback no las intercepta.
+- Fallback: cualquier ruta no API ni estática devuelve `index.html`.
+
+Requisitos del build:
+
+- `vite.config` con `base: '/'`.
+- El `index.html` referencia los activos bajo `/assets/`.
+
+Pruebas manuales:
+
+1. Abrir `/productos` y presionar F5: debe renderizar sin `404`.
+2. Abrir `/stock` y presionar F5: debe renderizar sin `404`.
+3. Solicitar `/assets/<archivo>.js` devuelve el asset.
+4. Endpoints como `/products`, `/auth/me`, `/docs` deben seguir funcionando normalmente.
+
+## Catálogo — Edición inline y preferencias
+
+- Edición inline de Precio de venta (canónico) con guardado en `onBlur` y `Esc` para cancelar. Solo `admin` y `colaborador` ven controles de edición.
+- Panel de Comparativa por producto con ofertas de proveedores, ordenadas por menor precio de compra; permite editar precio de compra inline.
+- Preferencias de columnas por usuario (orden, visibilidad, anchos) persistidas en backend. Botón “Diseño” para configurar y “Restaurar diseño” para volver a valores por defecto.
+- Edición masiva de precio de venta con modos `set|inc|dec|inc_pct|dec_pct` (modal). Requiere CSRF.
+
+Endpoints relevantes (prefijo `/products-ex`):
+
+- `PATCH /products/{product_id}/sale-price` (admin, colaborador; CSRF)
+- `PATCH /supplier-items/{supplier_item_id}/buy-price` (admin, colaborador; CSRF)
+- `POST /products/bulk-sale-price` (admin, colaborador; CSRF)
+- `GET /products/{product_id}/offerings`
+- `GET/PUT /users/me/preferences/products-table` (PUT requiere CSRF)
 
 ## Subir listas de precios desde el chat
 
@@ -650,3 +703,13 @@ python -m cli.ng db-init
 - M3: despliegue completo
 
 Contribuciones y feedback son bienvenidos.
+## Importar remitos (Santa Planta)
+
+- Pipeline de parsing con fallback: pdfplumber → camelot → OCR (ocrmypdf) → reintentos.
+- Endpoint: `POST /purchases/import/santaplanta?supplier_id=ID&debug=0|1&force_ocr=0|1`
+- Respuesta: `purchase_id`, `correlation_id`, `parsed.totals` y, con `debug=1`, muestras `debug.samples`.
+
+### Logs de import
+
+- Resumen en `AuditLog(action='purchase_import')` y eventos en `ImportLog` por etapa.
+- UI: botón "Ver logs" abre un drawer con timeline, copiar `correlation_id` y descargar JSON (`GET /purchases/{id}/logs?format=json`).

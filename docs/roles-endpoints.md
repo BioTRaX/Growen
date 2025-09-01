@@ -34,6 +34,12 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /equivalences | Ninguno |
 | POST | /equivalences | colaborador, admin (requiere CSRF) |
 | DELETE | /equivalences/{equivalence_id} | colaborador, admin (requiere CSRF) |
+| PATCH | /products-ex/products/{product_id}/sale-price | colaborador, admin (requiere CSRF) |
+| PATCH | /products-ex/supplier-items/{supplier_item_id}/buy-price | colaborador, admin (requiere CSRF) |
+| POST | /products-ex/products/bulk-sale-price | colaborador, admin (requiere CSRF) |
+| GET | /products-ex/products/{product_id}/offerings | cliente, proveedor, colaborador, admin |
+| GET | /products-ex/users/me/preferences/products-table | cliente, proveedor, colaborador, admin |
+| PUT | /products-ex/users/me/preferences/products-table | cliente, proveedor, colaborador, admin (requiere CSRF) |
 | GET | /suppliers/price-list/template | cliente, proveedor, colaborador, admin |
 | GET | /suppliers/{supplier_id}/price-list/template | cliente, proveedor, colaborador, admin |
 | POST | /suppliers/{supplier_id}/price-list/upload | proveedor, colaborador, admin (requiere CSRF) |

@@ -90,3 +90,9 @@ backup/
 *.bak
 *.old
 *.orig
+
+# Media (archivos subidos y derivados)
+Imagenes/
+
+# Carpeta de desarrollo y pruebas locales
+Devs/

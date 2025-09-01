@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+- ui(compras): dropdown "Cargar compra" con estilos dark consistentes.
+- ui(compras): nuevo PdfImportModal (proveedor obligatorio → subir PDF → procesar) que navega al borrador creado.
+- ui(compras): flujo Manual rehecho: encabezado + grilla de líneas editable (sku prov., título, cantidad, costo unitario, % desc., nota).
+- ui(compras): se eliminó cualquier acción de importar PDF de la vista Manual.
+- feat(compras): guardar como BORRADOR desde la vista Manual (POST /purchases) y actualizaciones posteriores con PUT /purchases/{id}; toasts y validaciones básicas.
 - feat: drag & drop, tema oscuro en buscador y modal de subida más robusto
 - Add: upload UI (+), dry-run viewer, commit
 - Add: productos canónicos y tabla de equivalencias

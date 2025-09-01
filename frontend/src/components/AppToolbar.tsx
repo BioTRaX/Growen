@@ -1,5 +1,6 @@
 import { useAuth } from '../auth/AuthContext'
 import { useNavigate } from 'react-router-dom'
+import { PATHS } from '../routes/paths'
 
 export default function AppToolbar() {
   const { state, logout } = useAuth()
@@ -10,6 +11,8 @@ export default function AppToolbar() {
   }
   const canUpload = ['proveedor', 'colaborador', 'admin'].includes(state.role)
   const canSeeSuppliers = state.role !== 'guest'
+  // Mostrar Compras para cualquier usuario autenticado (no-guest)
+  const canManagePurchases = state.role !== 'guest'
 
   return (
     <div
@@ -31,15 +34,21 @@ export default function AppToolbar() {
         </button>
       )}
       {canSeeSuppliers && (
-        <button className="btn-dark btn-lg" onClick={() => window.dispatchEvent(new Event('open-suppliers'))}>
+        <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.suppliers)}>
           Proveedores
         </button>
       )}
-      <button className="btn-dark btn-lg" onClick={() => window.dispatchEvent(new Event('open-products'))}>
+      <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.products)}>
         Productos
       </button>
       <button className="btn-dark btn-lg" onClick={toggleTheme}>Modo oscuro</button>
-      <button className="btn-dark btn-lg" onClick={() => navigate('/stock')}>Stock</button>
+      <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.stock)}>Stock</button>
+      {canManagePurchases && (
+        <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.purchases)}>Compras</button>
+      )}
+      {['colaborador', 'admin'].includes(state.role) && (
+        <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.imagesAdmin)}>Imágenes productos</button>
+      )}
       <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
         {state.role === 'admin' && (
           <button className="btn-dark btn-lg" onClick={() => navigate('/admin')}>Admin</button>

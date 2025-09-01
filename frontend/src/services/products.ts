@@ -2,6 +2,7 @@ export interface ProductSearchParams {
   q?: string
   supplier_id?: number
   category_id?: number
+  stock?: string
   page?: number
   page_size?: number
 }
@@ -12,6 +13,7 @@ export interface ProductItem {
   supplier: { id: number; slug: string; name: string }
   precio_compra: number | null
   precio_venta: number | null
+  canonical_sale_price?: number | null
   compra_minima: number | null
   category_path: string
   stock: number

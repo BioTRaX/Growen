@@ -1,5 +1,9 @@
+// File consolidated below; removed duplicate earlier implementation
 import { useEffect, useState } from 'react'
-import { CanonicalOffer, listOffersByCanonical } from '../services/canonical'
+import { getProductOfferings, OfferingRow, updateSupplierBuyPrice } from '../services/productsEx'
+import { showToast } from './Toast'
+import { formatARS, parseDecimalInput } from '../lib/format'
+import { useAuth } from '../auth/AuthContext'
 
 interface Props {
   canonicalId: number
@@ -7,13 +11,30 @@ interface Props {
 }
 
 export default function CanonicalOffers({ canonicalId, onClose }: Props) {
-  const [offers, setOffers] = useState<CanonicalOffer[]>([])
+  const { state } = useAuth()
+  const canEdit = state.role === 'admin' || state.role === 'colaborador'
+  const [offers, setOffers] = useState<OfferingRow[]>([])
+  const [editing, setEditing] = useState<number | null>(null)
+  const [value, setValue] = useState('')
 
   useEffect(() => {
-    listOffersByCanonical(canonicalId)
+    getProductOfferings(canonicalId)
       .then(setOffers)
       .catch(() => {})
   }, [canonicalId])
+
+  async function saveBuyPrice(id: number) {
+    const parsed = parseDecimalInput(value)
+    if (parsed == null) return
+    try {
+      const r = await updateSupplierBuyPrice(id, Number(parsed.toFixed(2)))
+      setOffers((prev) => prev.map((o) => (o.supplier_item_id === id ? { ...o, buy_price: r.buy_price ?? null } : o)))
+      setEditing(null)
+      showToast('success', 'Precio de compra actualizado')
+    } catch (e) {
+      showToast('error', 'No se pudo guardar el precio')
+    }
+  }
 
   return (
     <div
@@ -38,18 +59,47 @@ export default function CanonicalOffers({ canonicalId, onClose }: Props) {
           <thead>
             <tr>
               <th>Proveedor</th>
-              <th>Compra</th>
-              <th>Venta</th>
-              <th>Fecha</th>
+              <th>SKU</th>
+              <th className="text-center">Compra</th>
+              <th className="text-center">Fecha</th>
             </tr>
           </thead>
           <tbody>
-            {offers.map((of, idx) => (
-              <tr key={idx} className={of.mejor_precio ? 'best-price' : ''}>
-                <td>{of.supplier.name}</td>
-                <td>{of.precio_compra ?? ''}</td>
-                <td>{of.precio_venta ?? ''}</td>
-                <td>{of.updated_at ? new Date(of.updated_at).toLocaleString() : ''}</td>
+            {offers.map((of) => (
+              <tr key={of.supplier_item_id}>
+                <td>{of.supplier_name}</td>
+                <td>{of.supplier_sku}</td>
+                <td className="text-center">
+                  {canEdit && editing === of.supplier_item_id ? (
+                    <input
+                      autoFocus
+                      value={value}
+                      onChange={(e) => setValue(e.target.value)}
+                      onBlur={() => saveBuyPrice(of.supplier_item_id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') saveBuyPrice(of.supplier_item_id)
+                        if (e.key === 'Escape') setEditing(null)
+                      }}
+                      style={{ width: 100 }}
+                    />
+                  ) : (
+                    <span>
+                      {formatARS(of.buy_price)}
+                      {canEdit && (
+                        <button
+                          style={{ marginLeft: 6 }}
+                          onClick={() => {
+                            setEditing(of.supplier_item_id)
+                            setValue(of.buy_price != null ? String(of.buy_price) : '')
+                          }}
+                        >
+                          ✎
+                        </button>
+                      )}
+                    </span>
+                  )}
+                </td>
+                <td className="text-center">{of.updated_at ? new Date(of.updated_at).toLocaleString() : ''}</td>
               </tr>
             ))}
           </tbody>

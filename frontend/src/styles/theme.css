@@ -1,11 +1,6 @@
 :root {
   --bg: #0f1115;
   --panel: #151821;
-.truncate {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
   --text: #e6e8ee;
   --muted: #9aa3b2;
   --border: #23283a;
@@ -20,8 +15,13 @@
 
   /* Variables de alias para componentes */
   --panel-bg: var(--panel);
-  vertical-align: middle;
   --text-color: var(--text);
+}
+
+.truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 [data-theme="dark"] {
@@ -151,11 +151,49 @@ body {
   color: var(--primary);
 }
 
+/* Generic button baseline to ensure visibility for .btn usages */
+.btn {
+  background: transparent;
+  color: var(--text);
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--primary); color: var(--primary); }
+
+/* Destructive action */
+.btn-danger {
+  border-color: #7f1d1d;
+  color: #fca5a5;
+}
+.btn-danger:hover {
+  border-color: #ef4444;
+  color: #fecaca;
+  box-shadow: 0 0 0 2px rgba(239,68,68,0.2);
+}
+
 /* Large dark buttons akin to admin panel styling */
 .btn-lg {
   padding: 0.75rem 1.25rem;
   font-size: 1rem;
   border-radius: 8px;
+}
+.dropdown-panel {
+  background: var(--panel-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+}
+.dropdown .dropdown-menu {
+  display: none;
+}
+.dropdown:hover .dropdown-menu {
+  display: block;
+}
+.modal-backdrop {
+  backdrop-filter: blur(1px);
 }
 
 .btn-dark {
