@@ -41,6 +41,7 @@ python tools/doctor.py
 ```
 
 O a través del endpoint de la API (disponible solo para administradores en entorno de desarrollo): `GET /admin/import/doctor`.
+- OCR: `ocrmypdf` (requiere Tesseract, Ghostscript y Poppler). TODO: agregar "doctor" para validar instalación.
 
 ## Instalación local
 
@@ -746,3 +747,14 @@ El sistema incluye un pipeline robusto para importar remitos en formato PDF del 
 - **Respuesta**: La respuesta de la API incluye `purchase_id`, un `correlation_id` para seguimiento, y los totales parseados (`parsed.totals`).
 - **Logs de importación**: Cada paso del proceso de importación (ej. "iniciando ocr", "parseando con camelot") se registra en `ImportLog`. El resultado final (éxito o fracaso) se guarda en `AuditLog`.
 - **UI**: Desde la interfaz de compras, un botón "Ver logs" permite abrir un panel con el timeline de eventos, copiar el `correlation_id` y descargar el log completo en formato JSON (`GET /purchases/{id}/logs?format=json`).
+
+## Documentación adicional
+
+- [Importación de PDF](docs/IMPORT_PDF.md)
+- [Crawler de imágenes](docs/IMAGES.md)
+- [Seguridad](docs/SECURITY.md)
+
+## Lineamientos de agentes
+
+Consulta [AGENTS.md](AGENTS.md) para la estructura de prompts, el uso del encabezado NG-HEADER y el checklist de PRs.
+

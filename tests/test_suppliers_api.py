@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: test_suppliers_api.py
+# NG-HEADER: Ubicación: tests/test_suppliers_api.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 import asyncio
 

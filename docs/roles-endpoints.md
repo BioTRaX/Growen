@@ -1,3 +1,7 @@
+<!-- NG-HEADER: Nombre de archivo: roles-endpoints.md -->
+<!-- NG-HEADER: Ubicación: docs/roles-endpoints.md -->
+<!-- NG-HEADER: Descripción: Pendiente de descripción -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Roles por endpoint
 
 Este documento enumera cada endpoint de la API con el método HTTP y los roles requeridos.

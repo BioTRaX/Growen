@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: http.ts
+// NG-HEADER: Ubicación: frontend/src/services/http.ts
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import axios from "axios";
 
 // Compute a single API base bound to the current page hostname to avoid

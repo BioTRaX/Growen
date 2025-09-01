@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: doctor.py
+# NG-HEADER: Ubicación: tools/doctor.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Project doctor: validates env, Python deps, quick syntax, and optional auto-fix.
 
 Run manually:

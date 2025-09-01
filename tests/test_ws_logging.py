@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: test_ws_logging.py
+# NG-HEADER: Ubicación: tests/test_ws_logging.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import logging
 
 from test_ws_chat import client

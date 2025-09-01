@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: useTablePrefs.ts
+// NG-HEADER: Ubicación: frontend/src/lib/useTablePrefs.ts
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getProductsTablePrefs, putProductsTablePrefs, ProductsTablePrefs } from '../services/productsEx'
 

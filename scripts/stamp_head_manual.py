@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: stamp_head_manual.py
+# NG-HEADER: Ubicación: scripts/stamp_head_manual.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv

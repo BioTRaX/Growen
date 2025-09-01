@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: 20250831_purchases_module.py
+# NG-HEADER: Ubicación: db/migrations/versions/20250831_purchases_module.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """purchases module tables
 
 Revision ID: 20250831_purchases_module

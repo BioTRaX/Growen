@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: bus.py
+# NG-HEADER: Ubicación: agent_core/bus.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 """Bus de eventos en memoria."""
 from collections import defaultdict
 from typing import Any, Callable, DefaultDict, List

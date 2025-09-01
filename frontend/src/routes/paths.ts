@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: paths.ts
+// NG-HEADER: Ubicación: frontend/src/routes/paths.ts
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 export const PATHS = {
   home: "/",
   products: "/productos",

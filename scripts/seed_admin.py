@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: seed_admin.py
+# NG-HEADER: Ubicación: scripts/seed_admin.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 from sqlalchemy import create_engine, text
 from passlib.hash import argon2

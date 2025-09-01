@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# NG-HEADER: Nombre de archivo: start.sh
+# NG-HEADER: Ubicación: start.sh
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 set -euo pipefail
 
 # Ir a la raíz del repo

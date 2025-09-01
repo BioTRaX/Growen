@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: db_check.py
+# NG-HEADER: Ubicación: scripts/db_check.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 from agent_core.config import settings
 from sqlalchemy import create_engine, text, inspect

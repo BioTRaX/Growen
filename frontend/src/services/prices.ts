@@ -1,3 +1,7 @@
+// NG-HEADER: Nombre de archivo: prices.ts
+// NG-HEADER: Ubicación: frontend/src/services/prices.ts
+// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Lineamientos: Ver AGENTS.md
 export interface PriceHistoryParams {
   supplier_product_id?: number
   product_id?: number

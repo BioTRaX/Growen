@@ -1,3 +1,7 @@
+# NG-HEADER: Nombre de archivo: util.py
+# NG-HEADER: Ubicación: db/migrations/util.py
+# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
 import sqlalchemy as sa
