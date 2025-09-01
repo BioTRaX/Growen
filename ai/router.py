@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from agent_core.config import Settings
+from .persona import SYSTEM_PROMPT
 from .policy import choose
 from .providers.ollama_provider import OllamaProvider
 from .providers.openai_provider import OpenAIProvider
@@ -34,4 +35,5 @@ class AIRouter:
                 "Proveedor %s no soporta la tarea %s, usando ollama", name, task
             )
             provider = self._providers["ollama"]
-        return "".join(provider.generate(prompt))
+        full_prompt = f"{SYSTEM_PROMPT}\n\n{prompt}"
+        return "".join(provider.generate(full_prompt))

@@ -9,6 +9,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    Time,
     ForeignKey,
     Integer,
     Numeric,
@@ -86,9 +87,108 @@ class Image(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
     url: Mapped[str] = mapped_column(String(500))
+    # Ruta relativa dentro de MEDIA_ROOT para poder mover el root sin reescribir DB
+    path: Mapped[Optional[str]] = mapped_column(String(600), nullable=True)
     sort_order: Mapped[Optional[int]] = mapped_column(Integer)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    alt_text: Mapped[Optional[str]] = mapped_column(String(300))
+    title_text: Mapped[Optional[str]] = mapped_column(String(300))
+    mime: Mapped[Optional[str]] = mapped_column(String(100))
+    bytes: Mapped[Optional[int]] = mapped_column(Integer)
+    width: Mapped[Optional[int]] = mapped_column(Integer)
+    height: Mapped[Optional[int]] = mapped_column(Integer)
+    checksum_sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
 
     product: Mapped["Product"] = relationship(back_populates="images")
+
+
+class ImageVersion(Base):
+    __tablename__ = "image_versions"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('original','bg_removed','watermarked','thumb','card','full')",
+            name="ck_image_versions_kind",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    image_id: Mapped[int] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(20))
+    path: Mapped[str] = mapped_column(String(700))
+    width: Mapped[Optional[int]] = mapped_column(Integer)
+    height: Mapped[Optional[int]] = mapped_column(Integer)
+    hash: Mapped[Optional[str]] = mapped_column(String(64))
+    mime: Mapped[Optional[str]] = mapped_column(String(64))
+    size_bytes: Mapped[Optional[int]] = mapped_column(Integer)
+    source_url: Mapped[Optional[str]] = mapped_column(String(800))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+class ImageReview(Base):
+    __tablename__ = "image_reviews"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','approved','rejected')",
+            name="ck_image_reviews_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    image_id: Mapped[int] = mapped_column(ForeignKey("images.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    reviewed_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    note: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ImageJob(Base):
+    __tablename__ = "image_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('off','on','window')",
+            name="ck_image_jobs_mode",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64))
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
+    mode: Mapped[str] = mapped_column(String(16), default="off")
+    window_start: Mapped[Optional[datetime]] = mapped_column(Time, nullable=True)
+    window_end: Mapped[Optional[datetime]] = mapped_column(Time, nullable=True)
+    retries: Mapped[int] = mapped_column(Integer, default=3)
+    rate_rps: Mapped[Optional[float]] = mapped_column(Float, default=1.0)
+    burst: Mapped[int] = mapped_column(Integer, default=3)
+    log_retention_days: Mapped[int] = mapped_column(Integer, default=90)
+    purge_ttl_days: Mapped[int] = mapped_column(Integer, default=30)
+    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ImageJobLog(Base):
+    __tablename__ = "image_job_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_name: Mapped[str] = mapped_column(String(64))
+    level: Mapped[str] = mapped_column(String(16), default="INFO")
+    message: Mapped[str] = mapped_column(Text)
+    data: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+class ExternalMediaMap(Base):
+    __tablename__ = "external_media_map"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
+    provider: Mapped[str] = mapped_column(String(32))
+    remote_media_id: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
 
 class Category(Base):
@@ -237,6 +337,8 @@ class CanonicalProduct(Base):
     ng_sku: Mapped[Optional[str]] = mapped_column(String(20), unique=True, nullable=True)
     name: Mapped[str] = mapped_column(String(200))
     brand: Mapped[Optional[str]] = mapped_column(String(100))
+    # Precio de venta a nivel canónico
+    sale_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
     specs_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -354,3 +456,129 @@ class Session(Base):
     )
 
     user: Mapped[Optional["User"]] = relationship()
+
+
+class UserPreference(Base):
+    __tablename__ = "user_preferences"
+    __table_args__ = (
+        UniqueConstraint("user_id", "scope", name="ux_user_preferences_user_scope"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    scope: Mapped[str] = mapped_column(String(64))
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PriceHistory(Base):
+    __tablename__ = "price_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # 'canonical' o 'supplier'
+    entity_type: Mapped[str] = mapped_column(String(16))
+    entity_id: Mapped[int] = mapped_column(Integer)
+    price_old: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2))
+    price_new: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2))
+    note: Mapped[Optional[str]] = mapped_column(Text)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    ip: Mapped[Optional[str]] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    action: Mapped[str] = mapped_column(String(32))
+    table: Mapped[str] = mapped_column(String(64))
+    entity_id: Mapped[Optional[int]] = mapped_column(Integer)
+    # Nota: 'metadata' es un nombre reservado en SQLAlchemy; usamos 'meta' como atributo
+    # pero conservamos el nombre de columna 'metadata' a nivel de base de datos.
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, name="metadata")
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    ip: Mapped[Optional[str]] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+# --- Compras (Purchases) ---
+
+class Purchase(Base):
+    __tablename__ = "purchases"
+    __table_args__ = (
+        UniqueConstraint("supplier_id", "remito_number", name="ux_purchases_supplier_remito"),
+        CheckConstraint(
+            "status IN ('BORRADOR','VALIDADA','CONFIRMADA','ANULADA')",
+            name="ck_purchases_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"))
+    remito_number: Mapped[str] = mapped_column(String(64))
+    remito_date: Mapped[date] = mapped_column(Date)
+    depot_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="BORRADOR")
+    global_discount: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
+    vat_rate: Mapped[Optional[Numeric]] = mapped_column(Numeric(5, 2), default=0)
+    note: Mapped[Optional[str]] = mapped_column(Text)
+    created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    supplier: Mapped["Supplier"] = relationship()
+    lines: Mapped[list["PurchaseLine"]] = relationship(back_populates="purchase")
+    attachments: Mapped[list["PurchaseAttachment"]] = relationship(back_populates="purchase")
+
+
+class PurchaseLine(Base):
+    __tablename__ = "purchase_lines"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('OK','SIN_VINCULAR','PENDIENTE_CREACION')",
+            name="ck_purchase_lines_state",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    purchase_id: Mapped[int] = mapped_column(ForeignKey("purchases.id", ondelete="CASCADE"))
+    supplier_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("supplier_products.id"), nullable=True)
+    product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id"), nullable=True)
+    supplier_sku: Mapped[Optional[str]] = mapped_column(String(120))
+    title: Mapped[str] = mapped_column(String(300))
+    qty: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    line_discount: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
+    state: Mapped[str] = mapped_column(String(24), default="OK")
+    note: Mapped[Optional[str]] = mapped_column(Text)
+
+    purchase: Mapped["Purchase"] = relationship(back_populates="lines")
+    supplier_item: Mapped[Optional["SupplierProduct"]] = relationship()
+    product: Mapped[Optional["Product"]] = relationship()
+
+
+class PurchaseAttachment(Base):
+    __tablename__ = "purchase_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    purchase_id: Mapped[int] = mapped_column(ForeignKey("purchases.id", ondelete="CASCADE"))
+    filename: Mapped[str] = mapped_column(String(255))
+    mime: Mapped[Optional[str]] = mapped_column(String(100))
+    size: Mapped[Optional[int]] = mapped_column(Integer)
+    path: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+    purchase: Mapped["Purchase"] = relationship(back_populates="attachments")
+
+
+class ImportLog(Base):
+    __tablename__ = "import_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    purchase_id: Mapped[int] = mapped_column(ForeignKey("purchases.id", ondelete="CASCADE"))
+    correlation_id: Mapped[str] = mapped_column(String(64))
+    level: Mapped[str] = mapped_column(String(16), default="INFO")
+    stage: Mapped[str] = mapped_column(String(64))
+    event: Mapped[str] = mapped_column(String(64))
+    details: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)

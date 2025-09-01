@@ -18,7 +18,9 @@ from db.models import (
     SupplierPriceHistory,
     SupplierProduct,
     Product,
+    Image,
     ProductEquivalence,
+    CanonicalProduct,
 )
 from db.session import get_session
 from services.auth import require_csrf, require_roles
@@ -343,6 +345,7 @@ async def list_products(
     supplier_id: Optional[int] = None,
     category_id: Optional[int] = None,
     q: Optional[str] = None,
+    stock: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
     sort_by: str = "updated_at",
@@ -370,12 +373,14 @@ async def list_products(
     p = Product
     s = Supplier
     eq = ProductEquivalence
+    cp = CanonicalProduct
 
     stmt = (
-        select(sp, p, s, eq)
+        select(sp, p, s, eq, cp)
         .join(s, sp.supplier_id == s.id)
         .join(p, sp.internal_product_id == p.id)
         .outerjoin(eq, eq.supplier_product_id == sp.id)
+        .outerjoin(cp, cp.id == eq.canonical_product_id)
     )
 
     if supplier_id is not None:
@@ -386,6 +391,19 @@ async def list_products(
         stmt = stmt.where(
             or_(p.title.ilike(f"%{q}%"), sp.title.ilike(f"%{q}%"))
         )
+    # Stock filter: 'gt:0' or 'eq:0'
+    if stock:
+        try:
+            op, val = stock.split(":", 1)
+            val_i = int(val)
+        except Exception:
+            raise HTTPException(status_code=400, detail="stock inválido (use gt:0 o eq:0)")
+        if op == "gt":
+            stmt = stmt.where(p.stock > val_i)
+        elif op == "eq":
+            stmt = stmt.where(p.stock == val_i)
+        else:
+            raise HTTPException(status_code=400, detail="stock inválido (op debe ser gt o eq)")
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = await session.scalar(count_stmt) or 0
@@ -408,7 +426,7 @@ async def list_products(
     rows = result.all()
 
     items = []
-    for sp_obj, p_obj, s_obj, eq_obj in rows:
+    for sp_obj, p_obj, s_obj, eq_obj, cp_obj in rows:
         cat_path = await _category_path(session, p_obj.category_id)
         items.append(
             {
@@ -434,6 +452,7 @@ async def list_products(
                 if sp_obj.last_seen_at
                 else None,
                 "canonical_product_id": eq_obj.canonical_product_id if eq_obj else None,
+                "canonical_sale_price": float(cp_obj.sale_price) if (cp_obj and cp_obj.sale_price is not None) else None,
             }
         )
 
@@ -466,6 +485,67 @@ async def update_product_stock(
     prod.stock = payload.stock
     await session.commit()
     return {"product_id": product_id, "stock": prod.stock}
+
+
+# ------------------------------ Producto por id ------------------------------
+
+
+@router.get(
+    "/products/{product_id}",
+    dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))],
+)
+async def get_product(product_id: int, session: AsyncSession = Depends(get_session)):
+    prod = await session.get(Product, product_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    imgs = (
+        await session.execute(
+            select(Image)
+            .where(Image.product_id == product_id, Image.active == True)
+            .order_by(Image.sort_order.asc().nulls_last(), Image.id.asc())
+        )
+    ).scalars().all()
+    cat_path = await _category_path(session, prod.category_id)
+    return {
+        "id": prod.id,
+        "title": prod.title,
+        "slug": prod.slug,
+        "stock": prod.stock,
+        "sku_root": prod.sku_root,
+        "category_path": cat_path,
+        "description_html": prod.description_html,
+        "images": [
+            {
+                "id": im.id,
+                "url": im.url,
+                "alt_text": im.alt_text,
+                "title_text": im.title_text,
+                "is_primary": im.is_primary,
+                "locked": im.locked,
+                "active": im.active,
+            }
+            for im in imgs
+        ],
+    }
+
+
+class ProductUpdate(BaseModel):
+    description_html: str | None = None
+
+
+@router.patch(
+    "/products/{product_id}",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncSession = Depends(get_session)) -> dict:
+    prod = await session.get(Product, product_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    data = payload.model_dump(exclude_none=True)
+    if "description_html" in data:
+        prod.description_html = data["description_html"]
+    await session.commit()
+    return {"status": "ok"}
 
 
 # --------------------------- Historial de precios --------------------------

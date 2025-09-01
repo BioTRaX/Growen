@@ -2,6 +2,8 @@
 import asyncio
 import os
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from typing import AsyncGenerator
+from sqlalchemy.pool import StaticPool
 from agent_core.config import settings
 
 # Pytest con ``pytest-asyncio`` en modo estricto remueve el loop por defecto y
@@ -26,12 +28,41 @@ asyncio.get_event_loop = _safe_get_event_loop
 # ``DEBUG_SQL=1`` activa el modo ``echo`` para ver las consultas generadas y
 # facilitar la depuración de errores relacionados a la base de datos.
 ECHO = os.getenv("DEBUG_SQL", "0") == "1"
-engine = create_async_engine(
-    settings.db_url, echo=ECHO, pool_pre_ping=True, future=True
-)
+
+# Soporte especial para SQLite en memoria durante tests: un solo pool/conn compartido
+db_url = settings.db_url
+kwargs: dict = {"echo": ECHO, "pool_pre_ping": True, "future": True}
+if db_url.startswith("sqlite+") and ":memory:" in db_url:
+    # Usar una DB en memoria compartida y con nombre para múltiples conexiones
+    # Referencia: https://www.sqlite.org/inmemorydb.html (URI mode)
+    db_url = "sqlite+aiosqlite:///file:memdb1?mode=memory&cache=shared"
+    kwargs.update({"connect_args": {"uri": True}, "poolclass": StaticPool})
+
+engine = create_async_engine(db_url, **kwargs)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
-async def get_session() -> AsyncSession:
+_schema_initialized = False
+
+async def _ensure_schema_if_memory() -> None:
+    global _schema_initialized
+    if _schema_initialized:
+        return
+    try:
+        url = str(engine.url)
+        if url.startswith("sqlite+") and (":memory:" in url or "mode=memory" in url):
+            # Import models so metadata is populated
+            import db.models  # noqa: F401
+            from db.base import Base  # local import to avoid cycles
+            async with engine.begin() as conn:
+                # Asegurar una base limpia por proceso de test
+                await conn.run_sync(Base.metadata.drop_all)
+                await conn.run_sync(Base.metadata.create_all)
+        _schema_initialized = True
+    except Exception:
+        _schema_initialized = True
+
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    await _ensure_schema_if_memory()
     async with SessionLocal() as session:
         yield session
 

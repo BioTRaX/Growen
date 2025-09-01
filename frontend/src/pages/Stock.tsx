@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import { useNavigate } from 'react-router-dom'
+import { PATHS } from '../routes/paths'
 import { listCategories, Category } from '../services/categories'
 import { searchProducts, ProductItem, updateStock } from '../services/products'
+import { pushTNBulk } from '../services/images'
 
 export default function Stock() {
   const navigate = useNavigate()
@@ -18,6 +20,8 @@ export default function Stock() {
   const [loading, setLoading] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
   const [stockVal, setStockVal] = useState('')
+  const [tab, setTab] = useState<'gt' | 'eq'>('gt')
+  const [pushing, setPushing] = useState(false)
 
   useEffect(() => {
     listSuppliers().then(setSuppliers).catch(() => {})
@@ -33,6 +37,7 @@ export default function Stock() {
         category_id: categoryId ? Number(categoryId) : undefined,
         page,
         page_size: pageSize,
+        stock: tab === 'gt' ? 'gt:0' : 'eq:0',
       })
         .then((r) => {
           setItems(page === 1 ? r.items : [...items, ...r.items])
@@ -41,7 +46,7 @@ export default function Stock() {
         .finally(() => setLoading(false))
     }, 300)
     return () => clearTimeout(t)
-  }, [q, supplierId, categoryId, page])
+  }, [q, supplierId, categoryId, page, tab])
 
   function resetAndSearch() {
     setPage(1)
@@ -60,7 +65,15 @@ export default function Stock() {
     <div className="panel p-4" style={{ margin: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
   <h2 style={{ marginTop: 0, marginBottom: 8, flex: 1 }}>Stock</h2>
-  <button className="btn-dark btn-lg" onClick={() => navigate(-1)}>Volver</button>
+  <div style={{ display: 'flex', gap: 8 }}>
+  <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.purchases)}>Compras</button>
+    <button className="btn" disabled={pushing || !items.length} onClick={async () => { setPushing(true); try { await pushTNBulk(items.map((i) => i.product_id)); alert('Push Tiendanube (stub) completado'); } finally { setPushing(false) } }}>Enviar imágenes a Tiendanube</button>
+  <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.home)}>Volver</button>
+  </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+        <button className={"btn" + (tab === 'gt' ? ' btn-dark' : '')} onClick={() => { setTab('gt'); resetAndSearch() }}>Con stock</button>
+        <button className={"btn" + (tab === 'eq' ? ' btn-dark' : '')} onClick={() => { setTab('eq'); resetAndSearch() }}>Sin stock</button>
       </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
         <input
@@ -98,7 +111,9 @@ export default function Stock() {
         <tbody>
           {items.map((it) => (
             <tr key={it.product_id}>
-      <td style={{ textAlign: 'left' }}>{it.name}</td>
+      <td style={{ textAlign: 'left' }}>
+        <a className="link" href={`/productos/${it.product_id}`}>{it.name}</a>
+      </td>
       <td style={{ textAlign: 'left' }}>{it.supplier.name}</td>
       <td className="text-center">{it.precio_venta ?? ''}</td>
       <td className="text-center">{it.precio_compra ?? ''}</td>

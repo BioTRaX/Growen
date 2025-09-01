@@ -1,21 +1,28 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// Read from env var if present (set via cross-env or shell), else fallback
+const p = Number(process.env?.VITE_PORT ?? NaN)
+const port = Number.isFinite(p) ? p : 5175
+
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: '127.0.0.1',
+    port,
+    hmr: { host: '127.0.0.1', protocol: 'ws', port },
     proxy: {
       '/ws': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         ws: true,
         changeOrigin: true,
       },
       '/chat': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
       '/actions': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     }
