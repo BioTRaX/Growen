@@ -151,6 +151,39 @@ async def create_supplier(
     }
 
 
+@router.get(
+    "/suppliers/{supplier_id}/items",
+    dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))],
+)
+async def supplier_items_lookup(
+    supplier_id: int,
+    sku_like: Optional[str] = Query(None, min_length=1),
+    q: Optional[str] = Query(None),
+    limit: int = Query(10, ge=1, le=50),
+    session: AsyncSession = Depends(get_session),
+) -> List[dict]:
+    """Autocomplete de ítems del proveedor por SKU (supplier_product_id) o título.
+
+    - Retorna hasta `limit` resultados con `id`, `supplier_product_id` y `title`.
+    """
+    stmt = select(SupplierProduct).where(SupplierProduct.supplier_id == supplier_id)
+    if sku_like:
+        stmt = stmt.where(SupplierProduct.supplier_product_id.ilike(f"%{sku_like}%"))
+    if q:
+        stmt = stmt.where(SupplierProduct.title.ilike(f"%{q}%"))
+    stmt = stmt.limit(limit)
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        {
+            "id": r.id,
+            "supplier_product_id": r.supplier_product_id,
+            "title": r.title,
+            "product_id": r.internal_product_id,
+        }
+        for r in rows
+    ]
+
+
 @router.patch(
     "/suppliers/{supplier_id}",
     dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],

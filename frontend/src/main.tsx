@@ -6,6 +6,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles/theme.css";
+import "./styles/autocomplete.css";
 
 // Ajusta el tema inicial según `prefers-color-scheme`.
 const rootEl = document.documentElement;

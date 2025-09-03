@@ -35,16 +35,31 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
     setErrorMsg(null); setErrorCid(null); setErrorDetail(null)
     try {
       const res = await importSantaPlanta(Number(supplierId), file, debug, forceOCR)
-      const correlationId = res.headers?.['x-correlation-id']
-      
-      if (res.status === 200 && res.data.detail?.includes("se creó un borrador")) {
-        showToast('warning', `${res.data.detail} (ID: ${correlationId || 'N/A'})`)
+
+  const correlationId = (res as any).correlation_id || (res as any).correlationId || null
+      // Defensive extraction: some APIs may return `purchase_id` or `id`
+      let purchaseId: number | null = null
+  if (typeof (res as any).purchase_id !== 'undefined') purchaseId = Number((res as any).purchase_id)
+  else if (typeof (res as any).id !== 'undefined') purchaseId = Number((res as any).id)
+  else if ((res as any)?.parsed?.purchase_id) purchaseId = Number((res as any).parsed.purchase_id)
+
+      if (Number.isFinite(purchaseId)) {
+        showToast('success', `Importado, abriendo compra... (correlation: ${correlationId || 'N/A'})`)
+        try {
+          onSuccess(purchaseId as number)
+        } catch (err) {
+          // Ensure modal still closes if parent onSuccess throws
+          console.error('onSuccess handler threw', err)
+        }
+        onClose()
       } else {
-        showToast('success', `Importado, abriendo compra... (ID: ${correlationId || 'N/A'})`)
+        // No valid id returned — show useful debug info and keep modal open so user can act
+        showToast('error', `Import realizado pero no se devolvió purchase_id. Ver logs (id: ${correlationId || 'N/A'})`)
+        setErrorMsg('Import realizado pero el servidor no devolvió el ID de la compra.')
+        setErrorCid(correlationId)
+        setErrorDetail(res)
+        // keep modal open so user can inspect
       }
-      
-      onClose()
-      onSuccess((res.data as any).purchase_id || (res.data as any).id)
 
     } catch (e: any) {
       const detail = e?.response?.data
