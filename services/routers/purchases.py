@@ -48,6 +48,28 @@ from agent_core.config import settings
 router = APIRouter(prefix="/purchases", tags=["purchases"]) 
 
 
+def _sanitize_for_json(obj):
+    """Recursively convert Decimals and datetimes to JSON-serializable types.
+
+    Leaves other primitives intact. Used for AuditLog.meta and ImportLog.details.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, Decimal):
+        try:
+            return float(obj)
+        except Exception:
+            return str(obj)
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    # basic types (int, float, str, bool)
+    return obj
+
+
 @router.post("", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def create_purchase(payload: dict, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session)):
     supplier_id = payload.get("supplier_id")
@@ -475,7 +497,7 @@ async def import_santaplanta_pdf(
             remito_dt = date.today()
 
         # --- PolÃ­tica de BORRADOR vacÃ­o ---
-        ALLOW_EMPTY = os.getenv("IMPORT_ALLOW_EMPTY_DRAFT","true").lower() in ("1","true","yes")
+        ALLOW_EMPTY = settings.import_allow_empty_draft
         if not res.lines:
             if ALLOW_EMPTY:
                 # Crear compra vacía (BORRADOR), adjuntar PDF y devolver 200
@@ -488,15 +510,21 @@ async def import_santaplanta_pdf(
                 with open(pdf_path, "wb") as fh:
                     fh.write(content)
                 db.add(PurchaseAttachment(purchase_id=p.id, filename=file.filename, mime=file.content_type, size=len(content), path=str(pdf_path)))
-                db.add(AuditLog(action="purchase_import", table="purchases", entity_id=p.id, meta={
+                try:
+                    samples_empty = (res.debug.get("samples") if isinstance(res.debug, dict) else None)
+                except Exception:
+                    samples_empty = None
+                meta_obj = {
                     "correlation_id": correlation_id,
                     "filename": file.filename,
                     "sha256": sha256,
                     "remito_number": remito_number,
                     "remito_date": remito_dt.isoformat(),
                     "lines_detected": 0,
-                    "note": "empty_draft_allowed"
-                }))
+                    "note": "empty_draft_allowed",
+                    "samples": samples_empty,
+                }
+                db.add(AuditLog(action="purchase_import", table="purchases", entity_id=p.id, meta=_sanitize_for_json(meta_obj)))
                 await db.commit()
                 await db.refresh(p)
                 return {
@@ -614,32 +642,53 @@ async def import_santaplanta_pdf(
                     supplier_item_id = sp.id
                     product_id = sp.internal_product_id
             # Tolerante: si no hay SKU o no matchea, intentar por tÃ­tulo (bÃºsqueda simple)
-            if not supplier_item_id and title and len(title) >= 6:
-                # Buscar candidatos por palabra clave larga para limitar universo
+            if not supplier_item_id and title and len(title) >= 4:
+                # Usar rapidfuzz para encontrar el mejor match
                 try:
-                    key = max((w for w in re.split(r"\W+", title) if len(w) >= 5), key=len)
-                except ValueError:
-                    key = title.split(" ")[0]
-                cand_q = select(SupplierProduct).where(
-                    SupplierProduct.supplier_id==supplier_id,
-                    SupplierProduct.title.ilike(f"%{key}%")
-                ).limit(15)
-                cands = (await db.execute(cand_q)).scalars().all()
-                if cands:
-                    # Elegir el mÃ¡s parecido con difflib, con umbral 0.85 y ambigÃ¼edad controlada
-                    try:
-                        import difflib
-                        scored = []
-                        for c in cands:
-                            r = difflib.SequenceMatcher(None, (c.title or "").lower(), title.lower()).ratio()
-                            scored.append((r, c))
-                        scored.sort(reverse=True, key=lambda x: x[0])
-                        if scored and scored[0][0] >= 0.85:
-                            if len(scored) == 1 or (scored[0][0] - scored[1][0]) >= 0.05:
-                                supplier_item_id = scored[0][1].id
-                                product_id = scored[0][1].internal_product_id
-                    except Exception:
-                        pass
+                    from rapidfuzz import process, fuzz
+                    
+                    # 1. Buscar en supplier_products del proveedor
+                    sp_query = select(SupplierProduct).where(SupplierProduct.supplier_id == supplier_id)
+                    all_supplier_products = (await db.execute(sp_query)).scalars().all()
+                    
+                    choices = {sp.id: (sp.title or "") for sp in all_supplier_products}
+                    best_match = process.extractOne(title, choices, scorer=fuzz.WRatio, score_cutoff=85)
+
+                    if best_match:
+                        # best_match es (content, score, key) -> ('texto', 95.0, 123)
+                        sp_id = best_match[2]
+                        sp = await db.get(SupplierProduct, sp_id)
+                        if sp:
+                            supplier_item_id = sp.id
+                            product_id = sp.internal_product_id
+                    
+                    # 2. Si no, buscar en canónicos (como fallback)
+                    if not supplier_item_id:
+                        from db.models import CanonicalProduct
+                        cp_query = select(CanonicalProduct)
+                        all_canonicals = (await db.execute(cp_query)).scalars().all()
+                        
+                        choices_cp = {cp.id: (cp.name or "") for cp in all_canonicals}
+                        best_match_cp = process.extractOne(title, choices_cp, scorer=fuzz.WRatio, score_cutoff=87)
+                        
+                        if best_match_cp:
+                            # Aquí no seteamos supplier_item_id, solo product_id si encontramos un canónico
+                            # La vinculación real se haría en la UI o un paso posterior
+                            pass
+
+                except ImportError:
+                    # Fallback a lógica simple si rapidfuzz no está
+                    key = max((w for w in re.split(r"\W+", title) if len(w) >= 5), key=len, default=title.split(" ")[0])
+                    cand_q = select(SupplierProduct).where(
+                        SupplierProduct.supplier_id==supplier_id,
+                        SupplierProduct.title.ilike(f"%{key}%")
+                    ).limit(1)
+                    sp = (await db.execute(cand_q)).scalar_one_or_none()
+                    if sp:
+                        supplier_item_id = sp.id
+                        product_id = sp.internal_product_id
+                except Exception:
+                    pass
             state = "OK" if (supplier_item_id or product_id) else "SIN_VINCULAR"
             db.add(PurchaseLine(
                 purchase_id=p.id,
@@ -655,31 +704,35 @@ async def import_santaplanta_pdf(
 
         # Persistir meta resumen y log con correlation_id
         try:
-            setattr(p, "meta", {
+            setattr(p, "meta", _sanitize_for_json({
                 "correlation_id": correlation_id,
                 "filename": file.filename,
                 "sha256": sha256,
                 "remito_number": remito_number,
                 "remito_date": remito_dt.isoformat(),
                 "lines_detected": len(lines),
-            })
+            }))
         except Exception:
             pass
-        # Log de import con resumen, correlation_id y muestras
+        # Log de import con resumen, correlation_id y muestras (si están disponibles)
+        try:
+            samples = (res.debug.get("samples") if isinstance(res.debug, dict) else None)
+        except Exception:
+            samples = None
         db.add(
             AuditLog(
                 action="purchase_import",
                 table="purchases",
                 entity_id=p.id,
-                meta={
+                meta=_sanitize_for_json({
                     "correlation_id": correlation_id,
                     "filename": file.filename,
                     "sha256": sha256,
                     "remito_number": remito_number,
                     "remito_date": remito_dt.isoformat(),
                     "lines_detected": len(lines),
-                    "samples": (res.debug.get("samples") if debug_flag else None),
-                },
+                    "samples": samples,
+                }),
                 user_id=None,
                 ip=None,
             )
@@ -687,6 +740,10 @@ async def import_santaplanta_pdf(
         # Persistir eventos detallados si el modelo estÃ¡ disponible
         try:
             for ev in res.events:
+                try:
+                    details = ev.get("details") or {}
+                except Exception:
+                    details = {}
                 db.add(
                     ImportLog(
                         purchase_id=p.id,
@@ -694,7 +751,7 @@ async def import_santaplanta_pdf(
                         level=str(ev.get("level") or "INFO"),
                         stage=str(ev.get("stage") or ""),
                         event=str(ev.get("event") or ""),
-                        details=ev.get("details") or {},
+                        details=_sanitize_for_json(details),
                     )
                 )
         except Exception:

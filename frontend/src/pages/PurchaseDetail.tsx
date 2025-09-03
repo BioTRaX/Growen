@@ -7,7 +7,15 @@ import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom'
 import { PATHS } from '../routes/paths'
 import AppToolbar from '../components/AppToolbar'
 import ToastContainer, { showToast } from '../components/Toast'
-import { getPurchase, updatePurchase, validatePurchase, confirmPurchase, cancelPurchase, exportUnmatched, PurchaseLine, deletePurchase, getPurchaseLogs } from '../services/purchases'
+import { getPurchase, updatePurchase, validatePurchase, confirmPurchase, cancelPurchase, exportUnmatched, PurchaseLine, deletePurchase, getPurchaseLogs, searchSupplierProducts } from '../services/purchases'
+
+type SuggestionResult = {
+  id: number
+  supplier_product_id: string
+  title: string
+  product_id: number
+}
+
 
 export default function PurchaseDetail() {
   const nav = useNavigate()
@@ -28,16 +36,35 @@ export default function PurchaseDetail() {
   const dirty = useRef(false)
   const timer = useRef<number | null>(null)
   const [searchParams] = useSearchParams()
+  const [activeSuggestion, setActiveSuggestion] = useState<{ lineIdx: number; results: SuggestionResult[] } | null>(null)
+  const suggestionTimeout = useRef<number | null>(null)
 
   const addLine = useCallback(() => {
     setLines((prev) => [...prev, { title: '', supplier_sku: '', qty: 1, unit_cost: 0, line_discount: 0 }])
   }, [])
 
-  const onKey = useCallback((e: KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save() }
-  if (e.key === 'Escape') { e.preventDefault(); nav(PATHS.purchases) }
-    if (e.key === 'Enter') { e.preventDefault(); addLine() }
-  }, [nav, addLine])
+  const handleSkuChange = (lineIdx: number, sku: string) => {
+    setLines(prev => prev.map((p, i) => i === lineIdx ? { ...p, supplier_sku: sku } : p))
+    if (suggestionTimeout.current) clearTimeout(suggestionTimeout.current)
+    if (sku.length < 3) {
+      setActiveSuggestion({ lineIdx, results: [] })
+      return
+    }
+    suggestionTimeout.current = window.setTimeout(async () => {
+      if (!data?.supplier_id) return
+      try {
+        const results = await searchSupplierProducts(data.supplier_id, sku)
+        setActiveSuggestion({ lineIdx, results })
+      } catch {
+        setActiveSuggestion({ lineIdx, results: [] })
+      }
+    }, 300)
+  }
+
+  const selectSuggestion = (lineIdx: number, item: SuggestionResult) => {
+    setLines(prev => prev.map((p, i) => i === lineIdx ? { ...p, supplier_sku: item.supplier_product_id, title: item.title, supplier_item_id: item.id, product_id: item.product_id } : p))
+    setActiveSuggestion(null)
+  }
 
   const save = useCallback(async () => {
     if (!dirty.current || !pid) return
@@ -60,6 +87,12 @@ export default function PurchaseDetail() {
       setSaving(false)
     }
   }, [pid, data, lines])
+
+  const onKey = useCallback((e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save() }
+    if (e.key === 'Escape') { e.preventDefault(); nav(PATHS.purchases) }
+    if (e.key === 'Enter') { e.preventDefault(); addLine() }
+  }, [nav, addLine, save])
 
   useEffect(() => {
     (async () => {
@@ -178,8 +211,8 @@ export default function PurchaseDetail() {
             <button
               className="btn-primary btn-lg"
               onClick={doConfirm}
-              disabled={data?.status === 'CONFIRMADA' || (lines?.length || 0) === 0}
-              title={(lines?.length || 0) === 0 ? 'No hay líneas importadas' : ''}
+              disabled={data?.status === 'CONFIRMADA' || (lines?.length || 0) === 0 || (totals?.total || 0) === 0}
+              title={(lines?.length || 0) === 0 ? 'No hay líneas importadas' : ((totals?.total || 0) === 0 ? 'Total de la compra es 0' : '')}
             >
               Confirmar
             </button>
@@ -236,7 +269,24 @@ export default function PurchaseDetail() {
           <tbody>
             {lines.map((ln, idx) => (
               <tr key={idx}>
-                <td><input className="input" value={ln.supplier_sku || ''} onChange={(e) => setLines(prev => prev.map((p, i) => i === idx ? { ...p, supplier_sku: e.target.value } : p))} /></td>
+                <td style={{ position: 'relative' }}>
+                  <input
+                    className="input"
+                    value={ln.supplier_sku || ''}
+                    onChange={(e) => handleSkuChange(idx, e.target.value)}
+                    onFocus={() => setActiveSuggestion({ lineIdx: idx, results: [] })}
+                    onBlur={() => setTimeout(() => setActiveSuggestion(null), 200)}
+                  />
+                  {activeSuggestion?.lineIdx === idx && activeSuggestion.results.length > 0 && (
+                    <div className="autocomplete-suggestions">
+                      {activeSuggestion.results.map((r) => (
+                        <div key={r.id} onMouseDown={() => selectSuggestion(idx, r)}>
+                          {r.supplier_product_id} - {r.title}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </td>
                 <td><input className="input w-full" value={ln.title || ''} onChange={(e) => setLines(prev => prev.map((p, i) => i === idx ? { ...p, title: e.target.value } : p))} /></td>
                 <td className="text-center"><input className="input" type="number" step={0.01} value={ln.qty || 0} onChange={(e) => setLines(prev => prev.map((p, i) => i === idx ? { ...p, qty: Number(e.target.value) } : p))} style={{ width: 90 }} /></td>
                 <td className="text-center"><input className="input" type="number" step={0.01} value={ln.unit_cost || 0} onChange={(e) => setLines(prev => prev.map((p, i) => i === idx ? { ...p, unit_cost: Number(e.target.value) } : p))} style={{ width: 110 }} /></td>

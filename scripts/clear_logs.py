@@ -1,3 +1,38 @@
+"""Rotate/clear backend.log safely on Windows when file may be locked.
+
+Usage: python scripts/clear_logs.py
+
+Behavior:
+ - Try to rename logs/backend.log to logs/backend.log.YYYYmmddHHMMSS.bak
+ - If rename fails (file locked), create logs/backend.log.cleared marker and print instructions
+"""
+from pathlib import Path
+from datetime import datetime
+import os
+
+
+def main():
+    p = Path('logs') / 'backend.log'
+    if not p.exists():
+        print(f"Log file not found: {p}")
+        return
+    ts = datetime.now().strftime('%Y%m%d%H%M%S')
+    dest = p.with_name(p.name + f'.{ts}.bak')
+    try:
+        os.replace(str(p), str(dest))
+        # create an empty new log so logger can reopen (may require server restart)
+        p.write_text('')
+        print(f"Rotated log to {dest} and created empty {p}")
+    except Exception as e:
+        # Likely locked by another process (uvicorn). Create a marker file instead.
+        marker = p.with_name(p.name + '.cleared')
+        marker.write_text(f'clear requested at {ts}\nerror: {e}')
+        print(f"Could not rotate log file (likely locked). Created marker {marker}.")
+        print("To fully clear the log, restart the server and remove/rename the original log file.")
+
+
+if __name__ == '__main__':
+    main()
 # NG-HEADER: Nombre de archivo: clear_logs.py
 # NG-HEADER: Ubicación: scripts/clear_logs.py
 # NG-HEADER: Descripción: Pendiente de descripción

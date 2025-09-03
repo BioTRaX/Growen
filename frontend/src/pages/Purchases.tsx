@@ -144,7 +144,17 @@ export default function Purchases() {
       </div>
       <ToastContainer />
 
-  <PdfImportModal open={openPdf} onClose={() => setOpenPdf(false)} onSuccess={(id) => setTimeout(() => nav(`/compras/${id}?logs=1`), 300)} />
+  <PdfImportModal
+    open={openPdf}
+    onClose={() => setOpenPdf(false)}
+    onSuccess={(id) => {
+      if (Number.isFinite(Number(id))) {
+        nav(`/compras/${Number(id)}?logs=1`)
+      } else {
+        console.warn('Invalid purchase id from import:', id)
+      }
+    }}
+  />
     </>
   )
 }

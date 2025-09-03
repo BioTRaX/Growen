@@ -93,3 +93,8 @@ export async function deletePurchase(id: number) {
   return r.data as { status: string }
 }
 
+export async function searchSupplierProducts(supplierId: number, sku: string) {
+  const r = await http.get(`/suppliers/${supplierId}/items`, { params: { sku_like: sku } })
+  return r.data as { id: number; supplier_product_id: string; title: string; product_id: number }[]
+}
+

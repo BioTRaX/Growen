@@ -2,12 +2,13 @@
 // NG-HEADER: Ubicación: frontend/vite.config.ts
 // NG-HEADER: Descripción: Pendiente de descripción
 // NG-HEADER: Lineamientos: Ver AGENTS.md
+/// <reference types="node" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // Read from env var if present (set via cross-env or shell), else fallback
-const p = Number(process.env?.VITE_PORT ?? NaN)
-const port = Number.isFinite(p) ? p : 5175
+const p = Number(process?.env?.VITE_PORT ?? NaN)
+const port = (Number as any).isFinite ? (Number as any).isFinite(p) ? p : 5175 : 5175
 
 export default defineConfig({
   plugins: [react()],
