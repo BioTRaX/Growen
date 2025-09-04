@@ -8,7 +8,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-import dramatiq
+import dramatiq  # type: ignore
 
 from db.session import SessionLocal
 from db.models import Product, Image, ImageReview, ImageJobLog, ImageJob
@@ -41,7 +41,7 @@ def _within_window(job: ImageJob) -> bool:
     return True
 
 
-@dramatiq.actor(max_retries=3)
+@dramatiq.actor(queue_name="images", max_retries=3)
 def crawl_product_missing_image(product_id: int) -> None:
     async def _run() -> None:
         async with SessionLocal() as db:
@@ -67,7 +67,7 @@ def crawl_product_missing_image(product_id: int) -> None:
     asyncio.run(_run())
 
 
-@dramatiq.actor(max_retries=3)
+@dramatiq.actor(queue_name="images", max_retries=3)
 def crawl_catalog_missing_images(scope: str = "stock") -> None:
     async def _run() -> None:
         async with SessionLocal() as db:
@@ -93,7 +93,7 @@ def crawl_catalog_missing_images(scope: str = "stock") -> None:
     asyncio.run(_run())
 
 
-@dramatiq.actor(max_retries=3)
+@dramatiq.actor(queue_name="images", max_retries=3)
 def purge_soft_deleted(ttl_days: int = 30) -> None:
     async def _run() -> None:
         import datetime as dt

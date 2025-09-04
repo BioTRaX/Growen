@@ -8,27 +8,23 @@ if not defined LOG_DIR set "LOG_DIR=%ROOT%logs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 set "LOG_FILE=%LOG_DIR%\start.log"
 
-rem Validar dependencias externas
-where python >NUL 2>&1
-if %ERRORLEVEL% NEQ 0 (
-  call :log "[ERROR] python no esta instalado"
-  pause
-  exit /b 1
+rem Limpiar logs antes de empezar (evitar escribir en start.log para no bloquearlo)
+echo [INFO] Limpiando logs previos...
+if exist "%ROOT%scripts\clear_logs.py" (
+  "%ROOT%.venv\Scripts\python.exe" "%ROOT%scripts\clear_logs.py"
 )
-where npm >NUL 2>&1
-if %ERRORLEVEL% NEQ 0 (
-  call :log "[ERROR] npm no esta instalado"
-  pause
-  exit /b 1
+if exist "%ROOT%tools\clean_crawl_logs.py" (
+  "%ROOT%.venv\Scripts\python.exe" -m tools.clean_crawl_logs
 )
+call :log "[INFO] Logs previos limpiados."
 
 call :log "[INFO] Cerrando procesos previos..."
 if exist "%~dp0stop.bat" call "%~dp0stop.bat"
 REM pequeña espera para evitar condiciones de carrera al liberar puertos
 timeout /t 1 /nobreak >NUL
 
-call :log "[INFO] Verificando puertos 8000 y 5173..."
-for %%P in (8000 5173) do (
+call :log "[INFO] Verificando puertos 8000 y 5175..."
+for %%P in (8000 5175) do (
   call :wait_port_free %%P 5
   if errorlevel 1 (
     call :log "[ERROR] El puerto %%P esta en uso. Abortando."
@@ -37,11 +33,48 @@ for %%P in (8000 5173) do (
   )
 )
 
-call :log "[INFO] Instalando dependencias..."
-call "%~dp0fix_deps.bat"
+rem Asegurar Redis en 6379 (necesario para Dramatiq)
+call :log "[INFO] Verificando Redis en 127.0.0.1:6379..."
+call :check_redis 127.0.0.1 6379 10
 if errorlevel 1 (
-  call :log "[ERROR] Fallo la instalacion de dependencias"
+  call :log "[WARN] Redis no responde. Intentando iniciar contenedor 'growen-redis'..."
+  call :docker_start_redis
+  call :check_redis 127.0.0.1 6379 25
+  if errorlevel 1 (
+  call :log "[ERROR] No se pudo establecer Redis. Activando modo RUN_INLINE_JOBS=1 para desarrollo (sin colas)."
+  set "RUN_INLINE_JOBS=1"
+  ) else (
+    call :log "[INFO] Redis está listo en 6379."
+  )
+) else (
+  call :log "[INFO] Redis está listo en 6379."
+)
+
+call :log "[INFO] Instalando/verificando dependencias de Python desde requirements.txt..."
+"%ROOT%.venv\Scripts\python.exe" -m pip install -r "%ROOT%requirements.txt" >> "%LOG_FILE%" 2>&1
+if errorlevel 1 (
+  call :log "[ERROR] Falló la instalación de dependencias de Python. Revisa %LOG_FILE%."
+  pause
   exit /b 1
+)
+
+call :log "[INFO] Verificando instalación de Playwright..."
+"%ROOT%.venv\Scripts\python.exe" -m playwright install chromium >> "%LOG_FILE%" 2>&1
+if errorlevel 1 (
+    call :log "[WARN] Falló la instalación del navegador de Playwright (chromium). El crawler podría no funcionar."
+)
+
+rem Asegurarse de que frontend tenga node_modules (si no, ejecutar npm install)
+if not exist "%ROOT%frontend\node_modules" (
+  call :log "[INFO] node_modules no encontrado en frontend; ejecutando npm install..."
+  pushd "%ROOT%frontend"
+  npm install >> "%LOG_FILE%" 2>&1
+  if errorlevel 1 (
+    call :log "[ERROR] Falló 'npm install' en el frontend. Revisa %LOG_FILE%."
+    pause
+    exit /b 1
+  )
+  popd
 )
 
 call :log "[INFO] Ejecutando migraciones..."
@@ -57,9 +90,37 @@ set "LOG_LEVEL=DEBUG"
 set "IMPORT_RETURN_DEBUG=1"
 start "Growen API" cmd /k "set LOG_LEVEL=%LOG_LEVEL% && set IMPORT_RETURN_DEBUG=%IMPORT_RETURN_DEBUG% && "%VENV%\python.exe" -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000 --loop asyncio --http h11 --log-level debug >> "%LOG_DIR%\backend.log" 2>&1"
 
-call :log "[INFO] Iniciando frontend..."
-REM Forzar Vite a usar 5175 en IPv4 para evitar conflictos de permisos/::1
-start "Growen Frontend" cmd /k "pushd ""%ROOT%frontend"" && set VITE_PORT=5175 && npm run dev >> "%LOG_DIR%\frontend.log" 2>&1"
+call :log "[INFO] Preparando frontend..."
+REM Si existe carpeta dist vacía o VITE_BUILD=1, ejecutamos build para servir desde FastAPI.
+if exist "%ROOT%frontend\package.json" (
+  pushd "%ROOT%frontend"
+  if "!VITE_BUILD!"=="1" (
+    call :log "[INFO] Ejecutando build del frontend (VITE_BUILD=1)..."
+    npm run build >> "%LOG_DIR%\frontend.log" 2>&1
+  ) else (
+    REM Si no hay assets, también build
+    if not exist "%ROOT%frontend\dist\assets" (
+      call :log "[INFO] Assets no encontrados; ejecutando build del frontend..."
+      npm run build >> "%LOG_DIR%\frontend.log" 2>&1
+    ) else (
+      call :log "[INFO] Frontend ya compilado (dist/assets presente)."
+    )
+  )
+  popd
+)
+
+REM Opcional: si el dev server es preferido, descomentar este bloque.
+REM call :log "[INFO] Iniciando frontend en modo dev (5175)..."
+REM start "Growen Frontend" cmd /k "pushd ""%ROOT%frontend"" && set VITE_PORT=5175 && npm run dev >> "%LOG_DIR%\frontend.log" 2>&1"
+
+rem Iniciar worker de imágenes (Dramatiq)
+if not defined REDIS_URL set "REDIS_URL=redis://localhost:6379/0"
+if "%RUN_INLINE_JOBS%"=="1" (
+  call :log "[INFO] RUN_INLINE_JOBS=1: no se inicia worker Dramatiq (los triggers correrán inline)."
+) else (
+  call :log "[INFO] Iniciando worker de imagenes (broker: %REDIS_URL%)..."
+  start "Growen Images Worker" cmd /k "set REDIS_URL=%REDIS_URL% && call ""%ROOT%scripts\start_worker_images.cmd"""
+)
 
 endlocal
 exit /b 0
@@ -107,4 +168,40 @@ set "ts=!DATE! !TIME!"
 >>"%LOG_FILE%" echo [!ts!] %~1
 echo [!ts!] %~1
 exit /b 0
+
+:check_redis
+REM Uso: call :check_redis <host> <port> <retries>
+setlocal EnableDelayedExpansion
+set "_H=%~1"
+set "_P=%~2"
+set "_T=%~3"
+if not defined _T set "_T=10"
+set /a _I=0
+:_cr_loop
+set /a _I+=1
+for /f %%R in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "@(Test-NetConnection -ComputerName '%_H%' -Port %_P% -WarningAction SilentlyContinue).TcpTestSucceeded"') do set "__OK=%%R"
+if /I "!__OK!"=="True" (
+  endlocal & exit /b 0
+)
+if !_I! GEQ %_T% (
+  endlocal & exit /b 1
+)
+timeout /t 1 /nobreak >NUL
+goto _cr_loop
+
+:docker_start_redis
+setlocal EnableDelayedExpansion
+where docker >NUL 2>&1
+if errorlevel 1 (
+  endlocal & exit /b 1
+)
+for /f %%N in ('docker ps -a --filter "name=^/growen-redis$" --format "{{.Names}}" 2^>NUL') do set "__REDIS_NAME=%%N"
+if not defined __REDIS_NAME (
+  call :log "[INFO] Creando contenedor redis:7-alpine..."
+  docker run -d --name growen-redis -p 6379:6379 redis:7-alpine >> "%LOG_FILE%" 2>&1
+) else (
+  call :log "[INFO] Iniciando contenedor existente 'growen-redis'..."
+  docker start growen-redis >> "%LOG_FILE%" 2>&1
+)
+endlocal & exit /b 0
 

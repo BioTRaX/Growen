@@ -5,10 +5,10 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, condecimal
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,19 +28,19 @@ router = APIRouter(prefix="/products-ex", tags=["catalog"])
 
 
 class UpdateSalePriceIn(BaseModel):
-    sale_price: condecimal(gt=0, max_digits=12, decimal_places=2)
+    sale_price: Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=2)]
     note: str | None = None
 
 
 class UpdateBuyPriceIn(BaseModel):
-    buy_price: condecimal(gt=0, max_digits=12, decimal_places=2)
+    buy_price: Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=2)]
     note: str | None = None
 
 
 class BulkSalePriceIn(BaseModel):
     product_ids: list[int]
     mode: Literal["set", "inc", "dec", "inc_pct", "dec_pct"]
-    value: condecimal(gt=0, max_digits=12, decimal_places=4)
+    value: Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=4)]
     note: str | None = None
 
 

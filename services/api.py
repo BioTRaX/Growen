@@ -111,7 +111,12 @@ async def log_requests(request: Request, call_next):
     logger.info("%s %s -> %s (%.2fms)", request.method, request.url.path, resp.status_code, dur)
     return resp
 
-origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
+]
 
 app.add_middleware(
     CORSMiddleware,
@@ -149,6 +154,11 @@ app.include_router(media.router)
 app.include_router(image_jobs.router)
 app.include_router(images.router)
 app.include_router(health.router)
+try:
+    # include legacy /healthz for compatibility if present
+    app.include_router(health.legacy_router)  # type: ignore[attr-defined]
+except Exception:
+    pass
 app.include_router(debug.router, tags=["debug"])
 
 @app.on_event("startup")
@@ -163,17 +173,7 @@ async def _init_inmemory_db():
         logger.exception("No se pudo inicializar el esquema en memoria")
 
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    """Devuelve OK si la aplicación está viva."""
-    return {"status": "ok"}
-
-
-@app.get("/health/ai")
-async def health_ai() -> dict[str, list[str]]:
-    """Informa los proveedores disponibles de IA."""
-    router = AIRouter(settings)
-    return {"providers": router.available_providers()}
+# Unificado en services.routers.health
 
 # --- Static frontend (built) + SPA fallback ---
 try:

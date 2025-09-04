@@ -30,6 +30,8 @@ beautifulsoup4>=4.12.3
 clamd>=1.0.2
 dramatiq[redis]>=1.15.0
 rembg>=2.0.57
+tenacity>=8.2.3
+playwright>=1.42.0
 
 # PDF/OCR processing
 pdfplumber
