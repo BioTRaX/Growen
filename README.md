@@ -482,11 +482,19 @@ Ejecutar **desde CMD** con doble clic en `scripts\start.bat`. El script realiza 
 
 Requisitos previos:
 
-- Python 3.11
-- venv creado (`python -m venv .venv`)
-- Node.js/npm instalados
+- Python 3.11 (si no existe un virtualenv, `scripts\start.bat` intentará crearlo automáticamente)
+- Node.js/npm instalados (si faltan paquetes de frontend, `scripts\start.bat` ejecutará `npm install` en `frontend` cuando sea necesario)
 - `.env` completado (DB_URL, IA, etc.)
 - `frontend/.env` creado a partir de `frontend/.env.example` si se necesita ajustar `VITE_API_URL`.
+
+Comportamiento de auto-configuración de `scripts\start.bat`:
+
+- Si no existe `.venv`, el script intentará crear un entorno virtual en `.venv` y actualizar `pip`/`setuptools`.
+- Tras crear el virtualenv, se ejecuta `python -m tools.doctor`. Si la variable de entorno `ALLOW_AUTO_PIP_INSTALL=true` está definida, el doctor intentará instalar `requirements.txt` automáticamente.
+- Si `tools.doctor` detecta problemas críticos, el script pausará y te dará la opción de abortar o continuar.
+- Si `frontend/node_modules` no existe, `scripts\start.bat` ejecutará `npm install` dentro de `frontend`.
+
+Esto facilita un inicio de desarrollo “1‑clic” en máquinas nuevas.
 
 Para detener manualmente los servicios, ejecutar `scripts\stop.bat` desde CMD.
 

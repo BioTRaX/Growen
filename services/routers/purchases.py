@@ -628,6 +628,40 @@ async def import_santaplanta_pdf(
             }
             for ln in res.lines
         ]
+        # Normalizaciones adicionales para casos reales observados en remitos
+        # de Santa Planta: a veces el c�digo del proveedor queda en la columna
+        # de cantidad y el parser devuelve el % de bonificaci�n en 0 a pesar de
+        # estar presente como "-20% DESC" dentro del t�tulo.
+        for ln in lines:
+            try:
+                title_txt = (ln.get("title") or "").strip()
+                qty_num = int(float(ln.get("qty") or 0))
+                sku_txt = (ln.get("supplier_sku") or "").strip()
+                # Si el SKU es num�rico y coincide con la cantidad, intentar
+                # recuperarlo desde el t�tulo priorizando tokens de 4-6 d�gitos.
+                if sku_txt.isdigit() and qty_num and int(sku_txt) == qty_num:
+                    import re as _re
+                    cand = _re.findall(r"\b(\d{4,6})\b", title_txt)
+                    if cand:
+                        ln["supplier_sku"] = cand[-1]
+                    else:
+                        cand3 = [t for t in _re.findall(r"\b(\d{3,6})\b", title_txt) if int(t) != qty_num]
+                        if cand3:
+                            ln["supplier_sku"] = cand3[-1]
+                # Si la bonificaci�n es 0 pero el t�tulo contiene un porcentaje,
+                # tomar ese valor (ej: "-20% DESC").
+                if float(ln.get("line_discount") or 0) == 0 and title_txt:
+                    import re as _re
+                    mdisc = _re.search(r"(-?\d{1,2}(?:[\.,]\d+)?)\s*%", title_txt)
+                    if mdisc:
+                        try:
+                            val = float(str(mdisc.group(1)).replace(".", "").replace(",", "."))
+                            ln["line_discount"] = val
+                        except Exception:
+                            pass
+            except Exception:
+                # La normalizaci�n no debe romper la importaci�n.
+                pass
         for ln in lines:
             sku = (ln.get("supplier_sku") or "").strip()
             title = (ln.get("title") or "").strip() or sku or "(sin tÃ­tulo)"

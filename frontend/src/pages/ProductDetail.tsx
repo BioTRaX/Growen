@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import http from '../services/http'
-import { uploadProductImage, addImageFromUrl, setPrimary, lockImage, deleteImage, refreshSEO, pushTN } from '../services/images'
+import { uploadProductImage, addImageFromUrl, setPrimary, lockImage, deleteImage, refreshSEO, pushTN, removeBg, watermark } from '../services/images'
 import { useAuth } from '../auth/AuthContext'
 
 type Prod = {
@@ -63,6 +63,9 @@ export default function ProductDetail() {
     }
   }
 
+  const primary = (prod?.images || []).find(i => i.is_primary) || (prod?.images || [])[0]
+  const others = (prod?.images || []).filter(i => i.id !== primary?.id)
+
   return (
     <div className="panel p-4" style={{ background: '#0b0f14', color: '#e5e7eb', minHeight: '100vh' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -83,21 +86,36 @@ export default function ProductDetail() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, 220px)', gap: 12, marginTop: 16 }}>
-        {prod?.images?.map((im) => (
-          <div key={im.id} className="card" style={{ background: '#111827', padding: 8, borderRadius: 8 }}>
-            <img src={im.url} alt={im.alt_text || ''} style={{ width: '100%', height: 180, objectFit: 'cover', borderRadius: 6 }} />
-            <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>{im.title_text || ''}</div>
-            {canEdit && (
-              <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-                {!im.is_primary && <button className="btn-secondary" onClick={async () => { await setPrimary(pid, im.id); refresh() }}>Portada</button>}
-                {!im.locked && <button className="btn-secondary" onClick={async () => { await lockImage(pid, im.id); refresh() }}>Lock</button>}
-                <button className="btn-secondary" onClick={async () => { await refreshSEO(pid, im.id); refresh() }}>SEO</button>
-                {!im.locked && <button className="btn" onClick={async () => { await deleteImage(pid, im.id); refresh() }}>Borrar</button>}
-              </div>
-            )}
-          </div>
-        ))}
+      {/* Galería 1 + 2 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 260px', gap: 12, marginTop: 16, alignItems: 'start' }}>
+        <div className="card" style={{ background: '#111827', padding: 8, borderRadius: 8, minHeight: 320 }}>
+          {primary ? (
+            <img src={primary.url} alt={primary.alt_text || ''} style={{ width: '100%', height: 400, objectFit: 'cover', borderRadius: 6 }} />
+          ) : (
+            <div style={{ padding: 16, opacity: .7 }}>Sin imagen principal</div>
+          )}
+          {primary && canEdit && (
+            <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+              {!primary.locked && <button className="btn-secondary" onClick={async () => { await watermark(pid, primary.id); refresh() }}>Watermark</button>}
+              {!primary.locked && <button className="btn-secondary" onClick={async () => { await removeBg(pid, primary.id); refresh() }}>Quitar fondo</button>}
+              <button className="btn-secondary" onClick={async () => { await refreshSEO(pid, primary.id); refresh() }}>SEO</button>
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
+          {others.slice(0, 2).map((im) => (
+            <div key={im.id} className="card" style={{ background: '#111827', padding: 8, borderRadius: 8 }}>
+              <img src={im.url} alt={im.alt_text || ''} style={{ width: '100%', height: 190, objectFit: 'cover', borderRadius: 6 }} />
+              {canEdit && (
+                <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                  {!im.is_primary && <button className="btn-secondary" onClick={async () => { await setPrimary(pid, im.id); refresh() }}>Portada</button>}
+                  <button className="btn-secondary" onClick={async () => { await lockImage(pid, im.id); refresh() }}>{im.locked ? 'Unlock' : 'Lock'}</button>
+                  <button className="btn" onClick={async () => { await deleteImage(pid, im.id); refresh() }}>Borrar</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
       {loading && <div style={{ marginTop: 8 }}>Procesando...</div>}
 
@@ -109,6 +127,7 @@ export default function ProductDetail() {
           {prod?.slug && <div><span style={{ opacity: 0.7 }}>Slug:</span> {prod.slug}</div>}
           {prod?.sku_root && <div><span style={{ opacity: 0.7 }}>SKU:</span> {prod.sku_root}</div>}
           <div><span style={{ opacity: 0.7 }}>Stock:</span> {prod?.stock}</div>
+          <div><span style={{ opacity: 0.7 }}>Tiene imagen:</span> {(prod?.images?.length || 0) > 0 ? 'Sí' : 'No'}</div>
         </div>
       </div>
 

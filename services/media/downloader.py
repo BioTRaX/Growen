@@ -21,6 +21,7 @@ except Exception:  # pragma: no cover - optional import
     clamd = None  # type: ignore
 
 from . import get_media_root
+from services.images.ratelimit import get_limiter
 
 
 ALLOWED_SCHEMES = {"http", "https"}
@@ -107,6 +108,8 @@ async def download_product_image(
 
     headers = {"User-Agent": DEFAULT_UA, "Accept": "image/*,*/*;q=0.8"}
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        # Rate-limit global
+        await get_limiter().acquire()
         r = await client.get(url)
         r.raise_for_status()
         ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()

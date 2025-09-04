@@ -40,9 +40,13 @@ def _good_image(src: str) -> bool:
     return True
 
 
+from services.images.ratelimit import get_limiter
+
+
 async def _get(client: httpx.AsyncClient, url: str) -> str:
-    # simple rate limit 1 req/s with jitter
-    await asyncio.sleep(0.3 + random.random() * 0.3)
+    # Global rate-limit + small jitter
+    await get_limiter().acquire()
+    await asyncio.sleep(0.15 + random.random() * 0.25)
     r = await client.get(url)
     r.raise_for_status()
     return r.text

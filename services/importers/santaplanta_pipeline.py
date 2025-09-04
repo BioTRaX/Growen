@@ -196,7 +196,7 @@ def _extract_lines_from_table(table: List[List[str]], dbg: Dict[str, Any]) -> Li
 def _try_pdfplumber_tables(data: bytes, dbg: Dict[str, Any], events: List[Dict[str, Any]]) -> List[ParsedLine]:
     all_lines: List[ParsedLine] = []
     try:
-        import pdfplumber
+        import pdfplumber  # type: ignore
         with pdfplumber.open(io.BytesIO(data)) as pdf:
             for pi, page in enumerate(pdf.pages):
                 events.append({"level": "INFO", "stage": "pdfplumber", "event": "page_info", "details": {"page": pi + 1}})
@@ -206,7 +206,7 @@ def _try_pdfplumber_tables(data: bytes, dbg: Dict[str, Any], events: List[Dict[s
                     "snap_tolerance": 5,
                     "join_tolerance": 10,
                 }) or []
-                
+
                 for t in tables:
                     all_lines.extend(_extract_lines_from_table(t, dbg))
     except Exception as e:
@@ -217,7 +217,7 @@ def _try_pdfplumber_tables(data: bytes, dbg: Dict[str, Any], events: List[Dict[s
 def _try_camelot(pdf_path: Path, events: List[Dict[str, Any]], dbg: Dict[str, Any]) -> List[ParsedLine]:
     all_lines: List[ParsedLine] = []
     try:
-        import camelot
+        import camelot  # type: ignore
         flavors = [
             ("lattice", {"line_scale": 40, "strip_text": "\n"}),
             ("stream", {"edge_tol": 200, "row_tol": 10, "column_tol": 10})
@@ -244,7 +244,7 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
 
     # Header inicial
     try:
-        import pdfplumber
+        import pdfplumber  # type: ignore
         with pdfplumber.open(str(pdf_path)) as pdf:
             text_all = "\n".join([(p.extract_text() or "") for p in pdf.pages])
     except Exception as e:
@@ -291,7 +291,7 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
             if lines_ocr:
                 result.lines = lines_ocr
                 try:
-                    import pdfplumber
+                    import pdfplumber  # type: ignore
                     with pdfplumber.open(io.BytesIO(data_ocr)) as pdf_ocr:
                         text_ocr = "\n".join([(p.extract_text() or "") for p in pdf_ocr.pages])
                         remito_ocr, fecha_ocr = _parse_header_text(text_ocr, result.events)

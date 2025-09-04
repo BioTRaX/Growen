@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import http from '../services/http'
 import { listSuppliers, Supplier } from '../services/suppliers'
+import HealthPanel from '../components/HealthPanel'
 
 interface User {
   id: number
@@ -140,6 +141,9 @@ export default function AdminPanel() {
           </button>
         </div>
       </div>
+
+  {/* Health panel */}
+  <HealthPanel />
       <form onSubmit={submit} className="flex flex-col gap-2 mb-4">
         <input
           className="input"
