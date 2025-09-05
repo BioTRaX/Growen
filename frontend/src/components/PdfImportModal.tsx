@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import { importSantaPlanta } from '../services/purchases'
+import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
 import ToastContainer, { showToast } from './Toast'
 
 type Props = {
@@ -23,14 +24,49 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [errorCid, setErrorCid] = useState<string | null>(null)
   const [errorDetail, setErrorDetail] = useState<any>(null)
+  const [gateNeeded, setGateNeeded] = useState(false)
+  const [gateBusy, setGateBusy] = useState(false)
+  const [gateLogs, setGateLogs] = useState<ServiceLogItem[]>([])
 
   useEffect(() => { if (open) listSuppliers().then(setSuppliers).catch(() => setSuppliers([])) }, [open])
 
   if (!open) return null
 
+  async function ensurePdfService(): Promise<boolean> {
+    try {
+      const st = await serviceStatus('pdf_import')
+      if ((st?.status || '') !== 'running') {
+        setGateNeeded(true)
+        try { setGateLogs(await tailServiceLogs('pdf_import', 50)) } catch {}
+        return false
+      }
+      return true
+    } catch {
+      return true
+    }
+  }
+
+  async function startPdfNow() {
+    setGateBusy(true)
+    try {
+      await startService('pdf_import')
+      await new Promise(r => setTimeout(r, 600))
+      setGateNeeded(false)
+      showToast('success', 'Importador PDF iniciado')
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail || 'No se pudo iniciar el Importador PDF'
+      showToast('error', msg)
+      try { setGateLogs(await tailServiceLogs('pdf_import', 80)) } catch {}
+    } finally {
+      setGateBusy(false)
+    }
+  }
+
   async function process() {
     if (!supplierId) { showToast('error', 'Elegí proveedor'); return }
     if (!file) { showToast('error', 'Adjuntá un PDF'); return }
+    const ok = await ensurePdfService()
+    if (!ok) return
     setLoading(true)
     setErrorMsg(null); setErrorCid(null); setErrorDetail(null)
     try {
@@ -103,6 +139,27 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
           <button className="btn-primary" onClick={process} disabled={loading || !supplierId || !file}>{loading ? 'Procesando...' : 'Procesar'}</button>
         </div>
         <ToastContainer />
+        {gateNeeded && (
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8 }}>
+            <div className="panel" style={{ padding: 16, minWidth: 420 }}>
+              <h4 style={{ marginTop: 0 }}>Importador apagado</h4>
+              <p className="text-sm" style={{ opacity: 0.9 }}>Este paso necesita el servicio "Importador PDF (OCR)" encendido. ¿Iniciarlo ahora?</p>
+              <div className="row" style={{ gap: 8, marginTop: 6 }}>
+                <button className="btn-secondary" onClick={() => setGateNeeded(false)} disabled={gateBusy}>Cancelar</button>
+                <button className="btn-primary" onClick={startPdfNow} disabled={gateBusy}>{gateBusy ? 'Iniciando…' : 'Iniciar ahora'}</button>
+              </div>
+              <details style={{ marginTop: 8 }}>
+                <summary>Ver logs recientes</summary>
+                <ul style={{ maxHeight: 160, overflow: 'auto', fontSize: 12 }}>
+                  {gateLogs.map((l, i) => (
+                    <li key={i}>[{l.level}] {l.created_at} · {l.action} · {l.ok ? 'OK' : 'FAIL'} · {(l as any).error || (l as any)?.payload?.detail || ''}</li>
+                  ))}
+                </ul>
+                <button className="btn" onClick={async () => { try { setGateLogs(await tailServiceLogs('pdf_import', 120)) } catch {} }}>Actualizar logs</button>
+              </details>
+            </div>
+          </div>
+        )}
         {loading && (
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8 }}>
             <div className="panel" style={{ padding: 16 }}>

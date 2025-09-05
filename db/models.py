@@ -586,3 +586,61 @@ class ImportLog(Base):
     event: Mapped[str] = mapped_column(String(64))
     details: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+# --- Services registry (lightweight orchestration) ---
+
+class Service(Base):
+    __tablename__ = "services"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('stopped','starting','running','degraded','failed')",
+            name="ck_services_status",
+        ),
+        UniqueConstraint("name", name="ux_services_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="stopped")
+    auto_start: Mapped[bool] = mapped_column(Boolean, default=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    uptime_s: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ServiceLog(Base):
+    __tablename__ = "service_logs"
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('start','stop','status','health','panic')",
+            name="ck_service_logs_action",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    service: Mapped[str] = mapped_column(String(64))
+    correlation_id: Mapped[str] = mapped_column(String(64))
+    action: Mapped[str] = mapped_column(String(16))
+    host: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    level: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+class StartupMetric(Base):
+    __tablename__ = "startup_metrics"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ttfb_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    app_ready_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)

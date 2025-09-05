@@ -94,19 +94,32 @@ async def probe(title: str, db: AsyncSession = Depends(get_session)):
     No guarda nada; sirve para probar desde el panel.
     """
     from services.scrapers.santaplanta import search_by_title, extract_product_image
-    urls = await search_by_title(title)
-    first_img = None
-    for u in urls:
+    try:
+        if not (title or "").strip():
+            raise HTTPException(status_code=400, detail="title requerido")
+        urls = await search_by_title(title)
+        first_img = None
+        for u in urls:
+            try:
+                first_img = await extract_product_image(u)
+            except Exception:
+                first_img = None
+            if first_img:
+                break
+        # Log liviano para trazabilidad
+        db.add(ImageJobLog(job_name="imagenes_productos", level="INFO", message="probe", data={"title": title, "urls": urls[:3], "image": first_img}))
+        await db.commit()
+        return {"ok": True, "urls": urls, "image": first_img}
+    except HTTPException:
+        raise
+    except Exception as e:
+        # No romper el panel; devolver detalle y registrar
         try:
-            first_img = await extract_product_image(u)
+            db.add(ImageJobLog(job_name="imagenes_productos", level="ERROR", message="probe_error", data={"title": title, "error": str(e)[:200]}))
+            await db.commit()
         except Exception:
-            first_img = None
-        if first_img:
-            break
-    # Log liviano para trazabilidad
-    db.add(ImageJobLog(job_name="imagenes_productos", level="INFO", message="probe", data={"title": title, "urls": urls[:3], "image": first_img}))
-    await db.commit()
-    return {"urls": urls, "image": first_img}
+            pass
+        raise HTTPException(status_code=500, detail=f"probe_failed: {e}")
 
 
 @router.put("/settings", dependencies=[Depends(require_csrf), Depends(require_roles("admin"))])

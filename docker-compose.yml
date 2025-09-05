@@ -32,5 +32,33 @@ services:
       - "5173:5173"
     depends_on:
       - api
+  pdf_import:
+    image: alpine:3.19
+    command: ["sh","-c","sleep infinity"]
+    profiles: ["optional"]
+  playwright:
+    image: alpine:3.19
+    command: ["sh","-c","sleep infinity"]
+    profiles: ["optional"]
+  image_processing:
+    image: alpine:3.19
+    command: ["sh","-c","sleep infinity"]
+    profiles: ["optional"]
+  dramatiq:
+    image: alpine:3.19
+    command: ["sh","-c","sleep infinity"]
+    profiles: ["optional"]
+  scheduler:
+    image: alpine:3.19
+    command: ["sh","-c","sleep infinity"]
+    profiles: ["optional"]
+  tiendanube:
+    image: alpine:3.19
+    command: ["sh","-c","sleep infinity"]
+    profiles: ["optional"]
+  notifier:
+    image: alpine:3.19
+    command: ["sh","-c","sleep infinity"]
+    profiles: ["optional"]
 volumes:
   pgdata:

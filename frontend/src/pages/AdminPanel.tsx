@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom'
 import http from '../services/http'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import HealthPanel from '../components/HealthPanel'
+import ServicesPanel from '../components/ServicesPanel'
 
 interface User {
   id: number
@@ -142,8 +143,14 @@ export default function AdminPanel() {
         </div>
       </div>
 
-  {/* Health panel */}
-  <HealthPanel />
+  {/* Health + Servicios */}
+  <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+    <h3>Servicios y Health</h3>
+    <div style={{ marginBottom: 8 }}>
+      <HealthPanel />
+    </div>
+    <ServicesPanel />
+  </div>
       <form onSubmit={submit} className="flex flex-col gap-2 mb-4">
         <input
           className="input"
@@ -233,6 +240,8 @@ export default function AdminPanel() {
           </div>
         </div>
       </div>
+
+      {/* Services control panel (moved arriba junto a Health) */}
 
       {/* Review queue */}
       <div className="card" style={{ padding: 12, marginBottom: 16 }}>

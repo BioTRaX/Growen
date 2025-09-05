@@ -6,22 +6,24 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthContext";
 import ProtectedRoute from "./auth/ProtectedRoute";
 import Login from "./pages/Login";
-import AdminPanel from "./pages/AdminPanel";
-import ImagesAdminPanel from "./pages/ImagesAdminPanel";
-import Dashboard from "./pages/Dashboard";
-import Stock from "./pages/Stock";
-import Productos from "./pages/Productos";
-import ProductDetail from "./pages/ProductDetail";
-import Purchases from "./pages/Purchases";
-import PurchaseNew from "./pages/PurchaseNew";
-import PurchaseDetail from "./pages/PurchaseDetail";
-import SuppliersPage from "./pages/Suppliers";
+import { lazy, Suspense } from 'react';
+const AdminPanel = lazy(() => import('./pages/AdminPanel'))
+const ImagesAdminPanel = lazy(() => import('./pages/ImagesAdminPanel'))
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Stock = lazy(() => import('./pages/Stock'))
+const Productos = lazy(() => import('./pages/Productos'))
+const ProductDetail = lazy(() => import('./pages/ProductDetail'))
+const Purchases = lazy(() => import('./pages/Purchases'))
+const PurchaseNew = lazy(() => import('./pages/PurchaseNew'))
+const PurchaseDetail = lazy(() => import('./pages/PurchaseDetail'))
+const SuppliersPage = lazy(() => import('./pages/Suppliers'))
 import { PATHS } from "./routes/paths";
 
 export default function App() {
   return (
   <BrowserRouter>
       <AuthProvider>
+        <Suspense fallback={<div style={{padding:12}}>Cargando…</div>}>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
@@ -114,6 +116,7 @@ export default function App() {
           />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
+        </Suspense>
       </AuthProvider>
     </BrowserRouter>
   );

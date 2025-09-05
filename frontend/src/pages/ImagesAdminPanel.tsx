@@ -1,10 +1,11 @@
-// NG-HEADER: Nombre de archivo: ImagesAdminPanel.tsx
-// NG-HEADER: Ubicación: frontend/src/pages/ImagesAdminPanel.tsx
-// NG-HEADER: Descripción: Panel de imágenes con estado, triggers y revisión.
+﻿// NG-HEADER: Nombre de archivo: ImagesAdminPanel.tsx
+// NG-HEADER: UbicaciÃ³n: frontend/src/pages/ImagesAdminPanel.tsx
+// NG-HEADER: DescripciÃ³n: Panel de imÃ¡genes con estado, triggers y revisiÃ³n.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import http from '../services/http'
 import { Link } from 'react-router-dom'
+import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
 
 export default function ImagesAdminPanel() {
   const [status, setStatus] = useState<any>(null)
@@ -16,6 +17,9 @@ export default function ImagesAdminPanel() {
   const [correlationId, setCorrelationId] = useState<string | null>(null)
   const [snapshots, setSnapshots] = useState<any[]>([])
   const [selectedSnapshot, setSelectedSnapshot] = useState<string | null>(null)
+  const [gatePlayNeeded, setGatePlayNeeded] = useState(false)
+  const [gatePlayBusy, setGatePlayBusy] = useState(false)
+  const [gatePlayLogs, setGatePlayLogs] = useState<ServiceLogItem[]>([])
 
   useEffect(() => {
     refresh()
@@ -63,12 +67,62 @@ export default function ImagesAdminPanel() {
     await refresh()
   }
 
+  async function ensurePlaywright(): Promise<boolean> {
+    try {
+      const st = await serviceStatus('playwright')
+      if ((st?.status || '') !== 'running') {
+        setGatePlayNeeded(true)
+        try { setGatePlayLogs(await tailServiceLogs('playwright', 80)) } catch {}
+        return false
+      }
+      return true
+    } catch {
+      return true
+    }
+  }
+
+  async function startPlaywrightNow() {
+    setGatePlayBusy(true)
+    try {
+      await startService('playwright')
+      await new Promise(r => setTimeout(r, 600))
+      setGatePlayNeeded(false)
+      alert('Playwright iniciado')
+    } catch (e) {
+      alert('No se pudo iniciar Playwright (ver logs)')
+      try { setGatePlayLogs(await tailServiceLogs('playwright', 120)) } catch {}
+    } finally {
+      setGatePlayBusy(false)
+    }
+  }
+
   return (
     <div className="panel p-4" style={{ margin: 16 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2>Imágenes productos</h2>
+        <h2>ImÃ¡genes productos</h2>
         <Link to="/admin" className="btn-secondary btn-lg" style={{ textDecoration: 'none' }}>Volver</Link>
       </div>
+      {gatePlayNeeded && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }}>
+          <div className="panel" style={{ padding: 16, minWidth: 460 }}>
+            <h4 style={{ marginTop: 0 }}>Crawler apagado</h4>
+            <p className="text-sm" style={{ opacity: 0.9 }}>El escaneo necesita el servicio "Playwright / Chromium" encendido. ¿Iniciarlo ahora?</p>
+            <div className="row" style={{ gap: 8, marginTop: 6 }}>
+              <button className="btn-secondary" onClick={() => setGatePlayNeeded(false)} disabled={gatePlayBusy}>Cancelar</button>
+              <button className="btn-primary" onClick={startPlaywrightNow} disabled={gatePlayBusy}>{gatePlayBusy ? 'Iniciando…' : 'Iniciar ahora'}</button>
+            </div>
+            <details style={{ marginTop: 8 }}>
+              <summary>Ver logs recientes</summary>
+              <ul style={{ maxHeight: 160, overflow: 'auto', fontSize: 12 }}>
+                {gatePlayLogs.map((l, i) => (
+                  <li key={i}>[{l.level}] {l.created_at} · {l.action} · {l.ok ? 'OK' : 'FAIL'} · {(l as any).error || (l as any)?.payload?.detail || ''}</li>
+                ))}
+              </ul>
+              <button className="btn" onClick={async () => { try { setGatePlayLogs(await tailServiceLogs('playwright', 120)) } catch {} }}>Actualizar logs</button>
+            </details>
+          </div>
+        </div>
+      )}
       <div className="row" style={{ gap: 8, alignItems: 'center' }}>
         <label><input type="checkbox" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} /> Activado</label>
         <select className="select" value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
@@ -83,15 +137,15 @@ export default function ImagesAdminPanel() {
           <option value="stock">Con stock</option>
           <option value="all">Toda la base</option>
         </select>
-        <button className="btn" onClick={async () => { await http.post('/admin/image-jobs/trigger/crawl-missing', null, { params: { scope } }); alert('Crawl encolado') }}>Forzar escaneo catálogo</button>
+        <button className="btn" onClick={async () => { const ok = await ensurePlaywright(); if (!ok) return; await http.post('/admin/image-jobs/trigger/crawl-missing', null, { params: { scope } }); alert('Crawl encolado') }}>Forzar escaneo catÃ¡logo</button>
         <button className="btn" onClick={async () => { await http.post('/admin/image-jobs/trigger/purge'); alert('Purge encolado') }}>Purgar soft-deleted</button>
   <button className="btn" onClick={async () => { await http.post('/admin/image-jobs/clean-logs'); alert('Logs limpiados'); refresh() }}>Limpiar logs</button>
         <button className="btn" onClick={async () => {
-          const title = window.prompt('Título a probar (proveedor Santa Planta):')
+          const title = window.prompt('TÃ­tulo a probar (proveedor Santa Planta):')
           if (!title) return
           const r = await http.post('/admin/image-jobs/probe', null, { params: { title } })
           setProbe(r.data)
-        }}>Probar por título</button>
+        }}>Probar por tÃ­tulo</button>
       </div>
       <div style={{ marginTop: 12 }}>
         <h3>Estado</h3>
@@ -106,15 +160,15 @@ export default function ImagesAdminPanel() {
               <div><b>Fail (24h):</b> {status.fail ?? 0}</div>
               {status.current_product && (
                 <div>
-                  <b>Procesando:</b> {status.current_product.title || ''} (ID {status.current_product.product_id}) — {status.current_product.stage}
+                  <b>Procesando:</b> {status.current_product.title || ''} (ID {status.current_product.product_id}) â€” {status.current_product.stage}
                 </div>
               )}
             </div>
           </div>
-        ) : <div className="code">Cargando estado…</div>}
+        ) : <div className="code">Cargando estadoâ€¦</div>}
       </div>
       <div style={{ marginTop: 12 }}>
-        <h3>Logs (últimos 50)</h3>
+        <h3>Logs (Ãºltimos 50)</h3>
         <div style={{ marginTop: 8 }}>
           <input className="input" placeholder="Correlation ID (opcional)" value={correlationId || ''} onChange={e => setCorrelationId(e.target.value)} style={{ width: 360, marginRight: 6 }} />
           <button className="btn" onClick={async () => { if (correlationId) await fetchSnapshots(correlationId) }}>Ver snapshots</button>
@@ -156,7 +210,7 @@ export default function ImagesAdminPanel() {
         </div>
       )}
       <div style={{ marginTop: 12 }}>
-        <h3>Pendientes de revisión</h3>
+        <h3>Pendientes de revisiÃ³n</h3>
         {pendingReview.length === 0 ? (
           <div>No hay pendientes.</div>
         ) : (

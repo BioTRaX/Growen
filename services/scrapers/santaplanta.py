@@ -11,6 +11,7 @@ from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
+import re
 from bs4 import BeautifulSoup  # type: ignore
 
 
@@ -53,7 +54,20 @@ async def _get(client: httpx.AsyncClient, url: str) -> str:
 
 
 async def search_by_title(title: str, max_results: int = 3) -> List[str]:
-    q = title.strip().replace(" ", "+")
+    # Normalize noisy titles (drop parentheses, promos, symbols) similar to crawler
+    def _normalize_query(t: str) -> str:
+        t = re.sub(r"\([^\)]*\)", " ", t)
+        t = re.sub(r"\d+\s*[xX%]\s*\d*", " ", t)
+        t = re.sub(r"\b(PACK|DESC|DESCUENTO|UND|UNIDADES|U|LT|LTS|LITRO|DM|DM3|DM2|minimo|MINIMO)\b", " ", t, flags=re.IGNORECASE)
+        t = re.sub(r"[^\w\s]", " ", t, flags=re.UNICODE)
+        t = re.sub(r"\s+", " ", t).strip()
+        tokens = t.split()
+        if tokens and tokens[0].isupper() and 2 <= len(tokens[0]) <= 8:
+            tokens = tokens[1:]
+        if len(tokens) > 5:
+            tokens = tokens[:5]
+        return " ".join(tokens)
+    q = _normalize_query(title).strip().replace(" ", "+")
     url = f"{BASE}/shop/search/?q={q}"
     async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "GrowenBot/1.0"}) as client:
         html = await _get(client, url)

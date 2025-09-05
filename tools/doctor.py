@@ -56,6 +56,8 @@ OPTIONAL: list[str] = [
     "pdfplumber",
     "pdf2image",
     "pytesseract",
+    "ocrmypdf",
+    "rapidfuzz",
 ]
 
 
@@ -133,6 +135,15 @@ def run_doctor(fail_on_error: bool = False) -> int:
     print("[doctor] Python", sys.version.replace("\n", " "))
     # 1) Imports
     missing_crit = []
+    # Helper to check presence of system binaries (non-Python)
+    import shutil
+    import platform
+    def _which_any(names: list[str]) -> tuple[str|None, str]:
+        for n in names:
+            p = shutil.which(n)
+            if p:
+                return p, n
+        return None, names[0]
     def report(group: str, names: list[str]) -> None:
         ok = 0
         miss = 0
@@ -154,6 +165,38 @@ def run_doctor(fail_on_error: bool = False) -> int:
     report("CRITICAL", CRITICAL)
     report("IMPORTANT", IMPORTANT)
     report("OPTIONAL", OPTIONAL)
+
+    # 1b) System OCR/PDF tools (not installable via pip)
+    print("[doctor] SYSTEM: checking external OCR/PDF tools...")
+    sys_missing: list[str] = []
+    # Ghostscript (Windows: gswin64c/gswin32c, Unix: gs)
+    gs_path, gs_name = _which_any(["gswin64c", "gswin32c", "gs"])  # pragma: no cover
+    print(f"[doctor] SYSTEM   {'OK  ' if gs_path else 'MISS'} ghostscript ({gs_path or 'not found'})")
+    if not gs_path:
+        sys_missing.append("ghostscript")
+    # QPDF
+    qpdf_path, _ = _which_any(["qpdf"])  # pragma: no cover
+    print(f"[doctor] SYSTEM   {'OK  ' if qpdf_path else 'MISS'} qpdf ({qpdf_path or 'not found'})")
+    if not qpdf_path:
+        sys_missing.append("qpdf")
+    # Tesseract OCR
+    tesseract_path, _ = _which_any(["tesseract"])  # pragma: no cover
+    print(f"[doctor] SYSTEM   {'OK  ' if tesseract_path else 'MISS'} tesseract ({tesseract_path or 'not found'})")
+    if not tesseract_path:
+        sys_missing.append("tesseract")
+    # ocrmypdf CLI (prefer module execution, but CLI presence helps PATH checks)
+    ocrmypdf_cli, _ = _which_any(["ocrmypdf"])  # pragma: no cover
+    print(f"[doctor] SYSTEM   {'OK  ' if ocrmypdf_cli else 'MISS'} ocrmypdf ({ocrmypdf_cli or 'not found'})")
+
+    if sys_missing:
+        plat = platform.system()
+        print(f"[doctor] SYSTEM: missing tools: {', '.join(sys_missing)}")
+        if plat == "Windows":
+            print("[doctor] Hints (Windows): install via Chocolatey or Winget")
+            print("[doctor]   choco install -y tesseract tesseract-languages ghostscript qpdf")
+            print('[doctor]   winget install --silent --accept-source-agreements --accept-package-agreements "Tesseract-OCR" "ArtifexSoftware.Ghostscript" "QPDF.QPDF"')
+        else:
+            print("[doctor] Hints (Linux): sudo apt-get install -y tesseract-ocr ghostscript qpdf")
 
     # 2) requirements.txt comparison (best-effort)
     declared = _read_requirements(REQ_FILE)

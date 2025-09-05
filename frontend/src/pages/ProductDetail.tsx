@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import http from '../services/http'
 import { uploadProductImage, addImageFromUrl, setPrimary, lockImage, deleteImage, refreshSEO, pushTN, removeBg, watermark } from '../services/images'
+import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
 import { useAuth } from '../auth/AuthContext'
 
 type Prod = {
@@ -27,6 +28,9 @@ export default function ProductDetail() {
   const [prod, setProd] = useState<Prod | null>(null)
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
+  const [gateImgNeeded, setGateImgNeeded] = useState(false)
+  const [gateImgBusy, setGateImgBusy] = useState(false)
+  const [gateImgLogs, setGateImgLogs] = useState<ServiceLogItem[]>([])
   const [desc, setDesc] = useState('')
   const [savingDesc, setSavingDesc] = useState(false)
 
@@ -63,6 +67,35 @@ export default function ProductDetail() {
     }
   }
 
+  async function ensureImageProcessing(): Promise<boolean> {
+    try {
+      const st = await serviceStatus('image_processing')
+      if ((st?.status || '') !== 'running') {
+        setGateImgNeeded(true)
+        try { setGateImgLogs(await tailServiceLogs('image_processing', 80)) } catch {}
+        return false
+      }
+      return true
+    } catch {
+      return true
+    }
+  }
+
+  async function startImageProcessingNow() {
+    setGateImgBusy(true)
+    try {
+      await startService('image_processing')
+      await new Promise(r => setTimeout(r, 600))
+      setGateImgNeeded(false)
+      alert('Procesador de imágenes iniciado')
+    } catch (e) {
+      alert('No se pudo iniciar image_processing (ver logs)')
+      try { setGateImgLogs(await tailServiceLogs('image_processing', 120)) } catch {}
+    } finally {
+      setGateImgBusy(false)
+    }
+  }
+
   const primary = (prod?.images || []).find(i => i.is_primary) || (prod?.images || [])[0]
   const others = (prod?.images || []).filter(i => i.id !== primary?.id)
 
@@ -96,9 +129,9 @@ export default function ProductDetail() {
           )}
           {primary && canEdit && (
             <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-              {!primary.locked && <button className="btn-secondary" onClick={async () => { await watermark(pid, primary.id); refresh() }}>Watermark</button>}
-              {!primary.locked && <button className="btn-secondary" onClick={async () => { await removeBg(pid, primary.id); refresh() }}>Quitar fondo</button>}
-              <button className="btn-secondary" onClick={async () => { await refreshSEO(pid, primary.id); refresh() }}>SEO</button>
+              {!primary.locked && <button className="btn-secondary" onClick={async () => { const ok = await ensureImageProcessing(); if (!ok) return; await watermark(pid, primary.id); refresh() }}>Watermark</button>}
+              {!primary.locked && <button className="btn-secondary" onClick={async () => { const ok = await ensureImageProcessing(); if (!ok) return; await removeBg(pid, primary.id); refresh() }}>Quitar fondo</button>}
+              <button className="btn-secondary" onClick={async () => { const ok = await ensureImageProcessing(); if (!ok) return; await refreshSEO(pid, primary.id); refresh() }}>SEO</button>
             </div>
           )}
         </div>
@@ -162,6 +195,27 @@ export default function ProductDetail() {
 
       {/* Ficha: Proveedores y precios de compra */}
       <SupplierOfferings productId={pid} />
+      {gateImgNeeded && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }}>
+          <div className="panel" style={{ padding: 16, minWidth: 460 }}>
+            <h4 style={{ marginTop: 0 }}>Procesador de imágenes apagado</h4>
+            <p className="text-sm" style={{ opacity: 0.9 }}>Esta acción requiere "Procesado de imágenes" encendido. ¿Iniciarlo ahora?</p>
+            <div className="row" style={{ gap: 8, marginTop: 6 }}>
+              <button className="btn-secondary" onClick={() => setGateImgNeeded(false)} disabled={gateImgBusy}>Cancelar</button>
+              <button className="btn-primary" onClick={startImageProcessingNow} disabled={gateImgBusy}>{gateImgBusy ? 'Iniciando…' : 'Iniciar ahora'}</button>
+            </div>
+            <details style={{ marginTop: 8 }}>
+              <summary>Ver logs recientes</summary>
+              <ul style={{ maxHeight: 160, overflow: 'auto', fontSize: 12 }}>
+                {gateImgLogs.map((l, i) => (
+                  <li key={i}>[{l.level}] {l.created_at} · {l.action} · {l.ok ? 'OK' : 'FAIL'} · {(l as any).error || (l as any)?.payload?.detail || ''}</li>
+                ))}
+              </ul>
+              <button className="btn" onClick={async () => { try { setGateImgLogs(await tailServiceLogs('image_processing', 120)) } catch {} }}>Actualizar logs</button>
+            </details>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
