@@ -8,8 +8,9 @@ import os
 import socket
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 import shutil
+import subprocess
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
@@ -34,6 +35,77 @@ def _status(ok: bool, detail: str | None = None) -> Dict[str, Any]:
 @router.get("")
 async def health_root() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+def _which_any(names: List[str]) -> Tuple[str | None, str]:
+    for n in names:
+        p = shutil.which(n)
+        if p:
+            return p, n
+    return None, names[0]
+
+
+@router.get("/service/{name}")
+async def health_service(name: str) -> Dict[str, Any]:
+    name = name.lower()
+    if name == "pdf_import":
+        # Check Python deps + system tools
+        def _try(name: str) -> bool:
+            try:
+                __import__(name)
+                return True
+            except Exception:
+                return False
+        ocrmypdf_ok = _try("ocrmypdf")
+        pdfplumber_ok = _try("pdfplumber")
+        camelot_ok = _try("camelot")
+        tesseract_path, _ = _which_any(["tesseract"])  # pragma: no cover
+        qpdf_path, _ = _which_any(["qpdf"])  # pragma: no cover
+        gs_path, _ = _which_any(["gswin64c", "gswin32c", "gs"])  # pragma: no cover
+        hints: List[str] = []
+        if not tesseract_path:
+            hints.append("Instalá Tesseract (con idioma español)")
+        if not qpdf_path:
+            hints.append("Instalá QPDF")
+        if not gs_path:
+            hints.append("Instalá Ghostscript")
+        if not ocrmypdf_ok:
+            hints.append("Instalá ocrmypdf en el venv")
+        ok = ocrmypdf_ok and bool(tesseract_path and qpdf_path and gs_path)
+        return {"service": name, "ok": ok, "deps": {"ocrmypdf": ocrmypdf_ok, "pdfplumber": pdfplumber_ok, "camelot": camelot_ok, "tesseract": bool(tesseract_path), "qpdf": bool(qpdf_path), "ghostscript": bool(gs_path)}, "hints": hints}
+    if name == "playwright":
+        try:
+            import importlib
+            importlib.import_module("playwright")
+            # quick version check via subprocess, doesn't download
+            try:
+                r = subprocess.run(["python", "-m", "playwright", "--version"], capture_output=True, text=True, timeout=5)
+                ver = (r.stdout or r.stderr).strip()
+            except Exception:
+                ver = ""
+            return {"service": name, "ok": True, "version": ver, "hints": ["Si falta Chromium: python -m playwright install chromium"]}
+        except Exception as e:
+            return {"service": name, "ok": False, "error": str(e), "hints": ["pip install playwright", "python -m playwright install chromium"]}
+    if name == "image_processing":
+        def _try(name: str) -> bool:
+            try:
+                __import__(name)
+                return True
+            except Exception:
+                return False
+        pillow_ok = _try("PIL") or _try("Pillow")
+        rembg_ok = _try("rembg")
+        cv_ok = _try("cv2")
+        ok = pillow_ok
+        hints: List[str] = []
+        if not pillow_ok:
+            hints.append("pip install Pillow")
+        if not rembg_ok:
+            hints.append("pip install rembg")
+        return {"service": name, "ok": ok, "deps": {"pillow": pillow_ok, "rembg": rembg_ok, "opencv": cv_ok}, "hints": hints}
+    if name == "dramatiq":
+        return await health_dramatiq()
+    return {"service": name, "ok": False, "detail": "servicio desconocido"}
 
 
 @router.get("/ai")

@@ -18,13 +18,15 @@ from logging.handlers import RotatingFileHandler
 import os
 import time
 from fastapi import FastAPI, Request
+from fastapi import HTTPException as FastHTTPException
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, RedirectResponse, FileResponse
 
 from agent_core.config import settings
-from db.session import engine
+from db.session import engine, SessionLocal
 from db.base import Base
 import db.models  # ensure models are imported so metadata has all tables
 from ai.router import AIRouter
@@ -43,6 +45,7 @@ from .routers import (
     debug,
     auth,
     health,
+    services_admin,
 )
 
 raw_level = os.getenv("LOG_LEVEL", "INFO") or "INFO"
@@ -89,6 +92,9 @@ logging.getLogger("uvicorn.access").setLevel(level_name)
 # `redirect_slashes=False` evita redirecciones 307 entre `/ruta` y `/ruta/`,
 # lo que rompe las solicitudes *preflight* de CORS.
 app = FastAPI(title="Growen", redirect_slashes=False)
+APP_IMPORT_TS = time.perf_counter()
+APP_READY_TS: float | None = None
+_STARTUP_METRIC_WRITTEN = False
 
 
 @app.middleware("http")
@@ -97,6 +103,9 @@ async def log_requests(request: Request, call_next):
     start = time.perf_counter()
     try:
         resp = await call_next(request)
+    except (FastHTTPException, StarletteHTTPException):
+        # Deja que FastAPI maneje HTTPException (403/404/400, etc.)
+        raise
     except Exception:
         dur = (time.perf_counter() - start) * 1000
         logger.exception("EXC %s %s (%.2fms)", request.method, request.url.path, dur)
@@ -109,6 +118,19 @@ async def log_requests(request: Request, call_next):
         )
     dur = (time.perf_counter() - start) * 1000
     logger.info("%s %s -> %s (%.2fms)", request.method, request.url.path, resp.status_code, dur)
+    # Record startup metric once on first successful request
+    global _STARTUP_METRIC_WRITTEN
+    if not _STARTUP_METRIC_WRITTEN:
+        try:
+            from db.models import StartupMetric  # local import to avoid early import
+            ttfb_ms = int((time.perf_counter() - APP_IMPORT_TS) * 1000)
+            app_ready_ms = int(((APP_READY_TS or APP_IMPORT_TS) - APP_IMPORT_TS) * 1000)
+            async with SessionLocal() as s:  # type: ignore
+                s.add(StartupMetric(ttfb_ms=ttfb_ms, app_ready_ms=app_ready_ms, meta={"path": request.url.path}))
+                await s.commit()
+            _STARTUP_METRIC_WRITTEN = True
+        except Exception:
+            pass
     return resp
 
 origins = [
@@ -154,6 +176,7 @@ app.include_router(media.router)
 app.include_router(image_jobs.router)
 app.include_router(images.router)
 app.include_router(health.router)
+app.include_router(services_admin.router)
 try:
     # include legacy /healthz for compatibility if present
     app.include_router(health.legacy_router)  # type: ignore[attr-defined]
@@ -171,6 +194,27 @@ async def _init_inmemory_db():
                 await conn.run_sync(Base.metadata.create_all)
     except Exception:
         logger.exception("No se pudo inicializar el esquema en memoria")
+    # Auto-start optional services flagged as auto_start (best-effort, non-blocking)
+    try:
+        from db.models import Service
+        from sqlalchemy import select
+        from services.orchestrator import start_service as _svc_start
+        async with SessionLocal() as s:  # type: ignore
+            rows = (await s.execute(select(Service).where(Service.auto_start == True))).scalars().all()
+            for r in rows:
+                try:
+                    _svc_start(r.name, correlation_id=f"boot-{int(time.time())}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Mark app ready timestamp
+    global APP_READY_TS
+    try:
+        APP_READY_TS = time.perf_counter()
+    except Exception:
+        APP_READY_TS = None
 
 
 # Unificado en services.routers.health

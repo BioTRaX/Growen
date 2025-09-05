@@ -65,6 +65,35 @@ def _needs_js(html: str) -> bool:
     return ("lazyload" in h or "data-src" in h) and ("<img" in h)
 
 
+def _normalize_query(title: str) -> str:
+    """Heurística simple para limpiar títulos ruidosos:
+    - elimina paréntesis y su contenido
+    - quita tokens promocionales (PACK, DESC, UND, LT, DM, etc) y porcentajes
+    - elimina símbolos y colapsa espacios
+    - limita a 3-5 primeras palabras
+    - si la primera palabra es mayúscula corta (p. ej. marca), la descarta
+    """
+    t = title or ""
+    # quita contenido entre paréntesis
+    t = re.sub(r"\([^\)]*\)", " ", t)
+    # elimina porcentajes y multiplicadores
+    t = re.sub(r"\d+\s*[xX%]\s*\d*", " ", t)
+    # elimina tokens promocionales/comunes
+    t = re.sub(r"\b(PACK|DESC|DESCUENTO|UND|UNIDADES|U|LT|LTS|LITRO|DM|DM3|DM2|MINIMO|minimo)\b", " ", t, flags=re.IGNORECASE)
+    # limpia símbolos
+    t = re.sub(r"[^\w\s]", " ", t, flags=re.UNICODE)
+    t = re.sub(r"\s+", " ", t).strip()
+    tokens = t.split()
+    # descarta posible marca en mayúsculas al inicio
+    if tokens and tokens[0].isupper() and 2 <= len(tokens[0]) <= 8:
+        tokens = tokens[1:]
+    # limita longitud
+    if len(tokens) > 5:
+        tokens = tokens[:5]
+    # mínimo 2 tokens para evitar términos demasiado genéricos
+    return " ".join(tokens)
+
+
 @retry(stop=stop_after_attempt(int(os.getenv("CRAWL_RETRIES", "3"))), wait=wait_exponential(multiplier=float(os.getenv("CRAWL_BACKOFF_BASE", "1")), min=1, max=15), reraise=True)
 def _http_get(url: str) -> httpx.Response:
     # Sync rate limit for sync code paths
@@ -80,23 +109,46 @@ def _http_get(url: str) -> httpx.Response:
 async def search_pages_santaplanta(title: str, max_results: int = 5, correlation_id: str | None = None, db=None) -> List[str]:
     correlation = correlation_id or make_correlation_id()
     log_event_sync(correlation, None, None, "search", message="search_start", title=title)
-    q = title.strip().replace(" ", "+")
-    url = f"{BASE}/shop/search/?q={q}"
-    r = _http_get(url)
-    soup = BeautifulSoup(r.text, "html.parser")
+    # Queries: normalized, short, y fallback por subfrases
+    norm = _normalize_query(title)
+    candidates_q: List[str] = []
+    if norm:
+        candidates_q.append(norm)
+        parts = norm.split()
+        if len(parts) >= 3:
+            candidates_q.append(" ".join(parts[:3]))
+        if len(parts) >= 2:
+            candidates_q.append(" ".join(parts[:2]))
+    # Último intento: primeras 2 palabras del título original (sin paréntesis)
+    if not candidates_q:
+        base = re.sub(r"\([^\)]*\)", " ", title or "").strip()
+        tokens = base.split()
+        if tokens:
+            candidates_q.append(" ".join(tokens[:2]))
+
     out: List[str] = []
-    for a in soup.find_all("a", href=True):
-        href = str(a["href"]) or ""
-        if href.startswith("/shop/products/") or href.startswith("/shop/catalog"):
-            if href.startswith("/shop/products/"):
-                u = _abs(href)
-                if u not in out:
-                    out.append(u)
-        if len(out) >= max_results:
-            break
+    for qi in candidates_q:
+        try:
+            q = qi.strip().replace(" ", "+")
+            url = f"{BASE}/shop/search/?q={q}"
+            r = _http_get(url)
+            soup = BeautifulSoup(r.text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = str(a["href"]) or ""
+                if href.startswith("/shop/products/") or href.startswith("/shop/catalog"):
+                    if href.startswith("/shop/products/"):
+                        u = _abs(href)
+                        if u not in out:
+                            out.append(u)
+                if len(out) >= max_results:
+                    break
+            if out:
+                break
+        except Exception:
+            continue
     # attempt DB log as well
     try:
-        await log_event(db, level="INFO", correlation_id=correlation, product_id=None, step="search:done", urls=out[:max_results])
+        await log_event(db, level="INFO", correlation_id=correlation, product_id=None, step="search:done", urls=out[:max_results], query_used=(candidates_q[0] if candidates_q else None))
     except Exception:
         pass
     log_event_sync(correlation, None, None, "search", message="search_done", title=title, urls=out[:max_results])

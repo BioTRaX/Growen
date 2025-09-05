@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+import sys
 from typing import Optional
 
 
@@ -32,7 +33,11 @@ def run_ocrmypdf(src: Path, dst: Path, *, force: bool = False, timeout: int = 12
     - Usa idioma de entorno IMPORT_OCR_LANG o spa+eng por defecto.
     """
     lang = lang or os.getenv("IMPORT_OCR_LANG", "spa+eng")
+    # Ejecutar como módulo de Python para asegurar que se use el intérprete del venv
+    # incluso si la carpeta Scripts no está en PATH (Windows).
     args = [
+        sys.executable,
+        "-m",
         "ocrmypdf",
         "--language",
         lang,

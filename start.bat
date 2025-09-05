@@ -20,7 +20,7 @@ call :log "[INFO] Logs previos limpiados."
 
 call :log "[INFO] Cerrando procesos previos..."
 if exist "%~dp0stop.bat" call "%~dp0stop.bat"
-REM pequeña espera para evitar condiciones de carrera al liberar puertos
+REM pequeÃ±a espera para evitar condiciones de carrera al liberar puertos
 timeout /t 1 /nobreak >NUL
 
 call :log "[INFO] Verificando puertos 8000 y 5175..."
@@ -35,33 +35,33 @@ for %%P in (8000 5175) do (
 
 rem Asegurar Redis en 6379 (necesario para Dramatiq)
 call :log "[INFO] Verificando Redis en 127.0.0.1:6379..."
-call :check_redis 127.0.0.1 6379 10
+call :check_redis 127.0.0.1 6379 8
 if errorlevel 1 (
   call :log "[WARN] Redis no responde. Intentando iniciar contenedor 'growen-redis'..."
   call :docker_start_redis
-  call :check_redis 127.0.0.1 6379 25
+  call :check_redis 127.0.0.1 6379 15
   if errorlevel 1 (
   call :log "[ERROR] No se pudo establecer Redis. Activando modo RUN_INLINE_JOBS=1 para desarrollo (sin colas)."
   set "RUN_INLINE_JOBS=1"
   ) else (
-    call :log "[INFO] Redis está listo en 6379."
+    call :log "[INFO] Redis estÃ¡ listo en 6379."
   )
 ) else (
-  call :log "[INFO] Redis está listo en 6379."
+  call :log "[INFO] Redis estÃ¡ listo en 6379."
 )
 
 call :log "[INFO] Instalando/verificando dependencias de Python desde requirements.txt..."
 "%ROOT%.venv\Scripts\python.exe" -m pip install -r "%ROOT%requirements.txt" >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
-  call :log "[ERROR] Falló la instalación de dependencias de Python. Revisa %LOG_FILE%."
+  call :log "[ERROR] FallÃ³ la instalaciÃ³n de dependencias de Python. Revisa %LOG_FILE%."
   pause
   exit /b 1
 )
 
-call :log "[INFO] Verificando instalación de Playwright..."
+call :log "[INFO] Verificando instalaciÃ³n de Playwright..."
 "%ROOT%.venv\Scripts\python.exe" -m playwright install chromium >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
-    call :log "[WARN] Falló la instalación del navegador de Playwright (chromium). El crawler podría no funcionar."
+    call :log "[WARN] FallÃ³ la instalaciÃ³n del navegador de Playwright (chromium). El crawler podrÃ­a no funcionar."
 )
 
 rem Asegurarse de que frontend tenga node_modules (si no, ejecutar npm install)
@@ -70,7 +70,7 @@ if not exist "%ROOT%frontend\node_modules" (
   pushd "%ROOT%frontend"
   npm install >> "%LOG_FILE%" 2>&1
   if errorlevel 1 (
-    call :log "[ERROR] Falló 'npm install' en el frontend. Revisa %LOG_FILE%."
+    call :log "[ERROR] FallÃ³ 'npm install' en el frontend. Revisa %LOG_FILE%."
     pause
     exit /b 1
   )
@@ -80,7 +80,7 @@ if not exist "%ROOT%frontend\node_modules" (
 call :log "[INFO] Ejecutando migraciones..."
 call "%~dp0scripts\run_migrations.cmd"
 if errorlevel 1 (
-  call :log "[ERROR] No se iniciará el servidor debido a errores de migración."
+  call :log "[ERROR] No se iniciarÃ¡ el servidor debido a errores de migraciÃ³n."
   goto :eof
 )
 
@@ -88,17 +88,17 @@ call :log "[INFO] Iniciando backend..."
 rem Activar modo DEBUG para backend y devolver info de debug en import
 set "LOG_LEVEL=DEBUG"
 set "IMPORT_RETURN_DEBUG=1"
-start "Growen API" cmd /k "set LOG_LEVEL=%LOG_LEVEL% && set IMPORT_RETURN_DEBUG=%IMPORT_RETURN_DEBUG% && "%VENV%\python.exe" -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000 --loop asyncio --http h11 --log-level debug >> "%LOG_DIR%\backend.log" 2>&1"
+start "Growen API" cmd /k "set LOG_LEVEL=%LOG_LEVEL% && set IMPORT_RETURN_DEBUG=%IMPORT_RETURN_DEBUG% && set PATH=%VENV%;%PATH% && "%VENV%\python.exe" -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000 --loop asyncio --http h11 --log-level debug >> "%LOG_DIR%\backend.log" 2>&1"
 
 call :log "[INFO] Preparando frontend..."
-REM Si existe carpeta dist vacía o VITE_BUILD=1, ejecutamos build para servir desde FastAPI.
+REM Si existe carpeta dist vacÃ­a o VITE_BUILD=1, ejecutamos build para servir desde FastAPI.
 if exist "%ROOT%frontend\package.json" (
   pushd "%ROOT%frontend"
   if "!VITE_BUILD!"=="1" (
     call :log "[INFO] Ejecutando build del frontend (VITE_BUILD=1)..."
     npm run build >> "%LOG_DIR%\frontend.log" 2>&1
   ) else (
-    REM Si no hay assets, también build
+    REM Si no hay assets, tambiÃ©n build
     if not exist "%ROOT%frontend\dist\assets" (
       call :log "[INFO] Assets no encontrados; ejecutando build del frontend..."
       npm run build >> "%LOG_DIR%\frontend.log" 2>&1
@@ -113,10 +113,10 @@ REM Opcional: si el dev server es preferido, descomentar este bloque.
 REM call :log "[INFO] Iniciando frontend en modo dev (5175)..."
 REM start "Growen Frontend" cmd /k "pushd ""%ROOT%frontend"" && set VITE_PORT=5175 && npm run dev >> "%LOG_DIR%\frontend.log" 2>&1"
 
-rem Iniciar worker de imágenes (Dramatiq)
+rem Iniciar worker de imÃ¡genes (Dramatiq)
 if not defined REDIS_URL set "REDIS_URL=redis://localhost:6379/0"
 if "%RUN_INLINE_JOBS%"=="1" (
-  call :log "[INFO] RUN_INLINE_JOBS=1: no se inicia worker Dramatiq (los triggers correrán inline)."
+  call :log "[INFO] RUN_INLINE_JOBS=1: no se inicia worker Dramatiq (los triggers correrÃ¡n inline)."
 ) else (
   call :log "[INFO] Iniciando worker de imagenes (broker: %REDIS_URL%)..."
   start "Growen Images Worker" cmd /k "set REDIS_URL=%REDIS_URL% && call ""%ROOT%scripts\start_worker_images.cmd"""
@@ -179,14 +179,14 @@ if not defined _T set "_T=10"
 set /a _I=0
 :_cr_loop
 set /a _I+=1
-for /f %%R in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "@(Test-NetConnection -ComputerName '%_H%' -Port %_P% -WarningAction SilentlyContinue).TcpTestSucceeded"') do set "__OK=%%R"
-if /I "!__OK!"=="True" (
-  endlocal & exit /b 0
-)
+REM Quick TCP probe with 250ms timeout (faster than Test-NetConnection)
+set "__OK="
+for /f %%R in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "$h='%_H%';$p=%_P%;$c=New-Object System.Net.Sockets.TcpClient;$iar=$c.BeginConnect($h,$p,$null,$null);$ok=$iar.AsyncWaitHandle.WaitOne(250); if($ok -and $c.Connected){$c.Close(); 'OK'} else{$c.Close(); 'FAIL'}"') do set "__OK=%%R"
+if /I "!__OK!"=="OK" ( endlocal & exit /b 0 )
 if !_I! GEQ %_T% (
   endlocal & exit /b 1
 )
-timeout /t 1 /nobreak >NUL
+timeout /t 0 /nobreak >NUL
 goto _cr_loop
 
 :docker_start_redis
