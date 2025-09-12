@@ -66,3 +66,14 @@ export function openLogsStream(name: string, lastId = 0): EventSource {
   if (lastId) u.searchParams.set('last_id', String(lastId))
   return new EventSource(u.toString())
 }
+
+// Deps check/install
+export async function checkDeps(name: string): Promise<{ ok: boolean; missing?: string[]; detail?: string[]; hints?: string[] }>{
+  const r = await http.get(`/admin/services/${encodeURIComponent(name)}/deps/check`)
+  return r.data
+}
+
+export async function installDeps(name: string): Promise<{ ok: boolean; detail?: string[]; disabled?: boolean; hint?: string }>{
+  const r = await http.post(`/admin/services/${encodeURIComponent(name)}/deps/install`)
+  return r.data
+}

@@ -1,5 +1,57 @@
 # Growen
 
+## Endpoints clave (checklist rapido)
+
+- Autenticacion
+  - `POST /auth/login`: inicio de sesion
+  - `GET /auth/me`: info de sesion actual
+
+- Compras
+  - `GET /purchases`: listar (filtros y paginacion)
+  - `POST /purchases`: crear (BORRADOR)
+  - `GET /purchases/{id}`: detalle con lineas y adjuntos
+  - `PUT /purchases/{id}`: actualizar encabezado + lineas (upsert/delete)
+  - `POST /purchases/{id}/validate`: validar (marca lineas OK/SIN_VINCULAR)
+  - `POST /purchases/{id}/confirm`: confirmar (impacta stock y precios)
+  - `POST /purchases/{id}/cancel`: anular (revierte stock si corresponde)
+  - `GET /purchases/{id}/logs`: auditoria e import logs
+  - `GET /purchases/{id}/attachments/{att}/file`: descargar adjunto inline
+  - `POST /purchases/import/santaplanta`: importar PDF (pipeline OCR con dedupe)
+
+- Admin / Servicios
+  - `GET /admin/services`: listar servicios y estado
+  - `GET /admin/services/{name}/status`: estado puntual
+  - `POST /admin/services/{name}/start|stop`: control de servicio
+  - `GET /admin/services/{name}/logs`: ultimos N logs
+  - `GET /admin/services/{name}/logs/stream`: SSE de logs
+  - `GET /admin/services/{name}/deps/check`: chequeos de deps
+  - `POST /admin/services/{name}/deps/install`: instalar deps (dev)
+
+- Imagenes / Crawler
+  - `GET /admin/image-jobs/status`: estado del scheduler/crawler
+  - `GET /admin/image-jobs/logs`: ultimos logs
+  - `GET /admin/image-jobs/logs/stream`: SSE de logs
+  - `POST /admin/image-jobs/trigger/*`: disparadores (crawl/purge/etc.)
+  - `GET /admin/image-jobs/snapshots`: listar snapshot files por `correlation_id`
+  - `GET /admin/image-jobs/snapshots/file?path=...`: servir snapshot
+
+- Health / Diagnostico
+  - `GET /health`: liveness
+  - `GET /health/summary`: resumen (DB/Redis/Storage/Workers/etc.)
+  - `GET /health/service/{name}`: deps por servicio (pdf_import/playwright/...)
+  - `GET /health/db|redis|storage|optional|dramatiq`: checks especificos
+
+- WebSocket
+  - `WS /ws`: canal de chat; pings cada 30s; timeout lectura 60s
+
+- Productos / Media (ejemplos)
+  - `GET /products`: catalogo
+  - `GET /media/*`: estaticos del build (cuando aplica)
+
+Notas:
+- Rutas de Admin en frontend: `/admin/servicios`, `/admin/usuarios`, `/admin/imagenes-productos`.
+- Alias legacy `/admin/imagenes` redirige a `/admin/imagenes-productos`.
+
 Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web e IA híbrida.
 
 ## Arquitectura
@@ -373,7 +425,7 @@ Errores comunes:
 
 ### Flujo del visor de importaciones
 
-El visor trabaja de forma paginada llamando a `GET /imports/{job_id}/preview`. Como atajo, `GET /imports/{job_id}` devuelve `status`, `summary` y las primeras filas para hidratar vistas iniciales sin paginaci��n.
+El visor trabaja de forma paginada llamando a `GET /imports/{job_id}/preview`. Como atajo, `GET /imports/{job_id}` devuelve `status`, `summary` y las primeras filas para hidratar vistas iniciales sin paginación.
 
 1. La pestaña **Cambios** solicita `status=new,changed` para concentrar las filas a aplicar.
 2. **Errores** y **Duplicados en archivo** reutilizan el mismo endpoint variando `status`.
@@ -511,7 +563,7 @@ Los `.bat` están preparados para ejecutarse desde rutas como `C:\\Nice Grow\\Ag
 - `scripts\start.bat` encadena `stop` → `migrate` → `api + frontend` en ventanas separadas.
 - Para registrar cada consulta SQL en el log de migraciones ejecutar `scripts\start.bat /sql`.
 
-Nota de compatibilidad (psycopg as��ncrono): en Windows la aplicaci��n establece `WindowsSelectorEventLoopPolicy` al iniciar para evitar errores del conector as��ncrono de PostgreSQL.
+Nota de compatibilidad (psycopg asíncrono): en Windows la aplicación establece `WindowsSelectorEventLoopPolicy` al iniciar para evitar errores del conector asíncrono de PostgreSQL.
 
 ### Debian/Ubuntu
 
@@ -558,13 +610,13 @@ alembic -c ./alembic.ini downgrade -1
 Consulta `.env.example` para la lista completa. Variables destacadas:
 
 - `DB_URL`: URL de PostgreSQL (obligatoria; la aplicación no arranca si falta. Si la contraseña tiene caracteres reservados, encodéalos, ej.: `=` → `%3D`. Si tu contraseña tiene caracteres raros, ponela sin encodar en variables separadas y construí la URL con `SQLAlchemy URL.create()`; pero si usás `DB_URL` ya encodada, el `env.py` ahora la maneja bien.).
-- `ENV`: entorno de ejecuci��n (`dev`, `production`). En `dev` se completan or��genes locales y se flexibilizan claves por defecto para facilitar pruebas.
+- `ENV`: entorno de ejecución (`dev`, `production`). En `dev` se completan orígenes locales y se flexibilizan claves por defecto para facilitar pruebas.
 - `AI_MODE`: `auto`, `openai` u `ollama`.
 - `AI_ALLOW_EXTERNAL`: si es `false`, solo se usa Ollama.
 - `OLLAMA_URL`: URL base de Ollama (por defecto `http://localhost:11434`).
 - `OLLAMA_MODEL`: modelo de Ollama (por defecto `llama3.1`).
 - `OPENAI_API_KEY`, `OPENAI_MODEL`.
-- `AI_MAX_TOKENS_SHORT`, `AI_MAX_TOKENS_LONG`: l��mites de tokens para respuestas cortas/largas.
+- `AI_MAX_TOKENS_SHORT`, `AI_MAX_TOKENS_LONG`: límites de tokens para respuestas cortas/largas.
 - `AI_TIMEOUT_OLLAMA_MS`, `AI_TIMEOUT_OPENAI_MS`: timeouts de peticiones a proveedores.
 - `SECRET_KEY`: clave usada para firmar sesiones; en producción reemplace el
   placeholder `REEMPLAZAR_SECRET_KEY`, rote el valor periódicamente y manténgalo

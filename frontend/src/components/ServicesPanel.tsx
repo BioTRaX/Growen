@@ -1,9 +1,9 @@
-// NG-HEADER: Nombre de archivo: ServicesPanel.tsx
+﻿// NG-HEADER: Nombre de archivo: ServicesPanel.tsx
 // NG-HEADER: Ubicación: frontend/src/components/ServicesPanel.tsx
 // NG-HEADER: Descripción: Panel simple de control de servicios on-demand
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useMemo, useState } from 'react'
-import { listServices, startService, stopService, tailServiceLogs, panicStop, healthService, setAutoStart, openLogsStream, ServiceItem, ServiceLogItem } from '../services/servicesAdmin'
+import { listServices, startService, stopService, tailServiceLogs, panicStop, healthService, setAutoStart, openLogsStream, ServiceItem, ServiceLogItem, checkDeps, installDeps } from '../services/servicesAdmin'
 
 const SERVICE_LABELS: Record<string, string> = {
   pdf_import: 'Importador PDF (OCR)',
@@ -24,6 +24,24 @@ export default function ServicesPanel() {
   const [err, setErr] = useState<string | null>(null)
   const [health, setHealth] = useState<Record<string, { ok: boolean; hints?: string[] }>>({})
 
+  function Dot({ status }: { status: string }) {
+    const color = status === 'running' ? '#22c55e' : (status === 'degraded' || status === 'starting') ? '#f59e0b' : '#ef4444'
+    return <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: color, marginRight: 6 }} />
+  }
+
+  function truncate(s?: string, n = 80) {
+    if (!s) return ''
+  return s.length > n ? s.slice(0, n - 1) + '…' : s
+  }
+  function formatUptime(u?: number | null) {
+    if (!u || u <= 0) return '—'
+    const h = Math.floor(u / 3600)
+    const m = Math.floor((u % 3600) / 60)
+    const s = u % 60
+    const pad = (x: number) => String(x).padStart(2, '0')
+    return `${pad(h)}:${pad(m)}:${pad(s)}`
+  }
+
   async function refresh() {
     try {
       setErr(null)
@@ -42,6 +60,12 @@ export default function ServicesPanel() {
   }
 
   useEffect(() => { refresh() }, [])
+  // Soft polling to keep status fresh
+  useEffect(() => {
+    const id = setInterval(() => { refresh() }, 12000)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const sorted = useMemo(() => {
     return [...items].sort((a, b) => a.name.localeCompare(b.name))
@@ -95,7 +119,7 @@ export default function ServicesPanel() {
         es.onmessage = (ev) => {
           try {
             const data = JSON.parse(ev.data)
-            setLogs((prev) => ({ ...prev, [name]: [...(prev[name] || []), data].slice(-400) }))
+            setLogs((prev) => ({ ...prev, [name]: [...(prev[name] || []), data].slice(-200) }))
           } catch {}
         }
         es.onerror = () => { /* keep quiet */ }
@@ -109,15 +133,25 @@ export default function ServicesPanel() {
       {err && <div style={{ color: '#fca5a5', marginBottom: 8 }}>{err}</div>}
       <div className="row" style={{ gap: 8, marginBottom: 8 }}>
         <button className="btn" onClick={refresh}>Actualizar</button>
-        <button className="btn-secondary" onClick={async () => { try { await panicStop(); await refresh() } catch (e: any) { setErr(e?.response?.data?.detail || 'No se pudo ejecutar Pánico') } }}>Pánico: apagar no esenciales</button>
+        <button
+          className="btn-danger"
+          onClick={async () => {
+            if (!window.confirm('¿Seguro que querés apagar los servicios no esenciales?')) return
+            try { await panicStop(); await refresh() } catch (e: any) { setErr(e?.response?.data?.detail || 'No se pudo ejecutar Pánico') }
+          }}
+        >Pánico: apagar no esenciales</button>
       </div>
       <div className="col" style={{ gap: 10 }}>
         {sorted.map((s) => (
           <div key={s.id} className="row" style={{ alignItems: 'center', gap: 8, flexWrap: 'wrap', border: '1px solid #2a2a2a', borderRadius: 6, padding: 8 }}>
-          <div style={{ minWidth: 260 }}>
-            <strong>{SERVICE_LABELS[s.name] || s.name}</strong>
-            <div style={{ fontSize: 12, color: '#a3a3a3' }}>
+          <div style={{ minWidth: 320 }}>
+            <div className="row" style={{ alignItems: 'center' }}>
+              <Dot status={s.status} />
+              <strong>{SERVICE_LABELS[s.name] || s.name}</strong>
+            </div>
+            <div style={{ fontSize: 12, color: '#a3a3a3' }} title={s.started_at ? `Inicio: ${s.started_at}` : undefined}>
               estado: {s.status}{s.last_error ? ` · err: ${s.last_error.slice(0, 80)}` : ''}
+              {s.uptime_s ? ` · uptime: ${formatUptime(s.uptime_s)}` : ''}
               {health[s.name] && (
                 <>
                   {' '}· salud: <span style={{ color: health[s.name].ok ? '#22c55e' : '#ef4444' }}>{health[s.name].ok ? 'OK' : 'FALLA'}</span>
@@ -140,19 +174,40 @@ export default function ServicesPanel() {
               )}
             </div>
             <div className="row" style={{ gap: 8, alignItems: 'center', marginTop: 6 }}>
-              <label className="text-sm"><input type="checkbox" checked={s.auto_start} onChange={async (e) => { try { await setAutoStart(s.name, e.target.checked); await refresh() } catch {} }} /> Auto-start</label>
+              <label className="text-sm"><input type="checkbox" checked={s.auto_start} onChange={async (e) => { try { await setAutoStart(s.name, e.target.checked); await refresh() } catch {} }} /> Inicio automático</label>
             </div>
             <div style={{ flex: 1 }}>
               <details>
                 <summary>Logs recientes</summary>
-                <ul style={{ maxHeight: 160, overflow: 'auto', fontSize: 12 }}>
-                  {(logs[s.name] || []).map((l, i) => (
-                    <li key={i}>[{l.level}] {l.created_at} · {l.action} · {l.ok ? 'OK' : 'FAIL'} · {l.error || l.payload?.detail || ''}</li>
-                  ))}
+                <ul style={{ maxHeight: 240, overflow: 'auto', fontSize: 12, lineHeight: 1.35 }}>
+                  {(logs[s.name] || []).map((l, i) => {
+                    const level = (l.level || '').toUpperCase()
+                    const color = level === 'ERROR' ? '#ef4444' : level === 'WARN' || level === 'WARNING' ? '#f59e0b' : '#9ca3af'
+                    const msg = l.error || l.payload?.detail || ''
+                    return (
+                      <li key={i} style={{ color, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        [{l.level}] {l.created_at} · {l.action} · {l.ok ? 'OK' : 'FAIL'}
+                        {msg ? ` · ${msg}` : ''}
+                      </li>
+                    )
+                  })}
                 </ul>
                 <button className="btn" onClick={async () => { const tl = await tailServiceLogs(s.name, 200); setLogs((prev) => ({ ...prev, [s.name]: tl })) }}>Actualizar logs</button>
-                <label style={{ marginLeft: 8 }}><input type="checkbox" checked={!!live[s.name]} onChange={() => toggleLive(s.name)} /> Live</label>
+                <label style={{ marginLeft: 8, opacity: (logs[s.name]?.length || 0) === 0 ? 0.6 : 1 }} title={(logs[s.name]?.length || 0) === 0 ? 'Cargar logs primero' : 'Conectar para ver en vivo'}>
+                  <input type="checkbox" checked={!!live[s.name]} disabled={(logs[s.name]?.length || 0) === 0} onChange={() => toggleLive(s.name)} /> En vivo
+                </label>
                 <button className="btn" style={{ marginLeft: 8 }} onClick={async () => { try { const h = await healthService(s.name); setHealth(prev => ({ ...prev, [s.name]: { ok: !!h.ok, hints: h.hints || [] } })) } catch {} }}>Reintentar health</button>
+                <button className="btn" style={{ marginLeft: 8 }} onClick={async () => { try {
+                  const r = await checkDeps(s.name)
+                  const missing = (r.missing || []).join(', ')
+                  alert(`Deps ${s.name}: ${r.ok ? 'OK' : 'FALTAN'}${missing ? `\nFaltan: ${missing}` : ''}`)
+                } catch (e: any) { alert(e?.response?.data?.detail || 'Fallo al validar deps') } }}>Validar deps</button>
+                <button className="btn" style={{ marginLeft: 8 }} onClick={async () => { try {
+                  const r = await installDeps(s.name)
+                  const lines = (r.detail || []).slice(0, 12).join('\n')
+                  alert((r.disabled ? 'Instalación deshabilitada' : (r.ok ? 'Instalación OK' : 'Instalación falló')) + (lines ? `\n---\n${lines}` : ''))
+                  try { const tl = await tailServiceLogs(s.name, 120); setLogs((prev) => ({ ...prev, [s.name]: tl })) } catch {}
+                } catch (e: any) { alert(e?.response?.data?.detail || 'Fallo al instalar deps') } }}>Instalar deps</button>
               </details>
               {health[s.name] && health[s.name].hints && health[s.name].hints!.length > 0 && (
                 <div className="text-sm" style={{ marginTop: 6, color: '#fbbf24' }}>

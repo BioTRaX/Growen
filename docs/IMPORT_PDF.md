@@ -6,22 +6,42 @@
 # Importación de PDF
 
 El proceso de importación de PDF sigue el siguiente pipeline:
-1. `pdfplumber` extrae el texto cuando es posible.
-2. `Camelot` procesa tablas embebidas.
-3. Si el PDF no contiene texto o se fuerza el proceso, se ejecuta OCR con `ocrmypdf`.
+1. `pdfplumber` intenta extraer texto y tablas.
+2. `Camelot` (lattice/stream) busca tablas si no hubo éxito con pdfplumber.
+3. Si el PDF no contiene suficiente texto o se fuerza el proceso, se ejecuta OCR con `ocrmypdf` y se reintenta la extracción.
 
 ## Flags relevantes
-- `debug`: genera información adicional para diagnósticos.
+- `debug`: genera información adicional para diagnósticos (eventos del pipeline, muestras de filas).
 - `force_ocr`: fuerza el uso de OCR incluso si el PDF tiene texto.
 
 ## Política de borrador vacío
-Si el OCR no logra extraer contenido útil, se genera un borrador vacío para revisión manual.
+- Controlada por `IMPORT_ALLOW_EMPTY_DRAFT` (por defecto `true`).
+- Puede sobrescribirse en runtime vía variable de entorno.
+- Si el pipeline no detecta líneas, en dev puede crearse un BORRADOR vacío con el PDF adjunto y logs asociados.
 
 ## Respuesta
-Toda respuesta incluye un `correlation_id` para trazabilidad.
+- Siempre incluye `purchase_id`, `status` y `correlation_id`.
+- Con `debug=1` devuelve `debug.events` (resumen) y `debug.samples` (hasta 8 líneas parseadas) para diagnóstico.
 
-## Tips de diagnóstico
-- Revisar logs generados en modo `debug`.
-- Verificar dependencias externas: Tesseract, Ghostscript y Poppler.
-- Utilizar PDFs de ejemplo para pruebas controladas.
+## Trazabilidad y diagnóstico
+- Eventos del pipeline (ejemplos):
+  - `header_extract:text_stats` → páginas y cantidad de caracteres
+  - `pre_ocr:pdf_has_text` → si hay texto suficiente (threshold configurable)
+  - `pdfplumber:tables_found` → tablas detectadas por página
+  - `pdfplumber:lines_detected` → cantidad de líneas normalizadas
+  - `camelot:tables_found` → tablas detectadas por flavor
+  - `ocr:ocrmypdf_run` → resultado de OCR (ok/tiempo/stdout/stderr)
+  - `summary:done` / `summary:no_lines_after_pipeline`
+
+- Cómo ver logs de una compra:
+  - `GET /purchases/{id}/logs?limit=200` (incluye `AuditLog` + `ImportLog` con `correlation_id`)
+  - En la UI, en Detalle de compra → “Logs de importación”.
+
+- Servicio Importador (estado y deps):
+  - `GET /admin/services/pdf_import/status`
+  - `GET /health/service/pdf_import` (chequea `ocrmypdf`, `tesseract`, `qpdf`, `ghostscript`, `camelot`)
+
+## Limpieza de logs
+- Archivos (`logs/`): `python scripts/clear_logs.py`
+- Tablas de logs (no críticas): `python -m tools.clear_db_logs` (usar `--include-audit` para incluir `audit_log`).
 

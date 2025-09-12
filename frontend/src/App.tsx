@@ -7,6 +7,7 @@ import { AuthProvider } from "./auth/AuthContext";
 import ProtectedRoute from "./auth/ProtectedRoute";
 import Login from "./pages/Login";
 import { lazy, Suspense } from 'react';
+// Legacy AdminPanel kept for backward-compat entry but replaced by nested /admin routes
 const AdminPanel = lazy(() => import('./pages/AdminPanel'))
 const ImagesAdminPanel = lazy(() => import('./pages/ImagesAdminPanel'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
@@ -18,6 +19,11 @@ const PurchaseNew = lazy(() => import('./pages/PurchaseNew'))
 const PurchaseDetail = lazy(() => import('./pages/PurchaseDetail'))
 const SuppliersPage = lazy(() => import('./pages/Suppliers'))
 import { PATHS } from "./routes/paths";
+// New Admin sections (code-split per route)
+const AdminLayout = lazy(() => import('./pages/admin/AdminLayout'))
+const AdminUsers = lazy(() => import('./pages/admin/UsersPage'))
+const AdminServices = lazy(() => import('./pages/admin/ServicesPage'))
+const AdminImages = lazy(() => import('./pages/admin/ImagesCrawlerPage'))
 
 export default function App() {
   return (
@@ -98,19 +104,33 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+          {/* New Admin router with nested sections and role guards */}
           <Route
-            path="/admin"
+            path={PATHS.admin}
             element={
-              <ProtectedRoute roles={["admin"]}>
-                <AdminPanel />
+              <ProtectedRoute roles={["colaborador", "admin"]}>
+                <AdminLayout />
               </ProtectedRoute>
             }
-          />
+          >
+            <Route path="servicios" element={<AdminServices />} />
+            <Route path="imagenes-productos" element={<AdminImages />} />
+            {/* Users only for admins */}
+            <Route
+              path="usuarios"
+              element={
+                <ProtectedRoute roles={["admin"]}>
+                  <AdminUsers />
+                </ProtectedRoute>
+              }
+            />
+          </Route>
+          {/* Legacy fallbacks */}
           <Route
             path={PATHS.imagesAdmin}
             element={
               <ProtectedRoute roles={["colaborador", "admin"]}>
-                <ImagesAdminPanel />
+                <Navigate to={PATHS.adminImages} replace />
               </ProtectedRoute>
             }
           />

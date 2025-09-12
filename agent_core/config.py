@@ -39,6 +39,12 @@ class Settings:
 
     env: str = os.getenv("ENV", "dev")
     db_url: str = os.getenv("DB_URL", "")
+    # Soporte para componer la URL si no se pasa DB_URL directamente
+    db_host: str = os.getenv("DB_HOST", "localhost")
+    db_port: str = os.getenv("DB_PORT", "5432")
+    db_name: str = os.getenv("DB_NAME", "growen")
+    db_user: str = os.getenv("DB_USER", "growen")
+    db_pass: str = os.getenv("DB_PASS", "")
     ai_mode: str = os.getenv("AI_MODE", "auto")
     ai_allow_external: bool = os.getenv("AI_ALLOW_EXTERNAL", "true").lower() == "true"
     secret_key: str = os.getenv("SECRET_KEY", SECRET_KEY_PLACEHOLDER)
@@ -60,7 +66,27 @@ class Settings:
 
     def __post_init__(self) -> None:
         if not self.db_url:
-            raise RuntimeError("DB_URL debe definirse en el entorno")
+            # Intentar construir desde variables sueltas
+            if self.db_pass:
+                from urllib.parse import quote_plus as _qp
+                pw_enc = _qp(self.db_pass)
+            else:
+                pw_enc = ""
+            if self.db_user and pw_enc:
+                candidate = f"postgresql+psycopg://{self.db_user}:{pw_enc}@{self.db_host}:{self.db_port}/{self.db_name}"
+            elif self.db_user:
+                candidate = f"postgresql+psycopg://{self.db_user}@{self.db_host}:{self.db_port}/{self.db_name}"
+            else:
+                candidate = ""
+            if candidate:
+                self.db_url = candidate
+        if not self.db_url:
+            if self.env == "dev":
+                # Fallback amigable para no bloquear el arranque local sin Postgres
+                # Nota: aiosqlite sólo se usa si se instala aiosqlite (ya en requirements)
+                self.db_url = "sqlite+aiosqlite:///./dev.db"
+            else:
+                raise RuntimeError("DB_URL debe definirse en el entorno")
         if self.secret_key == SECRET_KEY_PLACEHOLDER:
             if self.env == "dev":
                 # En desarrollo se usa una clave predecible para simplificar pruebas

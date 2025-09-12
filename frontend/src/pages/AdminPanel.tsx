@@ -2,12 +2,13 @@
 // NG-HEADER: Ubicación: frontend/src/pages/AdminPanel.tsx
 // NG-HEADER: Descripción: Pendiente de descripción
 // NG-HEADER: Lineamientos: Ver AGENTS.md
-import { useEffect, useState } from 'react'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { PATHS } from '../routes/paths'
 import http from '../services/http'
 import { listSuppliers, Supplier } from '../services/suppliers'
-import HealthPanel from '../components/HealthPanel'
-import ServicesPanel from '../components/ServicesPanel'
+const HealthPanel = lazy(() => import('../components/HealthPanel'))
+const ServicesPanel = lazy(() => import('../components/ServicesPanel'))
 
 interface User {
   id: number
@@ -20,6 +21,7 @@ interface User {
 
 export default function AdminPanel() {
   const nav = useNavigate()
+  const [tab, setTab] = useState<'servicios' | 'usuarios' | 'imagenes'>('servicios')
   const [users, setUsers] = useState<User[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [form, setForm] = useState({
@@ -137,20 +139,35 @@ export default function AdminPanel() {
           <button className="btn-dark btn-lg" type="button" onClick={clearLogs}>
             Limpiar logs
           </button>
-          <button className="btn-secondary" type="button" onClick={() => (nav ? nav('/') : null)}>
+          <button className="btn-secondary" type="button" onClick={() => (nav ? nav(PATHS.home) : null)}>
             Volver
           </button>
         </div>
       </div>
 
-  {/* Health + Servicios */}
-  <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-    <h3>Servicios y Health</h3>
-    <div style={{ marginBottom: 8 }}>
-      <HealthPanel />
-    </div>
-    <ServicesPanel />
+  {/* Tabs */}
+  <div className="row" style={{ gap: 8, marginTop: 12, marginBottom: 12 }}>
+    <button className={"btn"} onClick={() => setTab('servicios')} style={{ borderColor: tab==='servicios' ? 'var(--primary)' : undefined, color: tab==='servicios' ? 'var(--primary)' : undefined }}>Servicios</button>
+    <button className={"btn"} onClick={() => setTab('usuarios')} style={{ borderColor: tab==='usuarios' ? 'var(--primary)' : undefined, color: tab==='usuarios' ? 'var(--primary)' : undefined }}>Usuarios</button>
+    <button className={"btn"} onClick={() => setTab('imagenes')} style={{ borderColor: tab==='imagenes' ? 'var(--primary)' : undefined, color: tab==='imagenes' ? 'var(--primary)' : undefined }}>Imágenes</button>
   </div>
+
+  {tab === 'servicios' && (
+    <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+      <h3>Servicios y Health</h3>
+      <div style={{ marginBottom: 8 }}>
+        <Suspense fallback={<div>Cargando...</div>}>
+          <HealthPanel />
+        </Suspense>
+      </div>
+      <Suspense fallback={<div>Cargando...</div>}>
+        <ServicesPanel />
+      </Suspense>
+    </div>
+  )}
+
+  {tab === 'usuarios' && (
+    <>
       <form onSubmit={submit} className="flex flex-col gap-2 mb-4">
         <input
           className="input"
@@ -206,70 +223,6 @@ export default function AdminPanel() {
         </button>
         {err && <div style={{color:'#fca5a5'}}>{err}</div>}
       </form>
-
-      {/* Image jobs panel */}
-      <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-        <h3>Job: Imágenes productos</h3>
-        {job && (
-          <div style={{ fontSize: 14, marginBottom: 8 }}>
-            <div>Activo: {job.active ? 'Sí' : 'No'} | Modo: {job.mode} | Ejecutando: {job.running ? 'Sí' : 'No'} | Pendientes: {job.pending}</div>
-          </div>
-        )}
-        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-          <label>Activo <input type="checkbox" checked={jobForm.active} onChange={(e) => setJobForm({ ...jobForm, active: e.target.checked })} /></label>
-          <select className="select" value={jobForm.mode} onChange={(e) => setJobForm({ ...jobForm, mode: e.target.value })}>
-            <option value="off">Off</option>
-            <option value="on">On</option>
-            <option value="window">Ventana</option>
-          </select>
-          <input className="input" type="number" value={jobForm.retries} onChange={(e) => setJobForm({ ...jobForm, retries: Number(e.target.value) })} placeholder="Reintentos" />
-          <input className="input" type="number" step="0.1" value={jobForm.rate_rps} onChange={(e) => setJobForm({ ...jobForm, rate_rps: Number(e.target.value) })} placeholder="rate_rps" />
-          <input className="input" type="number" value={jobForm.burst} onChange={(e) => setJobForm({ ...jobForm, burst: Number(e.target.value) })} placeholder="burst" />
-          <input className="input" type="number" value={jobForm.purge_ttl_days} onChange={(e) => setJobForm({ ...jobForm, purge_ttl_days: Number(e.target.value) })} placeholder="TTL purge" />
-          <input className="input" type="number" value={jobForm.log_retention_days} onChange={(e) => setJobForm({ ...jobForm, log_retention_days: Number(e.target.value) })} placeholder="Retencion logs" />
-          <button className="btn-dark btn-lg" type="button" onClick={async () => { await http.put('/admin/image-jobs/settings', jobForm); const r = await http.get('/admin/image-jobs/status'); setJob(r.data) }}>Guardar</button>
-        </div>
-        <div style={{ marginTop: 8 }}>
-          <strong>Logs recientes</strong>
-          <ul>
-            {job?.logs?.map((l: any, i: number) => <li key={i}>[{l.level}] {l.created_at} - {l.message}</li>)}
-          </ul>
-          <div className="row" style={{ gap: 8 }}>
-            <button className="btn" type="button" onClick={async () => { await http.post('/admin/image-jobs/trigger/crawl-missing'); alert('Crawl encolado') }}>Forzar escaneo catálogo</button>
-            <button className="btn" type="button" onClick={async () => { await http.post('/admin/image-jobs/trigger/purge'); alert('Purge encolado') }}>Purgar soft-deleted</button>
-          </div>
-        </div>
-      </div>
-
-      {/* Services control panel (moved arriba junto a Health) */}
-
-      {/* Review queue */}
-      <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-        <h3>Revisión de imágenes pendientes</h3>
-        <table className="w-full">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Producto</th>
-              <th>Imagen</th>
-              <th>Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {review.map((r) => (
-              <tr key={r.image_id}>
-                <td>{r.image_id}</td>
-                <td>{r.product_id}</td>
-                <td>{r.path}</td>
-                <td className="row" style={{ gap: 6 }}>
-                  <button className="btn-secondary" onClick={async () => { await http.post(`/products/images/${r.image_id}/review/approve`, null, { params: { lock: true } }); setReview((prev) => prev.filter((x: any) => x.image_id !== r.image_id)) }}>Aprobar+Lock</button>
-                  <button className="btn" onClick={async () => { await http.post(`/products/images/${r.image_id}/review/reject`, { soft_delete: true }); setReview((prev) => prev.filter((x: any) => x.image_id !== r.image_id)) }}>Rechazar</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
 
       {edit && (
         <form onSubmit={submitEdit} className="flex flex-col gap-2 mb-4">
@@ -348,6 +301,73 @@ export default function AdminPanel() {
           ))}
         </tbody>
       </table>
+    </>
+  )}
+
+  {tab === 'imagenes' && (
+    <>
+      <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+        <h3>Job: Imágenes productos</h3>
+        {job && (
+          <div style={{ fontSize: 14, marginBottom: 8 }}>
+            <div>Activo: {job.active ? 'Sí' : 'No'} | Modo: {job.mode} | Ejecutando: {job.running ? 'Sí' : 'No'} | Pendientes: {job.pending}</div>
+          </div>
+        )}
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <label>Activo <input type="checkbox" checked={jobForm.active} onChange={(e) => setJobForm({ ...jobForm, active: e.target.checked })} /></label>
+          <select className="select" value={jobForm.mode} onChange={(e) => setJobForm({ ...jobForm, mode: e.target.value })}>
+            <option value="off">Off</option>
+            <option value="on">On</option>
+            <option value="window">Ventana</option>
+          </select>
+          <input className="input" type="number" value={jobForm.retries} onChange={(e) => setJobForm({ ...jobForm, retries: Number(e.target.value) })} placeholder="Reintentos" />
+          <input className="input" type="number" step="0.1" value={jobForm.rate_rps} onChange={(e) => setJobForm({ ...jobForm, rate_rps: Number(e.target.value) })} placeholder="rate_rps" />
+          <input className="input" type="number" value={jobForm.burst} onChange={(e) => setJobForm({ ...jobForm, burst: Number(e.target.value) })} placeholder="burst" />
+          <input className="input" type="number" value={jobForm.purge_ttl_days} onChange={(e) => setJobForm({ ...jobForm, purge_ttl_days: Number(e.target.value) })} placeholder="TTL purge" />
+          <input className="input" type="number" value={jobForm.log_retention_days} onChange={(e) => setJobForm({ ...jobForm, log_retention_days: Number(e.target.value) })} placeholder="Retencion logs" />
+          <button className="btn-dark btn-lg" type="button" onClick={async () => { await http.put('/admin/image-jobs/settings', jobForm); const r = await http.get('/admin/image-jobs/status'); setJob(r.data) }}>Guardar</button>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <strong>Logs recientes</strong>
+          <ul>
+            {job?.logs?.map((l: any, i: number) => <li key={i}>[{l.level}] {l.created_at} - {l.message}</li>)}
+          </ul>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn" type="button" onClick={async () => { await http.post('/admin/image-jobs/trigger/crawl-missing'); alert('Crawl encolado') }}>Forzar escaneo catálogo</button>
+            <button className="btn" type="button" onClick={async () => { await http.post('/admin/image-jobs/trigger/purge'); alert('Purge encolado') }}>Purgar soft-deleted</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Review queue */}
+      <div className="card" style={{ padding: 12, marginBottom: 16 }}>
+        <h3>Revisión de imágenes pendientes</h3>
+        <table className="w-full">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Producto</th>
+              <th>Imagen</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {review.map((r) => (
+              <tr key={r.image_id}>
+                <td>{r.image_id}</td>
+                <td>{r.product_id}</td>
+                <td>{r.path}</td>
+                <td className="row" style={{ gap: 6 }}>
+                  <button className="btn-secondary" onClick={async () => { await http.post(`/products/images/${r.image_id}/review/approve`, null, { params: { lock: true } }); setReview((prev) => prev.filter((x: any) => x.image_id !== r.image_id)) }}>Aprobar+Lock</button>
+                  <button className="btn" onClick={async () => { await http.post(`/products/images/${r.image_id}/review/reject`, { soft_delete: true }); setReview((prev) => prev.filter((x: any) => x.image_id !== r.image_id)) }}>Rechazar</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  )}
     </div>
   )
 }

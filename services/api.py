@@ -216,6 +216,35 @@ async def _init_inmemory_db():
     except Exception:
         APP_READY_TS = None
 
+    # Periodic health logger (optional, controlled via SERVICE_HEALTH_LOG_SEC)
+    try:
+        import asyncio as _asyncio
+        from db.models import ServiceLog as _ServiceLog
+        import socket as _socket
+        interval = int(os.getenv("SERVICE_HEALTH_LOG_SEC", "0") or "0")
+        if interval > 0:
+            async def _health_loop():
+                from sqlalchemy import select as _select
+                from services.routers.health import KNOWN_OPTIONAL_SERVICES as _SERVICES, health_service as _health_service
+                while True:
+                    try:
+                        async with SessionLocal() as _s:  # type: ignore
+                            for _name in _SERVICES:
+                                try:
+                                    h = await _health_service(_name)
+                                    ok = bool(h.get("ok", False))
+                                    level = "INFO" if ok else "ERROR"
+                                    _s.add(_ServiceLog(service=_name, correlation_id=f"health-{int(time.time())}", action="health", host=_socket.gethostname(), pid=None, duration_ms=None, ok=ok, level=level, error=(None if ok else (h.get("detail") or "")), payload=h))
+                                except Exception as _e:
+                                    _s.add(_ServiceLog(service=_name, correlation_id=f"health-{int(time.time())}", action="health", host=_socket.gethostname(), pid=None, duration_ms=None, ok=False, level="ERROR", error=str(_e)))
+                            await _s.commit()
+                    except Exception:
+                        pass
+                    await _asyncio.sleep(max(10, interval))
+            _asyncio.create_task(_health_loop())
+    except Exception:
+        pass
+
 
 # Unificado en services.routers.health
 

@@ -2,7 +2,6 @@
 # NG-HEADER: Ubicación: docker-compose.yml
 # NG-HEADER: Descripción: Pendiente de descripción
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-version: '3.9'
 services:
   db:
     image: postgres:15

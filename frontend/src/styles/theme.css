@@ -6,13 +6,13 @@
   --bg: #0f1115;
   --panel: #151821;
   --text: #e6e8ee;
-  --muted: #9aa3b2;
+  --muted: #aab4c6; /* slightly brighter for better contrast */
   --border: #23283a;
   --primary: #7c4dff;
   --success: #22c55e;
   --input-bg: #0f1115;
   --input-border: #2a3042;
-  --input-placeholder: #8b93a7;
+  --input-placeholder: #9aa3b2;
   --table-header: #1b2030;
   --table-row: #121620;
   --table-row-hover: #1a1f2d;

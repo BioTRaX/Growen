@@ -1,5 +1,3 @@
-PowerShell -ExecutionPolicy Bypass -File .\scripts\register_startup_task.ps1ntegrar “overlay Playwright” en ImagesAdminPanel si no lo ves aún (puedo inyectarlo justo antes del cierre del contenedor principal, similar al gating de PDF).
-Agregar un “health chip” en las cards del Panel de Servicios llamando a GET /health/service/{name} y mostrando hints (por ejemplo, “Instalá Tesseract/Ghostscript/QPDF” o “python -m playwright install chromium”).
 param(
     [string]$TaskName = 'Growen-StartStack',
     [string]$Trigger = 'Logon'

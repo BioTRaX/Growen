@@ -12,7 +12,8 @@ from pydantic import BaseModel
 from sqlalchemy import select, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import User
+from db.models import User, ServiceLog
+import socket
 from db.session import get_session
 from services.auth import (
     hash_pw,
@@ -231,4 +232,24 @@ async def reset_password(user_id: int, db: AsyncSession = Depends(get_session)):
     user.password_hash = hash_pw(new_password)
     await db.commit()
     return {"password": new_password}
+
+
+@router.delete(
+    "/users/{user_id}",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+)
+async def delete_user(user_id: int, db: AsyncSession = Depends(get_session)):
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    ident = user.identifier
+    db.delete(user)
+    await db.flush()
+    # Audit log via service_logs
+    try:
+        db.add(ServiceLog(service="users", correlation_id=secrets.token_hex(8), action="delete", host=socket.gethostname(), pid=None, duration_ms=None, ok=True, level="INFO", error=None, payload={"user": ident, "user_id": user_id}))
+    except Exception:
+        pass
+    await db.commit()
+    return {"status": "ok"}
 

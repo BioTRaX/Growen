@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import { importSantaPlanta } from '../services/purchases'
 import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
+import { ensureServiceRunning } from '../lib/ensureServiceRunning'
 import ToastContainer, { showToast } from './Toast'
 
 type Props = {
@@ -49,14 +50,13 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
   async function startPdfNow() {
     setGateBusy(true)
     try {
-      await startService('pdf_import')
-      await new Promise(r => setTimeout(r, 600))
+      await ensureServiceRunning('pdf_import', { timeoutMs: 60_000, intervalMs: 1500 })
       setGateNeeded(false)
-      showToast('success', 'Importador PDF iniciado')
+      showToast('success', 'Importador PDF en ejecución')
     } catch (e: any) {
-      const msg = e?.response?.data?.detail || 'No se pudo iniciar el Importador PDF'
+      const msg = e?.message || e?.response?.data?.detail || 'No se pudo iniciar el Importador PDF'
       showToast('error', msg)
-      try { setGateLogs(await tailServiceLogs('pdf_import', 80)) } catch {}
+      try { setGateLogs(await tailServiceLogs('pdf_import', 120)) } catch {}
     } finally {
       setGateBusy(false)
     }
