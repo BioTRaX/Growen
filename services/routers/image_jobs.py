@@ -8,6 +8,8 @@ from typing import Optional
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
+from fastapi.responses import StreamingResponse
+import asyncio
 from fastapi.responses import FileResponse
 import mimetypes
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,6 +57,8 @@ async def status(db: AsyncSession = Depends(get_session)):
     from db.models import Product, Image
     subq_has_img = select(Image.id).where(Image.product_id == Product.id, Image.active == True).exists()
     pending = (await db.execute(select(func.count()).select_from(Product).where(Product.stock > 0).where(~subq_has_img))).scalar() or 0
+    # Total candidatos (stock>0)
+    total_candidates = (await db.execute(select(func.count()).select_from(Product).where(Product.stock > 0))).scalar() or 0
 
     # Current product: por altimo log con data.product_id
     current_product = None
@@ -74,6 +78,9 @@ async def status(db: AsyncSession = Depends(get_session)):
     recent = (await db.execute(select(ImageJobLog).where(ImageJobLog.created_at >= day_ago))).scalars().all()
     ok = sum(1 for r in recent if r.message in ("done", "downloaded") and (r.level or "INFO") in ("INFO", "SUCCESS"))
     fail = sum(1 for r in recent if (r.level or "").upper() == "ERROR")
+    processed = (total_candidates - pending) if total_candidates >= pending else ok + fail
+    total_for_progress = total_candidates if total_candidates > 0 else (processed + pending)
+    percent = int(round((processed / total_for_progress) * 100)) if total_for_progress else 0
     return {
         "name": job.name,
         "active": job.active,
@@ -84,6 +91,12 @@ async def status(db: AsyncSession = Depends(get_session)):
         "fail": fail,
         "current_product": current_product,
         "logs": logs,
+        "progress": {
+            "total": total_candidates,
+            "pending": pending,
+            "processed": processed,
+            "percent": percent,
+        },
     }
 
 
@@ -296,3 +309,57 @@ async def trigger_purge(db: AsyncSession = Depends(get_session)):
         logger.exception("No se pudo encolar purge")
         raise HTTPException(status_code=500, detail=f"No se pudo encolar purge: {e}")
     return {"status": "queued", "ttl_days": ttl}
+
+
+@router.get("/logs/stream", dependencies=[Depends(require_roles("admin"))])
+async def stream_logs(last_id: int = Query(0, ge=0), poll_ms: int = Query(1200, ge=200, le=10000), db: AsyncSession = Depends(get_session)):
+    """SSE stream de logs del crawler + progreso.
+
+    En cada iteración:
+      - Devuelve nuevos logs con id > last_id
+      - Adjunta resumen de progreso básico (pending/processed/percent)
+    """
+    poll = max(0.2, min(poll_ms / 1000.0, 10.0))
+
+    async def event_gen():  # pragma: no cover - streaming
+        nonlocal last_id
+        while True:
+            try:
+                # Obtener nuevos logs
+                stmt = select(ImageJobLog).where(ImageJobLog.id > last_id).order_by(ImageJobLog.id.asc()).limit(200)
+                rows = (await db.execute(stmt)).scalars().all()
+                items = []
+                for r in rows:
+                    last_id = max(last_id, r.id)
+                    items.append({
+                        "id": r.id,
+                        "created_at": r.created_at.isoformat() if getattr(r, "created_at", None) else None,
+                        "level": r.level,
+                        "message": r.message,
+                        "data": r.data or {},
+                    })
+                # Progreso ligero (sin recalcular logs recientes costosos)
+                from db.models import Product, Image
+                subq_has_img2 = select(Image.id).where(Image.product_id == Product.id, Image.active == True).exists()
+                pending_now = (await db.execute(select(func.count()).select_from(Product).where(Product.stock > 0).where(~subq_has_img2))).scalar() or 0
+                total_now = (await db.execute(select(func.count()).select_from(Product).where(Product.stock > 0))).scalar() or 0
+                processed_now = (total_now - pending_now) if total_now >= pending_now else 0
+                percent_now = int(round((processed_now / total_now) * 100)) if total_now else 0
+                payload = {
+                    "logs": items,
+                    "last_id": last_id,
+                    "progress": {
+                        "total": total_now,
+                        "pending": pending_now,
+                        "processed": processed_now,
+                        "percent": percent_now,
+                    },
+                }
+                import json
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            except asyncio.CancelledError:  # client disconnected
+                break
+            except Exception as e:  # swallow and continue
+                yield f"data: {{\"error\": \"{str(e)[:120]}\"}}\n\n"
+            await asyncio.sleep(poll)
+    return StreamingResponse(event_gen(), media_type="text/event-stream")

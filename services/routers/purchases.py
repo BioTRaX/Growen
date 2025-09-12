@@ -5,9 +5,9 @@
 """Compras (purchases) API endpoints.
 
 Estados de compra: BORRADOR -> VALIDADA -> CONFIRMADA -> ANULADA.
-Incluye: crear/editar, validaciÃ³n, confirmaciÃ³n (impacta stock y buy_price),
-anulaciÃ³n, listado con filtros, importaciÃ³n Santa Planta (PDF) y export de
-lÃ­neas SIN_VINCULAR.
+Incluye: crear/editar, validación, confirmación (impacta stock y buy_price),
+anulación, listado con filtros, importación Santa Planta (PDF) y export de
+líneas SIN_VINCULAR.
 """
 from __future__ import annotations
 
@@ -72,6 +72,12 @@ def _sanitize_for_json(obj):
 
 @router.post("", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def create_purchase(payload: dict, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session)):
+    """Crea una compra en estado BORRADOR.
+
+    Requiere: supplier_id, remito_number, remito_date (ISO).
+    Devuelve: { id, status }.
+    Unicidad por (supplier_id, remito_number).
+    """
     supplier_id = payload.get("supplier_id")
     remito_number = payload.get("remito_number")
     remito_date = payload.get("remito_date")
@@ -98,6 +104,11 @@ async def create_purchase(payload: dict, db: AsyncSession = Depends(get_session)
 
 @router.put("/{purchase_id}", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def update_purchase(purchase_id: int, payload: dict, db: AsyncSession = Depends(get_session)):
+    """Actualiza encabezado y líneas de una compra.
+
+    - Encabezado: global_discount, vat_rate, note, remito_date, depot_id, remito_number.
+    - Líneas: upsert/delete con `lines` [{ id?, op=upsert|delete, ... }].
+    """
     p = await db.get(Purchase, purchase_id)
     if not p:
         raise HTTPException(status_code=404, detail="Compra no encontrada")
@@ -108,11 +119,11 @@ async def update_purchase(purchase_id: int, payload: dict, db: AsyncSession = De
                 try:
                     p.remito_date = date.fromisoformat(payload[k])
                 except ValueError:
-                    raise HTTPException(status_code=400, detail="remito_date invÃ¡lida")
+                    raise HTTPException(status_code=400, detail="remito_date inválida")
             else:
                 setattr(p, k, payload[k])
 
-    # LÃ­neas: upsert/delete
+    # Líneas: upsert/delete
     lines: list[dict[str, Any]] = payload.get("lines") or []
     for ln in lines:
         op = (ln.get("op") or "upsert").lower()
@@ -126,7 +137,7 @@ async def update_purchase(purchase_id: int, payload: dict, db: AsyncSession = De
         if lid:
             obj = await db.get(PurchaseLine, int(lid))
             if not obj or obj.purchase_id != p.id:
-                raise HTTPException(status_code=404, detail="LÃ­nea no encontrada")
+                raise HTTPException(status_code=404, detail="Línea no encontrada")
         else:
             obj = PurchaseLine(purchase_id=p.id)
             db.add(obj)
@@ -151,6 +162,11 @@ async def list_purchases(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
 ):
+    """Lista compras con filtros y paginación.
+
+    Filtros: supplier_id, status, depot_id, remito_number, product_name, date_from, date_to.
+    Paginación: page, page_size.
+    """
     stmt = select(Purchase)
     if supplier_id:
         stmt = stmt.where(Purchase.supplier_id == supplier_id)
@@ -165,15 +181,15 @@ async def list_purchases(
             df = date.fromisoformat(date_from)
             stmt = stmt.where(Purchase.remito_date >= df)
         except Exception:
-            raise HTTPException(status_code=400, detail="date_from invÃ¡lida")
+            raise HTTPException(status_code=400, detail="date_from inválida")
     if date_to:
         try:
             dt = date.fromisoformat(date_to)
             stmt = stmt.where(Purchase.remito_date <= dt)
         except Exception:
-            raise HTTPException(status_code=400, detail="date_to invÃ¡lida")
+            raise HTTPException(status_code=400, detail="date_to inválida")
     if product_name:
-        # Join con lÃ­neas para buscar por tÃ­tulo
+    # Join con líneas para buscar por título
         sub = select(PurchaseLine.purchase_id).where(PurchaseLine.title.ilike(f"%{product_name}%")).subquery()
         stmt = stmt.where(Purchase.id.in_(select(sub.c.purchase_id)))
 
@@ -195,6 +211,10 @@ async def list_purchases(
 
 @router.get("/{purchase_id}")
 async def get_purchase(purchase_id: int, db: AsyncSession = Depends(get_session)):
+    """Obtiene una compra con totales, líneas y adjuntos.
+
+    Calcula subtotal, iva y total a partir de líneas y vat_rate.
+    """
     res = await db.execute(
         select(Purchase)
         .options(selectinload(Purchase.lines), selectinload(Purchase.attachments))
@@ -260,6 +280,11 @@ async def get_purchase(purchase_id: int, db: AsyncSession = Depends(get_session)
 
 @router.post("/{purchase_id}/validate", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def validate_purchase(purchase_id: int, db: AsyncSession = Depends(get_session)):
+    """Valida líneas y estado de la compra.
+
+    Marca cada línea como OK o SIN_VINCULAR según vínculos.
+    Estado: VALIDADA si todas las líneas están resueltas y hay al menos una; caso contrario BORRADOR.
+    """
     res = await db.execute(
         select(Purchase)
         .options(selectinload(Purchase.lines))
@@ -280,14 +305,26 @@ async def validate_purchase(purchase_id: int, db: AsyncSession = Depends(get_ses
         l.state = "OK" if linked else "SIN_VINCULAR"
         if not linked:
             unmatched += 1
-    # Requiere al menos 1 lÃ­nea para quedar VALIDADA
+    # Requiere al menos 1 línea para quedar VALIDADA
     p.status = "VALIDADA" if (unmatched == 0 and total_lines > 0) else "BORRADOR"
     await db.commit()
     return {"status": "ok", "unmatched": unmatched, "lines": total_lines}
 
 
 @router.post("/{purchase_id}/confirm", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
-async def confirm_purchase(purchase_id: int, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session)):
+async def confirm_purchase(
+    purchase_id: int,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+    debug: int = Query(0),
+):
+    """Confirma la compra e impacta stock y precios.
+
+    - Aumenta stock por producto vinculado (product_id o supplier_item_id -> internal_product_id).
+    - Actualiza current_purchase_price en SupplierProduct y registra PriceHistory.
+    - Deja AuditLog con resumen y deltas; notifica por Telegram si está configurado.
+    - Si PURCHASE_CONFIRM_REQUIRE_ALL_LINES=1 y hay líneas sin resolver, aborta con 422 y revierte.
+    """
     res = await db.execute(
         select(Purchase)
         .options(selectinload(Purchase.lines))
@@ -297,12 +334,16 @@ async def confirm_purchase(purchase_id: int, db: AsyncSession = Depends(get_sess
     if not p:
         raise HTTPException(status_code=404, detail="Compra no encontrada")
     if not p.lines:
-        raise HTTPException(status_code=422, detail="No hay lineas para confirmar")
+        raise HTTPException(status_code=422, detail="No hay líneas para confirmar")
     if p.status == "CONFIRMADA":
         return {"status": "ok"}
 
     now = datetime.utcnow()
     # Impactar stock y buy_price + price_history
+    applied_deltas: list[dict[str, int | None]] = []
+    import logging
+    log = logging.getLogger("growen")
+    unresolved: list[int] = []
     for l in p.lines:
         # Ajuste de costo por descuentos
         ln_disc = Decimal(str(l.line_discount or 0)) / Decimal("100")
@@ -335,12 +376,52 @@ async def confirm_purchase(purchase_id: int, db: AsyncSession = Depends(get_sess
         if prod_id:
             prod = await db.get(Product, prod_id)
             if prod:
-                # suma de stock
                 try:
                     qty = int(Decimal(str(l.qty or 0)))
                 except Exception:
                     qty = int(l.qty or 0)
-                prod.stock = int(prod.stock or 0) + max(0, qty)
+                old_stock = int(prod.stock or 0)
+                inc = max(0, qty)
+                prod.stock = old_stock + inc
+                applied_deltas.append({
+                    "product_id": prod.id,
+                    "product_title": getattr(prod, "title", None),
+                    "old": old_stock,
+                    "delta": inc,
+                    "new": prod.stock,
+                    "line_id": l.id,
+                })
+                try:
+                    log.info(
+                        "purchase_confirm: purchase=%s line=%s product=%s old_stock=%s +%s -> new_stock=%s",
+                        p.id, l.id, prod.id, old_stock, inc, prod.stock
+                    )
+                except Exception:
+                    pass
+            else:
+                unresolved.append(l.id)
+        else:
+            unresolved.append(l.id)
+
+    # Si hay líneas sin resolver y la política estricta está activa, abortar antes de confirmar
+    try:
+        require_all = os.getenv("PURCHASE_CONFIRM_REQUIRE_ALL_LINES", "0") in ("1", "true", "True")
+    except Exception:
+        require_all = False
+    if unresolved and require_all:
+        # Revertir cualquier cambio de stock hecho en memoria (rollback descarta flush no comprometido)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "unresolved_lines",
+                "message": "Existen líneas sin producto vinculado; corregí antes de confirmar",
+                "unresolved_line_ids": unresolved,
+            },
+        )
 
     p.status = "CONFIRMADA"
     # Log resumen + deltas de stock
@@ -357,33 +438,45 @@ async def confirm_purchase(purchase_id: int, db: AsyncSession = Depends(get_sess
                 target = sp.internal_product_id
         if target:
             stock_deltas.append({"product_id": target, "delta": int(max(0, q))})
+    # Si hay líneas sin producto resoluble, las dejamos registradas en meta para diagnóstico
     db.add(
         AuditLog(
             action="purchase_confirm",
             table="purchases",
             entity_id=p.id,
-            meta={"lines": len(p.lines), "stock_deltas": stock_deltas},
+            meta={
+                "lines": len(p.lines),
+                "stock_deltas": stock_deltas,
+                "applied_deltas": applied_deltas if debug else None,
+                "unresolved_lines": unresolved or None,
+            },
             user_id=sess.user.id if sess.user else None,
             ip=None,
         )
     )
     await db.commit()
 
-    # NotificaciÃ³n Telegram opcional
+    # Notificación Telegram opcional
     token = os.getenv("PURCHASE_TELEGRAM_TOKEN")
     chat_id = os.getenv("PURCHASE_TELEGRAM_CHAT_ID")
     if token and chat_id:
         try:
-            text = f"Compra confirmada: proveedor {p.supplier_id}, remito {p.remito_number}, lÃ­neas {len(p.lines)}"
+            text = f"Compra confirmada: proveedor {p.supplier_id}, remito {p.remito_number}, líneas {len(p.lines)}"
             async with httpx.AsyncClient(timeout=5.0) as client:
                 await client.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": text})
         except Exception:
             pass
+    if debug:
+        return {"status": "ok", "applied_deltas": applied_deltas, "unresolved_lines": unresolved or []}
     return {"status": "ok"}
 
 
 @router.post("/{purchase_id}/cancel", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def cancel_purchase(purchase_id: int, payload: dict, db: AsyncSession = Depends(get_session)):
+    """Anula una compra y revierte stock si estaba confirmada.
+
+    Requiere note. Registra AuditLog con detalle.
+    """
     note = payload.get("note")
     if not note:
         raise HTTPException(status_code=400, detail="note es obligatoria para anular")
@@ -437,6 +530,13 @@ async def import_santaplanta_pdf(
     debug: int = Query(0),
     force_ocr: int = Query(0),
 ):
+    """Importa PDF de Santa Planta mediante pipeline.
+
+    Guarda temporal, ejecuta parse_remito (pdfplumber → camelot → OCR),
+    deduplica por (supplier_id, remito_number) y hash, crea compra, adjunta PDF
+    y genera líneas con matching (SKU y fuzzy por título). Si debug está activo,
+    devuelve eventos y muestras.
+    """
     import logging
     log = logging.getLogger("growen")
     try:
@@ -455,7 +555,7 @@ async def import_santaplanta_pdf(
         with open(tmp_pdf, "wb") as fh:
             fh.write(content)
 
-        # Log start (sin purchase_id aÃºn)
+        # Log start (sin purchase_id aún)
         try:
             db.add(
                 AuditLog(
@@ -487,7 +587,7 @@ async def import_santaplanta_pdf(
             force_ocr=bool(force_ocr),
             debug=debug_flag,
         )
-        log.info(f"Import[{correlation_id}]: Pipeline finalizado. Remito={res.remito_number}, Fecha={res.remito_date}, LÃ­neas detectadas={len(res.lines) if res.lines else 0}")
+        log.info(f"Import[{correlation_id}]: Pipeline finalizado. Remito={res.remito_number}, Fecha={res.remito_date}, Líneas detectadas={len(res.lines) if res.lines else 0}")
 
         remito_number = res.remito_number or file.filename
         remito_date_str = res.remito_date
@@ -496,8 +596,12 @@ async def import_santaplanta_pdf(
         except Exception:
             remito_dt = date.today()
 
-        # --- PolÃ­tica de BORRADOR vacÃ­o ---
-        ALLOW_EMPTY = settings.import_allow_empty_draft
+    # --- Política de BORRADOR vacío ---
+        # Política configurable en caliente vía env var (fallback al valor de Settings)
+        if "IMPORT_ALLOW_EMPTY_DRAFT" in os.environ:
+            ALLOW_EMPTY = str(os.getenv("IMPORT_ALLOW_EMPTY_DRAFT", "true")).lower() == "true"
+        else:
+            ALLOW_EMPTY = settings.import_allow_empty_draft
         if not res.lines:
             if ALLOW_EMPTY:
                 # Crear compra vacía (BORRADOR), adjuntar PDF y devolver 200
@@ -525,6 +629,25 @@ async def import_santaplanta_pdf(
                     "samples": samples_empty,
                 }
                 db.add(AuditLog(action="purchase_import", table="purchases", entity_id=p.id, meta=_sanitize_for_json(meta_obj)))
+                # Registrar eventos del pipeline en ImportLog para diagnóstico aunque no haya líneas
+                try:
+                    for ev in (res.events or []):
+                        try:
+                            details = ev.get("details") or {}
+                        except Exception:
+                            details = {}
+                        db.add(
+                            ImportLog(
+                                purchase_id=p.id,
+                                correlation_id=correlation_id,
+                                level=str(ev.get("level") or "INFO"),
+                                stage=str(ev.get("stage") or ""),
+                                event=str(ev.get("event") or ""),
+                                details=_sanitize_for_json(details),
+                            )
+                        )
+                except Exception:
+                    pass
                 await db.commit()
                 await db.refresh(p)
                 return {
@@ -613,8 +736,8 @@ async def import_santaplanta_pdf(
 
         db.add(PurchaseAttachment(purchase_id=p.id, filename=file.filename, mime=file.content_type, size=len(content), path=str(pdf_path)))
 
-        # Crear lÃ­neas con matching por supplier_sku -> supplier_products.supplier_product_id
-        # Convertir lÃ­neas normalizadas del parser
+        # Crear líneas con matching por supplier_sku -> supplier_products.supplier_product_id
+        # Convertir líneas normalizadas del parser
         lines = [
             {
                 "supplier_sku": ln.supplier_sku,
@@ -628,17 +751,12 @@ async def import_santaplanta_pdf(
             }
             for ln in res.lines
         ]
-        # Normalizaciones adicionales para casos reales observados en remitos
-        # de Santa Planta: a veces el c�digo del proveedor queda en la columna
-        # de cantidad y el parser devuelve el % de bonificaci�n en 0 a pesar de
-        # estar presente como "-20% DESC" dentro del t�tulo.
+        # Normalizaciones adicionales (reparar SKU y bonificación si faltan)
         for ln in lines:
             try:
                 title_txt = (ln.get("title") or "").strip()
                 qty_num = int(float(ln.get("qty") or 0))
                 sku_txt = (ln.get("supplier_sku") or "").strip()
-                # Si el SKU es num�rico y coincide con la cantidad, intentar
-                # recuperarlo desde el t�tulo priorizando tokens de 4-6 d�gitos.
                 if sku_txt.isdigit() and qty_num and int(sku_txt) == qty_num:
                     import re as _re
                     cand = _re.findall(r"\b(\d{4,6})\b", title_txt)
@@ -648,8 +766,6 @@ async def import_santaplanta_pdf(
                         cand3 = [t for t in _re.findall(r"\b(\d{3,6})\b", title_txt) if int(t) != qty_num]
                         if cand3:
                             ln["supplier_sku"] = cand3[-1]
-                # Si la bonificaci�n es 0 pero el t�tulo contiene un porcentaje,
-                # tomar ese valor (ej: "-20% DESC").
                 if float(ln.get("line_discount") or 0) == 0 and title_txt:
                     import re as _re
                     mdisc = _re.search(r"(-?\d{1,2}(?:[\.,]\d+)?)\s*%", title_txt)
@@ -660,58 +776,60 @@ async def import_santaplanta_pdf(
                         except Exception:
                             pass
             except Exception:
-                # La normalizaci�n no debe romper la importaci�n.
                 pass
         for ln in lines:
             sku = (ln.get("supplier_sku") or "").strip()
-            title = (ln.get("title") or "").strip() or sku or "(sin tÃ­tulo)"
+            title = (ln.get("title") or "").strip() or sku or "(sin título)"
             qty = Decimal(str(ln.get("qty") or 0))
             unit_cost = Decimal(str(ln.get("unit_cost") or 0))
             line_discount = Decimal(str(ln.get("line_discount") or 0))
             supplier_item_id = None
             product_id = None
             if sku:
-                sp = await db.scalar(select(SupplierProduct).where(SupplierProduct.supplier_id==supplier_id, SupplierProduct.supplier_product_id==sku))
+                sp = await db.scalar(
+                    select(SupplierProduct)
+                    .where(
+                        SupplierProduct.supplier_id==supplier_id,
+                        SupplierProduct.supplier_product_id==sku
+                    )
+                )
+                if not sp and title:
+                    import re as _re
+                    for tok in _re.findall(r"\b(\d{3,6})\b", title):
+                        sp = await db.scalar(
+                            select(SupplierProduct)
+                            .where(
+                                SupplierProduct.supplier_id==supplier_id,
+                                SupplierProduct.supplier_product_id==tok
+                            )
+                        )
+                        if sp:
+                            sku = tok
+                            ln["supplier_sku"] = tok
+                            break
                 if sp:
                     supplier_item_id = sp.id
                     product_id = sp.internal_product_id
-            # Tolerante: si no hay SKU o no matchea, intentar por tÃ­tulo (bÃºsqueda simple)
             if not supplier_item_id and title and len(title) >= 4:
-                # Usar rapidfuzz para encontrar el mejor match
                 try:
                     from rapidfuzz import process, fuzz
-                    
-                    # 1. Buscar en supplier_products del proveedor
                     sp_query = select(SupplierProduct).where(SupplierProduct.supplier_id == supplier_id)
                     all_supplier_products = (await db.execute(sp_query)).scalars().all()
-                    
                     choices = {sp.id: (sp.title or "") for sp in all_supplier_products}
                     best_match = process.extractOne(title, choices, scorer=fuzz.WRatio, score_cutoff=85)
-
                     if best_match:
-                        # best_match es (content, score, key) -> ('texto', 95.0, 123)
                         sp_id = best_match[2]
                         sp = await db.get(SupplierProduct, sp_id)
                         if sp:
                             supplier_item_id = sp.id
                             product_id = sp.internal_product_id
-                    
-                    # 2. Si no, buscar en canónicos (como fallback)
                     if not supplier_item_id:
                         from db.models import CanonicalProduct
                         cp_query = select(CanonicalProduct)
                         all_canonicals = (await db.execute(cp_query)).scalars().all()
-                        
                         choices_cp = {cp.id: (cp.name or "") for cp in all_canonicals}
-                        best_match_cp = process.extractOne(title, choices_cp, scorer=fuzz.WRatio, score_cutoff=87)
-                        
-                        if best_match_cp:
-                            # Aquí no seteamos supplier_item_id, solo product_id si encontramos un canónico
-                            # La vinculación real se haría en la UI o un paso posterior
-                            pass
-
+                        process.extractOne(title, choices_cp, scorer=fuzz.WRatio, score_cutoff=87)
                 except ImportError:
-                    # Fallback a lógica simple si rapidfuzz no está
                     key = max((w for w in re.split(r"\W+", title) if len(w) >= 5), key=len, default=title.split(" ")[0])
                     cand_q = select(SupplierProduct).where(
                         SupplierProduct.supplier_id==supplier_id,
@@ -735,8 +853,6 @@ async def import_santaplanta_pdf(
                 line_discount=line_discount,
                 state=state,
             ))
-
-        # Persistir meta resumen y log con correlation_id
         try:
             setattr(p, "meta", _sanitize_for_json({
                 "correlation_id": correlation_id,
@@ -748,7 +864,6 @@ async def import_santaplanta_pdf(
             }))
         except Exception:
             pass
-        # Log de import con resumen, correlation_id y muestras (si están disponibles)
         try:
             samples = (res.debug.get("samples") if isinstance(res.debug, dict) else None)
         except Exception:
@@ -771,7 +886,6 @@ async def import_santaplanta_pdf(
                 ip=None,
             )
         )
-        # Persistir eventos detallados si el modelo estÃ¡ disponible
         try:
             for ev in res.events:
                 try:
@@ -792,7 +906,6 @@ async def import_santaplanta_pdf(
             pass
         await db.commit()
         await db.refresh(p)
-        # Calcular totales simples desde lÃ­neas
         try:
             sub = float(res.totals.get("subtotal") or 0)
         except Exception:
@@ -802,7 +915,6 @@ async def import_santaplanta_pdf(
         vat = float(p.vat_rate or 0)
         iva = sub * (vat / 100.0)
         total = sub + iva
-        
         response_data = {
             "purchase_id": p.id,
             "status": p.status,
@@ -833,7 +945,7 @@ async def import_santaplanta_pdf(
             log.exception("Error importando Santaplanta PDF: supplier_id=%s, filename=%s, correlation_id=%s", supplier_id, getattr(file, "filename", "?"), cid)
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail="No se pudo importar el remito; revisÃ¡ backend.log para mÃ¡s detalles", headers={"X-Correlation-ID": cid})
+    raise HTTPException(status_code=500, detail="No se pudo importar el remito; revisá backend.log para más detalles", headers={"X-Correlation-ID": cid})
 
 
 @router.get("/{purchase_id}/unmatched/export")
@@ -877,14 +989,14 @@ async def export_unmatched(purchase_id: int, fmt: str = Query("csv"), db: AsyncS
         w.writerows(rows)
         data = sio.getvalue().encode("utf-8")
         return StreamingResponse(BytesIO(data), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=unmatched_{purchase_id}.csv"})
-    return JSONResponse({"detail": "formato invÃ¡lido"}, status_code=400)
+    return JSONResponse({"detail": "formato inválido"}, status_code=400)
 
 
 @router.delete("/{purchase_id}", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def delete_purchase(purchase_id: int, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session)):
-    """Elimina una compra si estÃ¡ en estado seguro (BORRADOR o ANULADA).
+    """Elimina una compra si está en estado seguro (BORRADOR o ANULADA).
 
-    Nota: elimina tambiÃ©n lÃ­neas y adjuntos (cascade) y borra los archivos del
+    Nota: elimina también líneas y adjuntos (cascade) y borra los archivos del
     disco si existen bajo data/purchases/{id}.
     """
     # Eager-load children to support explicit delete across DBs sin cascade
@@ -933,7 +1045,7 @@ async def delete_purchase(purchase_id: int, db: AsyncSession = Depends(get_sessi
         # no bloquear por problemas de archivos
         pass
 
-    # Eliminar explÃ­citamente hijos por compatibilidad con motores que no honran ondelete
+    # Eliminar explícitamente hijos por compatibilidad con motores que no honran ondelete
     try:
         for l in list(p.lines or []):
             await db.delete(l)
@@ -949,6 +1061,10 @@ async def delete_purchase(purchase_id: int, db: AsyncSession = Depends(get_sessi
 
 @router.get("/{purchase_id}/logs")
 async def purchase_logs(purchase_id: int, db: AsyncSession = Depends(get_session), limit: int = Query(100, ge=1, le=500), format: str = Query("table")):
+    """Devuelve trazas de AuditLog e ImportLog vinculadas a la compra.
+
+    Si `format=json`, retorna la lista cruda; caso contrario `{ items }`.
+    """
     stmt = (
         select(AuditLog)
         .where(AuditLog.table == "purchases", AuditLog.entity_id == purchase_id)
@@ -990,6 +1106,10 @@ async def purchase_logs(purchase_id: int, db: AsyncSession = Depends(get_session
 
 @router.get("/{purchase_id}/attachments/{attachment_id}/file")
 async def download_attachment(purchase_id: int, attachment_id: int, db: AsyncSession = Depends(get_session)):
+    """Descarga inline un adjunto de la compra.
+
+    404 si no existe o no corresponde a la compra. Usa Content-Disposition inline.
+    """
     att = await db.get(PurchaseAttachment, attachment_id)
     if not att or att.purchase_id != purchase_id:
         raise HTTPException(status_code=404, detail="Adjunto no encontrado")

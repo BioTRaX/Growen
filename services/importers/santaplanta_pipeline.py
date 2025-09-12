@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+"""Pipeline robusto para parsear remitos de Santa Planta desde PDF.
+
+Estrategia:
+- Extraer header (número de remito y fecha) vía texto (pdfplumber) con normalización.
+- Detectar tablas de líneas con pdfplumber y/o Camelot (lattice/stream), con
+  heurísticas de fallback cuando no hay estructura clara.
+- Si falta texto o header/líneas, invocar OCR (ocrmypdf + Tesseract) y reintentar.
+- Emitir eventos y datos de depuración para observabilidad.
+"""
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -13,6 +23,7 @@ from rapidfuzz import process, fuzz
 
 from agent_core.config import settings
 from services.ocr.utils import pdf_has_text, run_ocrmypdf
+import os as _os
 
 
 @dataclass
@@ -206,7 +217,10 @@ def _try_pdfplumber_tables(data: bytes, dbg: Dict[str, Any], events: List[Dict[s
                     "snap_tolerance": 5,
                     "join_tolerance": 10,
                 }) or []
-
+                try:
+                    events.append({"level": "INFO", "stage": "pdfplumber", "event": "tables_found", "details": {"page": pi + 1, "count": len(tables)}})
+                except Exception:
+                    pass
                 for t in tables:
                     all_lines.extend(_extract_lines_from_table(t, dbg))
     except Exception as e:
@@ -214,8 +228,109 @@ def _try_pdfplumber_tables(data: bytes, dbg: Dict[str, Any], events: List[Dict[s
     return all_lines
 
 
+def _sanitize_tessdata_prefix():
+    val = _os.getenv("TESSDATA_PREFIX")
+    if not val:
+        return
+    bad = False
+    raw = val
+    # Strip quotes
+    if val.startswith(('"', "'")) and val.endswith(('"', "'")):
+        val = val[1:-1]
+        bad = True
+    # Remove stray trailing slash+quote artifacts
+    val2 = val.replace('"', '').replace("'", '')
+    if val2.endswith(('"', "'", '/"', '\\"')):
+        val2 = val2.rstrip('/"').rstrip('"')
+        bad = True
+    # Windows path typically ends without trailing slash
+    if val2.endswith(('\\', '/')):
+        val2 = val2.rstrip('\\/')
+        bad = True
+    if bad:
+        _os.environ['TESSDATA_PREFIX'] = val2
+
+
+def _heuristic_fallback_rows(raw_tables: list[list[list[str]]], events: list[dict], dbg: dict) -> list[ParsedLine]:
+    raw_lines: list[ParsedLine] = []
+    sample_added = 0
+    for t in raw_tables:
+        if len(t) < 2:
+            continue
+        for row in t[1:]:  # skip header
+            if not any(row):
+                continue
+            cells = [(_norm_text(c) if c else '') for c in row]
+            sku = None
+            title = None
+            qty = 0
+            unit_cost = Decimal('0')
+            for c in cells:
+                if not sku and re.fullmatch(r"\d{3,6}", c):
+                    sku = c
+                if title is None:
+                    title = c
+            for c in cells[1:]:
+                if re.fullmatch(r"\d+", c):
+                    qty = int(c)
+                    break
+            for c in reversed(cells):
+                if re.search(r"\d[\d\.,]*", c):
+                    unit_cost = _parse_money(c)
+                    break
+            if not title:
+                continue
+            # Infer SKU from any numeric token 3-6 digits in the title cell only, if still missing
+            if not sku and title:
+                # Extract numeric tokens (3-6 digits) from title and pick the longest (actual SKU)
+                title_tokens = re.findall(r"\b(\d{3,6})\b", title)
+                if title_tokens:
+                    # Prefer longest token (e.g., '6400' vs '607')
+                    sku = max(title_tokens, key=lambda t: (len(t), t))
+                    events.append({'level': 'INFO', 'stage': 'fallback', 'event': 'sku_inferred', 'details': {'sku': sku}})
+            pl = ParsedLine(supplier_sku=sku, title=title, qty=Decimal(qty), unit_cost_bonif=unit_cost)
+            raw_lines.append(pl)
+            if sample_added < 5:
+                dbg.setdefault('fallback_samples', []).append({'raw_row': row, 'parsed': pl.__dict__})
+                sample_added += 1
+    if not raw_lines:
+        return raw_lines
+    events.append({'level': 'INFO', 'stage': 'fallback', 'event': 'heuristic_rows', 'details': {'count': len(raw_lines)}})
+    # 1) Si hay líneas con qty>0 o precio>0 asumir que esas son productos y descartar puro metadata
+    product_candidates = [l for l in raw_lines if (l.qty and l.qty > 0) or (l.unit_cost_bonif and l.unit_cost_bonif > 0)]
+    filtered = product_candidates if product_candidates else list(raw_lines)
+    # 2) Si aún muchas líneas y la mayoría tienen qty=0/costo=0, filtrar por patrones de metadata
+    if len(filtered) > 1 and len(filtered) >= 5:
+        patterns = [
+            r"\bS\.?.?R\.?.?L\b", r"\bS\.A\b", r"\bIVA\b", r"\bCUIT\b", r"CONDIC", r"\bVENTA\b",
+            r"DIRECCI", r"DOMICILIO", r"\bCLIENTE\b", r"\bDISTRIB", r"\bPROVEED", r"SANTAPLANTA"
+        ]
+        meta_filtered: list[ParsedLine] = []
+        for l in filtered:
+            t_upper = l.title.upper()
+            if (not l.supplier_sku) and (l.qty == 0) and (l.unit_cost_bonif == 0):
+                if any(re.search(p, t_upper) for p in patterns):
+                    continue
+                # líneas muy cortas (<=3 tokens) sin números -> metadata
+                tokens = [tok for tok in re.split(r"\s+", t_upper) if tok]
+                if len(tokens) <= 3 and not any(ch.isdigit() for ch in t_upper):
+                    continue
+            meta_filtered.append(l)
+        if meta_filtered and len(meta_filtered) < len(filtered):
+            events.append({'level': 'INFO', 'stage': 'fallback', 'event': 'filtered_count', 'details': {'raw': len(raw_lines), 'kept': len(meta_filtered)}})
+            filtered = meta_filtered
+    # 3) Colapsar si sólo una línea parece item real (qty>0 o precio>0) y el resto parecen metadata
+    if len(filtered) > 1:
+        real_candidates = [l for l in filtered if (l.qty and l.qty > 0) or (l.unit_cost_bonif and l.unit_cost_bonif > 0)]
+        if len(real_candidates) == 1:
+            events.append({'level': 'INFO', 'stage': 'fallback', 'event': 'collapsed_single_item', 'details': {'raw': len(filtered)}})
+            filtered = real_candidates
+    return filtered
+
+
 def _try_camelot(pdf_path: Path, events: List[Dict[str, Any]], dbg: Dict[str, Any]) -> List[ParsedLine]:
     all_lines: List[ParsedLine] = []
+    raw_tables: list[list[list[str]]] = []
     try:
         import camelot  # type: ignore
         flavors = [
@@ -228,109 +343,138 @@ def _try_camelot(pdf_path: Path, events: List[Dict[str, Any]], dbg: Dict[str, An
                 events.append({"level": "INFO", "stage": "camelot", "event": "tables_found", "details": {"flavor": fl, "count": len(tables)}})
                 for tbl in tables:
                     df_list = tbl.df.astype(str).values.tolist()
+                    raw_tables.append(df_list)
                     all_lines.extend(_extract_lines_from_table(df_list, dbg))
             except Exception as e:
                 events.append({"level": "WARN", "stage": "camelot", "event": "flavor_exception", "details": {"flavor": fl, "msg": str(e)}})
     except Exception as e:
         events.append({"level": "WARN", "stage": "camelot", "event": "import_error", "details": {"msg": str(e)}})
+    # If no structured lines but we did capture raw tables, emit samples and heuristic fallback
+    if not all_lines and raw_tables:
+        # log first 3 header rows for diagnostics
+        samples = []
+        for t in raw_tables[:2]:
+            if t:
+                samples.append(t[0])
+        if samples:
+            dbg['camelot_headers_raw'] = samples
+        fallback = _heuristic_fallback_rows(raw_tables, events, dbg)
+        if fallback:
+            all_lines = fallback
     return all_lines
 
 
 def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = True, force_ocr: bool = False, debug: bool = False) -> ParsedResult:
+    """Parsea un remito PDF y devuelve líneas normalizadas y metadatos.
+
+    Parámetros:
+    - pdf_path: ruta al PDF de entrada.
+    - correlation_id: id de correlación para trazas.
+    - use_ocr_auto: si no hay texto/líneas, intentará OCR automáticamente.
+    - force_ocr: fuerza OCR aunque detecte texto/líneas.
+    - debug: incluye muestras y eventos adicionales en `result.debug`.
+
+    Retorna `ParsedResult` con `remito_number`, `remito_date`, `lines`, `totals`,
+    `events` y opcionalmente `debug`.
+    """
+    _sanitize_tessdata_prefix()
     result = ParsedResult(debug={"correlation_id": correlation_id})
     result.events.append({"level": "INFO", "stage": "start", "event": "parse_remito_called", "details": {"pdf": str(pdf_path), "force_ocr": force_ocr, "debug": debug}})
-
-    data = pdf_path.read_bytes()
-
-    # Header inicial
     try:
-        import pdfplumber  # type: ignore
-        with pdfplumber.open(str(pdf_path)) as pdf:
-            text_all = "\n".join([(p.extract_text() or "") for p in pdf.pages])
-    except Exception as e:
-        text_all = ""
-        result.events.append({"level": "WARN", "stage": "header_extract", "event": "pdfplumber_failed", "details": {"error": str(e)}})
-
-    result.remito_number, result.remito_date = _parse_header_text(text_all, result.events)
-    header_ok = bool(result.remito_number and result.remito_date)
-
-    # 1) pdfplumber tables
-    result.lines = _try_pdfplumber_tables(data, result.debug, result.events)
-
-    # 2) Camelot si no hay líneas
-    if not result.lines:
-        result.lines = _try_camelot(pdf_path, result.events, result.debug)
-
-    # 3) OCR si corresponde
-    ocr_applied = False
-    min_chars_for_text = settings.import_pdf_text_min_chars
-    has_enough_text = pdf_has_text(pdf_path, min_chars=min_chars_for_text)
-    needs_ocr = not result.lines or not header_ok
-
-    if use_ocr_auto and (needs_ocr or force_ocr or not has_enough_text):
-        ocr_start_time = datetime.now()
-        ocr_out = pdf_path.with_name(pdf_path.stem + "_ocr.pdf")
-        ok, stdout, stderr = run_ocrmypdf(
-            pdf_path,
-            ocr_out,
-            force=(force_ocr or needs_ocr),
-            timeout=settings.import_ocr_timeout,
-            lang=settings.import_ocr_lang,
-        )
-        ocr_duration = (datetime.now() - ocr_start_time).total_seconds()
-        ocr_applied = True
-        result.debug["ocr_applied"] = {"duration_s": ocr_duration}
-        result.events.append({"level": "INFO" if ok else "ERROR", "stage": "ocr", "event": "ocrmypdf_run", "details": {"ok": ok, "duration_s": ocr_duration, "output": str(ocr_out), "stdout": (stdout or "")[-300:], "stderr": (stderr or "")[-300:]}})
-        
-        if ok and ocr_out.exists():
-            data_ocr = ocr_out.read_bytes()
-            lines_ocr = _try_pdfplumber_tables(data_ocr, result.debug, result.events)
-            if not lines_ocr:
-                lines_ocr = _try_camelot(ocr_out, result.events, result.debug)
-            
-            if lines_ocr:
-                result.lines = lines_ocr
+        data = pdf_path.read_bytes()
+        try:
+            import pdfplumber  # type: ignore
+            with pdfplumber.open(str(pdf_path)) as pdf:
+                pages_text = [(p.extract_text() or "") for p in pdf.pages]
+                text_all = "\n".join(pages_text)
                 try:
-                    import pdfplumber  # type: ignore
-                    with pdfplumber.open(io.BytesIO(data_ocr)) as pdf_ocr:
-                        text_ocr = "\n".join([(p.extract_text() or "") for p in pdf_ocr.pages])
-                        remito_ocr, fecha_ocr = _parse_header_text(text_ocr, result.events)
-                        if remito_ocr: result.remito_number = remito_ocr
-                        if fecha_ocr: result.remito_date = fecha_ocr
-                except Exception as e:
-                    result.events.append({"level": "WARN", "stage": "header_reparse", "event": "pdfplumber_failed_ocr", "details": {"error": str(e)}})
-                # If OCR was applied but produced no lines, attempt one forced retry with different output file
-                if not result.lines and not force_ocr:
+                    result.events.append({"level": "INFO", "stage": "header_extract", "event": "text_stats", "details": {"pages": len(pages_text), "len_text": sum(len(t) for t in pages_text)}})
+                except Exception:
+                    pass
+        except Exception as e:
+            text_all = ""
+            result.events.append({"level": "WARN", "stage": "header_extract", "event": "pdfplumber_failed", "details": {"error": str(e)}})
+        result.remito_number, result.remito_date = _parse_header_text(text_all, result.events)
+        header_ok = bool(result.remito_number and result.remito_date)
+        result.lines = _try_pdfplumber_tables(data, result.debug, result.events)
+        if result.lines:
+            try:
+                result.events.append({"level": "INFO", "stage": "pdfplumber", "event": "lines_detected", "details": {"count": len(result.lines)}})
+            except Exception:
+                pass
+        if not result.lines:
+            result.lines = _try_camelot(pdf_path, result.events, result.debug)
+        ocr_applied = False
+        min_chars_for_text = settings.import_pdf_text_min_chars
+        has_enough_text = pdf_has_text(pdf_path, min_chars=min_chars_for_text)
+        try:
+            result.events.append({"level": "INFO", "stage": "pre_ocr", "event": "pdf_has_text", "details": {"min_chars": min_chars_for_text, "has_enough_text": bool(has_enough_text)}})
+        except Exception:
+            pass
+        needs_ocr = not result.lines or not header_ok
+        if use_ocr_auto and (needs_ocr or force_ocr or not has_enough_text):
+            ocr_start_time = datetime.now()
+            ocr_out = pdf_path.with_name(pdf_path.stem + "_ocr.pdf")
+            ok, stdout, stderr = run_ocrmypdf(
+                pdf_path,
+                ocr_out,
+                force=(force_ocr or needs_ocr),
+                timeout=settings.import_ocr_timeout,
+                lang=settings.import_ocr_lang,
+            )
+            ocr_duration = (datetime.now() - ocr_start_time).total_seconds()
+            ocr_applied = True
+            result.debug["ocr_applied"] = {"duration_s": ocr_duration}
+            result.events.append({"level": "INFO" if ok else "ERROR", "stage": "ocr", "event": "ocrmypdf_run", "details": {"ok": ok, "duration_s": ocr_duration, "output": str(ocr_out), "stdout": (stdout or "")[-300:], "stderr": (stderr or "")[-300:]}})
+            if ok and ocr_out.exists():
+                data_ocr = ocr_out.read_bytes()
+                lines_ocr = _try_pdfplumber_tables(data_ocr, result.debug, result.events)
+                if not lines_ocr:
+                    lines_ocr = _try_camelot(ocr_out, result.events, result.debug)
+                if lines_ocr:
+                    result.lines = lines_ocr
                     try:
-                        retry_out = pdf_path.with_name(pdf_path.stem + "_ocr2.pdf")
-                        ok2, stdout2, stderr2 = run_ocrmypdf(
-                            pdf_path,
-                            retry_out,
-                            force=True,
-                            timeout=settings.import_ocr_timeout,
-                            lang=settings.import_ocr_lang,
-                        )
-                        dur2 = None
-                        if ok2 and retry_out.exists():
-                            result.events.append({"level": "INFO" if ok2 else "WARN", "stage": "ocr", "event": "retry_ocr", "details": {"ok": ok2, "output": str(retry_out)}})
-                            data_ocr2 = retry_out.read_bytes()
-                            lines_ocr2 = _try_pdfplumber_tables(data_ocr2, result.debug, result.events)
-                            if not lines_ocr2:
-                                lines_ocr2 = _try_camelot(retry_out, result.events, result.debug)
-                            if lines_ocr2:
-                                result.lines = lines_ocr2
+                        import pdfplumber  # type: ignore
+                        with pdfplumber.open(io.BytesIO(data_ocr)) as pdf_ocr:
+                            text_ocr = "\n".join([(p.extract_text() or "") for p in pdf_ocr.pages])
+                            remito_ocr, fecha_ocr = _parse_header_text(text_ocr, result.events)
+                            if remito_ocr: result.remito_number = remito_ocr
+                            if fecha_ocr: result.remito_date = fecha_ocr
                     except Exception as e:
-                        result.events.append({"level": "WARN", "stage": "ocr", "event": "retry_exception", "details": {"error": str(e)}})
-
-    # Totales
-    subtotal = sum(line.subtotal for line in result.lines if line.subtotal is not None)
-    result.totals = {"subtotal": subtotal, "iva": Decimal("0"), "total": subtotal}
-
-    result.events.append({"level": "INFO", "stage": "summary", "event": "done", "details": {"lines": len(result.lines), "ocr": ocr_applied}})
-
-    # Preserve a minimal set of debug samples even when not running in verbose debug mode.
+                        result.events.append({"level": "WARN", "stage": "header_reparse", "event": "pdfplumber_failed_ocr", "details": {"error": str(e)}})
+                    if not result.lines and not force_ocr:
+                        try:
+                            retry_out = pdf_path.with_name(pdf_path.stem + "_ocr2.pdf")
+                            ok2, stdout2, stderr2 = run_ocrmypdf(
+                                pdf_path,
+                                retry_out,
+                                force=True,
+                                timeout=settings.import_ocr_timeout,
+                                lang=settings.import_ocr_lang,
+                            )
+                            if ok2 and retry_out.exists():
+                                result.events.append({"level": "INFO" if ok2 else "WARN", "stage": "ocr", "event": "retry_ocr", "details": {"ok": ok2, "output": str(retry_out)}})
+                                data_ocr2 = retry_out.read_bytes()
+                                lines_ocr2 = _try_pdfplumber_tables(data_ocr2, result.debug, result.events)
+                                if not lines_ocr2:
+                                    lines_ocr2 = _try_camelot(retry_out, result.events, result.debug)
+                                if lines_ocr2:
+                                    result.lines = lines_ocr2
+                        except Exception as e:
+                            result.events.append({"level": "WARN", "stage": "ocr", "event": "retry_exception", "details": {"error": str(e)}})
+        subtotal = sum(line.subtotal for line in result.lines if line.subtotal is not None)
+        result.totals = {"subtotal": subtotal, "iva": Decimal("0"), "total": subtotal}
+        if not result.lines:
+            try:
+                result.events.append({"level": "WARN", "stage": "summary", "event": "no_lines_after_pipeline", "details": {"ocr_applied": ocr_applied}})
+            except Exception:
+                pass
+        result.events.append({"level": "INFO", "stage": "summary", "event": "done", "details": {"lines": len(result.lines), "ocr": ocr_applied}})
+    except Exception as e:  # top-level safeguard
+        import traceback
+        stack = traceback.format_exc(limit=6)
+        result.events.append({"level": "ERROR", "stage": "exception", "event": "unhandled", "details": {"error": str(e), "stack": stack[-900:]}})
     if not debug:
         samples = result.debug.get("samples") if isinstance(result.debug, dict) else None
         result.debug = {"samples": samples} if samples else {}
-
     return result

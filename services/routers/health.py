@@ -4,6 +4,16 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
+"""Endpoints de health y diagnostico del sistema.
+
+Incluye verificaciones de:
+- Liveness básico (`/health`)
+- Dependencias por servicio opcional (`/health/service/{name}`)
+- Conectividad DB/Redis/Storage (`/health/db`, `/health/redis`, `/health/storage`)
+- Resumen general (`/health/summary`)
+- Compatibilidad legacy (`/healthz/db`)
+"""
+
 import os
 import socket
 import time
@@ -23,6 +33,12 @@ from db.session import get_db
 
 router = APIRouter(prefix="/health", tags=["health"])
 START_TIME = time.monotonic()
+KNOWN_OPTIONAL_SERVICES = [
+    "pdf_import",
+    "playwright",
+    "image_processing",
+    "dramatiq",
+]
 
 
 def _status(ok: bool, detail: str | None = None) -> Dict[str, Any]:
@@ -34,6 +50,7 @@ def _status(ok: bool, detail: str | None = None) -> Dict[str, Any]:
 
 @router.get("")
 async def health_root() -> Dict[str, str]:
+    """Liveness simple del backend (si responde, está vivo)."""
     return {"status": "ok"}
 
 
@@ -47,6 +64,7 @@ def _which_any(names: List[str]) -> Tuple[str | None, str]:
 
 @router.get("/service/{name}")
 async def health_service(name: str) -> Dict[str, Any]:
+    """Chequeos específicos por servicio opcional (pdf_import, playwright, etc.)."""
     name = name.lower()
     if name == "pdf_import":
         # Check Python deps + system tools
@@ -60,6 +78,16 @@ async def health_service(name: str) -> Dict[str, Any]:
         pdfplumber_ok = _try("pdfplumber")
         camelot_ok = _try("camelot")
         tesseract_path, _ = _which_any(["tesseract"])  # pragma: no cover
+        if not tesseract_path:
+            # Windows fallback common install dirs
+            possible = [
+                r"C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+                r"C:\\Program Files (x86)\\Tesseract-OCR\\tesseract.exe",
+            ]
+            for p in possible:
+                if os.path.exists(p):
+                    tesseract_path = p
+                    break
         qpdf_path, _ = _which_any(["qpdf"])  # pragma: no cover
         gs_path, _ = _which_any(["gswin64c", "gswin32c", "gs"])  # pragma: no cover
         hints: List[str] = []
@@ -72,7 +100,7 @@ async def health_service(name: str) -> Dict[str, Any]:
         if not ocrmypdf_ok:
             hints.append("Instalá ocrmypdf en el venv")
         ok = ocrmypdf_ok and bool(tesseract_path and qpdf_path and gs_path)
-        return {"service": name, "ok": ok, "deps": {"ocrmypdf": ocrmypdf_ok, "pdfplumber": pdfplumber_ok, "camelot": camelot_ok, "tesseract": bool(tesseract_path), "qpdf": bool(qpdf_path), "ghostscript": bool(gs_path)}, "hints": hints}
+    return {"service": name, "ok": ok, "deps": {"ocrmypdf": ocrmypdf_ok, "pdfplumber": pdfplumber_ok, "camelot": camelot_ok, "tesseract": bool(tesseract_path), "tesseract_path": tesseract_path, "qpdf": bool(qpdf_path), "ghostscript": bool(gs_path)}, "hints": hints}
     if name == "playwright":
         try:
             import importlib
@@ -110,18 +138,24 @@ async def health_service(name: str) -> Dict[str, Any]:
 
 @router.get("/ai")
 async def health_ai() -> Dict[str, List[str]]:
+    """Lista proveedores de AI disponibles según configuración actual."""
     router = AIRouter(settings)
     return {"providers": router.available_providers()}
 
 
 @router.get("/db")
 async def health_db(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    """Valida conexión a la base de datos (SELECT 1)."""
     await db.execute(text("SELECT 1"))
     return _status(True)
 
 
 @router.get("/redis")
 async def health_redis() -> Dict[str, Any]:
+    """Verifica conexión a Redis; en RUN_INLINE_JOBS=1 se omite.
+
+    Devuelve `ok` y opcional `detail` con error o motivo de omisión.
+    """
     # In inline mode we intentionally don't require Redis
     if os.getenv("RUN_INLINE_JOBS", "0") == "1":
         return _status(False, detail="skipped: RUN_INLINE_JOBS=1")
@@ -138,6 +172,7 @@ async def health_redis() -> Dict[str, Any]:
 
 @router.get("/storage")
 async def health_storage() -> Dict[str, Any]:
+    """Prueba escritura/lectura en carpeta de media y reporta espacio libre."""
     try:
         root = Path(__file__).resolve().parents[2]
         media_root = Path(os.getenv("MEDIA_ROOT", str(root / "Devs" / "Imagenes")))
@@ -153,6 +188,7 @@ async def health_storage() -> Dict[str, Any]:
 
 @router.get("/optional")
 async def health_optional() -> Dict[str, Any]:
+    """Presencia de dependencias opcionales de Python (best-effort)."""
     def _try_import(name: str) -> bool:
         try:
             __import__(name)
@@ -203,6 +239,11 @@ async def health_dramatiq() -> Dict[str, Any]:
 
 @router.get("/summary")
 async def health_summary(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    """Resumen general de salud del sistema.
+
+    Incluye DB, Redis, Storage, Dramatiq, proveedores de AI, assets frontend,
+    migraciones y servicios opcionales.
+    """
     # DB
     db_ok = True
     db_detail = None
@@ -324,6 +365,17 @@ async def health_summary(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
     uptime_seconds = int(max(0.0, time.monotonic() - START_TIME))
     host = socket.gethostname()
 
+    # Per optional-service health (best-effort)
+    per_services: Dict[str, Any] = {}
+    try:
+        for name in KNOWN_OPTIONAL_SERVICES:
+            try:
+                per_services[name] = await health_service(name)
+            except Exception as e:
+                per_services[name] = _status(False, detail=str(e))
+    except Exception:
+        per_services = {}
+
     details: Dict[str, Any] = {
         "db": _status(db_ok, db_detail),
         "redis": _status(redis_ok, redis_detail),
@@ -334,6 +386,7 @@ async def health_summary(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
         "frontend_built": fe_dist_ok,
         "db_migration": migration,
         "process": {"uptime_seconds": uptime_seconds, "host": host},
+        "services": per_services,
     }
     overall_ok = db_ok and redis_ok and storage_ok
     return {"status": "ok" if overall_ok else "degraded", "details": details}
@@ -345,5 +398,6 @@ legacy_router = APIRouter(prefix="/healthz", tags=["health"], include_in_schema=
 
 @legacy_router.get("/db")
 async def legacy_health_db(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    """Compatibilidad legacy para probes que consultan /healthz/db."""
     await db.execute(text("SELECT 1"))
     return {"db": "ok"}

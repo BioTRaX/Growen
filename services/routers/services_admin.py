@@ -21,6 +21,9 @@ from db.session import get_session
 from db.models import Service, ServiceLog
 from services.auth import require_roles, require_csrf
 from services.orchestrator import start_service as _start, stop_service as _stop, status_service as _status
+from agent_core.config import settings
+import shutil
+import subprocess
 
 
 router = APIRouter(prefix="/admin/services", tags=["admin","services"])
@@ -53,6 +56,10 @@ async def _ensure_row(db: AsyncSession, name: str) -> Service:
 
 @router.get("", dependencies=[Depends(require_roles("admin", "colaborador"))])
 async def list_services(db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
+    """Lista servicios conocidos con estado actual y metadatos.
+
+    Asegura filas para KNOWN_SERVICES y calcula uptime si está en running.
+    """
     # Ensure known services exist so UI always shows a complete list
     for name in KNOWN_SERVICES:
         await _ensure_row(db, name)
@@ -77,6 +84,7 @@ async def list_services(db: AsyncSession = Depends(get_session)) -> Dict[str, An
 
 @router.patch("/{name}", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def update_service(name: str, payload: Dict[str, Any], db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
+    """Actualiza banderas del servicio (ej. auto_start)."""
     if name not in KNOWN_SERVICES:
         raise HTTPException(status_code=404, detail="Servicio desconocido")
     row = await _ensure_row(db, name)
@@ -91,6 +99,7 @@ async def update_service(name: str, payload: Dict[str, Any], db: AsyncSession = 
 
 @router.get("/{name}/status", dependencies=[Depends(require_roles("admin", "colaborador"))])
 async def status(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
+    """Consulta estado del servicio y persiste último estado básico."""
     if name not in KNOWN_SERVICES:
         raise HTTPException(status_code=404, detail="Servicio desconocido")
     row = await _ensure_row(db, name)
@@ -110,6 +119,7 @@ async def status(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str
 
 @router.post("/{name}/start", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def start(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
+    """Inicia un servicio y registra logs/uptime."""
     if name not in KNOWN_SERVICES:
         raise HTTPException(status_code=404, detail="Servicio desconocido")
     row = await _ensure_row(db, name)
@@ -140,6 +150,7 @@ async def start(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str,
 
 @router.post("/{name}/stop", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def stop(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
+    """Detiene un servicio y persiste uptime acumulado."""
     if name not in KNOWN_SERVICES:
         raise HTTPException(status_code=404, detail="Servicio desconocido")
     await _ensure_row(db, name)
@@ -163,6 +174,7 @@ async def stop(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, 
 
 @router.post("/panic-stop", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def panic_stop(db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
+    """Detiene servicios no esenciales (best-effort)."""
     out: List[Dict[str, Any]] = []
     for name in KNOWN_SERVICES:
         cid = _cid()
@@ -175,6 +187,7 @@ async def panic_stop(db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
 
 @router.get("/{name}/logs", dependencies=[Depends(require_roles("admin", "colaborador"))])
 async def tail_logs(name: str, tail: int = Query(100, ge=1, le=1000), db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
+    """Devuelve los últimos N logs del servicio."""
     rows = (await db.execute(select(ServiceLog).where(ServiceLog.service == name).order_by(ServiceLog.created_at.desc()).limit(tail))).scalars().all()
     items = [
         {
@@ -194,6 +207,7 @@ async def tail_logs(name: str, tail: int = Query(100, ge=1, le=1000), db: AsyncS
 
 @router.get("/{name}/logs/stream", dependencies=[Depends(require_roles("admin", "colaborador"))])
 async def stream_logs(name: str, db: AsyncSession = Depends(get_session), last_id: int = Query(0, ge=0), poll_ms: int = Query(1000, ge=200, le=10_000)):
+    """SSE con logs incrementales del servicio (mantiene last_id)."""
     async def event_gen():  # type: ignore
         import json
         import asyncio
@@ -229,3 +243,95 @@ async def stream_logs(name: str, db: AsyncSession = Depends(get_session), last_i
             return
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+@router.get("/{name}/deps/check", dependencies=[Depends(require_roles("admin", "colaborador"))])
+async def deps_check(name: str) -> Dict[str, Any]:
+    """Chequea dependencias de sistema/paquetes según el servicio."""
+    name = name.lower()
+    missing: List[str] = []
+    hints: List[str] = []
+    ok = True
+    if name == "playwright":
+        try:
+            import importlib  # noqa: F401
+            importlib.import_module("playwright")
+        except Exception:
+            ok = False
+            missing.append("playwright")
+            hints.append("pip install playwright && python -m playwright install chromium")
+        # chromium presence is best-effort; encourage install
+        hints.append("Si falta Chromium: python -m playwright install chromium")
+    elif name == "pdf_import":
+        # Check common external tools (with Windows fallback paths)
+        tesseract = shutil.which("tesseract")
+        if not tesseract:
+            for p in [
+                r"C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+                r"C:\\Program Files (x86)\\Tesseract-OCR\\tesseract.exe",
+            ]:
+                if os.path.exists(p):
+                    tesseract = p
+                    break
+        qpdf = shutil.which("qpdf")
+        gs = shutil.which("gswin64c") or shutil.which("gswin32c") or shutil.which("gs")
+        if not tesseract:
+            ok = False; missing.append("tesseract")
+        if not qpdf:
+            ok = False; missing.append("qpdf")
+        if not gs:
+            ok = False; missing.append("ghostscript")
+        if not ok:
+            hints.append("Instala Tesseract/QPDF/Ghostscript en el host/imagen")
+    elif name == "image_processing":
+        try:
+            __import__("PIL")
+        except Exception:
+            ok = False; missing.append("Pillow")
+        # Optional helpers
+        try:
+            __import__("rembg")
+        except Exception:
+            hints.append("pip install rembg (opcional)")
+    else:
+        return {"ok": False, "missing": [], "detail": ["servicio desconocido"]}
+    return {"ok": ok, "missing": missing, "hints": hints}
+
+
+@router.post("/{name}/deps/install", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
+async def deps_install(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
+    """Dev helper to install missing deps for selected services.
+
+    Only enabled in non-production environments.
+    """
+    if settings.env == "production":
+        return {"ok": False, "disabled": True, "hint": "Instalación deshabilitada en producción"}
+    name = name.lower()
+    detail: List[str] = []
+    ok = True
+    if name == "playwright":
+        try:
+            # Install chromium browser only
+            proc = subprocess.run(["python", "-m", "playwright", "install", "chromium"], capture_output=True, text=True, timeout=300)
+            out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+            for line in out.splitlines():
+                if line.strip():
+                    detail.append(line.strip())
+            ok = proc.returncode == 0
+        except Exception as e:
+            ok = False
+            detail.append(str(e))
+    elif name == "pdf_import":
+        ok = False
+        detail.append("Instalación automática de herramientas del sistema no soportada; usar gestor del sistema")
+    else:
+        ok = False
+        detail.append("servicio desconocido")
+
+    # Log result
+    try:
+        db.add(ServiceLog(service=name, correlation_id=_cid(), action="deps", host=socket.gethostname(), pid=None, duration_ms=None, ok=ok, level=("INFO" if ok else "ERROR"), error=(None if ok else "install failed"), payload={"detail": detail[:50]}))
+        await db.commit()
+    except Exception:
+        pass
+    return {"ok": ok, "detail": detail[:200]}

@@ -10,6 +10,12 @@ export const PATHS = {
   suppliers: "/proveedores",
   purchases: "/compras",
   purchasesNew: "/compras/nueva",
+  // Admin
+  admin: "/admin",
+  adminUsers: "/admin/usuarios",
+  adminServices: "/admin/servicios",
+  adminImages: "/admin/imagenes-productos",
+  // legacy alias
   imagesAdmin: "/admin/imagenes",
 } as const;
 

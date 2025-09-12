@@ -1,13 +1,14 @@
 ﻿// NG-HEADER: Nombre de archivo: ImagesAdminPanel.tsx
-// NG-HEADER: UbicaciÃ³n: frontend/src/pages/ImagesAdminPanel.tsx
-// NG-HEADER: DescripciÃ³n: Panel de imÃ¡genes con estado, triggers y revisiÃ³n.
+// NG-HEADER: Ubicación: frontend/src/pages/ImagesAdminPanel.tsx
+// NG-HEADER: Descripción: Panel de imágenes con estado, triggers y revisión.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import http from '../services/http'
 import { Link } from 'react-router-dom'
+import { PATHS } from '../routes/paths'
 import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
 
-export default function ImagesAdminPanel() {
+export default function ImagesAdminPanel({ embedded = false }: { embedded?: boolean }) {
   const [status, setStatus] = useState<any>(null)
   const [logs, setLogs] = useState<string[]>([])
   const [form, setForm] = useState<any>({ active: false, mode: 'off', retries: 3, rate_rps: 1, burst: 3, log_retention_days: 90, purge_ttl_days: 30 })
@@ -20,11 +21,14 @@ export default function ImagesAdminPanel() {
   const [gatePlayNeeded, setGatePlayNeeded] = useState(false)
   const [gatePlayBusy, setGatePlayBusy] = useState(false)
   const [gatePlayLogs, setGatePlayLogs] = useState<ServiceLogItem[]>([])
+  const [live, setLive] = useState(false)
+  const esRef = useRef<EventSource | null>(null)
+  const [lastId, setLastId] = useState(0)
 
   useEffect(() => {
-    refresh()
-    const id = setInterval(() => { refresh(false) }, 4000)
-    return () => clearInterval(id)
+  refresh()
+  const id = setInterval(() => { if (!live) refresh(false) }, 6000)
+  return () => { clearInterval(id); if (esRef.current) { esRef.current.close(); esRef.current = null } }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -33,17 +37,11 @@ export default function ImagesAdminPanel() {
       const r = await http.get('/admin/image-jobs/status')
       setStatus(r.data)
       setForm((prev: any) => ({ ...prev, active: r.data.active, mode: r.data.mode }))
-      const lg = await http.get('/admin/image-jobs/logs', { params: { limit: 50 } })
-      const items = Array.isArray(lg.data) ? lg.data : (lg.data.items || [])
-  setLogs(items)
-      // fetch NDJSON file tail for more detailed crawler events
-      try {
-        const nd = await http.get('/admin/image-jobs/ndjson-file', { params: { limit: 200 } })
-        const lines = (nd.data || "").split('\n').filter(Boolean)
-  const pretty = lines.slice(-50).map((l: string) => l)
-        setLogs(prev => [...pretty, ...prev].slice(0, 200))
-      } catch (e) {
-        // ignore
+      // Simplify: rely on SSE when live; if not live fetch textual tail
+      if (!live) {
+        const lg = await http.get('/admin/image-jobs/logs', { params: { limit: 50 } })
+        const items = Array.isArray(lg.data) ? lg.data : (lg.data.items || [])
+        setLogs(items)
       }
       const rev = await http.get('/products/images/review', { params: { status: 'pending' } })
       setPendingReview(rev.data || [])
@@ -96,11 +94,41 @@ export default function ImagesAdminPanel() {
     }
   }
 
+  function toggleLive() {
+    const on = !live
+    setLive(on)
+    if (on) {
+      try { if (esRef.current) { esRef.current.close(); esRef.current = null } } catch {}
+      const url = new URL('/admin/image-jobs/logs/stream', window.location.origin)
+      if (lastId) url.searchParams.set('last_id', String(lastId))
+      const es = new EventSource(url.toString())
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data)
+          if (data.logs && data.logs.length) {
+            setLogs(prev => [...prev, ...data.logs.map((l: any) => `[${l.level}] ${l.created_at} - ${l.message}`)].slice(-400))
+            setLastId(data.last_id || lastId)
+          }
+          if (data.progress && status) {
+            setStatus((prev: any) => ({ ...(prev || {}), progress: data.progress }))
+          }
+        } catch {}
+      }
+      es.onerror = () => { /* ignore */ }
+      esRef.current = es
+    } else {
+      try { if (esRef.current) esRef.current.close() } catch {}
+      esRef.current = null
+    }
+  }
+
   return (
     <div className="panel p-4" style={{ margin: 16 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2>ImÃ¡genes productos</h2>
-        <Link to="/admin" className="btn-secondary btn-lg" style={{ textDecoration: 'none' }}>Volver</Link>
+  <h2>Imágenes productos</h2>
+        {!embedded && (
+          <Link to={PATHS.admin} className="btn-secondary btn-lg" style={{ textDecoration: 'none' }}>Volver</Link>
+        )}
       </div>
       {gatePlayNeeded && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }}>
@@ -123,7 +151,7 @@ export default function ImagesAdminPanel() {
           </div>
         </div>
       )}
-      <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+  <div className="row" style={{ gap: 8, alignItems: 'center' }}>
         <label><input type="checkbox" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} /> Activado</label>
         <select className="select" value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
           <option value="off">Off</option>
@@ -137,15 +165,16 @@ export default function ImagesAdminPanel() {
           <option value="stock">Con stock</option>
           <option value="all">Toda la base</option>
         </select>
-        <button className="btn" onClick={async () => { const ok = await ensurePlaywright(); if (!ok) return; await http.post('/admin/image-jobs/trigger/crawl-missing', null, { params: { scope } }); alert('Crawl encolado') }}>Forzar escaneo catÃ¡logo</button>
-        <button className="btn" onClick={async () => { await http.post('/admin/image-jobs/trigger/purge'); alert('Purge encolado') }}>Purgar soft-deleted</button>
+  <button className="btn" onClick={async () => { const ok = await ensurePlaywright(); if (!ok) return; await http.post('/admin/image-jobs/trigger/crawl-missing', null, { params: { scope } }); alert('Crawl encolado') }}>Forzar escaneo catálogo</button>
+  <button className="btn" onClick={async () => { await http.post('/admin/image-jobs/trigger/purge'); alert('Purge encolado') }}>Purgar soft-deleted</button>
   <button className="btn" onClick={async () => { await http.post('/admin/image-jobs/clean-logs'); alert('Logs limpiados'); refresh() }}>Limpiar logs</button>
         <button className="btn" onClick={async () => {
-          const title = window.prompt('TÃ­tulo a probar (proveedor Santa Planta):')
+          const title = window.prompt('Título a probar (proveedor Santa Planta):')
           if (!title) return
           const r = await http.post('/admin/image-jobs/probe', null, { params: { title } })
           setProbe(r.data)
-        }}>Probar por tÃ­tulo</button>
+  }}>Probar por título</button>
+  <label style={{ marginLeft: 8 }}><input type="checkbox" checked={live} onChange={toggleLive} /> Live</label>
       </div>
       <div style={{ marginTop: 12 }}>
         <h3>Estado</h3>
@@ -158,17 +187,25 @@ export default function ImagesAdminPanel() {
               <div><b>Pendientes:</b> {status.pending}</div>
               <div><b>OK (24h):</b> {status.ok ?? 0}</div>
               <div><b>Fail (24h):</b> {status.fail ?? 0}</div>
+              {status.progress && (
+                <div style={{ minWidth: 220 }}>
+                  <b>Progreso:</b> {status.progress.percent}% ({status.progress.processed}/{status.progress.total || '∼'})
+                  <div style={{ height: 6, background: '#1f2937', borderRadius: 4, marginTop: 4 }}>
+                    <div style={{ width: `${status.progress.percent}%`, height: '100%', background: '#22c55e', borderRadius: 4, transition: 'width .6s' }} />
+                  </div>
+                </div>
+              )}
               {status.current_product && (
                 <div>
-                  <b>Procesando:</b> {status.current_product.title || ''} (ID {status.current_product.product_id}) â€” {status.current_product.stage}
+                  <b>Procesando:</b> {status.current_product.title || ''} (ID {status.current_product.product_id}) — {status.current_product.stage}
                 </div>
               )}
             </div>
           </div>
-        ) : <div className="code">Cargando estadoâ€¦</div>}
+  ) : <div className="code">Cargando estado…</div>}
       </div>
       <div style={{ marginTop: 12 }}>
-        <h3>Logs (Ãºltimos 50)</h3>
+  <h3>Logs (últimos 50)</h3>
         <div style={{ marginTop: 8 }}>
           <input className="input" placeholder="Correlation ID (opcional)" value={correlationId || ''} onChange={e => setCorrelationId(e.target.value)} style={{ width: 360, marginRight: 6 }} />
           <button className="btn" onClick={async () => { if (correlationId) await fetchSnapshots(correlationId) }}>Ver snapshots</button>
@@ -210,7 +247,7 @@ export default function ImagesAdminPanel() {
         </div>
       )}
       <div style={{ marginTop: 12 }}>
-        <h3>Pendientes de revisiÃ³n</h3>
+  <h3>Pendientes de revisión</h3>
         {pendingReview.length === 0 ? (
           <div>No hay pendientes.</div>
         ) : (

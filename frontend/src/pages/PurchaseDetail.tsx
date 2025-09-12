@@ -159,8 +159,17 @@ export default function PurchaseDetail() {
 
   async function doConfirm() {
     try {
-      await confirmPurchase(pid)
+      const res = await confirmPurchase(pid, true)
       showToast('success', 'Compra confirmada')
+      if (Array.isArray(res.applied_deltas) && res.applied_deltas.length > 0) {
+        for (const d of res.applied_deltas) {
+          const name = d.product_title || `Producto ${d.product_id}`
+          showToast('info', `${name}: +${d.delta} (→ ${d.new})`)
+        }
+      }
+      if (Array.isArray(res.unresolved_lines) && res.unresolved_lines.length > 0) {
+        showToast('warning', `Líneas sin producto: ${res.unresolved_lines.join(', ')}`)
+      }
       const p = await getPurchase(pid)
       setData(p)
     } catch (e: any) {

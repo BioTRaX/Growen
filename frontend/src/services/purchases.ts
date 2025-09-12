@@ -61,9 +61,9 @@ export async function validatePurchase(id: number) {
   return r.data as { status: string; unmatched: number; lines: number }
 }
 
-export async function confirmPurchase(id: number) {
-  const r = await http.post(`/purchases/${id}/confirm`, {})
-  return r.data
+export async function confirmPurchase(id: number, debug: boolean = false) {
+  const r = await http.post(`/purchases/${id}/confirm`, {}, { params: { debug: debug ? 1 : 0 } })
+  return r.data as { status: string; applied_deltas?: { product_id: number; product_title?: string | null; delta: number; new: number; old: number }[]; unresolved_lines?: number[] }
 }
 
 export async function cancelPurchase(id: number, note: string) {

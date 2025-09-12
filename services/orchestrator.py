@@ -31,7 +31,32 @@ _LAZY_STATE: Dict[str, str] = {}
 
 
 def _has_docker() -> bool:
-    return bool(shutil.which("docker")) and COMPOSE_FILE.exists()
+    """Return True only if Docker CLI exists AND the engine is reachable.
+
+    On some hosts (e.g., Windows with Docker Desktop stopped) the `docker`
+    binary is present but the engine socket isn't. In that case, trying to
+    run `docker compose` will fail with errors like:
+      - open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.
+      - Cannot connect to the Docker daemon
+
+    To avoid surfacing these failures to the UI, proactively check engine
+    health via `docker info` with a short timeout. If it fails, behave as if
+    Docker isn't available and fall back to the lazy in-process registry.
+    """
+    if not (shutil.which("docker") and COMPOSE_FILE.exists()):
+        return False
+    try:
+        proc = subprocess.run(
+            ["docker", "info", "-f", "{{.ServerVersion}}"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if proc.returncode != 0:
+            return False
+        return bool((proc.stdout or "").strip())
+    except Exception:
+        return False
 
 
 def _compose(args: list[str]) -> subprocess.CompletedProcess:
@@ -42,10 +67,17 @@ def _compose(args: list[str]) -> subprocess.CompletedProcess:
 
 def start_service(name: str, correlation_id: str) -> ServiceStatus:
     if _has_docker():
+        # Idempotencia amable: si ya está en running/starting, no intentes reiniciar
+        current = status_service(name)
+        if current.status in ("running", "starting"):
+            return ServiceStatus(name=name, status=current.status, ok=True, detail=f"noop: already {current.status}")
         proc = _compose(["up", "-d", name])
         ok = proc.returncode == 0
         detail = proc.stdout.strip() or proc.stderr.strip()
-        return ServiceStatus(name=name, status=("running" if ok else "failed"), ok=ok, detail=detail)
+        # Después de up, consultar rápidamente el estado para normalizar running/starting
+        post = status_service(name)
+        status = post.status if post.status else ("running" if ok else "failed")
+        return ServiceStatus(name=name, status=status, ok=ok, detail=detail)
     # Fallback: lazy state only
     _LAZY_STATE[name] = "running"
     return ServiceStatus(name=name, status="running", ok=True, detail="lazy-start (no docker)")
@@ -65,8 +97,20 @@ def status_service(name: str) -> ServiceStatus:
     if _has_docker():
         proc = _compose(["ps", name])
         out = (proc.stdout or "") + "\n" + (proc.stderr or "")
-        running = ("running" in out.lower()) and proc.returncode == 0
-        return ServiceStatus(name=name, status=("running" if running else "stopped"), ok=True, detail=out.strip())
+        lower = out.lower()
+        ok = proc.returncode == 0
+        # Normalización flexible de estados de Docker/Compose
+        # "Up", "Up (healthy)", "running" => running
+        # "health: starting", "restarting", "starting" => starting
+        # "unhealthy" => degraded
+        # "exited", "stopped" => stopped
+        status = "stopped"
+        if any(k in lower for k in ("unhealthy",)):
+            status = "degraded"
+        if any(k in lower for k in ("health: starting", "restarting", "starting")):
+            status = "starting"
+        if ok and any(k in lower for k in ("up", "running", "started", "healthy")) and "health: starting" not in lower:
+            status = "running"
+        return ServiceStatus(name=name, status=status, ok=True, detail=out.strip())
     st = _LAZY_STATE.get(name, "stopped")
     return ServiceStatus(name=name, status=st, ok=True, detail="lazy-status (no docker)")
-
