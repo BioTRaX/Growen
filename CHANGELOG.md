@@ -29,3 +29,42 @@
 - fix: soporte de `psycopg` asíncrono en Windows usando `WindowsSelectorEventLoopPolicy`
 - fix: migración idempotente que agrega `users.identifier` si falta y actualiza el modelo
 - fix: formulario de login centrado y autenticación/guest integrados con `AuthContext`
+
+## [0.2.0] - 2025-09-12
+
+### Added
+- purchases: respuesta `confirm` con `applied_deltas` (debug=1) para trazabilidad de stock.
+- purchases: bloqueo estricto opcional (env `PURCHASE_CONFIRM_REQUIRE_ALL_LINES`) cuando hay líneas sin vincular.
+- admin: nuevo layout `/admin` con secciones Servicios, Usuarios, Imágenes y Health unificadas.
+- admin/services: chequeo (`/deps/check`) e instalación (`/deps/install`) de dependencias opcionales (playwright, pdf OCR stack).
+- images: stream SSE de logs/progreso (`/admin/image-jobs/logs/stream`) y cálculo de % progreso.
+- import(SantaPlanta): heurísticas SKU (tokens numéricos), fallback camelot/pdfplumber + OCR mejorado, eventos detallados y retry.
+- health: endpoints enriquecidos (`/health/service/*`, `/health/summary`) con reporte por servicio opcional y storage/redis/db/AI.
+- services: util frontend `ensureServiceRunning` para espera idempotente de estado running.
+- auth: endpoint para eliminar usuario con audit (DELETE `/auth/users/{id}`).
+- scripts: herramienta `tools/clear_db_logs.py` para purgar tablas de logs; registro de tarea startup PowerShell.
+
+### Changed
+- orchestrator: detección robusta de Docker (verifica engine con `docker info`) y normalización de estados (running/starting/degraded).
+- image jobs: endpoint `status` agrega objeto `progress` (total, pending, processed, percent).
+- pipeline import: sanitización de `TESSDATA_PREFIX` y fallback heurístico de filas cuando no se detectan tablas estructuradas.
+- start.bat: mensajes internacionalizados (acentos), build condicional frontend y manejo mejorado de Redis ausente.
+- health summary: incluye mapa `services` con estado individual.
+
+### Fixed
+- import: múltiples mejoras de resiliencia frente a PDFs sin texto y paths OCR.
+- purchases: sanitización de mensajes Unicode y logs por línea (`old_stock + delta -> new`).
+- UI: carga de sección Stock tras invalidación de chunks (nueva build hash) al mejorar build flow.
+
+### UI / UX
+- Tema oscuro refinado (contraste placeholders, muted text) y toasts apilados (info/success/warning) con per-product delta.
+- Panel de imágenes: modo Live (SSE) y barra de progreso animada.
+- Panel de servicios: integra panel de health + logs streaming.
+- PurchaseDetail: toasts por producto con incremento de stock y aviso de líneas sin vincular.
+
+### Chore / Dev
+- Documentación interna con docstrings en routers (purchases, health, services_admin, image_jobs, import pipeline).
+- Limpieza y normalización de mensajes en scripts y logs.
+
+---
+
