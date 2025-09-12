@@ -1,6 +1,6 @@
 [project]
 name = "growen"
-version = "0.1.0"
+version = "0.2.0"
 description = "Agente para gestión de catálogo y stock de Nice Grow"
 authors = [{name = "Growen"}]
 requires-python = ">=3.11"
