@@ -19,16 +19,22 @@ const PurchaseNew = lazy(() => import('./pages/PurchaseNew'))
 const PurchaseDetail = lazy(() => import('./pages/PurchaseDetail'))
 const SuppliersPage = lazy(() => import('./pages/Suppliers'))
 import { PATHS } from "./routes/paths";
+import { ToastProvider, InjectToastStyles } from './components/ToastProvider'
+import { ThemeProvider } from './theme/ThemeProvider'
 // New Admin sections (code-split per route)
 const AdminLayout = lazy(() => import('./pages/admin/AdminLayout'))
 const AdminUsers = lazy(() => import('./pages/admin/UsersPage'))
 const AdminServices = lazy(() => import('./pages/admin/ServicesPage'))
 const AdminImages = lazy(() => import('./pages/admin/ImagesCrawlerPage'))
+const CatalogDiagnosticsPage = lazy(() => import('./pages/CatalogDiagnosticsPage'))
 
 export default function App() {
   return (
   <BrowserRouter>
       <AuthProvider>
+        <ThemeProvider>
+        <ToastProvider>
+        <InjectToastStyles />
         <Suspense fallback={<div style={{padding:12}}>Cargando…</div>}>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -115,6 +121,7 @@ export default function App() {
           >
             <Route path="servicios" element={<AdminServices />} />
             <Route path="imagenes-productos" element={<AdminImages />} />
+            <Route path="catalogos/diagnostico" element={<CatalogDiagnosticsPage />} />
             {/* Users only for admins */}
             <Route
               path="usuarios"
@@ -137,6 +144,8 @@ export default function App() {
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
         </Suspense>
+        </ToastProvider>
+        </ThemeProvider>
       </AuthProvider>
     </BrowserRouter>
   );

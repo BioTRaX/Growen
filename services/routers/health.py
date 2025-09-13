@@ -100,7 +100,7 @@ async def health_service(name: str) -> Dict[str, Any]:
         if not ocrmypdf_ok:
             hints.append("Instalá ocrmypdf en el venv")
         ok = ocrmypdf_ok and bool(tesseract_path and qpdf_path and gs_path)
-    return {"service": name, "ok": ok, "deps": {"ocrmypdf": ocrmypdf_ok, "pdfplumber": pdfplumber_ok, "camelot": camelot_ok, "tesseract": bool(tesseract_path), "tesseract_path": tesseract_path, "qpdf": bool(qpdf_path), "ghostscript": bool(gs_path)}, "hints": hints}
+        return {"service": name, "ok": ok, "deps": {"ocrmypdf": ocrmypdf_ok, "pdfplumber": pdfplumber_ok, "camelot": camelot_ok, "tesseract": bool(tesseract_path), "tesseract_path": tesseract_path, "qpdf": bool(qpdf_path), "ghostscript": bool(gs_path)}, "hints": hints}
     if name == "playwright":
         try:
             import importlib

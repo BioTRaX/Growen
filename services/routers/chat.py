@@ -7,7 +7,9 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from services.ai.provider import ai_reply
+from agent_core.config import settings as core_settings
+from ai.router import AIRouter
+from ai.types import Task
 
 router = APIRouter()
 
@@ -27,7 +29,13 @@ class ChatOut(BaseModel):
 
 @router.post("/chat", response_model=ChatOut)
 async def chat_endpoint(payload: ChatIn) -> ChatOut:
-    """Llama a la IA y normaliza la respuesta."""
+    """Llama a la IA usando AIRouter (inyecta SYSTEM_PROMPT)."""
 
-    reply = await ai_reply(payload.text)
+    router = AIRouter(core_settings)
+    raw = router.run(Task.SHORT_ANSWER.value, payload.text)
+    # Recortar system prompt si el stub devuelve todo el prompt completo.
+    if "\n\n" in raw:
+        reply = raw.split("\n\n")[-1].strip()
+    else:
+        reply = raw.strip()
     return ChatOut(text=reply)

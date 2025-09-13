@@ -253,6 +253,7 @@ class TablePrefs(BaseModel):
 
 
 SCOPE_PRODUCTS = "products_table"
+SCOPE_PRODUCT_DETAIL = "product_detail_style"
 
 
 @router.get("/users/me/preferences/products-table")
@@ -273,6 +274,35 @@ async def put_prefs(data: TablePrefs, session_data: SessionData = Depends(curren
         row.data = payload
     else:
         row = UserPreference(user_id=session_data.user.id, scope=SCOPE_PRODUCTS, data=payload)
+        db.add(row)
+    await db.commit()
+    return {"status": "ok"}
+
+
+class ProductDetailStyle(BaseModel):
+    style: Literal["default", "minimalDark"]
+
+
+@router.get("/users/me/preferences/product-detail")
+async def get_product_detail_pref(session_data: SessionData = Depends(current_session), db: AsyncSession = Depends(get_session)):
+    """Devuelve la preferencia de estilo de ficha de producto del usuario actual."""
+    if not session_data.user:
+        return {}
+    row = await db.scalar(select(UserPreference).where(UserPreference.user_id == session_data.user.id, UserPreference.scope == SCOPE_PRODUCT_DETAIL))
+    return row.data if row else {}
+
+
+@router.put("/users/me/preferences/product-detail", dependencies=[Depends(require_csrf)])
+async def put_product_detail_pref(data: ProductDetailStyle, session_data: SessionData = Depends(current_session), db: AsyncSession = Depends(get_session)):
+    """Guarda la preferencia de estilo de ficha de producto para el usuario actual."""
+    if not session_data.user:
+        raise HTTPException(status_code=401, detail="Auth required")
+    row = await db.scalar(select(UserPreference).where(UserPreference.user_id == session_data.user.id, UserPreference.scope == SCOPE_PRODUCT_DETAIL))
+    payload = data.model_dump()
+    if row:
+        row.data = payload
+    else:
+        row = UserPreference(user_id=session_data.user.id, scope=SCOPE_PRODUCT_DETAIL, data=payload)
         db.add(row)
     await db.commit()
     return {"status": "ok"}

@@ -8,6 +8,8 @@ import { FixedSizeList as List, ListChildComponentProps } from 'react-window'
 import { listSuppliers, Supplier } from '../services/suppliers'
 import { listCategories, Category } from '../services/categories'
 import { searchProducts, ProductItem, updateStock } from '../services/products'
+import { deleteProducts } from '../services/products'
+import ProductCreateModal from './ProductCreateModal'
 import { updateSalePrice } from '../services/productsEx'
 import { showToast } from './Toast'
 import PriceHistoryModal from './PriceHistoryModal'
@@ -39,6 +41,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [stockFilter, setStockFilter] = useState<string>('')
+  const [recentFilter, setRecentFilter] = useState<string>('')
   const [editing, setEditing] = useState<number | null>(null)
   const [stockVal, setStockVal] = useState('')
   const [saleEditing, setSaleEditing] = useState<number | null>(null) // canonical_product_id
@@ -50,6 +53,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [selected, setSelected] = useState<number[]>([])
   const [showBulk, setShowBulk] = useState(false)
   const [showColsCfg, setShowColsCfg] = useState(false)
+  const [showCreate, setShowCreate] = useState(false)
   // Fixed row height for virtualized list to avoid overlap
   const ROW_HEIGHT = 56
   const [listHeight, setListHeight] = useState<number>(400)
@@ -226,7 +230,8 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         q,
         supplier_id: supplierId ? Number(supplierId) : undefined,
         category_id: categoryId ? Number(categoryId) : undefined,
-    stock: stockFilter || undefined,
+        stock: stockFilter || undefined,
+        created_since_days: recentFilter ? Number(recentFilter) : undefined,
         page,
       })
         .then((r) => {
@@ -237,7 +242,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         .finally(() => setLoading(false))
     }, 300)
     return () => clearTimeout(t)
-  }, [q, supplierId, categoryId, stockFilter, page, open])
+  }, [q, supplierId, categoryId, stockFilter, recentFilter, page, open])
 
   async function saveStock(id: number) {
     const num = Number(stockVal)
@@ -470,8 +475,30 @@ export default function ProductsDrawer({ open, onClose }: Props) {
             Editar precios ({selected.length})
           </button>
         )}
+        {!!selected.length && canEdit && (
+          <button
+            className="btn"
+            onClick={async () => {
+              if (!window.confirm(`Eliminar ${selected.length} productos? Esta acción es permanente.`)) return
+              try {
+                await deleteProducts(selected)
+                // refrescar lista
+                setItems([])
+                setPage(1)
+                setSelected([])
+              } catch (e) {
+                alert('No se pudieron eliminar')
+              }
+            }}
+          >
+            Eliminar seleccionados
+          </button>
+        )}
         <button className="btn" onClick={() => setShowColsCfg((v) => !v)}>Diseño</button>
         <button className="btn" onClick={() => reset()}>Restaurar diseño</button>
+        {canEdit && (
+          <button className="btn" onClick={() => setShowCreate(true)}>Nuevo producto</button>
+        )}
         <div style={{ marginLeft: 'auto', fontSize: 12, opacity: 0.8 }}>
           Click en casillas para seleccionar filas
         </div>
@@ -533,6 +560,20 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           <option value="">Stock: Todos</option>
           <option value="gt:0">Con stock</option>
           <option value="eq:0">Sin stock</option>
+        </select>
+        <select
+          className="select"
+          value={recentFilter}
+          onChange={(e) => {
+            setRecentFilter(e.target.value)
+            setItems([])
+            setPage(1)
+          }}
+        >
+          <option value="">Recientes: Todos</option>
+          <option value="1">Últimas 24h</option>
+          <option value="7">≤ 7 días</option>
+          <option value="30">≤ 30 días</option>
         </select>
       </div>
       <div style={{ fontSize: 12, marginBottom: 8 }}>{total} resultados</div>
@@ -607,6 +648,17 @@ export default function ProductsDrawer({ open, onClose }: Props) {
               setSelected([])
             }
           }}
+        />
+      )}
+      {showCreate && (
+        <ProductCreateModal
+          onCreated={() => {
+            // Refrescar lista volviendo a página 1
+            setPage(1)
+            setItems([])
+            setShowCreate(false)
+          }}
+          onClose={() => setShowCreate(false)}
         />
       )}
     </div>

@@ -15,6 +15,7 @@ export const PATHS = {
   adminUsers: "/admin/usuarios",
   adminServices: "/admin/servicios",
   adminImages: "/admin/imagenes-productos",
+  adminCatalogDiagnostics: "/admin/catalogos/diagnostico",
   // legacy alias
   imagesAdmin: "/admin/imagenes",
 } as const;

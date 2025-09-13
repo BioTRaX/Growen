@@ -16,11 +16,23 @@ export interface ImageItem {
   sort_order?: number
 }
 
-export async function uploadProductImage(productId: number, file: File): Promise<{ image_id: number; url: string }> {
+export async function uploadProductImage(
+  productId: number,
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<{ image_id: number; url: string }> {
   const form = new FormData()
   form.append('file', file)
   const r = await http.post(`/products/${productId}/images/upload`, form, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (e) => {
+      try {
+        if (e.total) {
+          const pct = Math.max(0, Math.min(100, Math.round((e.loaded / e.total) * 100)))
+          onProgress?.(pct)
+        }
+      } catch {}
+    },
   })
   return r.data
 }

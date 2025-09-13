@@ -1,4 +1,4 @@
-﻿// NG-HEADER: Nombre de archivo: ImagesAdminPanel.tsx
+// NG-HEADER: Nombre de archivo: ImagesAdminPanel.tsx
 // NG-HEADER: Ubicación: frontend/src/pages/ImagesAdminPanel.tsx
 // NG-HEADER: Descripción: Panel de imágenes con estado, triggers y revisión.
 // NG-HEADER: Lineamientos: Ver AGENTS.md

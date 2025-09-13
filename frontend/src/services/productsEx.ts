@@ -94,3 +94,25 @@ export async function putProductsTablePrefs(prefs: ProductsTablePrefs): Promise<
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
+
+// Product detail (card) style preference
+export type ProductDetailStyle = 'default' | 'minimalDark'
+
+export async function getProductDetailStylePref(): Promise<{ style?: ProductDetailStyle }> {
+  const res = await fetch(`${base}/products-ex/users/me/preferences/product-detail`, {
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function putProductDetailStylePref(style: ProductDetailStyle): Promise<{ status: string }> {
+  const res = await fetch(`${base}/products-ex/users/me/preferences/product-detail`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders() },
+    body: JSON.stringify({ style }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}

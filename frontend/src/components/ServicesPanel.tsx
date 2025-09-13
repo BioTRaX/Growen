@@ -1,4 +1,4 @@
-﻿// NG-HEADER: Nombre de archivo: ServicesPanel.tsx
+// NG-HEADER: Nombre de archivo: ServicesPanel.tsx
 // NG-HEADER: Ubicación: frontend/src/components/ServicesPanel.tsx
 // NG-HEADER: Descripción: Panel simple de control de servicios on-demand
 // NG-HEADER: Lineamientos: Ver AGENTS.md

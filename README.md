@@ -52,6 +52,24 @@ Notas:
 - Rutas de Admin en frontend: `/admin/servicios`, `/admin/usuarios`, `/admin/imagenes-productos`.
 - Alias legacy `/admin/imagenes` redirige a `/admin/imagenes-productos`.
 
+## Ficha de producto: Minimal Dark + subida de imágenes
+
+- Estética Minimal Dark:
+  - Toggle en `/productos/:id` con selector “Estética: Default | Minimal Dark`.
+  - Persiste por usuario en `user_preferences` (`scope = product_detail_style`) vía
+    `GET/PUT /products-ex/users/me/preferences/product-detail`. Fallback a `localStorage`.
+  - Estilo oscuro minimalista con más aire y acentos verdes/fucsia.
+
+- Subir imagen (solo Admin):
+  - Botón “Subir imagen” en la ficha (visible solo para rol `admin`).
+  - Validaciones frontend: tipos `jpg/png/webp`, tamaño ≤ 10 MB, dimensiones ≥ 600×600.
+  - Progreso de subida; toasts de éxito/error.
+  - Endpoint backend: `POST /products/{id}/images/upload` (valida tipos/tamaño/dimensiones, AV opcional, deriva webp).
+  - Auditoría: `audit_log` con `action=upload_image` y metadatos (producto, filename, size).
+
+Tips:
+- Colaborador mantiene acciones de URL (“Descargar”) y push a Tiendanube; la subida directa se reserva a Admin.
+
 Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web e IA híbrida.
 
 ## Arquitectura
@@ -220,6 +238,23 @@ type logs\run_api.log
 type logs\backend.log
 ```
 
+### Limpieza rápida de logs
+
+Para iniciar una sesión de depuración limpia:
+
+```bash
+python scripts/cleanup_logs.py --dry-run   # muestra acciones
+python scripts/cleanup_logs.py             # elimina rotaciones y trunca backend.log
+python scripts/cleanup_logs.py --keep-days 2
+```
+
+Acciones del script:
+- Elimina `backend.log.*` y `.bak` (no borra `backend.log` principal; lo trunca).
+- Borra logs de diagnósticos y jobs de imágenes si coinciden con patrones.
+- Conserva estructura de carpetas. Usa `--keep-days N` para preservar archivos recientes.
+
+Recomendado antes de reproducir un escenario (confirmar compra, probar WebSocket de chat, etc.) para aislar el nuevo output.
+
 ### Migraciones
 
 - Este repositorio ya incluye el árbol de Alembic; **no** ejecutes `alembic init`.
@@ -277,6 +312,32 @@ Endpoints relevantes (prefijo `/products-ex`):
 - `POST /products/bulk-sale-price` (admin, colaborador; CSRF)
 - `GET /products/{product_id}/offerings`
 - `GET/PUT /users/me/preferences/products-table` (PUT requiere CSRF)
+
+### Creación manual de productos
+
+Soporte para crear productos internos manualmente (roles `admin` y `colaborador`).
+
+Backend:
+- `POST /products` (CSRF) JSON:
+  ```json
+  { "title": "Nombre", "category_id": 123, "initial_stock": 0, "status": "active" }
+  ```
+  Respuesta incluye `id`, `sku_root` (derivado de título, hasta 8 chars alfanum), `slug`, `stock`, `category_id`, `status`.
+  Registra `AuditLog` (`action=product_create`).
+
+Frontend:
+- Botón "Nuevo producto" en panel Productos abre modal.
+- Formulario: Nombre (requerido), Categoría (lazy load al enfocar), Stock inicial (≥0).
+- Al crear reinicia a página 1 y refresca lista, muestra toast.
+
+Validaciones:
+- `initial_stock >= 0`.
+- `category_id` debe existir si se envía.
+
+Limitaciones actuales / posibles mejoras:
+- Sin variantes automáticas ni carga de imágenes en el modal.
+- Futuro: clonación, importación CSV, set de atributos iniciales.
+
 
 ## Subir listas de precios desde el chat
 
@@ -795,6 +856,129 @@ python -m cli.ng db-init
 - M3: despliegue completo
 
 Contribuciones y feedback son bienvenidos.
+
+## Catálogo (PDF)
+
+Feature para generar un PDF de catálogo seleccionando productos desde la vista **Stock**.
+
+Endpoints (`/catalogs/*`, roles: `admin` y `colaborador`):
+
+- `POST /catalogs/generate` cuerpo `{ "ids": [...] }` genera un archivo timestamp `catalog_YYYYMMDD_HHMMSS.pdf` y actualiza `ultimo_catalogo.pdf` (symlink o copia).
+- `GET /catalogs` lista catálogos existentes con paginación y filtros:
+  - Query params: `page=1`, `page_size=20` (<=500), `from_dt=YYYY-MM-DD`, `to_dt=YYYY-MM-DD`.
+  - Respuesta: `{items:[{id,filename,size,modified_at,latest}], total, page, page_size, pages}` ordenados desc.
+- `GET /catalogs/{id}` / `HEAD /catalogs/{id}` / `GET /catalogs/{id}/download` accesos por id (formato `YYYYMMDD_HHMMSS`).
+- `HEAD /catalogs/latest` verifica existencia del alias.
+- `GET /catalogs/latest` sirve inline el más reciente.
+- `GET /catalogs/latest/download` descarga el más reciente.
+- `GET /catalogs/export.csv` exporta la lista (mismos filtros `from_dt`, `to_dt`).
+- `DELETE /catalogs/{id}` elimina el catálogo indicado. Si el eliminado era el que apuntaba `ultimo_catalogo.pdf`, se reasigna el alias al siguiente más reciente (orden por `mtime`). Si no quedan catálogos, el alias se elimina. Respuesta: `{ "deleted": "YYYYMMDD_HHMMSS" }`.
+
+Notas sobre `DELETE`:
+- No requiere CSRF (solo roles) para alinearse con otros endpoints de lectura; si se desea endurecer, agregar `Depends(require_csrf)`.
+- Detección de "latest" contempla dos modos: (1) si `ultimo_catalogo.pdf` es symlink compara el destino; (2) si es copia compara bytes.
+- Retención (`CATALOG_RETENTION`) actúa solo en generación, no en delete manual.
+- Intentar borrar dos veces devuelve `404` en la segunda (el archivo ya no existe).
+
+Generación:
+- Agrupa productos por categoría raíz (si no tiene, usa "Sin categoría").
+- Sección 1: listado por categoría mostrando título y **precio de venta** (si existe). No incluye precio de compra ni stock.
+- Sección 2: fichas 2×2 (4 por página) por categoría, sin mezclar categorías en una página. Cada ficha: imagen principal (si existe), título, **precio de venta**, descripción "blanda" (HTML sanitizado y truncado a ~1000 chars, luego 600 chars dentro de la ficha) sin tags.
+- El precio de venta se toma de `product.sale_price` (cuando esté disponible) o, si está ausente, de la variante con `promo_price` o `price` mínima (fallback). Nunca se incluyen precios de compra.
+- Estilo dark con acentos verde (#22C55E) y fucsia (#f0f).
+- HTML → PDF vía WeasyPrint; fallback degradado ReportLab si falla la librería principal.
+
+Dependencias:
+- `weasyprint` (opcional, agregado a `pyproject.toml`; en Windows requiere dependencias GTK externas).
+- `reportlab` como fallback.
+
+Frontend:
+- En `Stock` se agregó selección múltiple (checkbox por fila) y botones: **Generar catálogo**, **Ver catálogo**, **Descargar catálogo** y **Limpiar selección**.
+- Generar exige al menos un producto seleccionado (alert si no).
+- Ver/Descargar validan existencia con `HEAD` primero; si 404 muestra alerta.
+
+Ruta de guardado: archivos en `./catalogos/catalog_YYYYMMDD_HHMMSS.pdf` + alias `ultimo_catalogo.pdf`.
+
+Retención: configurar `CATALOG_RETENTION=N` (variable de entorno). Si `N>0`, se conservan solo los N catálogos más nuevos (no afecta `ultimo_catalogo.pdf`). `0` = ilimitado.
+
+Logs:
+- Sistema de logging ampliado (observabilidad fina): por cada generación se producen (a) un log detallado JSONL con pasos y (b) un resumen JSON.
+- Pasos registrados (orden típico):
+  1. `start` (count, user)
+  2. `products_loaded` (products)
+  3. `images_loaded` (images)
+  4. `groups_built` (groups)
+  5. `html_built` (size)
+  6. `pdf_rendered` (bytes)
+  7. `pdf_written` (file, bytes)
+  8. `latest_updated` (mode=symlink|copy) ó `latest_update_failed`
+  9. `retention_applied`
+ 10. `summary_written`
+  (Si ocurre un error en symlink/copy se agrega `latest_update_failed`).
+- Ruta de logs:
+  - Resumen: `logs/catalogs/summary_YYYYMMDD_HHMMSS.json`
+  - Detallado: `logs/catalogs/detail/catalog_YYYYMMDD_HHMMSS.log` (cada línea JSON independiente)
+- Contenido del resumen: `{ generated_at, file, size, count, duration_ms }`.
+- Retención de PDFs: controlada por `CATALOG_RETENTION` (N más recientes; 0 = ilimitado).
+- Retención de logs detallados: se conservan los últimos 40 (`MAX_DETAIL_LOGS=40` en código). Los resúmenes actualmente no se purgan automáticamente.
+- Ya NO se borran todos los `.log` al final: solo se aplica política de recorte a detallados antiguos; esto asegura trazabilidad forense reciente sin crecimiento descontrolado.
+- Logging estructurado adicional en el logger Python (`[catalog] start / ok`).
+
+Diagnóstico (endpoints nuevos, roles `admin|colaborador`):
+
+- `GET /catalogs/diagnostics/status` → `{ active_generation: {running, started_at, ids}, detail_logs, summaries }`.
+- `GET /catalogs/diagnostics/summaries?limit=20` → últimos resúmenes parseados.
+- `GET /catalogs/diagnostics/log/{id}` → devuelve el log detallado (lista `items` + `count`). `id` formato `YYYYMMDD_HHMMSS`.
+
+Concurrencia:
+- Si ya hay una generación activa, `POST /catalogs/generate` responde `409` `{ "detail": "Ya hay una generación en curso" }` para evitar solapamientos (protección simple en memoria).
+
+Errores típicos de generación y diagnóstico:
+- `404 Productos no encontrados` si todos los IDs suministrados no existen.
+- `500 No se pudo generar el PDF` ante fallo de render (WeasyPrint + fallback ReportLab agotados).
+- `500 No se pudo escribir log detallado de catálogo` solo afecta observabilidad; el PDF igual puede generarse.
+
+Uso de los logs detallados:
+- Permiten medir tiempos inter-etapas (diferencia entre timestamps consecutivos) para optimización futura (ej. render HTML vs render PDF).
+- Facilitan reintentos manuales si se observa cuellos en `images_loaded` o `pdf_rendered` (dependencias de librerías y fuentes).
+
+Extensiones futuras sugeridas (no implementadas aún):
+- Parametrizar `MAX_DETAIL_LOGS` por variable de entorno (`CATALOG_DETAIL_LOG_RETENTION`).
+- Endpoint para métricas agregadas (p95/p99 `duration_ms`).
+- Flag `dry_run` para validar estructura sin escribir archivos.
+
+Notas futuras:
+- Resumen de logs previo a la limpieza para auditoría opcional.
+Frontend: incluye modal de Histórico que lista catálogos con marca 'latest', links Ver / Descargar y tamaños.
+
+### Pruebas manuales (Catálogo PDF)
+
+1. Generar 2 catálogos (seleccionar conjuntos distintos de productos) con ~5 s de diferencia para asegurar timestamps distintos.
+2. `GET /catalogs` debe listar ambos ordenados (más nuevo primero) y exactamente uno con `latest=true`.
+3. Borrar el MÁS ANTIGUO (`DELETE /catalogs/{id_antiguo}`):
+  - Respuesta `200 {"deleted": id}`.
+  - `GET /catalogs` solo muestra el restante y sigue `latest=true`.
+  - `HEAD /catalogs/{id_antiguo}` devuelve `404`.
+4. Generar un tercer catálogo. Confirmar que ahora el nuevo tiene `latest=true`.
+5. Borrar el que figura como `latest` actualmente:
+  - `DELETE` debe reasignar `ultimo_catalogo.pdf` al inmediatamente anterior.
+  - `HEAD /catalogs/latest` sigue devolviendo `200`.
+  - En Windows sin permisos de symlink puede usarse copia; validar que el contenido (tamaño) coincide con el archivo esperado.
+6. Borrar el último catálogo restante y verificar:
+  - `HEAD /catalogs/latest` => `404`.
+  - `GET /catalogs` => lista vacía.
+7. Generar 3 catálogos con `CATALOG_RETENTION=2` (ajustar variable y reiniciar backend): tras el tercero, el primero (más viejo) debe haber desaparecido automáticamente; `DELETE` sobre uno de los dos restantes debe seguir funcionando y actualizar alias según corresponda.
+8. CSV export: con varios catálogos presentes llamar `GET /catalogs/export.csv?from_dt=YYYY-MM-DD&to_dt=YYYY-MM-DD`; abrir el CSV y corroborar que las filas coinciden con `GET /catalogs` filtrado.
+9. Filtros de fecha: usar `from_dt` del día actual y `to_dt` anterior (debe devolver vacío); invertir para ver resultados.
+10. Concurrencia: lanzar dos borrados casi simultáneos (ej. ejecutar DELETE dos veces); segunda debe devolver `404`.
+11. Frontend: abrir modal Histórico, usar botón "Borrar" y confirmar toasts de éxito y refresco de la lista; borrar el `latest` y validar que la marca "latest" migra al siguiente.
+12. Error handling: intentar `DELETE /catalogs/valor_malformado` (longitud distinta a 15) => `400 ID inválido`.
+
+Checklist rápido post-borrado de latest:
+- `ultimo_catalogo.pdf` apunta (symlink) o contiene (copia) el nuevo más reciente.
+- No quedan referencias a un archivo inexistente.
+- La paginación sigue consistente (`page_size`, `total`, `pages`).
+
 ## Importar remitos (Santa Planta)
 
 El sistema incluye un pipeline robusto para importar remitos en formato PDF del proveedor Santa Planta, creando una compra en estado `BORRADOR`.

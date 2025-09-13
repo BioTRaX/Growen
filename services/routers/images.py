@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 from typing import List, Optional
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from pydantic import BaseModel
@@ -58,16 +58,35 @@ async def upload_image(
     prod = await db.get(Product, pid)
     if not prod:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
+    # Correlation id for diagnostics
+    import uuid as _uuid
+    cid = _uuid.uuid4().hex
+    try:
+        await _audit(db, "upload_start", "images", None, {"product_id": pid, "filename": file.filename, "content_type": file.content_type, "cid": cid}, sess, request)
+    except Exception:
+        pass
     # Basic type gate
     allowed = {"image/jpeg", "image/png", "image/webp"}
     if file.content_type and file.content_type not in allowed:
+        try:
+            await _audit(db, "upload_type_block", "images", None, {"product_id": pid, "cid": cid, "content_type": file.content_type}, sess, request)
+        except Exception:
+            pass
         raise HTTPException(status_code=415, detail="Tipo de archivo no permitido")
     path, sha256 = await save_upload(f"Productos/{pid}/raw", file.filename, file)
+    try:
+        await _audit(db, "upload_saved", "images", None, {"product_id": pid, "cid": cid, "path": str(path), "sha256": sha256}, sess, request)
+    except Exception:
+        pass
     # Size validation (<=10MB) and dimensions (>= min)
     size = path.stat().st_size
     if size > 10 * 1024 * 1024:
         try:
             path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            await _audit(db, "upload_too_large", "images", None, {"product_id": pid, "cid": cid, "bytes": int(size)}, sess, request)
         except Exception:
             pass
         raise HTTPException(status_code=400, detail="Archivo demasiado grande (>10MB)")
@@ -82,11 +101,19 @@ async def upload_image(
                 pass
             raise HTTPException(status_code=400, detail=f"Resolucion insuficiente (<{min_side}x{min_side})")
     except HTTPException:
+        try:
+            await _audit(db, "upload_invalid_dimensions", "images", None, {"product_id": pid, "cid": cid}, sess, request)
+        except Exception:
+            pass
         raise
     except Exception:
         # Not an image or unreadable
         try:
             path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            await _audit(db, "upload_invalid_image", "images", None, {"product_id": pid, "cid": cid}, sess, request)
         except Exception:
             pass
         raise HTTPException(status_code=400, detail="Archivo de imagen invalido")
@@ -96,6 +123,10 @@ async def upload_image(
     except Exception as e:
         try:
             path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            await _audit(db, "upload_av_blocked", "images", None, {"product_id": pid, "cid": cid, "error": str(e)}, sess, request)
         except Exception:
             pass
         raise HTTPException(status_code=400, detail=str(e))
@@ -134,11 +165,14 @@ async def upload_image(
             db.add(ImageVersion(image_id=img.id, kind=kind, path=relv, width=px, height=px, mime="image/webp"))
     except Exception:
         # Derivative generation is best-effort; log via audit and continue
-        await _audit(db, "derive_error", "images", None, {"product_id": pid, "filename": file.filename}, sess, request)
-    await _audit(db, "upload", "images", None, {"product_id": pid, "filename": file.filename}, sess, request)
+        await _audit(db, "derive_error", "images", img.id if 'img' in locals() else None, {"product_id": pid, "cid": cid, "filename": file.filename}, sess, request)
+    try:
+        await _audit(db, "upload_image", "images", img.id, {"product_id": pid, "filename": file.filename, "size": size, "cid": cid}, sess, request)
+    except Exception:
+        pass
     await db.commit()
     await db.refresh(img)
-    return {"image_id": img.id, "url": img.url, "path": img.path}
+    return {"image_id": img.id, "url": img.url, "path": img.path, "correlation_id": cid}
 
 
 @router.post(
@@ -251,6 +285,32 @@ async def delete_image(pid: int, iid: int, request: Request, db: AsyncSession = 
     await _audit(db, "soft_delete", "images", iid, {"product_id": pid}, sess, request)
     await db.commit()
     return {"status": "ok"}
+
+
+@router.get(
+    "/{pid}/images/audit-logs",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+)
+async def image_audit_logs(pid: int, db: AsyncSession = Depends(get_session), limit: int = Query(50, ge=1, le=500)) -> dict:
+    """Auditoría reciente de acciones de imágenes para el producto pid."""
+    from sqlalchemy import join
+    j = join(AuditLog, Image, AuditLog.entity_id == Image.id)
+    rows = (await db.execute(
+        select(AuditLog, Image.id.label("image_id")).select_from(j)
+        .where(Image.product_id == pid, AuditLog.table == "images")
+        .order_by(AuditLog.created_at.desc())
+        .limit(limit)
+    )).all()
+    items = [
+        {
+            "action": a.action,
+            "created_at": a.created_at.isoformat() if getattr(a, "created_at", None) else None,
+            "meta": a.meta or {},
+            "image_id": img_id,
+        }
+        for a, img_id in rows
+    ]
+    return {"items": items}
 
 
 class ReorderIn(BaseModel):

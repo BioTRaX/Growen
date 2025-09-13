@@ -166,6 +166,8 @@ app.include_router(chat.router)
 app.include_router(auth.router)
 app.include_router(actions.router)
 app.include_router(ws.router)
+from services.routers import catalogs as catalogs_router  # import after logger setup
+app.include_router(catalogs_router.router)
 app.include_router(catalog.router)
 app.include_router(imports.router)
 app.include_router(canonical_products.canonical_router)
