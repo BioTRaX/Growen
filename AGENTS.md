@@ -98,4 +98,5 @@ Formato por lenguaje:
 - [ ] Se actualizaron docs afectadas.
 - [ ] Se listaron dependencias nuevas y prerequisitos.
 - [ ] Se agregaron o actualizaron tests si aplica.
+- [ ] Si la PR toca catálogo PDF (`/catalogs/*`), verificar sección "Catálogo (PDF)" (histórico, retention, endpoints) y mantener la limpieza de logs.
 

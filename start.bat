@@ -119,7 +119,7 @@ if "%RUN_INLINE_JOBS%"=="1" (
   call :log "[INFO] RUN_INLINE_JOBS=1: no se inicia worker Dramatiq (los triggers correrán inline)."
 ) else (
   call :log "[INFO] Iniciando worker de imagenes (broker: %REDIS_URL%)..."
-  start "Growen Images Worker" cmd /k "set REDIS_URL=%REDIS_URL% && call ""%ROOT%scripts\start_worker_images.cmd"""
+  start "Growen Images Worker" cmd /k call "%ROOT%scripts\start_worker_images.cmd"
 )
 
 endlocal

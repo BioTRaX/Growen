@@ -9,8 +9,12 @@ import { PATHS } from '../routes/paths'
 import { listCategories, Category } from '../services/categories'
 import { searchProducts, ProductItem, updateStock } from '../services/products'
 import { pushTNBulk } from '../services/images'
+import { generateCatalog, headLatestCatalog } from '../services/catalogs'
+import CatalogHistoryModal from '../components/CatalogHistoryModal'
+import { useToast } from '../components/ToastProvider'
 
 export default function Stock() {
+  const { push } = useToast()
   const navigate = useNavigate()
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -26,6 +30,16 @@ export default function Stock() {
   const [stockVal, setStockVal] = useState('')
   const [tab, setTab] = useState<'gt' | 'eq'>('gt')
   const [pushing, setPushing] = useState(false)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [showHistory, setShowHistory] = useState(false)
+  const toggleSelect = (id: number) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  const clearSelection = () => setSelected(new Set())
 
   useEffect(() => {
     listSuppliers().then(setSuppliers).catch(() => {})
@@ -69,10 +83,24 @@ export default function Stock() {
     <div className="panel p-4" style={{ margin: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
   <h2 style={{ marginTop: 0, marginBottom: 8, flex: 1 }}>Stock</h2>
-  <div style={{ display: 'flex', gap: 8 }}>
-  <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.purchases)}>Compras</button>
+  <div style={{ display: 'flex', gap: 8, flexWrap:'wrap' }}>
+    <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.purchases)}>Compras</button>
     <button className="btn" disabled={pushing || !items.length} onClick={async () => { setPushing(true); try { await pushTNBulk(items.map((i) => i.product_id)); alert('Push Tiendanube (stub) completado'); } finally { setPushing(false) } }}>Enviar imágenes a Tiendanube</button>
-  <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.home)}>Volver</button>
+    <button className="btn" disabled={!selected.size} onClick={async () => {
+      if (!selected.size) { push({ kind:'error', message:'Debe seleccionar al menos un producto' }); return }
+      try { const rIds = Array.from(selected); await generateCatalog(rIds); push({ kind:'success', message:`Catálogo generado (${rIds.length} productos)` }) } catch (e:any) { push({ kind:'error', message: e.message || 'Error generando catálogo' }) }
+    }}>Generar catálogo</button>
+    <button className="btn" onClick={async () => {
+      const ok = await headLatestCatalog(); if (!ok) { push({ kind:'error', message:'No hay catálogo disponible' }); return }
+      window.open('/api/catalogs/latest','_blank'); push({ kind:'info', message:'Abriendo catálogo actual' })
+    }}>Ver catálogo</button>
+    <button className="btn" onClick={async () => {
+      const ok = await headLatestCatalog(); if (!ok) { push({ kind:'error', message:'No hay catálogo disponible' }); return }
+      window.location.href = '/api/catalogs/latest/download'; push({ kind:'info', message:'Descargando catálogo' })
+    }}>Descargar catálogo</button>
+    <button className="btn-secondary" disabled={!selected.size} onClick={clearSelection}>Limpiar selección</button>
+  <button className="btn" onClick={() => setShowHistory(true)}>Histórico catálogos</button>
+    <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.home)}>Volver</button>
   </div>
       </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
@@ -102,7 +130,8 @@ export default function Stock() {
       <div style={{ fontSize: 12, marginBottom: 8 }}>{total} resultados</div>
   <table className="table w-full">
         <thead>
-          <tr>
+      <tr>
+    <th></th>
     <th style={{ textAlign: 'left' }}>Producto</th>
     <th style={{ textAlign: 'left' }}>Proveedor</th>
     <th className="text-center">Precio venta</th>
@@ -114,7 +143,10 @@ export default function Stock() {
         </thead>
         <tbody>
           {items.map((it) => (
-            <tr key={it.product_id}>
+            <tr key={it.product_id} className={selected.has(it.product_id) ? 'row-selected' : ''}>
+      <td className="text-center">
+        <input type="checkbox" checked={selected.has(it.product_id)} onChange={() => toggleSelect(it.product_id)} />
+      </td>
       <td style={{ textAlign: 'left' }}>
         <a className="link" href={`/productos/${it.product_id}`}>{it.name}</a>
       </td>
@@ -149,6 +181,7 @@ export default function Stock() {
         <button className="btn-dark btn-lg" disabled={page === 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Anterior</button>
         <button className="btn-dark btn-lg" disabled={items.length >= total || loading} onClick={() => setPage((p) => p + 1)}>Más</button>
       </div>
+      <CatalogHistoryModal open={showHistory} onClose={() => setShowHistory(false)} />
     </div>
   )
 }

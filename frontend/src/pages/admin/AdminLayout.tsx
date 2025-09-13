@@ -45,6 +45,7 @@ export default function AdminLayout() {
         <NavLink to={PATHS.adminServices} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Servicios</NavLink>
         <NavLink to={PATHS.adminUsers} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Usuarios</NavLink>
         <NavLink to={PATHS.adminImages} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Imágenes de productos</NavLink>
+        <NavLink to={PATHS.adminCatalogDiagnostics} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Catálogos (Diag)</NavLink>
       </div>
       <Outlet />
     </div>

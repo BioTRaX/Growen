@@ -7,6 +7,7 @@ export interface ProductSearchParams {
   supplier_id?: number
   category_id?: number
   stock?: string
+  created_since_days?: number
   page?: number
   page_size?: number
 }
@@ -64,5 +65,62 @@ export async function updateStock(productId: number, stock: number): Promise<{ p
     body: JSON.stringify({ stock }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export interface CreateProductInput {
+  title: string
+  category_id?: number | null
+  initial_stock?: number
+  status?: string
+}
+
+export interface CreatedProduct {
+  id: number
+  title: string
+  sku_root: string
+  slug: string
+  stock: number
+  category_id: number | null
+  status: string | null
+}
+
+export async function createProduct(input: CreateProductInput): Promise<CreatedProduct> {
+  const headers = {
+    ...csrfHeaders(),
+    'Content-Type': 'application/json',
+  }
+  const res = await fetch(`${base}/products`, {
+    method: 'POST',
+    headers,
+    credentials: 'include',
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try {
+      const data = await res.json()
+      if (data?.detail) msg = data.detail
+    } catch {}
+    throw new Error(msg)
+  }
+  return res.json()
+}
+
+export async function deleteProducts(ids: number[]): Promise<{ requested: number; deleted: number }> {
+  if (!ids.length) throw new Error('Lista de ids vacía')
+  const headers = {
+    ...csrfHeaders(),
+    'Content-Type': 'application/json',
+  }
+  const res = await fetch(`${base}/products`, {
+    method: 'DELETE',
+    headers,
+    credentials: 'include',
+    body: JSON.stringify({ ids }),
+  })
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`)
+  }
   return res.json()
 }

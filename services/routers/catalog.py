@@ -25,9 +25,10 @@ from db.models import (
     Image,
     ProductEquivalence,
     CanonicalProduct,
+    AuditLog,
 )
 from db.session import get_session
-from services.auth import require_csrf, require_roles
+from services.auth import require_csrf, require_roles, current_session, SessionData
 
 router = APIRouter(tags=["catalog"])
 
@@ -351,6 +352,7 @@ class ProductSortBy(str, Enum):
     precio_venta = "precio_venta"
     precio_compra = "precio_compra"
     name = "name"
+    created_at = "created_at"
 
 
 class SortOrder(str, Enum):
@@ -383,6 +385,7 @@ async def list_products(
     category_id: Optional[int] = None,
     q: Optional[str] = None,
     stock: Optional[str] = None,
+    created_since_days: Optional[int] = None,
     page: int = 1,
     page_size: int = 20,
     sort_by: str = "updated_at",
@@ -441,6 +444,13 @@ async def list_products(
             stmt = stmt.where(p.stock == val_i)
         else:
             raise HTTPException(status_code=400, detail="stock inválido (op debe ser gt o eq)")
+    # Filtro de productos creados recientemente
+    if created_since_days is not None:
+        if created_since_days < 0 or created_since_days > 365:
+            raise HTTPException(status_code=400, detail="created_since_days fuera de rango (0-365)")
+        from datetime import datetime, timedelta
+        cutoff = datetime.utcnow() - timedelta(days=created_since_days)
+        stmt = stmt.where(p.created_at >= cutoff)
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = await session.scalar(count_stmt) or 0
@@ -450,6 +460,7 @@ async def list_products(
         ProductSortBy.precio_venta: sp.current_sale_price,
         ProductSortBy.precio_compra: sp.current_purchase_price,
         ProductSortBy.name: p.title,
+        ProductSortBy.created_at: p.created_at,
     }
     sort_col = sort_map[sort_by_enum]
     sort_col = sort_col.asc() if order_enum == SortOrder.asc else sort_col.desc()
@@ -505,6 +516,100 @@ class StockUpdate(BaseModel):
     stock: int
 
 
+class ProductCreate(BaseModel):
+    title: str
+    category_id: Optional[int] = None
+    initial_stock: int = 0
+    status: Optional[str] = None
+
+    def validate_values(self):
+        if self.initial_stock < 0:
+            raise ValueError("initial_stock debe ser >= 0")
+
+
+def _slugify(value: str) -> str:
+    value = value.lower().strip()
+    repl = []
+    for ch in value:
+        if ch.isalnum():
+            repl.append(ch)
+        elif ch in {" ", "-", "_"}:
+            repl.append("-")
+    slug = "".join(repl)
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug.strip("-")[:180]
+
+
+def _gen_sku_root(title: str) -> str:
+    base = ''.join([c for c in title.upper() if c.isalnum()])[:8]
+    if not base:
+        base = "PRD"
+    return base
+
+
+@router.post(
+    "/products",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def create_product(
+    payload: ProductCreate,
+    session: AsyncSession = Depends(get_session),
+    request: Request = None,
+    sess: SessionData = Depends(current_session),
+):
+    try:
+        payload.validate_values()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    # Validar categoría si se provee
+    if payload.category_id is not None:
+        cat = await session.get(Category, payload.category_id)
+        if not cat:
+            raise HTTPException(status_code=400, detail="category_id inválido")
+    sku_root = _gen_sku_root(payload.title)
+    slug = _slugify(payload.title)
+    prod = Product(
+        sku_root=sku_root,
+        title=payload.title,
+        category_id=payload.category_id,
+        status=payload.status or "active",
+        slug=slug,
+        stock=payload.initial_stock,
+    )
+    session.add(prod)
+    await session.commit()
+    await session.refresh(prod)
+    # audit
+    try:
+        session.add(
+            AuditLog(
+                action="product_create",
+                table="products",
+                entity_id=prod.id,
+                meta={
+                    "title": prod.title,
+                    "category_id": prod.category_id,
+                    "initial_stock": payload.initial_stock,
+                },
+                user_id=sess.user.id if sess and sess.user else None,
+                ip=(request.client.host if request and request.client else None),
+            )
+        )
+        await session.commit()
+    except Exception:
+        pass
+    return {
+        "id": prod.id,
+        "title": prod.title,
+        "sku_root": prod.sku_root,
+        "slug": prod.slug,
+        "stock": prod.stock,
+        "category_id": prod.category_id,
+        "status": prod.status,
+    }
+
+
 @router.patch(
     "/products/{product_id}/stock",
     dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
@@ -513,14 +618,32 @@ async def update_product_stock(
     product_id: int,
     payload: StockUpdate,
     session: AsyncSession = Depends(get_session),
+    request: Request = None,
+    sess: SessionData = Depends(current_session),
 ) -> dict:
     if payload.stock < 0 or payload.stock > 1_000_000_000:
         raise HTTPException(status_code=400, detail="stock fuera de rango")
     prod = await session.get(Product, product_id)
     if not prod:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
+    old = int(prod.stock or 0)
     prod.stock = payload.stock
     await session.commit()
+    # audit
+    try:
+        session.add(
+            AuditLog(
+                action="product_stock_update",
+                table="products",
+                entity_id=product_id,
+                meta={"old": old, "new": prod.stock},
+                user_id=sess.user.id if sess and sess.user else None,
+                ip=(request.client.host if request and request.client else None),
+            )
+        )
+        await session.commit()
+    except Exception:
+        pass
     return {"product_id": product_id, "stock": prod.stock}
 
 
@@ -570,19 +693,98 @@ class ProductUpdate(BaseModel):
     description_html: str | None = None
 
 
+class ProductsDeleteRequest(BaseModel):
+    ids: List[int]
+    hard: bool = False  # futuro: permitir soft-delete si se agrega flag
+
+
 @router.patch(
     "/products/{product_id}",
     dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
 )
-async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncSession = Depends(get_session)) -> dict:
+async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncSession = Depends(get_session), request: Request = None, sess: SessionData = Depends(current_session)) -> dict:
     prod = await session.get(Product, product_id)
     if not prod:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
     data = payload.model_dump(exclude_none=True)
+    old_desc = getattr(prod, "description_html", None)
     if "description_html" in data:
         prod.description_html = data["description_html"]
     await session.commit()
+    # audit description change
+    try:
+        session.add(
+            AuditLog(
+                action="product_update",
+                table="products",
+                entity_id=product_id,
+                meta={"fields": list(data.keys()), "desc_len_old": (len(old_desc or "") if old_desc is not None else None), "desc_len_new": (len(prod.description_html or "") if prod.description_html is not None else None)},
+                user_id=sess.user.id if sess and sess.user else None,
+                ip=(request.client.host if request and request.client else None),
+            )
+        )
+        await session.commit()
+    except Exception:
+        pass
     return {"status": "ok"}
+
+
+@router.get(
+    "/products/{product_id}/audit-logs",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+)
+async def product_audit_logs(product_id: int, session: AsyncSession = Depends(get_session), limit: int = Query(50, ge=1, le=500)) -> dict:
+    rows = (await session.execute(
+        select(AuditLog)
+        .where(AuditLog.table == "products", AuditLog.entity_id == product_id)
+        .order_by(AuditLog.created_at.desc())
+        .limit(limit)
+    )).scalars().all()
+    items = [
+        {
+            "action": r.action,
+            "created_at": r.created_at.isoformat() if getattr(r, "created_at", None) else None,
+            "meta": r.meta or {},
+        }
+        for r in rows
+    ]
+    return {"items": items}
+
+
+@router.delete(
+    "/products",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def delete_products(payload: ProductsDeleteRequest, session: AsyncSession = Depends(get_session), request: Request = None, sess: SessionData = Depends(current_session)) -> dict:
+    if not payload.ids:
+        raise HTTPException(status_code=400, detail="ids requerido")
+    # Limitar tamaño lote
+    if len(payload.ids) > 200:
+        raise HTTPException(status_code=400, detail="máx 200 ids por solicitud")
+    # Borrado en cascada por constraints (ondelete=CASCADE en varias FK). Usamos delete por id.
+    deleted = 0
+    for pid in payload.ids:
+        prod = await session.get(Product, pid)
+        if prod:
+            await session.delete(prod)
+            deleted += 1
+    await session.commit()
+    # audit (no detallamos todos para no inflar tabla; registramos lote)
+    try:
+        session.add(
+            AuditLog(
+                action="products_delete_bulk",
+                table="products",
+                entity_id=None,
+                meta={"count": deleted, "requested": len(payload.ids)},
+                user_id=sess.user.id if sess and sess.user else None,
+                ip=(request.client.host if request and request.client else None),
+            )
+        )
+        await session.commit()
+    except Exception:
+        pass
+    return {"requested": len(payload.ids), "deleted": deleted}
 
 
 # --------------------------- Historial de precios --------------------------

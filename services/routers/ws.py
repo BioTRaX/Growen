@@ -5,6 +5,7 @@
 """WebSocket de chat que utiliza la IA de respaldo."""
 
 from datetime import datetime
+import time
 import asyncio
 import logging
 
@@ -16,10 +17,17 @@ from db.models import Session as DBSess
 from db.session import SessionLocal
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from services.ai.provider import ai_reply
+from agent_core.config import settings as core_settings
+from ai.router import AIRouter
+from ai.types import Task
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+try:  # inicializa logger AI separado si corresponde
+    from ai.logging_setup import setup_ai_logger
+    setup_ai_logger()
+except Exception:  # pragma: no cover
+    pass
 
 # Intervalos en segundos para mantener la conexión
 PING_INTERVAL = 30
@@ -58,6 +66,7 @@ async def ws_chat(socket: WebSocket) -> None:
     await socket.accept()
     ping_task = asyncio.create_task(_ping(socket))
     try:
+        router = AIRouter(core_settings)
         while True:
             try:
                 data = await asyncio.wait_for(
@@ -68,6 +77,7 @@ async def ws_chat(socket: WebSocket) -> None:
                 break
 
             # Personalizar el prompt con los datos del usuario/rol si hay sesión.
+            t0 = time.perf_counter()
             prompt = data
             if sess:
                 if sess.user:
@@ -75,9 +85,35 @@ async def ws_chat(socket: WebSocket) -> None:
                     prompt = f"{nombre} ({sess.role}) dice: {data}"
                 else:
                     prompt = f"{sess.role} dice: {data}"
-
-            reply = await ai_reply(prompt)
+            try:
+                # AIRouter es síncrono; ejecutar directamente (rápido para prompts cortos)
+                raw_reply = router.run(Task.SHORT_ANSWER.value, prompt)
+            except Exception as exc:  # pragma: no cover
+                logger.error(
+                    "ws_chat ai_router error",
+                    extra={
+                        "error": str(exc),
+                        "prompt_chars": len(prompt),
+                        "raw_chars": len(data),
+                    },
+                )
+                await socket.send_json({"role": "system", "text": f"error: {exc}"})
+                continue
+            # El stub de OllamaProvider retorna el prompt completo (incluye SYSTEM_PROMPT). Conservemos solo después de la última doble nueva línea si aparece.
+            if "\n\n" in raw_reply:
+                reply = raw_reply.split("\n\n")[-1].strip()
+            else:
+                reply = raw_reply.strip()
             await socket.send_json({"role": "assistant", "text": reply})
+            logger.info(
+                "ws_chat message",
+                extra={
+                    "prompt_chars": len(prompt),
+                    "reply_chars": len(reply),
+                    "duration_ms": int((time.perf_counter() - t0) * 1000),
+                    "auth": bool(sess),
+                },
+            )
     except WebSocketDisconnect:
         # El cliente cerró la conexión; Starlette maneja el cierre y no
         # es necesario llamar a ``close`` manualmente.

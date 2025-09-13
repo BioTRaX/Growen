@@ -1,0 +1,138 @@
+#!/usr/bin/env python
+"""Utilidad para limpiar logs históricos dejando un arranque limpio.
+
+Acciones:
+- Elimina archivos *.bak en logs/backend.* y backend.log.* dentro de logs/
+- Trunca (no elimina) logs/backend.log si existe
+- Elimina archivos *.log dentro de logs/catalog/ (si existiera) y subcarpetas diagnostics
+- Elimina archivos de logs de jobs de imágenes (image_jobs*.log) si existieran
+- Mantiene estructura de directorios.
+
+Uso:
+  python scripts/cleanup_logs.py [--dry-run] [--keep-days N]
+
+--dry-run   Muestra lo que se haría sin modificar nada.
+--keep-days Conserva archivos cuyo mtime es más reciente que N días (por defecto 0 => borra todos los coincidentes).
+
+Salida con códigos:
+  0 Exitoso
+  1 Error inesperado
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+LOGS_DIR = ROOT / "logs"
+
+PATTERNS = [
+    "backend.log.*.bak",
+    "backend.log.*",
+    "*.catalog_diagnostics_detail.log",
+    "*.catalog_diagnostics_summary.log",
+    "image_jobs*.log",
+]
+
+# Directorios adicionales que podrían contener logs secundarios
+EXTRA_DIRS = [
+    LOGS_DIR / "diagnostics",
+]
+
+
+def human_size(num: int) -> str:
+    for unit in ["B", "KB", "MB", "GB"]:
+        if num < 1024:
+            return f"{num:.1f}{unit}"
+        num /= 1024
+    return f"{num:.1f}TB"
+
+
+def collect_files(keep_days: int) -> list[Path]:
+    cutoff = time.time() - keep_days * 86400
+    results: list[Path] = []
+
+    def consider(p: Path):
+        if not p.is_file():
+            return
+        try:
+            if keep_days > 0 and p.stat().st_mtime >= cutoff:
+                return
+        except OSError:
+            return
+        results.append(p)
+
+    # Principal
+    if LOGS_DIR.exists():
+        for pattern in PATTERNS:
+            for p in LOGS_DIR.glob(pattern):
+                if p.name == "backend.log":  # no eliminar archivo principal
+                    continue
+                consider(p)
+    for d in EXTRA_DIRS:
+        if d.exists():
+            for pattern in PATTERNS:
+                for p in d.glob(pattern):
+                    consider(p)
+    return results
+
+
+def truncate_backend():
+    main_log = LOGS_DIR / "backend.log"
+    if not main_log.exists():
+        return False, 0
+    size = main_log.stat().st_size
+    with open(main_log, "w", encoding="utf-8"):
+        pass
+    return True, size
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true", help="Solo mostrar acciones")
+    ap.add_argument("--keep-days", type=int, default=0, help="Conservar archivos modificados en los últimos N días")
+    args = ap.parse_args(argv)
+
+    if not LOGS_DIR.exists():
+        print(f"No existe directorio de logs: {LOGS_DIR}")
+        return 0
+
+    targets = collect_files(args.keep_days)
+    total_bytes = 0
+    for f in targets:
+        try:
+            total_bytes += f.stat().st_size
+        except OSError:
+            pass
+
+    print(f"Encontrados {len(targets)} archivos para eliminar (≈ {human_size(total_bytes)})")
+    for f in targets:
+        print(f" - {f.relative_to(ROOT)}")
+
+    if args.dry_run:
+        print("--dry-run activo: no se eliminarán archivos.")
+    else:
+        deleted = 0
+        for f in targets:
+            try:
+                f.unlink()
+                deleted += 1
+            except OSError as e:
+                print(f"No se pudo eliminar {f}: {e}")
+        print(f"Eliminados {deleted} archivos.")
+
+    truncated, prev = truncate_backend()
+    if truncated:
+        print(f"Truncado backend.log (antes {human_size(prev)})")
+    else:
+        print("backend.log no existe, nada que truncar")
+
+    print("Listo.")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main(sys.argv[1:]))
