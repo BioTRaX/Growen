@@ -1,10 +1,22 @@
 <!-- NG-HEADER: Nombre de archivo: CHANGELOG.md -->
 <!-- NG-HEADER: Ubicación: CHANGELOG.md -->
-<!-- NG-HEADER: Descripción: Pendiente de descripción -->
+<!-- NG-HEADER: Descripción: Historial de cambios y dependencias añadidas -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
 ## [Unreleased]
+- deps: agregado `onnxruntime` a `requirements.txt` para soporte completo de `rembg` (background removal) y documentadas dependencias del sistema (Tesseract, Ghostscript, QPDF) en `docs/dependencies.md`.
+- docs: expandido `docs/dependencies.md` para incluir playwright, tenacity, onnxruntime y pasos de validación/instalación de binarios.
+- ai: reemplazado stub de `OllamaProvider` por integración HTTP real (streaming opcional) con daemon Ollama (`/api/generate`).
+- docs: nuevo `docs/ollama.md` con instrucciones de instalación y variables de entorno para LLM local.
+- db/migrations: ampliado manejo de `alembic_version.version_num` creando la tabla manualmente con `VARCHAR(255)` para evitar `StringDataRightTruncation` al insertar revisiones largas (fix env.py).
+- db/migrations/env.py: ahora fuerza `version_table_column_type=String(255)` y realiza preflight `_ensure_alembic_version_column` robusto (crea o altera según corresponda) antes de correr migraciones.
+- db/migrations/env.py: logging mejorado (archivo por corrida, DB_URL ofuscado, historial de heads reciente) y `load_dotenv(..., override=True)` para asegurar consistencia de `DB_URL`.
+- db/migrations/versions/20241105_auth_roles_sessions.py: eliminado abort estricto por placeholder de `ADMIN_PASS`; se agregó fallback seguro, carga explícita de `.env` y hash Argon2 con import local defensivo.
+- scripts: agregado `scripts/check_admin_user.py` para verificación rápida post-migraciones del usuario admin.
+- scripts/seed_admin.py: mensaje de advertencia si `ADMIN_PASS` es placeholder y creación idempotente del usuario admin.
+- docs: documentado flujo de recuperación de migraciones rotas por longitud de `alembic_version` y placeholder de `ADMIN_PASS` (ver nuevo archivo `docs/MIGRATIONS_NOTES.md`).
+
 - ui(compras): dropdown "Cargar compra" con estilos dark consistentes.
 - ui(compras): nuevo PdfImportModal (proveedor obligatorio → subir PDF → procesar) que navega al borrador creado.
 - ui(compras): flujo Manual rehecho: encabezado + grilla de líneas editable (sku prov., título, cantidad, costo unitario, % desc., nota).

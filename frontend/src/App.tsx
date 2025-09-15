@@ -18,6 +18,7 @@ const Purchases = lazy(() => import('./pages/Purchases'))
 const PurchaseNew = lazy(() => import('./pages/PurchaseNew'))
 const PurchaseDetail = lazy(() => import('./pages/PurchaseDetail'))
 const SuppliersPage = lazy(() => import('./pages/Suppliers'))
+const SupplierDetailPage = lazy(() => import('./pages/SupplierDetail'))
 import { PATHS } from "./routes/paths";
 import { ToastProvider, InjectToastStyles } from './components/ToastProvider'
 import { ThemeProvider } from './theme/ThemeProvider'
@@ -75,6 +76,14 @@ export default function App() {
             element={
               <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
                 <SuppliersPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/proveedores/:id"
+            element={
+              <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
+                <SupplierDetailPage />
               </ProtectedRoute>
             }
           />

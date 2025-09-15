@@ -139,9 +139,10 @@ async def upload_image(
         prod.slug = base[:200]
         db.add(prod)
     rel = str(path.relative_to(get_media_root()))
+    rel_norm = rel.replace('\\', '/')
     img = Image(
         product_id=pid,
-        url=f"/media/{rel.replace('\\', '/')}",
+        url=f"/media/{rel_norm}",
         path=rel,
         mime=file.content_type or None,
         bytes=size,
@@ -203,9 +204,10 @@ async def image_from_url(
         prod.slug = base[:200]
         db.add(prod)
     rel = str(dl.path.relative_to(get_media_root()))
+    rel_norm = rel.replace('\\', '/')
     img = Image(
         product_id=pid,
-        url=f"/media/{rel.replace('\\', '/')}",
+        url=f"/media/{rel_norm}",
         path=rel,
         mime=dl.mime,
         bytes=dl.size,

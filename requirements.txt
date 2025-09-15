@@ -40,3 +40,4 @@ ocrmypdf
 pdf2image
 pytesseract
 opencv-python-headless
+onnxruntime>=1.22.1  # runtime para rembg (model inference)

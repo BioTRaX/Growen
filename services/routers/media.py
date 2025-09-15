@@ -36,9 +36,11 @@ async def upload_media(
     path, sha256 = await save_upload("products", file.filename, file)
     rel_path = str(path.relative_to(get_media_root()))
 
+    # Normalizar separadores a URL-friendly
+    normalized_rel = rel_path.replace('\\', '/')
     img = Image(
         product_id=product_id,
-        url=f"/media/{rel_path.replace('\\', '/')}",
+        url=f"/media/{normalized_rel}",
         path=rel_path,
         mime=file.content_type or None,
         bytes=path.stat().st_size,

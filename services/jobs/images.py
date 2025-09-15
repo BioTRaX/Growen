@@ -8,14 +8,35 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-import dramatiq  # type: ignore
+try:  # Hacer opcional dramatiq para permitir levantar la API sin la dependencia
+    import dramatiq  # type: ignore
+    _dramatiq_available = True
+except Exception:  # pragma: no cover - entorno sin dramatiq
+    _dramatiq_available = False
+    def _noop_decorator(*dargs, **dkwargs):
+        def _wrap(func):
+            return func
+        return _wrap
+    class _StubModule:  # type: ignore
+        actor = staticmethod(_noop_decorator)
+    dramatiq = _StubModule()  # type: ignore
 
 from db.session import SessionLocal
 from db.models import Product, Image, ImageReview, ImageJobLog, ImageJob
 from services.media.downloader import download_product_image
 from services.media.processor import to_square_webp_set
 from services.media import get_media_root
-from services.scrapers.santaplanta import search_by_title, extract_product_image
+# Import opcional del scraper (requiere bs4). Se usará indirectamente vía ensure_product_image
+try:  # pragma: no cover - dependencias opcionales
+    from services.scrapers.santaplanta import search_by_title, extract_product_image  # type: ignore
+    _santaplanta_available = True
+except Exception:
+    _santaplanta_available = False
+    # Stubs mínimos para que code paths que accidentalmente los llamen no rompan severamente
+    async def search_by_title(title: str):  # type: ignore
+        raise RuntimeError("santaplanta scraper no disponible (beautifulsoup4 no instalado)")
+    async def extract_product_image(url: str):  # type: ignore
+        return None
 from services.media.orchestrator import ensure_product_image
 from services.notifications.telegram import send_message
 
