@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: env.py
 # NG-HEADER: Ubicación: db/migrations/env.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Script de entorno Alembic: carga .env, prepara logging y ejecuta migraciones
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 import logging
@@ -12,7 +12,7 @@ from logging.config import fileConfig
 from alembic import context
 from alembic.script import ScriptDirectory
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import engine_from_config, text
+from sqlalchemy import engine_from_config, text, String
 from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
 from urllib.parse import urlsplit
@@ -50,8 +50,16 @@ script = ScriptDirectory.from_config(config)
 # Cargar .env explícitamente desde la raíz del repo (dos niveles hacia arriba)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 dotenv_path = REPO_ROOT / ".env"
-load_dotenv(dotenv_path)
-logger.info("Archivo .env: %s (exists=%s)", dotenv_path, dotenv_path.exists())
+pre_env_db_url = os.environ.get("DB_URL")
+load_dotenv(dotenv_path, override=True)  # override=True para forzar lo definido en .env
+post_env_db_url = os.environ.get("DB_URL")
+logger.info("Archivo .env: %s (exists=%s, override=True)", dotenv_path, dotenv_path.exists())
+if pre_env_db_url and pre_env_db_url != post_env_db_url:
+    logger.info(
+        "DB_URL en proceso fue sobreescrita por .env (antes vs después): %s -> %s",
+        "(oculta)" if pre_env_db_url else None,
+        "(oculta)" if post_env_db_url else None,
+    )
 
 # === Cargar DB_URL desde entorno ===
 db_url = os.getenv("DB_URL")
@@ -87,36 +95,80 @@ def _coerce_bool(val) -> bool:
 
 
 def _ensure_alembic_version_column(conn):
-    """Amplía alembic_version.version_num a VARCHAR(255) si es muy corto."""
-    q = text(
-        """
-        SELECT character_maximum_length
-        FROM information_schema.columns
-        WHERE table_name = 'alembic_version'
-          AND column_name = 'version_num'
-          AND table_schema = current_schema()
-        LIMIT 1
-        """
-    )
-    res = conn.execute(q).scalar()
-    if res is None:
-        return
-    try:
-        curr_len = int(res)
-    except (TypeError, ValueError):
-        curr_len = None
-    if curr_len is not None and curr_len < 64:
-        conn.execute(
+    """Amplía alembic_version.version_num a VARCHAR(255) si es muy corto o si la tabla no existe todavía.
+
+    Nota: Alembic crea la tabla con VARCHAR(32) por defecto. Configuramos además
+    version_table_column_type en context.configure para futuras creaciones, pero
+    aquí hacemos un ALTER preventivo si ya existe con longitud insuficiente.
+    """
+    try:  # pragma: no cover - se ejecuta en runtime de migraciones
+        # 1. Detectar existencia de la tabla
+        tbl_exists = conn.execute(
             text(
-                "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"
+                """
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = current_schema()
+                  AND table_name = 'alembic_version'
+                LIMIT 1
+                """
             )
+        ).scalar() is not None
+
+        if not tbl_exists:
+            # Crear manualmente con longitud extendida para que Alembic no la cree con VARCHAR(32)
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE alembic_version (
+                        version_num VARCHAR(255) NOT NULL PRIMARY KEY
+                    )
+                    """
+                )
+            )
+            logger.info(
+                "Creada tabla alembic_version manualmente con version_num VARCHAR(255)"
+            )
+            return  # Nada más que hacer en esta fase (está vacía todavía)
+
+        # 2. Si existe, evaluar longitud de la columna y ampliar si es necesario
+        q = text(
+            """
+            SELECT character_maximum_length
+            FROM information_schema.columns
+            WHERE table_name = 'alembic_version'
+              AND column_name = 'version_num'
+              AND table_schema = current_schema()
+            LIMIT 1
+            """
         )
-        logger.info("Ajustado alembic_version.version_num a VARCHAR(255)")
-    else:
-        logger.info(
-            "alembic_version.version_num ya es suficientemente amplio (len=%s)",
-            curr_len,
-        )
+        res = conn.execute(q).scalar()
+        if res is None:
+            logger.info(
+                "No se pudo obtener longitud de version_num; se omite ajuste preventivo"
+            )
+            return
+        try:
+            curr_len = int(res)
+        except (TypeError, ValueError):
+            curr_len = None
+        if curr_len is None:
+            logger.info("No se pudo determinar longitud actual de alembic_version.version_num (res=%s)", res)
+            return
+        if curr_len < 64:
+            conn.execute(
+                text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)")
+            )
+            logger.info(
+                "Ajustado alembic_version.version_num de len=%s a VARCHAR(255)",
+                curr_len,
+            )
+        else:
+            logger.info(
+                "alembic_version.version_num ya es suficientemente amplio (len=%s)",
+                curr_len,
+            )
+    except Exception as e:  # pragma: no cover - diagnóstico defensivo
+        logger.warning("No se pudo ajustar alembic_version.version_num: %s", e)
 
 
 def run_migrations_offline() -> None:
@@ -128,6 +180,7 @@ def run_migrations_offline() -> None:
         compare_type=True,
         compare_server_default=True,
         include_schemas=True,
+        version_table_column_type=String(255),
     )
 
     with context.begin_transaction():
@@ -193,6 +246,7 @@ def run_migrations_online() -> None:
             compare_type=True,
             compare_server_default=True,
             include_schemas=True,
+            version_table_column_type=String(255),
         )
 
         try:

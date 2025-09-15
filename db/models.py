@@ -267,6 +267,13 @@ class Supplier(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     slug: Mapped[str] = mapped_column(String(50), unique=True)
     name: Mapped[str] = mapped_column(String(100))
+    # Datos extendidos
+    location: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    contact_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    contact_email: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    extra_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
     products: Mapped[list["SupplierProduct"]] = relationship(back_populates="supplier")
@@ -284,6 +291,10 @@ class SupplierFile(Base):
     processed: Mapped[bool] = mapped_column(Boolean, default=False)
     dry_run: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[Optional[str]] = mapped_column(Text)
+    # Campos extendidos (Sept 2025)
+    original_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    content_type: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class SupplierProduct(Base):

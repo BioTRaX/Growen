@@ -7,7 +7,8 @@ import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom'
 import { PATHS } from '../routes/paths'
 import AppToolbar from '../components/AppToolbar'
 import ToastContainer, { showToast } from '../components/Toast'
-import { getPurchase, updatePurchase, validatePurchase, confirmPurchase, cancelPurchase, exportUnmatched, PurchaseLine, deletePurchase, getPurchaseLogs, searchSupplierProducts } from '../services/purchases'
+import { getPurchase, updatePurchase, validatePurchase, confirmPurchase, cancelPurchase, exportUnmatched, PurchaseLine, deletePurchase, getPurchaseLogs, searchSupplierProducts, resendPurchaseStock } from '../services/purchases'
+import { createProduct } from '../services/products'
 
 type SuggestionResult = {
   id: number
@@ -38,6 +39,14 @@ export default function PurchaseDetail() {
   const [searchParams] = useSearchParams()
   const [activeSuggestion, setActiveSuggestion] = useState<{ lineIdx: number; results: SuggestionResult[] } | null>(null)
   const suggestionTimeout = useRef<number | null>(null)
+  const [createForLine, setCreateForLine] = useState<number | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [newProdName, setNewProdName] = useState('')
+  const [newProdStock, setNewProdStock] = useState('0')
+  const [selectedLines, setSelectedLines] = useState<Set<number>>(new Set())
+  const [bulkCreateOpen, setBulkCreateOpen] = useState(false)
+  const [bulkPrefix, setBulkPrefix] = useState('')
+  const [bulkCreating, setBulkCreating] = useState(false)
 
   const addLine = useCallback(() => {
     setLines((prev) => [...prev, { title: '', supplier_sku: '', qty: 1, unit_cost: 0, line_discount: 0 }])
@@ -54,6 +63,13 @@ export default function PurchaseDetail() {
       if (!data?.supplier_id) return
       try {
         const results = await searchSupplierProducts(data.supplier_id, sku)
+        // Auto-link if an exact SKU match is present
+        const exact = results.find(r => r.supplier_product_id === sku)
+        if (exact) {
+          setLines(prev => prev.map((p, i) => i === lineIdx ? { ...p, supplier_item_id: exact.id, product_id: exact.product_id, title: p.title || exact.title, state: 'OK' } : p))
+          setActiveSuggestion(null)
+          return
+        }
         setActiveSuggestion({ lineIdx, results })
       } catch {
         setActiveSuggestion({ lineIdx, results: [] })
@@ -225,12 +241,41 @@ export default function PurchaseDetail() {
             >
               Confirmar
             </button>
+            {data?.status === 'CONFIRMADA' && (
+              <div className="dropdown" style={{ position: 'relative' }}>
+                <button className="btn-secondary btn-lg" onClick={async () => {
+                  try {
+                    const prev = await resendPurchaseStock(pid, false, true)
+                    if (!prev.applied_deltas || prev.applied_deltas.length === 0) {
+                      showToast('info', 'Sin deltas de stock para re-aplicar')
+                      return
+                    }
+                    if (confirm(`Se volverían a sumar ${prev.applied_deltas.reduce((a,b)=>a+(b.delta||0),0)} unidades en ${prev.applied_deltas.length} productos. ¿Aplicar?`)) {
+                      const res = await resendPurchaseStock(pid, true, true)
+                      showToast('success', 'Stock reenviado')
+                      if (res.applied_deltas) {
+                        for (const d of res.applied_deltas.slice(0, 5)) {
+                          const name = d.product_title || `Prod ${d.product_id}`
+                          showToast('info', `${name}: +${d.delta}`)
+                        }
+                        if (res.applied_deltas.length > 5) showToast('info', `(+${res.applied_deltas.length - 5} más)`) 
+                      }
+                    }
+                  } catch (e:any) {
+                    showToast('error', e?.response?.data?.detail || 'Error en reenviar stock')
+                  }
+                }}>Reenviar a Stock</button>
+              </div>
+            )}
             <button className="btn-secondary btn-lg" onClick={() => exportUnmatched(pid, 'csv')} disabled={!unmatched}>Exportar SIN_VINCULAR</button>
             <Link to={PATHS.purchases} className="btn-secondary btn-lg" style={{ textDecoration: 'none' }}>Cerrar</Link>
           </div>
         </div>
         <div className="text-sm" style={{ opacity: 0.8, marginBottom: 8 }}>
           Consejo amistoso: si el remito no coincide, no lo inventes, rey.
+          {data?.meta?.last_resend_stock_at && (
+            <span style={{ marginLeft: 16, fontWeight: 500 }}>Último reenvío stock: {new Date(data.meta.last_resend_stock_at).toLocaleString('es-AR')}</span>
+          )}
         </div>
 
         <div className="row mb-3" style={{ gap: 10, alignItems: 'flex-end' }}>
@@ -256,13 +301,17 @@ export default function PurchaseDetail() {
 
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}>
           <h3 style={{ margin: 0 }}>Líneas ({lines.length}) {unmatched ? `— ${unmatched} SIN_VINCULAR` : ''}</h3>
-          <div className="row">
+          <div className="row" style={{ gap: 8 }}>
             <button className="btn" onClick={addLine}>Agregar línea (Enter)</button>
+            {Array.from(selectedLines).some(i => !lines[i]?.product_id && !lines[i]?.supplier_item_id) && (
+              <button className="btn-dark" onClick={() => setBulkCreateOpen(true)}>Crear productos seleccionados</button>
+            )}
           </div>
         </div>
         <table className="table w-full">
           <thead>
             <tr>
+              <th></th>
               <th>SKU prov.</th>
               <th>Título</th>
               <th className="text-center">Cant.</th>
@@ -276,8 +325,13 @@ export default function PurchaseDetail() {
             </tr>
           </thead>
           <tbody>
-            {lines.map((ln, idx) => (
-              <tr key={idx}>
+            {lines.map((ln, idx) => {
+              const isNew = (ln as any)._createdNow
+              return (
+              <tr key={idx} className={selectedLines.has(idx) ? 'row-selected' : ''}>
+                <td className="text-center">
+                  <input type="checkbox" checked={selectedLines.has(idx)} onChange={() => setSelectedLines(prev => { const n = new Set(prev); if (n.has(idx)) n.delete(idx); else n.add(idx); return n })} />
+                </td>
                 <td style={{ position: 'relative' }}>
                   <input
                     className="input"
@@ -296,7 +350,10 @@ export default function PurchaseDetail() {
                     </div>
                   )}
                 </td>
-                <td><input className="input w-full" value={ln.title || ''} onChange={(e) => setLines(prev => prev.map((p, i) => i === idx ? { ...p, title: e.target.value } : p))} /></td>
+                <td style={{ position: 'relative' }}>
+                  <input className="input w-full" value={ln.title || ''} onChange={(e) => setLines(prev => prev.map((p, i) => i === idx ? { ...p, title: e.target.value } : p))} />
+                  {isNew && <span style={{ position: 'absolute', top: 4, right: 6, background: '#2563eb', color: '#fff', fontSize: 10, padding: '2px 4px', borderRadius: 4 }}>NUEVO</span>}
+                </td>
                 <td className="text-center"><input className="input" type="number" step={0.01} value={ln.qty || 0} onChange={(e) => setLines(prev => prev.map((p, i) => i === idx ? { ...p, qty: Number(e.target.value) } : p))} style={{ width: 90 }} /></td>
                 <td className="text-center"><input className="input" type="number" step={0.01} value={ln.unit_cost || 0} onChange={(e) => setLines(prev => prev.map((p, i) => i === idx ? { ...p, unit_cost: Number(e.target.value) } : p))} style={{ width: 110 }} /></td>
                 <td className="text-center"><input className="input" type="number" step={0.01} value={ln.line_discount || 0} onChange={(e) => setLines(prev => prev.map((p, i) => i === idx ? { ...p, line_discount: Number(e.target.value) } : p))} style={{ width: 90 }} /></td>
@@ -318,9 +375,24 @@ export default function PurchaseDetail() {
                   )
                 })()}
                 <td className="text-center" style={{ color: (!ln.product_id && !ln.supplier_item_id) ? '#e67e22' : undefined }}>{ln.state || ((!ln.product_id && !ln.supplier_item_id) ? 'SIN_VINCULAR' : 'OK')}</td>
-                <td><button className="btn-secondary" onClick={() => setLines(prev => prev.filter((_, i) => i !== idx))}>Borrar</button></td>
+                <td style={{ display: 'flex', gap: 4 }}>
+                  {!ln.product_id && !ln.supplier_item_id && (
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        setCreateForLine(idx)
+                        setNewProdName(ln.title || '')
+                        setNewProdStock(String(ln.qty || 0))
+                      }}
+                      title="Crear producto y vincular"
+                    >Crear producto</button>
+                  )}
+                  <button className="btn-secondary" onClick={() => setLines(prev => prev.filter((_, i) => i !== idx))}>Borrar</button>
+                </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
         <div className="row" style={{ justifyContent: 'flex-end', gap: 16, marginTop: 8 }}>
@@ -335,6 +407,89 @@ export default function PurchaseDetail() {
           <button className="btn btn-danger btn-lg" onClick={doDelete} disabled={!(data?.status === 'BORRADOR' || data?.status === 'ANULADA')} title={!(data?.status === 'BORRADOR' || data?.status === 'ANULADA') ? 'Solo en BORRADOR o ANULADA' : ''}>Eliminar</button>
         </div>
       </div>
+      {createForLine !== null && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="panel" style={{ padding: 20, width: 480, maxWidth: '95%' }}>
+            <h3 style={{ marginTop: 0 }}>Crear producto para línea #{createForLine + 1}</h3>
+            <label className="label">Nombre</label>
+            <input className="input w-full" value={newProdName} onChange={e => setNewProdName(e.target.value)} />
+            <label className="label" style={{ marginTop: 8 }}>Stock inicial (usar 0 si se crea desde la compra)</label>
+            <input className="input" type="number" value={newProdStock} onChange={e => setNewProdStock(e.target.value)} />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button className="btn" onClick={() => setCreateForLine(null)} disabled={creating}>Cancelar</button>
+              <button
+                className="btn-dark"
+                disabled={creating || !newProdName.trim()}
+                onClick={async () => {
+                  if (!newProdName.trim()) return
+                  setCreating(true)
+                  try {
+                    // Para evitar doble carga de stock, forzamos 0 cuando el producto
+                    // se crea desde una compra (la confirmación aplicará la cantidad de la línea).
+                    const stockNum = 0
+                    const prod = await createProduct({
+                      title: newProdName.trim(),
+                      initial_stock: stockNum,
+                      supplier_id: data?.supplier_id || null,
+                      supplier_sku: lines[createForLine!]?.supplier_sku || null,
+                      purchase_id: pid,
+                      purchase_line_index: createForLine!,
+                    })
+                    setLines(prev => prev.map((ln, i) => i === createForLine ? ({ ...(ln as any), product_id: prod.id, state: 'OK', _createdNow: true } as any) : ln))
+                    showToast('success', 'Producto creado y vinculado')
+                    setCreateForLine(null)
+                  } catch (e: any) {
+                    showToast('error', e?.message || 'No se pudo crear')
+                  } finally { setCreating(false) }
+                }}
+              >{creating ? 'Creando...' : 'Crear y vincular'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {bulkCreateOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="panel" style={{ padding: 20, width: 560, maxWidth: '96%' }}>
+            <h3 style={{ marginTop: 0 }}>Crear productos seleccionados</h3>
+            <p className="text-sm" style={{ opacity: .85 }}>Se crearán productos para cada línea seleccionada SIN_VINCULAR. Podés definir un prefijo opcional que se antepone al título existente.</p>
+            <label className="label">Prefijo (opcional)</label>
+            <input className="input w-full" value={bulkPrefix} onChange={e => setBulkPrefix(e.target.value)} placeholder="Ej: SP - " />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button className="btn" disabled={bulkCreating} onClick={() => setBulkCreateOpen(false)}>Cancelar</button>
+              <button className="btn-dark" disabled={bulkCreating} onClick={async () => {
+                const targets = Array.from(selectedLines).filter(i => !lines[i]?.product_id && !lines[i]?.supplier_item_id)
+                if (!targets.length) { showToast('error', 'No hay líneas elegibles'); return }
+                setBulkCreating(true)
+                let ok = 0
+                try {
+                  const newLines = [...lines]
+                  for (const idx of targets) {
+                    const ln = newLines[idx]
+                    try {
+                      const prod = await createProduct({
+                        title: (bulkPrefix + (ln.title || '')) || 'Producto',
+                        // Evitar doble suma: siempre crear con stock 0, confirm sumará la cantidad.
+                        initial_stock: 0,
+                        supplier_id: data?.supplier_id || null,
+                        supplier_sku: ln.supplier_sku || null,
+                        purchase_id: pid,
+                        purchase_line_index: idx,
+                      })
+                      newLines[idx] = { ...(ln as any), product_id: prod.id, state: 'OK', _createdNow: true } as any
+                      ok++
+                    } catch (e:any) {
+                      console.error('Error creando producto en lote', e)
+                    }
+                  }
+                  setLines(newLines)
+                  showToast('success', `Creados ${ok}/${targets.length}`)
+                  setBulkCreateOpen(false)
+                } finally { setBulkCreating(false) }
+              }}>{bulkCreating ? 'Creando...' : 'Crear todos'}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {logsOpen && (
         <div style={{ position: 'fixed', top: 0, right: 0, height: '100%', width: 420, background: 'var(--panel-bg)', borderLeft: '1px solid var(--border)', boxShadow: '0 0 24px rgba(0,0,0,0.35)', zIndex: 60, display: 'flex', flexDirection: 'column' }}>
           <div className="row" style={{ padding: 12, borderBottom: '1px solid var(--border)', alignItems: 'center', justifyContent: 'space-between' }}>

@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: ProductsDrawer.tsx
 // NG-HEADER: Ubicación: frontend/src/components/ProductsDrawer.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Drawer de exploración y edición masiva de productos (búsqueda, filtros, edición y borrado en lote)
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 // File consolidated below; removed duplicate earlier implementation
 import { useEffect, useMemo, useState } from 'react'
@@ -54,6 +54,8 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [showBulk, setShowBulk] = useState(false)
   const [showColsCfg, setShowColsCfg] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   // Fixed row height for virtualized list to avoid overlap
   const ROW_HEIGHT = 56
   const [listHeight, setListHeight] = useState<number>(400)
@@ -475,23 +477,13 @@ export default function ProductsDrawer({ open, onClose }: Props) {
             Editar precios ({selected.length})
           </button>
         )}
-        {!!selected.length && canEdit && (
+        {canEdit && (
           <button
             className="btn"
-            onClick={async () => {
-              if (!window.confirm(`Eliminar ${selected.length} productos? Esta acción es permanente.`)) return
-              try {
-                await deleteProducts(selected)
-                // refrescar lista
-                setItems([])
-                setPage(1)
-                setSelected([])
-              } catch (e) {
-                alert('No se pudieron eliminar')
-              }
-            }}
+            disabled={!selected.length}
+            onClick={() => selected.length && setShowDeleteConfirm(true)}
           >
-            Eliminar seleccionados
+            Borrar seleccionados{selected.length ? ` (${selected.length})` : ''}
           </button>
         )}
         <button className="btn" onClick={() => setShowColsCfg((v) => !v)}>Diseño</button>
@@ -577,54 +569,63 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         </select>
       </div>
       <div style={{ fontSize: 12, marginBottom: 8 }}>{total} resultados</div>
-      <table className="table w-full table-fixed" style={{ marginBottom: 0 }}>
-        <thead>
-          <tr>
-            {orderedCols.map((c) => (
-              <th
-                key={c.id}
-                style={{ width: widthFor(c.id as ColId), textAlign: c.id === 'product' || c.id === 'supplier' ? 'left' : 'center' }}
-              >
-                {c.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-      </table>
-      <List
-        height={listHeight}
-        itemCount={items.length}
-        itemSize={ROW_HEIGHT}
-        width={"100%"}
-        onItemsRendered={({ visibleStopIndex }) => {
-          if (visibleStopIndex >= items.length - 5 && !loading && items.length < total) {
-            setPage((p) => p + 1)
-          }
-        }}
-      >
-        {({ index, style }: ListChildComponentProps) => {
-          const it = items[index]
-          return (
-            <div key={it.product_id} style={{ ...style, height: ROW_HEIGHT, overflow: 'hidden' }}>
-              <table className="table w-full table-fixed" style={{ marginBottom: 0 }}>
-                <tbody>
-                  <tr>
-                    {orderedCols.map((c) => (
-                      <td
-                        key={c.id}
-                        className={c.id === 'product' || c.id === 'supplier' ? '' : 'text-center'}
-                        style={{ width: widthFor(c.id as ColId) }}
-                      >
-                        {c.renderCell(it)}
-                      </td>
-                    ))}
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          )
-        }}
-      </List>
+      {/* Horizontal scroll container */}
+      <div style={{ flex: '1 1 auto', overflowX: 'auto', overflowY: 'hidden' }}>
+        <div style={{ minWidth: orderedCols.reduce((sum, c) => sum + widthFor(c.id as ColId), 0) + 40 }}>
+          <table className="table w-full table-fixed" style={{ marginBottom: 0 }}>
+            <thead>
+              <tr>
+                {orderedCols.map((c) => (
+                  <th
+                    key={c.id}
+                    style={{ width: widthFor(c.id as ColId), textAlign: c.id === 'product' || c.id === 'supplier' ? 'left' : 'center' }}
+                  >
+                    {c.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          </table>
+          <List
+            height={listHeight}
+            itemCount={items.length}
+            itemSize={ROW_HEIGHT}
+            width={orderedCols.reduce((sum, c) => sum + widthFor(c.id as ColId), 0) + 40}
+            onItemsRendered={({ visibleStopIndex }) => {
+              if (visibleStopIndex >= items.length - 5 && !loading && items.length < total) {
+                setPage((p) => p + 1)
+              }
+            }}
+          >
+            {({ index, style }: ListChildComponentProps) => {
+              const it = items[index]
+              return (
+                <div key={it.product_id} style={{ ...style, height: ROW_HEIGHT, overflow: 'hidden' }}>
+                  <table className="table w-full table-fixed" style={{ marginBottom: 0 }}>
+                    <tbody>
+                      <tr>
+                        {orderedCols.map((c) => (
+                          <td
+                            key={c.id}
+                            className={c.id === 'product' || c.id === 'supplier' ? '' : 'text-center'}
+                            style={{ width: widthFor(c.id as ColId) }}
+                          >
+                            {c.renderCell(it)}
+                          </td>
+                        ))}
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              )
+            }}
+          </List>
+        </div>
+      </div>
+      {/* Bottom scrollbar area to ensure always visible */}
+      <div style={{ height: 16, overflowX: 'auto' }}>
+        <div style={{ width: orderedCols.reduce((sum, c) => sum + widthFor(c.id as ColId), 0) + 40 }} />
+      </div>
       {historyProduct && (
         <PriceHistoryModal productId={historyProduct} onClose={() => setHistoryProduct(null)} />
       )}
@@ -660,6 +661,49 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           }}
           onClose={() => setShowCreate(false)}
         />
+      )}
+      {showDeleteConfirm && (
+        <div className="modal-backdrop">
+          <div className="modal" style={{ maxWidth: 440 }}>
+            <h3 style={{ marginTop: 0 }}>Confirmar borrado</h3>
+            <p style={{ fontSize: 14 }}>
+              Vas a borrar <strong>{selected.length}</strong> producto(s). Esta acción es permanente y puede eliminar o dejar huérfanas
+              referencias asociadas (imágenes, equivalencias, etc.) según las reglas del backend. No se puede deshacer.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button className="btn" disabled={deleting} onClick={() => setShowDeleteConfirm(false)}>Cancelar</button>
+              <button
+                className="btn-dark"
+                disabled={deleting || !selected.length}
+                onClick={async () => {
+                  if (!selected.length) return
+                  setDeleting(true)
+                  try {
+                    const ids = selected.slice()
+                    const r = await deleteProducts(ids)
+                    showToast('success', `Borrados ${r.deleted} / ${r.requested}`)
+                    setItems(prev => prev.filter(it => !ids.includes(it.product_id)))
+                    setSelected([])
+                    setShowDeleteConfirm(false)
+                    // Si la lista quedó vacía tras el borrado, forzar recarga desde página 1
+                    setTimeout(() => {
+                      if (items.length === 0) {
+                        setPage(1)
+                        setItems([])
+                      }
+                    }, 0)
+                  } catch (e: any) {
+                    showToast('error', e.message || 'Error borrando productos')
+                  } finally {
+                    setDeleting(false)
+                  }
+                }}
+              >
+                Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -238,6 +238,89 @@ def parse_santaplanta_pdf(data: bytes) -> dict:
     tab_lines, dbg = _parse_table_with_pdfplumber(data)
     lines = tab_lines if tab_lines else _parse_lines(text)
     out = {"remito_number": header.get("remito_number"), "remito_date": header.get("remito_date"), "lines": lines, "unreadable": False}
+
+    # Heurística refinada de corrección de SKU.
+    # Objetivo: Corregir falsos SKUs cortos (ej. '100') que en realidad provienen de cantidad u otro campo,
+    # cuando el título contiene un único número candidato de 3-4 dígitos que parece el SKU real.
+    # Evitar sobre-corregir SKUs legítimos de 2-3 dígitos (ej. '120') que simplemente coexisten con medidas (500 ML, 250 G, etc.).
+    def _maybe_correct_line(ln: dict) -> None:
+        try:
+            raw_sku = str(ln.get("supplier_sku") or "").strip()
+            if not raw_sku or not raw_sku.isdigit():
+                return
+            title_orig = ln.get("title") or ""
+            title_up = title_orig.upper()
+            qty_val = ln.get("qty")
+
+            # Capturar números candidatos de 3-4 dígitos y filtrar los que representan medidas (seguido de unidad)
+            units = {"ML", "G", "KG", "L", "CM", "MM", "GR", "CC"}
+            candidates = []  # (num, idx)
+            for m in re.finditer(r"\b(\d{3,4})\b", title_up):
+                num = m.group(1)
+                end = m.end()
+                # mirar token inmediatamente después (saltando uno o dos espacios)
+                after = title_up[end:end+6].strip()
+                unit_token = None
+                if after:
+                    # primer palabra
+                    first = re.split(r"\s+", after)[0]
+                    # limpiar puntuación final
+                    first_clean = re.sub(r"[^A-Z0-9]", "", first)
+                    if first_clean in units:
+                        unit_token = first_clean
+                if unit_token:  # es medida, descartamos
+                    continue
+                candidates.append((num, m.start()))
+
+            # Único candidato restante
+            uniq_nums = list(dict.fromkeys([c[0] for c in candidates]))
+            if len(uniq_nums) != 1:
+                return
+            candidate = uniq_nums[0]
+            if candidate == raw_sku:
+                return
+
+            # Reglas para decidir si corregir:
+            reasons = []
+            suspicious_short = {"100", "200", "300", "400", "500", "050", "075"}
+            # 1. SKU actual coincide con qty (interpretado mal)
+            try:
+                if qty_val is not None and int(qty_val) == int(raw_sku):
+                    reasons.append("sku_equals_qty")
+            except Exception:
+                pass
+            # 2. SKU en lista de sospechosos genéricos
+            if raw_sku in suspicious_short:
+                reasons.append("suspicious_constant")
+            # 3. Prefijo truncado (candidate empieza con sku y es más largo)
+            if candidate.startswith(raw_sku) and len(candidate) > len(raw_sku):
+                reasons.append("prefix_truncation")
+            # 4. Indicador textual antes del candidate (COD / SKU / CÓD)
+            if re.search(rf"(SKU|COD|CÓD|CÓD\.)\s*{candidate}\b", title_up):
+                reasons.append("label_precedes_candidate")
+
+            # Limitar a SKUs cortos (<=3) para no tocar SKUs más largos legítimos
+            if len(raw_sku) <= 3 and reasons:
+                ln["_corrected_original_sku"] = raw_sku
+                ln["supplier_sku"] = candidate
+                ln["_sku_correction"] = "title_numeric_token_refined"
+                ln["_sku_correction_reasons"] = reasons
+                log.info(
+                    "import_sku_correction",
+                    extra={
+                        "supplier": "santaplanta",
+                        "original_sku": raw_sku,
+                        "new_sku": candidate,
+                        "reasons": ",".join(reasons),
+                        "qty": qty_val,
+                        "title_excerpt": title_orig[:60],
+                    },
+                )
+        except Exception:
+            return
+
+    for _ln in out.get("lines", []):
+        _maybe_correct_line(_ln)
     # Adjuntar un pequeño debug si hubo tablas
     if dbg:
         out["debug"] = {"text_len": len(text), **dbg}

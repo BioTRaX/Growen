@@ -73,6 +73,11 @@ export interface CreateProductInput {
   category_id?: number | null
   initial_stock?: number
   status?: string
+  supplier_id?: number | null
+  supplier_sku?: string | null
+  canonical_product_id?: number | null
+  purchase_id?: number | null
+  purchase_line_index?: number | null
 }
 
 export interface CreatedProduct {
@@ -83,6 +88,8 @@ export interface CreatedProduct {
   stock: number
   category_id: number | null
   status: string | null
+  supplier_product_id?: number | null
+  canonical_product_id?: number | null
 }
 
 export async function createProduct(input: CreateProductInput): Promise<CreatedProduct> {

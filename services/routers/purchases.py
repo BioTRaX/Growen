@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: purchases.py
 # NG-HEADER: Ubicación: services/routers/purchases.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Endpoints de compras (CRUD, confirmación, resend-stock, logs, importación PDF)
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Compras (purchases) API endpoints.
 
@@ -46,6 +46,66 @@ import uuid
 from agent_core.config import settings
 
 router = APIRouter(prefix="/purchases", tags=["purchases"]) 
+
+# Helper centralizado para logging estructurado de eventos de compra
+def _purchase_event_log(logger_name: str, event: str, **fields):
+    import logging, json
+    log = logging.getLogger(logger_name)
+    try:
+        flat = {k: v for k, v in fields.items() if v is not None}
+        log.info("purchase_event %s %s", event, json.dumps(flat, default=str))
+    except Exception:
+        pass
+
+
+@router.get("/{purchase_id}/resend-info", dependencies=[Depends(require_roles("admin", "colaborador"))])
+async def purchase_resend_info(
+    purchase_id: int,
+    db: AsyncSession = Depends(get_session),
+):
+    """Devuelve metadata mínima para UI sobre resend-stock.
+
+    Campos:
+    - status: estado actual de la compra.
+    - last_resend_stock_at: timestamp ISO de último apply (o null).
+    - resend_cooldown_seconds: ventana de cooldown configurada.
+    - cooldown_active: bool si aún no expiró cooldown.
+    - remaining_seconds: segundos restantes (si activo) redondeado hacia abajo.
+    - now: timestamp actual en UTC.
+    """
+    res = await db.execute(select(Purchase).where(Purchase.id == purchase_id))
+    p = res.scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Compra no encontrada")
+    try:
+        cooldown_seconds = int(os.getenv("PURCHASE_RESEND_COOLDOWN_SECONDS", "300"))
+    except Exception:
+        cooldown_seconds = 300
+    last_resend = None
+    meta_obj = getattr(p, "meta", {}) or {}
+    if isinstance(meta_obj, dict):
+        last_resend = meta_obj.get("last_resend_stock_at")
+    from datetime import timedelta
+    cooldown_active = False
+    remaining = 0
+    if last_resend:
+        try:
+            last_dt = datetime.fromisoformat(last_resend)
+            diff = datetime.utcnow() - last_dt
+            if diff < timedelta(seconds=cooldown_seconds):
+                cooldown_active = True
+                remaining = int((timedelta(seconds=cooldown_seconds) - diff).total_seconds())
+        except Exception:
+            pass
+    return {
+        "purchase_id": p.id,
+        "status": p.status,
+        "last_resend_stock_at": last_resend,
+        "resend_cooldown_seconds": cooldown_seconds,
+        "cooldown_active": cooldown_active,
+        "remaining_seconds": remaining,
+        "now": datetime.utcnow().isoformat(),
+    }
 
 
 def _sanitize_for_json(obj):
@@ -469,6 +529,156 @@ async def confirm_purchase(
     if debug:
         return {"status": "ok", "applied_deltas": applied_deltas, "unresolved_lines": unresolved or []}
     return {"status": "ok"}
+
+
+@router.post("/{purchase_id}/resend-stock", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
+async def resend_stock(
+    purchase_id: int,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+    apply: int = Query(0, description="Si =1 aplica cambios; si =0 sólo preview"),
+    debug: int = Query(0),
+):
+    """Re-aplica (o previsualiza) los impactos de stock de una compra previamente CONFIRMADA.
+
+    Casos de uso: reparar stock tras rollback parcial, auditoría o si se detectó que algún listener externo falló.
+
+    Reglas:
+    - Sólo permitido si la compra está CONFIRMADA.
+    - Calcula deltas como en confirm_purchase (qty de líneas con vínculo resoluble).
+    - Si `apply=0` devuelve previsualización (no cambia stock).
+    - Si `apply=1` suma nuevamente las cantidades al stock actual.
+    - Registra AuditLog (action="purchase_resend_stock").
+    - Opcional debug para devolver applied_deltas detallados.
+    - No modifica estado de la compra.
+    - No re-escribe precios de compra (price history) para evitar distorsión histórica.
+    """
+    res = await db.execute(
+        select(Purchase).options(selectinload(Purchase.lines)).where(Purchase.id == purchase_id)
+    )
+    p = res.scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Compra no encontrada")
+    if p.status != "CONFIRMADA":
+        raise HTTPException(status_code=400, detail="Sólo se puede reenviar stock de una compra CONFIRMADA")
+
+    # Cooldown (evitar doble aplicación accidental)
+    from datetime import timedelta
+    try:
+        cooldown_seconds = int(os.getenv("PURCHASE_RESEND_COOLDOWN_SECONDS", "300"))
+    except Exception:
+        cooldown_seconds = 300
+    if apply:
+        meta_obj = getattr(p, "meta", {}) or {}
+        last_ts = meta_obj.get("last_resend_stock_at") if isinstance(meta_obj, dict) else None
+        if last_ts:
+            try:
+                last_dt = datetime.fromisoformat(last_ts)
+                if datetime.utcnow() - last_dt < timedelta(seconds=cooldown_seconds):
+                    raise HTTPException(status_code=429, detail="Cooldown activo: esperá antes de reenviar stock nuevamente")
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+
+    # Recalcular deltas de stock resolubles
+    applied_deltas: list[dict[str, int | None]] = []
+    unresolved: list[int] = []
+    import logging, os as _os
+    log = logging.getLogger("growen")
+    for l in p.lines:
+        prod_id: Optional[int] = l.product_id
+        if not prod_id and l.supplier_item_id:
+            sp = await db.get(SupplierProduct, l.supplier_item_id)
+            if sp and sp.internal_product_id:
+                prod_id = sp.internal_product_id
+        if not prod_id:
+            unresolved.append(l.id)
+            continue
+        try:
+            qty = int(Decimal(str(l.qty or 0)))
+        except Exception:
+            qty = int(l.qty or 0)
+        inc = max(0, qty)
+        prod = await db.get(Product, prod_id)
+        if not prod:
+            unresolved.append(l.id)
+            continue
+        old_stock = int(prod.stock or 0)
+        new_stock = old_stock + inc if apply else old_stock
+        applied_deltas.append({
+            "product_id": prod.id,
+            "product_title": getattr(prod, "title", None),
+            "old": old_stock,
+            "delta": inc,
+            "new": new_stock if apply else old_stock + inc,  # expected new
+            "line_id": l.id,
+        })
+        if apply:
+            prod.stock = new_stock
+        try:
+            log.info(
+                "purchase_resend_stock: purchase=%s line=%s product=%s apply=%s old_stock=%s +%s -> %s",
+                p.id, l.id, prod.id, bool(apply), old_stock, inc, new_stock if apply else old_stock + inc
+            )
+        except Exception:
+            pass
+
+    if apply:
+        db.add(
+            AuditLog(
+                action="purchase_resend_stock",
+                table="purchases",
+                entity_id=p.id,
+                meta={
+                    "lines": len(p.lines),
+                    "applied": True,
+                    "deltas": applied_deltas if debug else None,
+                    "unresolved_lines": unresolved or None,
+                    "cooldown_seconds": cooldown_seconds,
+                },
+                user_id=sess.user.id if sess and sess.user else None,
+                ip=None,
+            )
+        )
+        # Persistir timestamp en meta de purchase
+        try:
+            pm = getattr(p, "meta", {}) or {}
+            if isinstance(pm, dict):
+                pm["last_resend_stock_at"] = datetime.utcnow().isoformat()
+                setattr(p, "meta", pm)
+        except Exception:
+            pass
+        await db.commit()
+    else:
+        # Preview (sin commit) — sólo log de auditoría en memoria si se desea
+        try:
+            db.add(
+                AuditLog(
+                    action="purchase_resend_stock_preview",
+                    table="purchases",
+                    entity_id=p.id,
+                    meta={
+                        "lines": len(p.lines),
+                        "applied": False,
+                        "deltas": applied_deltas if debug else None,
+                        "unresolved_lines": unresolved or None,
+                    },
+                    user_id=sess.user.id if sess and sess.user else None,
+                    ip=None,
+                )
+            )
+            await db.commit()
+        except Exception:
+            pass
+
+    _purchase_event_log("growen", "resend_stock", purchase_id=p.id, mode="apply" if apply else "preview", lines=len(p.lines), unresolved=len(unresolved), applied=bool(apply))
+    return {
+        "status": "ok",
+        "mode": "apply" if apply else "preview",
+        "applied_deltas": applied_deltas if debug else None,
+        "unresolved_lines": unresolved or None,
+    }
 
 
 @router.post("/{purchase_id}/cancel", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # NG-HEADER: Nombre de archivo: debug_migrations.py
 # NG-HEADER: Ubicación: scripts/debug_migrations.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Reporte del estado de migraciones (current, heads, history) y alerta de múltiples heads
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Diagnóstico de migraciones de Alembic.
 

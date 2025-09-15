@@ -4,10 +4,12 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 services:
   db:
+    container_name: growen-postgres
     image: postgres:15
     environment:
       POSTGRES_USER: growen
-      POSTGRES_PASSWORD: "GrowenBot=01"
+      # IMPORTANT: Unified password (was previously GrowenBot=01 causing mismatch)
+      POSTGRES_PASSWORD: "GrowenBot01"
       POSTGRES_DB: growen
     ports:
       - "5432:5432"

@@ -7,7 +7,7 @@ import { listSuppliers, Supplier } from '../services/suppliers'
 import { useNavigate } from 'react-router-dom'
 import { PATHS } from '../routes/paths'
 import { listCategories, Category } from '../services/categories'
-import { searchProducts, ProductItem, updateStock } from '../services/products'
+import { searchProducts, ProductItem, updateStock, deleteProducts } from '../services/products'
 import { pushTNBulk } from '../services/images'
 import { generateCatalog, headLatestCatalog } from '../services/catalogs'
 import CatalogHistoryModal from '../components/CatalogHistoryModal'
@@ -32,6 +32,8 @@ export default function Stock() {
   const [pushing, setPushing] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [showHistory, setShowHistory] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const toggleSelect = (id: number) => {
     setSelected(prev => {
       const next = new Set(prev)
@@ -99,6 +101,7 @@ export default function Stock() {
       window.location.href = '/api/catalogs/latest/download'; push({ kind:'info', message:'Descargando catálogo' })
     }}>Descargar catálogo</button>
     <button className="btn-secondary" disabled={!selected.size} onClick={clearSelection}>Limpiar selección</button>
+  <button className="btn" disabled={!selected.size} onClick={() => setShowDeleteConfirm(true)}>Borrar seleccionados</button>
   <button className="btn" onClick={() => setShowHistory(true)}>Histórico catálogos</button>
     <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.home)}>Volver</button>
   </div>
@@ -182,6 +185,36 @@ export default function Stock() {
         <button className="btn-dark btn-lg" disabled={items.length >= total || loading} onClick={() => setPage((p) => p + 1)}>Más</button>
       </div>
       <CatalogHistoryModal open={showHistory} onClose={() => setShowHistory(false)} />
+      {showDeleteConfirm && (
+        <div className="modal-backdrop">
+          <div className="modal" style={{ maxWidth: 420 }}>
+            <h3 style={{ marginTop: 0 }}>Confirmar borrado</h3>
+            <p style={{ fontSize: 14 }}>
+              Vas a borrar <strong>{selected.size}</strong> producto(s). Esta acción es permanente y eliminará también datos dependientes
+              (imágenes, equivalencias, etc.) según las reglas del backend.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button className="btn" disabled={deleting} onClick={() => setShowDeleteConfirm(false)}>Cancelar</button>
+              <button className="btn-dark" disabled={deleting} onClick={async () => {
+                if (!selected.size) return
+                setDeleting(true)
+                try {
+                  const ids = Array.from(selected)
+                  const r = await deleteProducts(ids)
+                  push({ kind: 'success', message: `Borrados ${r.deleted} / ${r.requested}` })
+                  setItems(prev => prev.filter(it => !selected.has(it.product_id)))
+                  clearSelection()
+                  setShowDeleteConfirm(false)
+                } catch (e: any) {
+                  push({ kind: 'error', message: e.message || 'Error borrando productos' })
+                } finally {
+                  setDeleting(false)
+                }
+              }}>Confirmar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

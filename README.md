@@ -198,6 +198,26 @@ SELECT column_name FROM information_schema.columns
 - Endpoints: `POST /purchases`, `PUT /purchases/{id}`, `POST /purchases/{id}/validate`, `POST /purchases/{id}/confirm`, `POST /purchases/{id}/cancel`, `GET /purchases`, `GET /purchases/{id}`, `POST /purchases/import/santaplanta`, `GET /purchases/{id}/unmatched/export`.
 - Importación Santa Planta (PDF): parser heurístico que crea una compra en estado BORRADOR, adjunta el PDF y realiza matching preferente por SKU proveedor (fallback por título a futuro).
 - Confirmación: incrementa stock de producto, actualiza `current_purchase_price` del `supplier_product` y registra `price_history` (entity_type `supplier`). Audita la operación.
+
+### Mejoras recientes (Productos & Compras)
+
+- Tabla de productos: ahora cuenta con scroll horizontal para navegar todas las columnas cuando la suma de anchos excede el viewport. Se añadió un contenedor con `overflow-x: auto` y una barra inferior siempre accesible.
+- Alta manual: botón "Nuevo producto" (roles admin / colaborador) dentro de la vista de productos abre un modal para crear y refresca la lista inmediatamente.
+- Importación Santa Planta: en el detalle de compra, cada línea `SIN_VINCULAR` incluye un botón "Crear producto" que abre un diálogo ligero inline para generar el producto y vincularlo a la línea en un paso. El estado de la línea pasa a `OK` y, al confirmar la compra, se aplica el ajuste de stock.
+- Optimización UX: no es necesario salir de la pantalla de la compra para dar de alta productos nuevos derivados del PDF.
+
+#### Extensiones adicionales
+
+- Creación masiva en Compras: seleccionar múltiples líneas `SIN_VINCULAR` y usar "Crear productos seleccionados" para generar productos en lote. Cada producto toma el título existente (con prefijo opcional) y el stock inicial igual a la cantidad de la línea.
+- Auto‐link por SKU: al tipear un SKU exacto que coincide con un `supplier_product_id` existente, la línea se vincula automáticamente (estado pasa a `OK`).
+- Badge `NUEVO`: líneas cuyo producto fue creado en la sesión actual muestran un sello visual sobre el título.
+- (Pendiente) creación simultánea de supplier_item cuando se cree el producto manualmente (requiere exponer endpoint backend). Por ahora sólo se crea el producto interno.
+
+Próximos pasos sugeridos:
+1. Creación masiva para múltiples líneas `SIN_VINCULAR` seleccionadas.
+2. Sugerencia automática de categoría a partir de tokens frecuentes del título.
+3. Etiqueta visual para productos creados durante la sesión (p.ej. badge "NUEVO").
+4. Opción de precargar precio de venta canónico si existe heurística de margen.
 - Filtros: proveedor, fecha (rango), estado, depósito, remito y búsqueda por nombre de producto.
 - Export: líneas `SIN_VINCULAR` en CSV o XLSX (si está disponible `openpyxl`).
 - Frontend: `/compras`, `/compras/nueva`, `/compras/:id`; autoguardado cada 30s; atajos Enter/Ctrl+S/Esc; tips y chicanas visibles.
@@ -997,6 +1017,8 @@ El sistema incluye un pipeline robusto para importar remitos en formato PDF del 
 - [Importación de PDF](docs/IMPORT_PDF.md)
 - [Crawler de imágenes](docs/IMAGES.md)
 - [Seguridad](docs/SECURITY.md)
+- [Gestión de proveedores](docs/SUPPLIERS.md)
+- [Flujo de Compras y Reenvío de Stock](docs/PURCHASES.md)
 
 ## Lineamientos de agentes
 

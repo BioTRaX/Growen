@@ -264,12 +264,20 @@ async def get_snapshot_file(path: str):
 
 # --- Triggers ---
 import os
-from services.jobs.images import crawl_catalog_missing_images, purge_soft_deleted
+
+# Lazy wrappers para evitar ImportError en arranque si dramatiq/bs4 faltan
+def _lazy_jobs():  # pragma: no cover - runtime only
+    try:
+        from services.jobs.images import crawl_catalog_missing_images, purge_soft_deleted  # type: ignore
+        return crawl_catalog_missing_images, purge_soft_deleted
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"jobs_backend_indisponible: {e}")
 
 
 @router.post("/trigger/crawl-missing", dependencies=[Depends(require_csrf), Depends(require_roles("admin", "colaborador"))])
 async def trigger_crawl_missing(scope: str = Query("stock"), db: AsyncSession = Depends(get_session)):
     # Dev fallback: run inline if requested (no Redis needed)
+    crawl_catalog_missing_images, _purge = _lazy_jobs()
     if os.getenv("RUN_INLINE_JOBS", "0") == "1":
         try:
             # Run in a separate thread so images actor can call asyncio.run safely
@@ -291,6 +299,7 @@ async def trigger_crawl_missing(scope: str = Query("stock"), db: AsyncSession = 
 
 @router.post("/trigger/purge", dependencies=[Depends(require_csrf), Depends(require_roles("admin"))])
 async def trigger_purge(db: AsyncSession = Depends(get_session)):
+    crawl_catalog_missing_images, purge_soft_deleted = _lazy_jobs()
     job = await db.scalar(select(ImageJob).where(ImageJob.name == "imagenes_productos"))
     ttl = job.purge_ttl_days if job else 30
     # Dev fallback: run inline if requested (no Redis needed)
