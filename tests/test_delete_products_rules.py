@@ -23,7 +23,7 @@ def _create_product_with_stock(stock: int = 1) -> int:
     async def _go():
         async with SessionLocal() as s:
             sku = f"PX-{uuid.uuid4().hex[:6]}"
-            p = Product(sku_root=sku, title="Prod X", stock=stock)
+            p = Product(sku_root=sku, title=f"Prod X {uuid.uuid4().hex[:6]}", stock=stock)
             s.add(p)
             await s.flush()
             v = Variant(product_id=p.id, sku=sku)
@@ -40,7 +40,9 @@ def _create_product_with_stock(stock: int = 1) -> int:
 def _create_purchase_referencing_product(pid: int) -> None:
     async def _go():
         async with SessionLocal() as s:
-            sup = Supplier(slug="sdel", name="S Del")
+            import uuid
+            su = uuid.uuid4().hex[:6]
+            sup = Supplier(slug=f"sdel-{su}", name=f"S Del {su}")
             s.add(sup)
             await s.flush()
             pur = Purchase(supplier_id=sup.id, remito_number="R-DEL", remito_date=__import__("datetime").date.today())

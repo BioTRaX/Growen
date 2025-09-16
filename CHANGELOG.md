@@ -5,6 +5,13 @@
 # Changelog
 
 ## [Unreleased]
+- feat(catalog): eliminación segura ahora elimina primero `supplier_price_history` antes de `supplier_products` para evitar NOT NULL FK en SQLite/PG.
+- fix(catalog): error 500 al eliminar producto que no tenía stock ni referencias causado por FK `supplier_price_history.supplier_product_fk` -> ahora 200 con registro de cascada.
+- docs: README ampliado con campo opcional `sku` en creación y detalle de reglas de borrado incluyendo cascada manual.
+- feat(catalog): `POST /catalog/products` ahora acepta campo opcional `sku`; si no se provee se deriva de `supplier_sku` o `title`.
+- feat(catalog): validación de formato SKU y pre-chequeo de duplicados (responde 409 sin generar excepción persistente).
+- feat(api): handler global de `IntegrityError` que mapea `variants_sku_key` a `{code: duplicate_sku}` (HTTP 409) y otros constraints a `code: conflict`.
+- docs(security): actualizado `docs/SECURITY.md` con detalles de manejo de integridad y validación de SKU.
 - deps: agregado `onnxruntime` a `requirements.txt` para soporte completo de `rembg` (background removal) y documentadas dependencias del sistema (Tesseract, Ghostscript, QPDF) en `docs/dependencies.md`.
 - docs: expandido `docs/dependencies.md` para incluir playwright, tenacity, onnxruntime y pasos de validación/instalación de binarios.
 - ai: reemplazado stub de `OllamaProvider` por integración HTTP real (streaming opcional) con daemon Ollama (`/api/generate`).

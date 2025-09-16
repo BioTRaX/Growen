@@ -21,8 +21,10 @@ from services.auth import SessionData, current_session, require_csrf
 async def _init_db() -> int:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    import uuid
     async with SessionLocal() as session:
-        supplier = Supplier(slug="s1", name="S1")
+        # Usar slug único por corrida para evitar UNIQUE constraint failed en re-ejecuciones / importaciones repetidas
+        supplier = Supplier(slug=f"s1-{uuid.uuid4().hex[:8]}", name="S1")
         session.add(supplier)
         await session.flush()
         job = ImportJob(supplier_id=supplier.id, filename="x.xlsx", status="DRY_RUN")
