@@ -70,6 +70,14 @@ export async function getProductOfferings(productId: number): Promise<OfferingRo
   return res.json()
 }
 
+export async function getInternalProductOfferings(productId: number): Promise<OfferingRow[]> {
+  const res = await fetch(`${base}/products-ex/products/internal/${productId}/offerings`, {
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
 export interface ProductsTablePrefs {
   columnOrder?: string[]
   columnVisibility?: Record<string, boolean>

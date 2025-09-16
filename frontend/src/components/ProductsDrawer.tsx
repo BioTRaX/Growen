@@ -17,6 +17,9 @@ import CanonicalOffers from './CanonicalOffers'
 import CanonicalForm from './CanonicalForm'
 import EquivalenceLinker from './EquivalenceLinker'
 import BulkSalePriceModal from './BulkSalePriceModal'
+import ActivityPanel from './ActivityPanel'
+import PriceEditModal from './PriceEditModal'
+import DiagnosticsDrawer from './DiagnosticsDrawer'
 import { useProductsTablePrefs } from '../lib/useTablePrefs'
 import { formatARS, parseDecimalInput } from '../lib/format'
 import { useAuth } from '../auth/AuthContext'
@@ -52,10 +55,16 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [equivData, setEquivData] = useState<{ supplierId: number; supplierProductId: number } | null>(null)
   const [selected, setSelected] = useState<number[]>([])
   const [showBulk, setShowBulk] = useState(false)
+  const [activityFor, setActivityFor] = useState<number | null>(null)
+  const [editingPriceFor, setEditingPriceFor] = useState<{ productId: number; canonicalId?: number | null; sale?: number | null } | null>(null)
   const [showColsCfg, setShowColsCfg] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
+  const [showDiag, setShowDiag] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<number[] | null>(null)
+  const selectAllOnPage = () => setSelected(items.map(i => i.product_id))
+  const toggleSelectAllOnPage = () => setSelected((prev) => prev.length === items.length ? [] : items.map(i => i.product_id))
   // Fixed row height for virtualized list to avoid overlap
   const ROW_HEIGHT = 56
   const [listHeight, setListHeight] = useState<number>(400)
@@ -75,6 +84,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
     | 'canonical'
     | 'equivalence'
     | 'comparativa'
+    | 'actions'
 
   type ColDef = {
     id: ColId
@@ -97,6 +107,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
     'canonical',
     'equivalence',
     'comparativa',
+    'actions',
   ]
 
   const defaultVisibility: Record<ColId, boolean> = {
@@ -112,6 +123,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
     canonical: true,
     equivalence: true,
     comparativa: true,
+    actions: true,
   }
 
   const baseWidths: Record<ColId, number> = {
@@ -127,6 +139,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
     canonical: 110,
     equivalence: 120,
     comparativa: 110,
+    actions: 120,
   }
 
   function widthFor(id: ColId): number {
@@ -295,7 +308,11 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         label: 'Producto',
         defaultWidth: baseWidths.product,
         renderCell: (it) => (
-          <Link to={`/productos/${it.product_id}`} className="truncate" style={{ display: 'inline-block', maxWidth: widthFor('product') }}>
+          <Link
+            to={`/productos/${it.product_id}`}
+            className="truncate product-title"
+            style={{ display: 'inline-block', maxWidth: widthFor('product') }}
+          >
             {it.name}
           </Link>
         ),
@@ -440,6 +457,28 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           )
         ),
       },
+      {
+        id: 'actions',
+        label: 'Acciones',
+        defaultWidth: baseWidths.actions,
+        renderCell: (it) => (
+          canEdit ? (
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+              <button
+                className="btn"
+                onClick={() => setEditingPriceFor({ productId: it.product_id, canonicalId: it.canonical_product_id, sale: (it as any).canonical_sale_price ?? (it as any).precio_venta ?? null })}
+              >Precio</button>
+              <button className="btn" onClick={() => setActivityFor(it.product_id)}>Actividad</button>
+              <button
+                className="btn"
+                onClick={() => { setPendingDeleteIds([it.product_id]); setShowDeleteConfirm(true) }}
+              >Eliminar</button>
+            </div>
+          ) : (
+            <span />
+          )
+        ),
+      },
     ]
     return defs
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -477,7 +516,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
             Editar precios ({selected.length})
           </button>
         )}
-        {canEdit && (
+        {
           <button
             className="btn"
             disabled={!selected.length}
@@ -485,9 +524,24 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           >
             Borrar seleccionados{selected.length ? ` (${selected.length})` : ''}
           </button>
-        )}
+        }
+        <button
+          className="btn"
+          disabled={!items.length}
+          onClick={toggleSelectAllOnPage}
+        >
+          {selected.length === items.length && items.length > 0 ? 'Deseleccionar página' : 'Seleccionar página'}
+        </button>
+        <button
+          className="btn"
+          disabled={!selected.length}
+          onClick={() => setSelected([])}
+        >
+          Limpiar selección
+        </button>
         <button className="btn" onClick={() => setShowColsCfg((v) => !v)}>Diseño</button>
-        <button className="btn" onClick={() => reset()}>Restaurar diseño</button>
+  <button className="btn" onClick={() => reset()}>Restaurar diseño</button>
+  <button className="btn" onClick={() => setShowDiag(true)}>Ver diagnósticos</button>
         {canEdit && (
           <button className="btn" onClick={() => setShowCreate(true)}>Nuevo producto</button>
         )}
@@ -662,38 +716,96 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           onClose={() => setShowCreate(false)}
         />
       )}
+      {editingPriceFor && (
+        <PriceEditModal
+          productId={editingPriceFor.productId}
+          canonicalProductId={editingPriceFor.canonicalId}
+          currentSale={editingPriceFor.sale ?? undefined}
+          onSaved={(kind, value) => {
+            // Update row minimally
+            setItems(prev => prev.map(it => {
+              if (it.product_id !== editingPriceFor.productId) return it
+              if (kind === 'sale' && editingPriceFor?.canonicalId) {
+                return { ...it, canonical_sale_price: value }
+              }
+              if (kind === 'buy') {
+                return it // buy price not displayed in main list per-offering; skip
+              }
+              return it
+            }))
+          }}
+          onClose={() => setEditingPriceFor(null)}
+        />
+      )}
+      {activityFor && (
+        <ActivityPanel productId={activityFor} onClose={() => setActivityFor(null)} />
+      )}
+      <DiagnosticsDrawer open={showDiag} onClose={() => setShowDiag(false)} />
       {showDeleteConfirm && (
         <div className="modal-backdrop">
           <div className="modal" style={{ maxWidth: 440 }}>
             <h3 style={{ marginTop: 0 }}>Confirmar borrado</h3>
             <p style={{ fontSize: 14 }}>
-              Vas a borrar <strong>{selected.length}</strong> producto(s). Esta acción es permanente y puede eliminar o dejar huérfanas
+              Vas a borrar <strong>{(pendingDeleteIds ?? selected).length}</strong> producto(s). Esta acción es permanente y puede eliminar o dejar huérfanas
               referencias asociadas (imágenes, equivalencias, etc.) según las reglas del backend. No se puede deshacer.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
               <button className="btn" disabled={deleting} onClick={() => setShowDeleteConfirm(false)}>Cancelar</button>
               <button
                 className="btn-dark"
-                disabled={deleting || !selected.length}
+                disabled={deleting || !(pendingDeleteIds ?? selected).length}
                 onClick={async () => {
-                  if (!selected.length) return
+                  const ids = (pendingDeleteIds ?? selected).slice()
+                  if (!ids.length) return
                   setDeleting(true)
                   try {
-                    const ids = selected.slice()
+                    // Pre-chequeo amigable: avisar si hay seleccionados con stock > 0
+                    try {
+                      const selSet = new Set(ids)
+                      const withStock = items.filter(it => selSet.has(it.product_id) && (it.stock ?? 0) > 0)
+                      if (withStock.length > 0) {
+                        const showCount = Math.min(5, withStock.length)
+                        const sample = withStock.slice(0, showCount).map(it => String(it.product_id)).join(', ')
+                        showToast('info', `Seleccionaste ${withStock.length} con stock > 0${withStock.length ? ` (ej: ${sample}${withStock.length > showCount ? '…' : ''})` : ''}. El backend bloqueará esos borrados.`)
+                      }
+                    } catch {}
                     const r = await deleteProducts(ids)
-                    showToast('success', `Borrados ${r.deleted} / ${r.requested}`)
-                    setItems(prev => prev.filter(it => !ids.includes(it.product_id)))
-                    setSelected([])
+                    let msg = `Borrados ${r.deleted.length} de ${r.requested.length}`
+                    const blockedMessages: string[] = []
+                    if (r.blocked_stock?.length) {
+                      const showCount = Math.min(5, r.blocked_stock.length)
+                      const sample = r.blocked_stock.slice(0, showCount).join(', ')
+                      blockedMessages.push(`con stock: ${r.blocked_stock.length}${r.blocked_stock.length ? ` (ej: ${sample}${r.blocked_stock.length > showCount ? '…' : ''})` : ''}`)
+                    }
+                    if (r.blocked_refs?.length) {
+                      const showCount = Math.min(5, r.blocked_refs.length)
+                      const sample = r.blocked_refs.slice(0, showCount).join(', ')
+                      blockedMessages.push(`con referencias: ${r.blocked_refs.length}${r.blocked_refs.length ? ` (ej: ${sample}${r.blocked_refs.length > showCount ? '…' : ''})` : ''}`)
+                    }
+                    if (blockedMessages.length) {
+                      msg += ` (Bloqueados: ${blockedMessages.join(', ')})`
+                    }
+                    showToast(r.deleted.length > 0 ? 'success' : 'info', msg)
+                    if ((r.blocked_stock?.length || 0) + (r.blocked_refs?.length || 0)) {
+                      showToast('info', 'Sugerencia: filtrá "Sin stock" para facilitar el borrado de los que quedaron bloqueados por stock.')
+                    }
+                    
+                    if (r.deleted.length > 0) {
+                      setItems(prev => prev.filter(it => !r.deleted.includes(it.product_id)))
+                    }
+                    setSelected(prev => prev.filter(id => !r.deleted.includes(id)))
+                    setPendingDeleteIds(null)
                     setShowDeleteConfirm(false)
-                    // Si la lista quedó vacía tras el borrado, forzar recarga desde página 1
-                    setTimeout(() => {
-                      if (items.length === 0) {
+                    
+                    // If the list becomes empty after deletion, force a refresh of the first page
+                    if (items.length === r.deleted.length) {
+                      setTimeout(() => {
                         setPage(1)
                         setItems([])
-                      }
-                    }, 0)
+                      }, 100)
+                    }
                   } catch (e: any) {
-                    showToast('error', e.message || 'Error borrando productos')
+                    showToast('error', e?.message || 'No se pudieron eliminar los productos')
                   } finally {
                     setDeleting(false)
                   }

@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import Product, Image, Category
@@ -191,7 +192,8 @@ async def generate_catalog(data: CatalogGenerateIn, session: AsyncSession = Depe
         logger.debug("[catalog] %s %s", msg, extra)
     log_step("start", count=len(data.ids), user=getattr(session_data.user, 'id', None))
     # Cargar productos
-    q = select(Product).where(Product.id.in_(data.ids))
+    # Eager-load variants to avoid async lazy-load (MissingGreenlet)
+    q = select(Product).options(selectinload(Product.variants)).where(Product.id.in_(data.ids))
     products = (await session.execute(q)).scalars().all()
     if not products:
         _active_generation.update({"running": False})

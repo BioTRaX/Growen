@@ -130,6 +130,43 @@ def _sanitize_for_json(obj):
     return obj
 
 
+def _normalize_title_for_dedupe(x: str) -> str:
+    t = (x or "").strip().lower()
+    try:
+        import unicodedata
+        t = ''.join(c for c in unicodedata.normalize('NFKD', t) if not unicodedata.combining(c))
+    except Exception:
+        pass
+    return ' '.join(t.split())
+
+
+def _dedupe_lines(lines: list[dict]) -> tuple[list[dict], int, int]:
+    """Filtra líneas duplicadas por SKU y por título normalizado.
+
+    Devuelve (unique_lines, ignored_by_sku, ignored_by_title).
+    """
+    seen_skus: set[str] = set()
+    seen_titles: set[str] = set()
+    unique_lines: list[dict] = []
+    ignored_by_sku = 0
+    ignored_by_title = 0
+    for ln in lines:
+        sku_key = (ln.get("supplier_sku") or "").strip().lower()
+        title_key = _normalize_title_for_dedupe((ln.get("title") or ""))
+        if sku_key:
+            if sku_key in seen_skus:
+                ignored_by_sku += 1
+                continue
+            seen_skus.add(sku_key)
+        if title_key:
+            if title_key in seen_titles:
+                ignored_by_title += 1
+                continue
+            seen_titles.add(title_key)
+        unique_lines.append(ln)
+    return unique_lines, ignored_by_sku, ignored_by_title
+
+
 @router.post("", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def create_purchase(payload: dict, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session)):
     """Crea una compra en estado BORRADOR.
@@ -393,8 +430,6 @@ async def confirm_purchase(
     p = res.scalar_one_or_none()
     if not p:
         raise HTTPException(status_code=404, detail="Compra no encontrada")
-    if not p.lines:
-        raise HTTPException(status_code=422, detail="No hay líneas para confirmar")
     if p.status == "CONFIRMADA":
         return {"status": "ok"}
 
@@ -987,7 +1022,34 @@ async def import_santaplanta_pdf(
                             pass
             except Exception:
                 pass
-        for ln in lines:
+        # --- Anti-duplicados: filtrar por SKU y por título normalizado ---
+        unique_lines, ignored_by_sku, ignored_by_title = _dedupe_lines(lines)
+
+        # Log de duplicados a ImportLog en WARN
+        try:
+            if ignored_by_sku:
+                db.add(ImportLog(
+                    purchase_id=p.id,
+                    correlation_id=correlation_id,
+                    level="WARN",
+                    stage="dedupe",
+                    event="ignored_duplicates_by_sku",
+                    details={"count": ignored_by_sku},
+                ))
+            if ignored_by_title:
+                db.add(ImportLog(
+                    purchase_id=p.id,
+                    correlation_id=correlation_id,
+                    level="WARN",
+                    stage="dedupe",
+                    event="ignored_duplicates_by_title",
+                    details={"count": ignored_by_title},
+                ))
+        except Exception:
+            pass
+
+        src_lines = unique_lines
+        for ln in src_lines:
             sku = (ln.get("supplier_sku") or "").strip()
             title = (ln.get("title") or "").strip() or sku or "(sin título)"
             qty = Decimal(str(ln.get("qty") or 0))
@@ -1071,6 +1133,9 @@ async def import_santaplanta_pdf(
                 "remito_number": remito_number,
                 "remito_date": remito_dt.isoformat(),
                 "lines_detected": len(lines),
+                "lines_unique": len(src_lines),
+                "ignored_by_sku": ignored_by_sku,
+                "ignored_by_title": ignored_by_title,
             }))
         except Exception:
             pass
@@ -1090,6 +1155,9 @@ async def import_santaplanta_pdf(
                     "remito_number": remito_number,
                     "remito_date": remito_dt.isoformat(),
                     "lines_detected": len(lines),
+                    "lines_unique": len(src_lines),
+                    "ignored_by_sku": ignored_by_sku,
+                    "ignored_by_title": ignored_by_title,
                     "samples": samples,
                 }),
                 user_id=None,
@@ -1119,8 +1187,8 @@ async def import_santaplanta_pdf(
         try:
             sub = float(res.totals.get("subtotal") or 0)
         except Exception:
-            sub = sum(float(l.get("subtotal") or 0) for l in lines) or sum(
-                float(l.get("qty") or 0) * float(l.get("unit_cost") or 0) for l in lines
+            sub = sum(float(l.get("subtotal") or 0) for l in src_lines) or sum(
+                float(l.get("qty") or 0) * float(l.get("unit_cost") or 0) for l in src_lines
             )
         vat = float(p.vat_rate or 0)
         iva = sub * (vat / 100.0)
@@ -1133,7 +1201,7 @@ async def import_santaplanta_pdf(
             "parsed": {
                 "remito": remito_number,
                 "fecha": remito_dt.isoformat(),
-                "lines": len(lines),
+                "lines": len(src_lines),
                 "totals": {"subtotal": round(sub, 2), "iva": round(iva, 2), "total": round(total, 2)},
                 "hash": f"sha256:{sha256}",
             },

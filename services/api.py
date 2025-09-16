@@ -99,8 +99,16 @@ _STARTUP_METRIC_WRITTEN = False
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Registra cada solicitud y captura excepciones."""
+    """Registra cada solicitud y captura excepciones con un correlation-id."""
     start = time.perf_counter()
+    # Correlation / request id (prefer incoming header if present)
+    try:
+        corr = request.headers.get("x-correlation-id") or request.headers.get("x-request-id")
+        if not corr:
+            # generate lightweight id: epoch-ms + pid snippet
+            corr = f"req-{int(time.time()*1000):x}-{os.getpid():x}"
+    except Exception:
+        corr = None
     try:
         resp = await call_next(request)
     except (FastHTTPException, StarletteHTTPException):
@@ -108,7 +116,10 @@ async def log_requests(request: Request, call_next):
         raise
     except Exception:
         dur = (time.perf_counter() - start) * 1000
-        logger.exception("EXC %s %s (%.2fms)", request.method, request.url.path, dur)
+        if corr:
+            logger.exception("EXC %s %s cid=%s (%.2fms)", request.method, request.url.path, corr, dur)
+        else:
+            logger.exception("EXC %s %s (%.2fms)", request.method, request.url.path, dur)
         # Devolver error con tono argento, breve y claro (sin faltar el respeto)
         return JSONResponse(
             {
@@ -117,7 +128,15 @@ async def log_requests(request: Request, call_next):
             status_code=500,
         )
     dur = (time.perf_counter() - start) * 1000
-    logger.info("%s %s -> %s (%.2fms)", request.method, request.url.path, resp.status_code, dur)
+    if corr:
+        # echo correlation id in response header so FE can surface it
+        try:
+            resp.headers["X-Correlation-Id"] = corr
+        except Exception:
+            pass
+        logger.info("%s %s -> %s cid=%s (%.2fms)", request.method, request.url.path, resp.status_code, corr, dur)
+    else:
+        logger.info("%s %s -> %s (%.2fms)", request.method, request.url.path, resp.status_code, dur)
     # Record startup metric once on first successful request
     global _STARTUP_METRIC_WRITTEN
     if not _STARTUP_METRIC_WRITTEN:

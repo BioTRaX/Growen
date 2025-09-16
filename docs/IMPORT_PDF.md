@@ -19,6 +19,16 @@ El proceso de importación de PDF sigue el siguiente pipeline:
 - Puede sobrescribirse en runtime vía variable de entorno.
 - Si el pipeline no detecta líneas, en dev puede crearse un BORRADOR vacío con el PDF adjunto y logs asociados.
 
+## Anti-duplicados (SKU y título)
+- Durante la normalización de líneas se aplica un filtro de duplicados por:
+  - SKU del proveedor (`supplier_sku`) normalizado a minúsculas.
+  - Título normalizado (sin acentos, minúsculas, espacios colapsados).
+- Las líneas descartadas no se cargan; se registran métricas en `AuditLog` e ítems `WARN` en `ImportLog` (`dedupe/ignored_duplicates_by_*`).
+
+## Encabezados y correlación
+- Todas las respuestas del import incluyen `X-Correlation-ID` en headers.
+- En caso de error (`422`, `409` o `500`) se devuelve también ese header para facilitar el diagnóstico.
+
 ## Respuesta
 - Siempre incluye `purchase_id`, `status` y `correlation_id`.
 - Con `debug=1` devuelve `debug.events` (resumen) y `debug.samples` (hasta 8 líneas parseadas) para diagnóstico.

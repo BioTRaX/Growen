@@ -80,20 +80,33 @@ def collect_files(keep_days: int) -> list[Path]:
     return results
 
 
-def truncate_backend():
+def truncate_backend(skip: bool = False):
     main_log = LOGS_DIR / "backend.log"
     if not main_log.exists():
         return False, 0
+    if skip:
+        return False, main_log.stat().st_size
     size = main_log.stat().st_size
-    with open(main_log, "w", encoding="utf-8"):
-        pass
-    return True, size
+    try:
+        with open(main_log, "w", encoding="utf-8"):
+            pass
+        return True, size
+    except PermissionError:
+        # En Windows puede estar bloqueado por un proceso (uvicorn). Dejar marcador y continuar.
+        marker = LOGS_DIR / "backend.log.cleared"
+        try:
+            with open(marker, "w", encoding="utf-8") as f:
+                f.write("clear-intent: failed due to lock; please stop server and re-run cleanup\n")
+        except OSError:
+            pass
+        return False, size
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="Solo mostrar acciones")
     ap.add_argument("--keep-days", type=int, default=0, help="Conservar archivos modificados en los últimos N días")
+    ap.add_argument("--skip-truncate", action="store_true", help="No truncar backend.log (evita error si está bloqueado)")
     args = ap.parse_args(argv)
 
     if not LOGS_DIR.exists():
@@ -108,7 +121,9 @@ def main(argv: list[str]) -> int:
         except OSError:
             pass
 
-    print(f"Encontrados {len(targets)} archivos para eliminar (≈ {human_size(total_bytes)})")
+    # Evitar caracteres no ASCII en Windows (como '≈') para no romper stdout por encoding
+    approx = "~"
+    print(f"Encontrados {len(targets)} archivos para eliminar ({approx} {human_size(total_bytes)})")
     for f in targets:
         print(f" - {f.relative_to(ROOT)}")
 
@@ -124,11 +139,14 @@ def main(argv: list[str]) -> int:
                 print(f"No se pudo eliminar {f}: {e}")
         print(f"Eliminados {deleted} archivos.")
 
-    truncated, prev = truncate_backend()
+    truncated, prev = truncate_backend(skip=args.skip_truncate)
     if truncated:
         print(f"Truncado backend.log (antes {human_size(prev)})")
     else:
-        print("backend.log no existe, nada que truncar")
+        if (LOGS_DIR / "backend.log").exists():
+            print("backend.log no truncado (posible bloqueo); se dejó marcador backend.log.cleared")
+        else:
+            print("backend.log no existe, nada que truncar")
 
     print("Listo.")
     return 0

@@ -3,6 +3,7 @@
 // NG-HEADER: Descripción: Pendiente de descripción
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import axios from "axios";
+import { diagAdd } from "../lib/corrStore";
 
 // Compute a single API base bound to the current page hostname to avoid
 // cookie/CSRF mismatches between 127.0.0.1 and localhost.
@@ -48,7 +49,49 @@ http.interceptors.request.use((config) => {
       (config.headers as any)["X-CSRF-Token"] = csrf;
     }
   }
+  // mark start time for duration metrics
+  (config as any)._start = Date.now();
   return config;
 });
+
+// Collect correlation-id and request diagnostics
+http.interceptors.response.use(
+  (response) => {
+    try {
+      const cfg: any = response.config || {};
+      const started = cfg._start || Date.now();
+      const dur = Date.now() - started;
+      const cid = (response.headers && (response.headers["x-correlation-id"] || (response.headers as any)["X-Correlation-Id"])) as string | undefined;
+      diagAdd({
+        ts: new Date().toISOString(),
+        method: (cfg.method || "GET").toUpperCase(),
+        url: cfg.url || "",
+        status: response.status,
+        ms: dur,
+        cid,
+      });
+    } catch {}
+    return response;
+  },
+  (error) => {
+    try {
+      const resp = error.response;
+      const cfg: any = (resp && resp.config) || error.config || {};
+      const started = cfg._start || Date.now();
+      const dur = Date.now() - started;
+      const headers = (resp && resp.headers) || {};
+      const cid = (headers["x-correlation-id"] || (headers as any)["X-Correlation-Id"]) as string | undefined;
+      diagAdd({
+        ts: new Date().toISOString(),
+        method: (cfg.method || "GET").toUpperCase(),
+        url: cfg.url || "",
+        status: resp ? resp.status : 0,
+        ms: dur,
+        cid,
+      });
+    } catch {}
+    return Promise.reject(error);
+  }
+);
 
 export default http;

@@ -265,6 +265,7 @@ Para iniciar una sesión de depuración limpia:
 ```bash
 python scripts/cleanup_logs.py --dry-run   # muestra acciones
 python scripts/cleanup_logs.py             # elimina rotaciones y trunca backend.log
+python scripts/cleanup_logs.py --skip-truncate  # no intenta truncar backend.log (útil si está bloqueado por el proceso)
 python scripts/cleanup_logs.py --keep-days 2
 ```
 
@@ -274,6 +275,9 @@ Acciones del script:
 - Conserva estructura de carpetas. Usa `--keep-days N` para preservar archivos recientes.
 
 Recomendado antes de reproducir un escenario (confirmar compra, probar WebSocket de chat, etc.) para aislar el nuevo output.
+
+Notas en Windows:
+- Si `backend.log` está bloqueado por el proceso de la API, el script registrará el error de permiso y creará el marcador `backend.log.cleared` para indicar que se intentó limpiar. Usá `--skip-truncate` para omitir el truncado y aun así limpiar rotaciones.
 
 ### Migraciones
 
@@ -320,15 +324,33 @@ Pruebas manuales:
 
 ## Catálogo — Edición inline y preferencias
 
-- Edición inline de Precio de venta (canónico) con guardado en `onBlur` y `Esc` para cancelar. Solo `admin` y `colaborador` ven controles de edición.
-- Panel de Comparativa por producto con ofertas de proveedores, ordenadas por menor precio de compra; permite editar precio de compra inline.
+- Edición inline de Precio de venta (canónico) con guardado en `Enter`/`onBlur` y `Esc` para cancelar. Solo `admin` y `colaborador` ven controles de edición.
+- Panel de Comparativa por producto con ofertas de proveedores, ordenadas por menor precio de compra; permite editar precio de compra inline (roles `admin|colaborador`).
 - Preferencias de columnas por usuario (orden, visibilidad, anchos) persistidas en backend. Botón “Diseño” para configurar y “Restaurar diseño” para volver a valores por defecto.
 - Edición masiva de precio de venta con modos `set|inc|dec|inc_pct|dec_pct` (modal). Requiere CSRF.
 
-Endpoints relevantes (prefijo `/products-ex`):
+Endpoints relevantes (precio y compras), prefijo `/products-ex` para precios:
 
 - `PATCH /products/{product_id}/sale-price` (admin, colaborador; CSRF)
 - `PATCH /supplier-items/{supplier_item_id}/buy-price` (admin, colaborador; CSRF)
+
+### Eliminación segura de productos
+
+- `DELETE /catalog/products` (CSRF; roles `admin|colaborador`). Cuerpo `{ "ids": number[] }`.
+- Reglas de negocio:
+  - 400 si el producto tiene `stock > 0`.
+  - 409 si el producto posee referencias en compras (`purchase_lines.product_id`).
+  - Si no hay bloqueos: se eliminan dependencias compatibles sin ON DELETE CASCADE: `supplier_products`, `variants`, `inventories` e `images`; luego el `product`.
+- Respuesta: `{ requested, deleted, blocked_stock?: number[], blocked_refs?: number[] }`.
+- Auditoría: `AuditLog { action: "product_delete" }` por cada producto con metadatos de cascada.
+
+### Anti-duplicados en import de Compras (SantaPlanta)
+
+- Se filtran líneas duplicadas por `supplier_sku` y por `title` normalizado (trim, lower, sin tildes).
+- Se registran métricas en `ImportLog` con nivel `WARN`:
+  - `ignored_duplicates_by_sku` y `ignored_duplicates_by_title`.
+- La respuesta de `POST /purchases/import/santaplanta` incluye `lines_unique`, `ignored_by_sku` e `ignored_by_title` en metadatos y encabezado `X-Correlation-Id` para trazar logs.
+- Auditoría de import con estos campos para trazabilidad.
 - `POST /products/bulk-sale-price` (admin, colaborador; CSRF)
 - `GET /products/{product_id}/offerings`
 - `GET/PUT /users/me/preferences/products-table` (PUT requiere CSRF)
@@ -338,12 +360,23 @@ Endpoints relevantes (prefijo `/products-ex`):
 Soporte para crear productos internos manualmente (roles `admin` y `colaborador`).
 
 Backend:
-- `POST /products` (CSRF) JSON:
+- `POST /catalog/products` (CSRF) JSON mínimo (modal rápido):
   ```json
-  { "title": "Nombre", "category_id": 123, "initial_stock": 0, "status": "active" }
+  {
+    "title": "Nombre",
+    "initial_stock": 0,
+    "supplier_id": 1,
+    "supplier_sku": "OPCIONAL",
+    "purchase_price": 100.0,
+    "sale_price": 150.0
+  }
   ```
-  Respuesta incluye `id`, `sku_root` (derivado de título, hasta 8 chars alfanum), `slug`, `stock`, `category_id`, `status`.
-  Registra `AuditLog` (`action=product_create`).
+  - Requiere proveedor y precios de compra/venta.
+  - Crea `Product` + `Variant` (SKU = `sku_root`), valida SKU único global.
+  - Crea `SupplierProduct` y registra `current_purchase_price`/`current_sale_price` e historial en `supplier_price_history`.
+  - Respuesta incluye `id`, `sku_root`, `supplier_item_id`.
+  - Compatibilidad: el endpoint `/products` completo sigue disponible para flujos avanzados (categoría, estado, enlaces canónicos).
+  - Si el SKU ya existe, devuelve 409 con detalle.
 
 Frontend:
 - Botón "Nuevo producto" en panel Productos abre modal.

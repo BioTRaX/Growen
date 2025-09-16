@@ -8,6 +8,8 @@ import { useNavigate } from 'react-router-dom'
 import { PATHS } from '../routes/paths'
 import { listCategories, Category } from '../services/categories'
 import { searchProducts, ProductItem, updateStock, deleteProducts } from '../services/products'
+import { updateSalePrice, updateSupplierBuyPrice } from '../services/productsEx'
+import { useAuth } from '../auth/AuthContext'
 import { pushTNBulk } from '../services/images'
 import { generateCatalog, headLatestCatalog } from '../services/catalogs'
 import CatalogHistoryModal from '../components/CatalogHistoryModal'
@@ -15,6 +17,8 @@ import { useToast } from '../components/ToastProvider'
 
 export default function Stock() {
   const { push } = useToast()
+  const { state } = useAuth()
+  const canEdit = state.role === 'admin' || state.role === 'colaborador'
   const navigate = useNavigate()
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -28,6 +32,10 @@ export default function Stock() {
   const [loading, setLoading] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
   const [stockVal, setStockVal] = useState('')
+  const [editSaleId, setEditSaleId] = useState<number | null>(null)
+  const [saleVal, setSaleVal] = useState('')
+  const [editBuyId, setEditBuyId] = useState<number | null>(null)
+  const [buyVal, setBuyVal] = useState('')
   const [tab, setTab] = useState<'gt' | 'eq'>('gt')
   const [pushing, setPushing] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -42,6 +50,10 @@ export default function Stock() {
     })
   }
   const clearSelection = () => setSelected(new Set())
+  const selectAllOnPage = () => setSelected(new Set(items.map((i) => i.product_id)))
+  const toggleSelectAllOnPage = () => {
+    if (selected.size === items.length) clearSelection(); else selectAllOnPage()
+  }
 
   useEffect(() => {
     listSuppliers().then(setSuppliers).catch(() => {})
@@ -81,6 +93,40 @@ export default function Stock() {
     setEditing(null)
   }
 
+  function parseDecimalInput(s: string): number | null {
+    if (!s) return null
+    const x = s.replace(/\s+/g, '').replace(',', '.')
+    const num = Number(x)
+    if (!isFinite(num) || num <= 0) return null
+    return Math.round(num * 100) / 100
+  }
+
+  async function saveSalePrice(pid: number) {
+    const v = parseDecimalInput(saleVal)
+    if (v == null) { push({ kind: 'error', message: 'Precio de venta inválido' }); return }
+    try {
+      await updateSalePrice(pid, v)
+      setItems(prev => prev.map(it => (it.canonical_product_id === pid ? { ...it, canonical_sale_price: v } : it)))
+      push({ kind: 'success', message: 'Precio de venta actualizado' })
+      setEditSaleId(null)
+    } catch (e: any) {
+      push({ kind: 'error', message: e.message || 'Error actualizando precio de venta' })
+    }
+  }
+
+  async function saveBuyPrice(supplierItemId: number) {
+    const v = parseDecimalInput(buyVal)
+    if (v == null) { push({ kind: 'error', message: 'Precio de compra inválido' }); return }
+    try {
+      await updateSupplierBuyPrice(supplierItemId, v)
+      setItems(prev => prev.map(it => (it as any).supplier_item_id === supplierItemId ? { ...it, precio_compra: v } : it))
+      push({ kind: 'success', message: 'Precio de compra actualizado' })
+      setEditBuyId(null)
+    } catch (e: any) {
+      push({ kind: 'error', message: e.message || 'Error actualizando precio de compra' })
+    }
+  }
+
   return (
     <div className="panel p-4" style={{ margin: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -100,7 +146,8 @@ export default function Stock() {
       const ok = await headLatestCatalog(); if (!ok) { push({ kind:'error', message:'No hay catálogo disponible' }); return }
       window.location.href = '/api/catalogs/latest/download'; push({ kind:'info', message:'Descargando catálogo' })
     }}>Descargar catálogo</button>
-    <button className="btn-secondary" disabled={!selected.size} onClick={clearSelection}>Limpiar selección</button>
+  <button className="btn" disabled={!items.length} onClick={toggleSelectAllOnPage}>{selected.size === items.length && items.length > 0 ? 'Deseleccionar página' : 'Seleccionar página'}</button>
+  <button className="btn-secondary" disabled={!selected.size} onClick={clearSelection}>Limpiar selección</button>
   <button className="btn" disabled={!selected.size} onClick={() => setShowDeleteConfirm(true)}>Borrar seleccionados</button>
   <button className="btn" onClick={() => setShowHistory(true)}>Histórico catálogos</button>
     <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.home)}>Volver</button>
@@ -137,8 +184,8 @@ export default function Stock() {
     <th></th>
     <th style={{ textAlign: 'left' }}>Producto</th>
     <th style={{ textAlign: 'left' }}>Proveedor</th>
-    <th className="text-center">Precio venta</th>
-    <th className="text-center">Compra</th>
+  <th className="text-center">Precio venta</th>
+  <th className="text-center">Compra</th>
     <th className="text-center">Stock</th>
     <th className="text-center">Categoría</th>
     <th className="text-center">Actualizado</th>
@@ -151,11 +198,55 @@ export default function Stock() {
         <input type="checkbox" checked={selected.has(it.product_id)} onChange={() => toggleSelect(it.product_id)} />
       </td>
       <td style={{ textAlign: 'left' }}>
-        <a className="link" href={`/productos/${it.product_id}`}>{it.name}</a>
+        <a className="truncate product-title" href={`/productos/${it.product_id}`}>{it.name}</a>
       </td>
       <td style={{ textAlign: 'left' }}>{it.supplier.name}</td>
-      <td className="text-center">{it.precio_venta ?? ''}</td>
-      <td className="text-center">{it.precio_compra ?? ''}</td>
+      <td className="text-center">
+        {canEdit && it.canonical_product_id ? (
+          editSaleId === it.canonical_product_id ? (
+            <span>
+              <input
+                className="input"
+                style={{ width: 100 }}
+                value={saleVal}
+                onChange={(e) => setSaleVal(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveSalePrice(it.canonical_product_id!); if (e.key === 'Escape') setEditSaleId(null) }}
+                onBlur={() => saveSalePrice(it.canonical_product_id!)}
+              />
+            </span>
+          ) : (
+            <span>
+              {it.canonical_sale_price != null ? `$ ${(it.canonical_sale_price as number).toFixed(2)}` : '-'}
+              <button className="btn-secondary" style={{ marginLeft: 6 }} onClick={() => { setEditSaleId(it.canonical_product_id!); setSaleVal(String(it.canonical_sale_price ?? '')) }}>✎</button>
+            </span>
+          )
+        ) : (
+          <span>{it.canonical_sale_price ?? ''}</span>
+        )}
+      </td>
+      <td className="text-center">
+        {canEdit && (it as any).supplier_item_id ? (
+          editBuyId === (it as any).supplier_item_id ? (
+            <span>
+              <input
+                className="input"
+                style={{ width: 100 }}
+                value={buyVal}
+                onChange={(e) => setBuyVal(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveBuyPrice((it as any).supplier_item_id); if (e.key === 'Escape') setEditBuyId(null) }}
+                onBlur={() => saveBuyPrice((it as any).supplier_item_id)}
+              />
+            </span>
+          ) : (
+            <span>
+              {it.precio_compra != null ? `$ ${(it.precio_compra as number).toFixed(2)}` : '-'}
+              <button className="btn-secondary" style={{ marginLeft: 6 }} onClick={() => { setEditBuyId((it as any).supplier_item_id); setBuyVal(String(it.precio_compra ?? '')) }}>✎</button>
+            </span>
+          )
+        ) : (
+          <span>{it.precio_compra ?? ''}</span>
+        )}
+      </td>
       <td className="text-center">
                 {editing === it.product_id ? (
                   <span>
@@ -200,13 +291,40 @@ export default function Stock() {
                 setDeleting(true)
                 try {
                   const ids = Array.from(selected)
+                  // Pre-chequeo: aviso si hay seleccionados con stock > 0
+                  try {
+                    const selSet = new Set(ids)
+                    const withStock = items.filter(it => selSet.has(it.product_id) && (it.stock ?? 0) > 0)
+                    if (withStock.length > 0) {
+                      const showCount = Math.min(5, withStock.length)
+                      const sample = withStock.slice(0, showCount).map(it => String(it.product_id)).join(', ')
+                      push({ kind:'info', message: `Seleccionaste ${withStock.length} con stock > 0${withStock.length ? ` (ej: ${sample}${withStock.length > showCount ? '…' : ''})` : ''}. El backend bloqueará esos borrados.` })
+                    }
+                  } catch {}
                   const r = await deleteProducts(ids)
-                  push({ kind: 'success', message: `Borrados ${r.deleted} / ${r.requested}` })
-                  setItems(prev => prev.filter(it => !selected.has(it.product_id)))
+                  const parts: string[] = []
+                  parts.push(`Borrados ${r.deleted.length} / ${r.requested.length}`)
+                  if (r.blocked_stock.length) {
+                    const showCount = Math.min(5, r.blocked_stock.length)
+                    const sample = r.blocked_stock.slice(0, showCount).join(', ')
+                    parts.push(`con stock: ${r.blocked_stock.length}${r.blocked_stock.length ? ` (ej: ${sample}${r.blocked_stock.length > showCount ? '…' : ''})` : ''}`)
+                  }
+                  if (r.blocked_refs.length) {
+                    const showCount = Math.min(5, r.blocked_refs.length)
+                    const sample = r.blocked_refs.slice(0, showCount).join(', ')
+                    parts.push(`en compras: ${r.blocked_refs.length}${r.blocked_refs.length ? ` (ej: ${sample}${r.blocked_refs.length > showCount ? '…' : ''})` : ''}`)
+                  }
+                  push({ kind: 'success', message: parts.join(' | ') })
+                  if ((r.blocked_stock?.length || 0) + (r.blocked_refs?.length || 0)) {
+                    push({ kind:'info', message:'Sugerencia: usá el tab "Sin stock" para eliminar fácilmente los que quedaron bloqueados por stock.' })
+                  }
+                  // Remover solo los realmente eliminados
+                  const deletedSet = new Set(r.deleted)
+                  setItems(prev => prev.filter(it => !deletedSet.has(it.product_id)))
                   clearSelection()
                   setShowDeleteConfirm(false)
                 } catch (e: any) {
-                  push({ kind: 'error', message: e.message || 'Error borrando productos' })
+                  push({ kind: 'error', message: e?.message || e?.response?.data?.detail || 'No se pudieron eliminar' })
                 } finally {
                   setDeleting(false)
                 }

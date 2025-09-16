@@ -17,6 +17,10 @@
   --table-row: #121620;
   --table-row-hover: #1a1f2d;
 
+  /* Accent for product title links */
+  --accent-soft: #e879f9; /* Soft fuchsia */
+  --accent-soft-hover: #f0abfc; /* lighter on hover */
+
   /* Variables de alias para componentes */
   --panel-bg: var(--panel);
   --text-color: var(--text);
@@ -209,6 +213,15 @@ body {
   border-color: var(--primary);
   color: var(--text);
   box-shadow: 0 0 0 2px rgba(124,77,255,0.25);
+}
+
+/* Product title link styling */
+.product-title {
+  color: var(--accent-soft);
+  text-decoration: none;
+}
+.product-title:hover {
+  text-decoration: underline;
 }
 
 .badge-muted {
