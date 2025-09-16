@@ -8,7 +8,7 @@ import http from '../services/http'
 import { uploadProductImage, addImageFromUrl, setPrimary, lockImage, deleteImage, refreshSEO, pushTN, removeBg, watermark } from '../services/images'
 import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
 import { useAuth } from '../auth/AuthContext'
-import { getProductDetailStylePref, putProductDetailStylePref, ProductDetailStyle } from '../services/productsEx'
+import { getProductDetailStylePref, putProductDetailStylePref, ProductDetailStyle, updateSalePrice, updateSupplierBuyPrice } from '../services/productsEx'
 import { showToast } from '../components/Toast'
 
 type Prod = {
@@ -19,6 +19,8 @@ type Prod = {
   sku_root?: string
   description_html?: string | null
   images: { id: number; url: string; alt_text?: string; title_text?: string; is_primary?: boolean; locked?: boolean; active?: boolean }[]
+  canonical_product_id?: number | null
+  canonical_sale_price?: number | null
 }
 
 export default function ProductDetail() {
@@ -43,6 +45,8 @@ export default function ProductDetail() {
   const [styleVariant, setStyleVariant] = useState<ProductDetailStyle>('default')
   const [imgDiag, setImgDiag] = useState<{ action: string; created_at?: string; meta?: any; image_id?: number }[]>([])
   const [prodDiag, setProdDiag] = useState<{ action: string; created_at?: string; meta?: any }[]>([])
+  const [editingSale, setEditingSale] = useState(false)
+  const [saleVal, setSaleVal] = useState('')
 
   const theme = useMemo(() => ({
     bg: styleVariant === 'minimalDark' ? '#0b0f14' : '#0d1117',
@@ -140,6 +144,14 @@ export default function ProductDetail() {
     } finally {
       setLoading(false)
     }
+  }
+
+  function parseDecimalInput(s: string): number | null {
+    if (!s) return null
+    const x = s.replace(/\s+/g, '').replace(',', '.')
+    const num = Number(x)
+    if (!isFinite(num) || num <= 0) return null
+    return Math.round(num * 100) / 100
   }
 
   async function ensureImageProcessing(): Promise<boolean> {
@@ -256,6 +268,25 @@ export default function ProductDetail() {
           {prod?.sku_root && <div><span style={{ opacity: 0.7 }}>SKU:</span> {prod.sku_root}</div>}
           <div><span style={{ opacity: 0.7 }}>Stock:</span> {prod?.stock}</div>
           <div><span style={{ opacity: 0.7 }}>Tiene imagen:</span> {(prod?.images?.length || 0) > 0 ? 'Sí' : 'No'}</div>
+          {prod?.canonical_product_id ? (
+            <div>
+              <span style={{ opacity: 0.7 }}>Precio venta:</span>{' '}
+              {canEdit ? (
+                editingSale ? (
+                  <>
+                    <input className="input" style={{ width: 120 }} value={saleVal} onChange={(e) => setSaleVal(e.target.value)} onKeyDown={async (e) => { if (e.key === 'Enter') { const v = parseDecimalInput(saleVal); if (v == null) { showToast('error', 'Valor inválido'); return } try { await updateSalePrice(prod.canonical_product_id!, v); await refresh(); showToast('success', 'Precio guardado'); setEditingSale(false) } catch (err: any) { showToast('error', err?.message || 'Error') } } if (e.key === 'Escape') setEditingSale(false) }} onBlur={async () => { const v = parseDecimalInput(saleVal); if (v == null) { showToast('error', 'Valor inválido'); return } try { await updateSalePrice(prod.canonical_product_id!, v); await refresh(); showToast('success', 'Precio guardado'); setEditingSale(false) } catch (err: any) { showToast('error', err?.message || 'Error') } }} />
+                  </>
+                ) : (
+                  <>
+                    <span>{prod?.canonical_sale_price != null ? `$ ${Number(prod.canonical_sale_price).toFixed(2)}` : '-'}</span>
+                    <button className="btn-secondary" style={{ marginLeft: 6 }} onClick={() => { setEditingSale(true); setSaleVal(String(prod?.canonical_sale_price ?? '')) }}>✎</button>
+                  </>
+                )
+              ) : (
+                <span>{prod?.canonical_sale_price ?? '-'}</span>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -369,9 +400,13 @@ export default function ProductDetail() {
 }
 
 function SupplierOfferings({ productId, theme }: { productId: number; theme: { card: string; border: string } }) {
+  const { state } = useAuth()
+  const canEdit = state.role === 'admin' || state.role === 'colaborador'
   const [rows, setRows] = useState<{ supplier_item_id: number; supplier_name: string; supplier_sku: string; buy_price: number | null; updated_at?: string | null }[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [buyVal, setBuyVal] = useState('')
 
   useEffect(() => {
     let mounted = true
@@ -411,7 +446,20 @@ function SupplierOfferings({ productId, theme }: { productId: number; theme: { c
                   <tr key={r.supplier_item_id}>
                     <td>{r.supplier_name}</td>
                     <td>{r.supplier_sku}</td>
-                    <td>{r.buy_price != null ? `$ ${r.buy_price.toFixed(2)}` : '-'}</td>
+                    <td>
+                      {canEdit ? (
+                        editingId === r.supplier_item_id ? (
+                          <input className="input" style={{ width: 120 }} value={buyVal} onChange={(e) => setBuyVal(e.target.value)} onKeyDown={async (e) => { if (e.key === 'Enter') { const v = Number(buyVal.replace(',', '.')); if (!isFinite(v) || v <= 0) { showToast('error', 'Valor inválido'); return } try { await updateSupplierBuyPrice(r.supplier_item_id, Math.round(v * 100) / 100); setRows(prev => prev.map(x => x.supplier_item_id === r.supplier_item_id ? { ...x, buy_price: Math.round(v * 100) / 100 } : x)); setEditingId(null); showToast('success', 'Precio guardado') } catch (err: any) { showToast('error', err?.message || 'Error') } } if (e.key === 'Escape') setEditingId(null) }} onBlur={async () => { const v = Number(buyVal.replace(',', '.')); if (!isFinite(v) || v <= 0) { showToast('error', 'Valor inválido'); return } try { await updateSupplierBuyPrice(r.supplier_item_id, Math.round(v * 100) / 100); setRows(prev => prev.map(x => x.supplier_item_id === r.supplier_item_id ? { ...x, buy_price: Math.round(v * 100) / 100 } : x)); setEditingId(null); showToast('success', 'Precio guardado') } catch (err: any) { showToast('error', err?.message || 'Error') } }} />
+                        ) : (
+                          <>
+                            <span>{r.buy_price != null ? `$ ${r.buy_price.toFixed(2)}` : '-'}</span>
+                            <button className="btn-secondary" style={{ marginLeft: 6 }} onClick={() => { setEditingId(r.supplier_item_id); setBuyVal(String(r.buy_price ?? '')) }}>✎</button>
+                          </>
+                        )
+                      ) : (
+                        <span>{r.buy_price != null ? `$ ${r.buy_price.toFixed(2)}` : '-'}</span>
+                      )}
+                    </td>
                     <td>{r.updated_at ? new Date(r.updated_at).toLocaleString() : '-'}</td>
                   </tr>
                 ))}

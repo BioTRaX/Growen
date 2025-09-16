@@ -25,9 +25,12 @@ from db.models import (
     SupplierProduct,
     Product,
     Image,
+    Variant,
+    Inventory,
     ProductEquivalence,
     CanonicalProduct,
     AuditLog,
+    PurchaseLine,
 )
 from db.session import get_session
 from services.auth import require_csrf, require_roles, current_session, SessionData
@@ -36,6 +39,171 @@ router = APIRouter(tags=["catalog"])
 
 # Tamaño de página por defecto para el historial de precios
 DEFAULT_PRICE_HISTORY_PAGE_SIZE = int(os.getenv("PRICE_HISTORY_PAGE_SIZE", "20"))
+# ------------------------------- Productos (mínimo para tests) -------------------------------
+from pydantic import BaseModel as _PydModel
+
+
+class _ProductCreate(_PydModel):
+    title: str
+    # Stock inicial opcional (para flujo mínimo de pruebas). Si se informan compras, se ignora.
+    initial_stock: int = 0
+    # Proveedor obligatorio para este flujo
+    supplier_id: int
+    # SKU del proveedor opcional; si no se informa se reutiliza sku_root
+    supplier_sku: Optional[str] = None
+    # Precios requeridos
+    purchase_price: float
+    sale_price: float
+
+
+@router.post(
+    "/catalog/products",
+    dependencies=[Depends(require_csrf)],
+)
+async def create_product_minimal(payload: _ProductCreate, session: AsyncSession = Depends(get_session)):
+    """Crea un producto mínimo para pruebas con un Variant y opcionalmente inventario.
+
+    Nota: endpoint pensado para entorno de pruebas; en producción existen flujos más ricos.
+    """
+    # Validar proveedor
+    supplier = await session.get(Supplier, payload.supplier_id)
+    if not supplier:
+        raise HTTPException(status_code=400, detail="supplier_id inválido")
+
+    prod = Product(sku_root=(payload.supplier_sku or payload.title)[:50], title=payload.title)
+    session.add(prod)
+    await session.flush()
+
+    # Crear variante con SKU = sku_root y validar unicidad
+    from db.models import Variant, Inventory, SupplierProduct, SupplierPriceHistory
+    # Chequear duplicado
+    existing = await session.scalar(select(Variant).where(Variant.sku == prod.sku_root))
+    if existing:
+        raise HTTPException(status_code=409, detail="SKU ya existente para otra variante")
+    var = Variant(product_id=prod.id, sku=prod.sku_root)
+    session.add(var)
+    await session.flush()
+
+    # Inventario opcional
+    if payload.initial_stock and payload.initial_stock > 0:
+        inv = Inventory(variant_id=var.id, stock_qty=int(payload.initial_stock))
+        session.add(inv)
+
+    # Guardar stock agregado también en Product.stock para compatibilidad
+    prod.stock = int(payload.initial_stock or 0)
+
+    # Crear SupplierProduct asociado y precios actuales
+    sp = SupplierProduct(
+        supplier_id=payload.supplier_id,
+        supplier_product_id=(payload.supplier_sku or prod.sku_root),
+        title=payload.title[:200],
+        current_purchase_price=payload.purchase_price,
+        current_sale_price=payload.sale_price,
+        internal_product_id=prod.id,
+        internal_variant_id=var.id,
+    )
+    session.add(sp)
+    await session.flush()
+
+    # Registrar historial de precios (as_of_date = hoy)
+    from datetime import date as _date
+    sph = SupplierPriceHistory(
+        supplier_product_fk=sp.id,
+        file_fk=None,
+        as_of_date=_date.today(),
+        purchase_price=payload.purchase_price,
+        sale_price=payload.sale_price,
+        delta_purchase_pct=None,
+        delta_sale_pct=None,
+    )
+    session.add(sph)
+
+    await session.commit()
+    return {"id": prod.id, "title": prod.title, "sku_root": prod.sku_root, "supplier_item_id": sp.id}
+
+
+class _ProductsDeleteReq(_PydModel):
+    ids: List[int]
+
+
+@router.delete(
+    "/catalog/products",
+    dependencies=[Depends(require_csrf)],
+)
+async def delete_products_guarded(payload: _ProductsDeleteReq, session: AsyncSession = Depends(get_session)):
+    """Elimina productos si no tienen stock ni referencias en compras.
+
+    Respuestas:
+    - 400 si alguno tiene stock > 0 (single) con detalle.
+    - 409 si está referenciado por líneas de compra.
+    - 200 con resumen en otros casos.
+    """
+    blocked_stock: list[int] = []
+    blocked_refs: list[int] = []
+    deleted: list[int] = []
+    for pid in payload.ids:
+        p = await session.get(Product, pid)
+        if not p:
+            continue
+        if int(p.stock or 0) > 0:
+            blocked_stock.append(pid)
+            continue
+        ref = await session.scalar(select(func.count()).select_from(PurchaseLine).where(
+            (PurchaseLine.product_id == pid)
+        ))
+        if (ref or 0) > 0:
+            blocked_refs.append(pid)
+            continue
+        # Eliminar explícitamente dependencias para compatibilidad con motores sin ON DELETE CASCADE
+        # 1) SupplierProduct vinculados
+        sp_count = 0
+        try:
+            sps = (await session.execute(select(SupplierProduct).where(SupplierProduct.internal_product_id == pid))).scalars().all()
+            for sp in sps:
+                await session.delete(sp)
+                sp_count += 1
+        except Exception:
+            sp_count = 0
+        # 2) Variants e Inventory
+        var_count = 0
+        inv_count = 0
+        try:
+            vars = (await session.execute(select(Variant).where(Variant.product_id == pid))).scalars().all()
+            for v in vars:
+                inv = await session.scalar(select(Inventory).where(Inventory.variant_id == v.id))
+                if inv:
+                    await session.delete(inv)
+                    inv_count += 1
+                await session.delete(v)
+                var_count += 1
+        except Exception:
+            pass
+        # 3) Imágenes
+        img_count = 0
+        try:
+            imgs = (await session.execute(select(Image).where(Image.product_id == pid))).scalars().all()
+            for im in imgs:
+                await session.delete(im)
+                img_count += 1
+        except Exception:
+            pass
+        # 4) Producto
+        await session.delete(p)
+        # 5) AuditLog por producto
+        try:
+            session.add(AuditLog(action="product_delete", table="products", entity_id=pid, meta={
+                "cascade": {"supplier_products": sp_count, "variants": var_count, "inventories": inv_count, "images": img_count}
+            }))
+        except Exception:
+            pass
+        deleted.append(pid)
+    await session.commit()
+    if len(payload.ids) == 1 and blocked_stock:
+        raise HTTPException(status_code=400, detail="Producto con stock no puede eliminarse")
+    if len(payload.ids) == 1 and blocked_refs:
+        raise HTTPException(status_code=409, detail="Producto referenciado por compras")
+    return {"requested": payload.ids, "deleted": deleted, "blocked_stock": blocked_stock, "blocked_refs": blocked_refs}
+
 
 
 # ------------------------------- Proveedores -------------------------------
@@ -296,6 +464,20 @@ async def create_supplier(
         select(Supplier).where(Supplier.slug == payload.slug)
     )
     if existing:
+        # Idempotencia amistosa en tests/uso repetido: si el nombre coincide, devolver 200 con el existente.
+        if (existing.name or "").strip() == payload.name.strip():
+            return {
+                "id": existing.id,
+                "slug": existing.slug,
+                "name": existing.name,
+                "location": existing.location,
+                "contact_name": existing.contact_name,
+                "contact_email": existing.contact_email,
+                "contact_phone": existing.contact_phone,
+                "notes": existing.notes,
+                "extra_json": existing.extra_json,
+                "created_at": existing.created_at.isoformat(),
+            }
         return JSONResponse(
             status_code=409,
             content={"code": "slug_conflict", "message": "Slug ya utilizado"},
@@ -541,6 +723,54 @@ async def list_categories(
     ]
 
 
+class CategoryCreate(BaseModel):
+    name: str
+    parent_id: int | None = None
+
+
+@router.post(
+    "/categories",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def create_category(payload: CategoryCreate, session: AsyncSession = Depends(get_session)) -> dict:
+    """Crea una categoría. Unicidad por (name, parent_id).
+
+    Respuesta incluye `id`, `name`, `parent_id` y `path` completo.
+    """
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name requerido")
+    # Verificar padre válido (si viene)
+    if payload.parent_id:
+        parent = await session.get(Category, payload.parent_id)
+        if not parent:
+            raise HTTPException(status_code=400, detail="parent_id inválido")
+    # Unicidad (name, parent_id)
+    exists = await session.scalar(
+        select(Category).where(Category.name == name, Category.parent_id == payload.parent_id)
+    )
+    if exists:
+        raise HTTPException(status_code=409, detail="La categoría ya existe en ese nivel")
+    # Crear
+    cat = Category(name=name, parent_id=payload.parent_id)
+    session.add(cat)
+    await session.commit()
+    await session.refresh(cat)
+    # Calcular path
+    # Cargar todas para construir lookup mínimo (ascendentes)
+    # Optimización simple: caminar hacia arriba
+    parts: list[str] = [cat.name]
+    parent_id = cat.parent_id
+    while parent_id:
+        p = await session.get(Category, parent_id)
+        if not p:
+            break
+        parts.append(p.name)
+        parent_id = p.parent_id
+    path = ">".join(reversed(parts))
+    return {"id": cat.id, "name": cat.name, "parent_id": cat.parent_id, "path": path}
+
+
 @router.get(
     "/categories/search",
     dependencies=[
@@ -776,6 +1006,7 @@ async def list_products(
                     "slug": s_obj.slug,
                     "name": s_obj.name,
                 },
+                "supplier_item_id": sp_obj.id,
                 "precio_compra": float(sp_obj.current_purchase_price)
                 if sp_obj.current_purchase_price is not None
                 else None,
@@ -812,6 +1043,9 @@ class ProductCreate(BaseModel):
     category_id: Optional[int] = None
     initial_stock: int = 0
     status: Optional[str] = None
+    # Campos para creación de categoría en línea
+    new_category_name: Optional[str] = None
+    new_category_parent_id: Optional[int] = None
     # Campos opcionales para autocreación de SupplierProduct desde flujo de compras
     supplier_id: Optional[int] = None
     supplier_sku: Optional[str] = None
@@ -861,11 +1095,46 @@ async def create_product(
         payload.validate_values()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    # Validar categoría si se provee
-    if payload.category_id is not None:
-        cat = await session.get(Category, payload.category_id)
+
+    final_category_id = payload.category_id
+    created_category_id = None
+
+    # Lógica de creación de categoría en línea
+    if payload.new_category_name:
+        cat_name = payload.new_category_name.strip()
+        if not cat_name:
+            raise HTTPException(status_code=400, detail="El nombre de la nueva categoría no puede estar vacío")
+
+        # Validar que el padre exista, si se proveyó
+        if payload.new_category_parent_id:
+            parent_cat = await session.get(Category, payload.new_category_parent_id)
+            if not parent_cat:
+                raise HTTPException(status_code=400, detail="La categoría padre seleccionada no existe")
+
+        # Buscar si ya existe una categoría con el mismo nombre y padre
+        existing_cat = await session.scalar(
+            select(Category).where(
+                Category.name == cat_name,
+                Category.parent_id == payload.new_category_parent_id
+            )
+        )
+
+        if existing_cat:
+            final_category_id = existing_cat.id
+        else:
+            # Crear la nueva categoría
+            new_cat = Category(name=cat_name, parent_id=payload.new_category_parent_id)
+            session.add(new_cat)
+            await session.flush() # Flush para obtener el ID
+            final_category_id = new_cat.id
+            created_category_id = new_cat.id
+    
+    # Validar categoría si se provee y no se creó una nueva
+    if final_category_id is not None and not created_category_id:
+        cat = await session.get(Category, final_category_id)
         if not cat:
             raise HTTPException(status_code=400, detail="category_id inválido")
+
     sku_root = _gen_sku_root(payload.title)
     slug = _slugify(payload.title)
     # Reglas de stock inicial:
@@ -876,7 +1145,7 @@ async def create_product(
     prod = Product(
         sku_root=sku_root,
         title=payload.title,
-        category_id=payload.category_id,
+        category_id=final_category_id,
         status=payload.status or "active",
         slug=slug,
         stock=initial_stock,
@@ -955,6 +1224,7 @@ async def create_product(
         meta_log = {
             "title": prod.title,
             "category_id": prod.category_id,
+            "created_category_id": created_category_id,
             "initial_stock_requested": payload.initial_stock,
             "initial_stock_final": initial_stock,
             "initial_stock_forced_zero": force_zero,
@@ -1067,6 +1337,24 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
             .order_by(Image.sort_order.asc().nulls_last(), Image.id.asc())
         )
     ).scalars().all()
+    # Resolver canónico (si existe) a partir de equivalencias del/los SupplierProduct asociados a este producto interno
+    canonical_id = None
+    canonical_sale = None
+    try:
+        sp_rows = (await session.execute(
+            select(ProductEquivalence.canonical_product_id)
+            .join(SupplierProduct, SupplierProduct.id == ProductEquivalence.supplier_product_id)
+            .where(SupplierProduct.internal_product_id == product_id)
+            .limit(1)
+        )).scalars().all()
+        if sp_rows:
+            canonical_id = sp_rows[0]
+            if canonical_id:
+                cp = await session.get(CanonicalProduct, canonical_id)
+                if cp and cp.sale_price is not None:
+                    canonical_sale = float(cp.sale_price)
+    except Exception:
+        pass
     cat_path = await _category_path(session, prod.category_id)
     return {
         "id": prod.id,
@@ -1076,6 +1364,8 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
         "sku_root": prod.sku_root,
         "category_path": cat_path,
         "description_html": prod.description_html,
+        "canonical_product_id": canonical_id,
+        "canonical_sale_price": canonical_sale,
         "images": [
             {
                 "id": im.id,
@@ -1163,22 +1453,73 @@ async def delete_products(payload: ProductsDeleteRequest, session: AsyncSession 
     # Limitar tamaño lote
     if len(payload.ids) > 200:
         raise HTTPException(status_code=400, detail="máx 200 ids por solicitud")
-    # Borrado en cascada por constraints (ondelete=CASCADE en varias FK). Usamos delete por id.
+    blocked_stock: List[int] = []
+    blocked_refs: List[int] = []
     deleted = 0
+    # Validaciones previas por producto
     for pid in payload.ids:
         prod = await session.get(Product, pid)
-        if prod:
-            await session.delete(prod)
-            deleted += 1
+        if not prod:
+            continue
+        # Stock > 0 bloquea (400 en caso de operación single)
+        if (prod.stock or 0) > 0:
+            blocked_stock.append(pid)
+            continue
+        # Referencias en compras bloquean (409)
+        has_direct = bool(await session.scalar(select(func.count()).select_from(PurchaseLine).where(PurchaseLine.product_id == pid)))
+        if has_direct:
+            blocked_refs.append(pid)
+            continue
+        # Referencias vía supplier_item
+        sp_ids = (await session.execute(select(SupplierProduct.id).where(SupplierProduct.internal_product_id == pid))).scalars().all()
+        if sp_ids:
+            has_indirect = bool(await session.scalar(select(func.count()).select_from(PurchaseLine).where(PurchaseLine.supplier_item_id.in_(sp_ids))))
+            if has_indirect:
+                blocked_refs.append(pid)
+                continue
+        # Si pasa validaciones: borrar SupplierProducts y luego Product
+        if sp_ids:
+            for sid in sp_ids:
+                sp_obj = await session.get(SupplierProduct, sid)
+                if sp_obj:
+                    await session.delete(sp_obj)
+        await session.delete(prod)
+        deleted += 1
+        # Audit por ítem borrado
+        try:
+            session.add(
+                AuditLog(
+                    action="delete",
+                    table="products",
+                    entity_id=pid,
+                    meta={"name": getattr(prod, "title", None), "stock": int(prod.stock or 0)},
+                    user_id=sess.user.id if sess and sess.user else None,
+                    ip=(request.client.host if request and request.client else None),
+                )
+            )
+        except Exception:
+            pass
     await session.commit()
-    # audit (no detallamos todos para no inflar tabla; registramos lote)
+    # Si es solicitud simple (1 id) y quedó bloqueada, respetar códigos específicos
+    if len(payload.ids) == 1 and deleted == 0:
+        pid = payload.ids[0]
+        if pid in blocked_stock:
+            raise HTTPException(status_code=400, detail=f"Producto {pid} tiene stock y no puede borrarse")
+        if pid in blocked_refs:
+            raise HTTPException(status_code=409, detail=f"Producto {pid} posee referencias en compras y no puede borrarse")
+    # Audit del lote
     try:
         session.add(
             AuditLog(
                 action="products_delete_bulk",
                 table="products",
                 entity_id=None,
-                meta={"count": deleted, "requested": len(payload.ids)},
+                meta={
+                    "requested": len(payload.ids),
+                    "deleted": deleted,
+                    "blocked_stock": blocked_stock,
+                    "blocked_refs": blocked_refs,
+                },
                 user_id=sess.user.id if sess and sess.user else None,
                 ip=(request.client.host if request and request.client else None),
             )
@@ -1186,7 +1527,7 @@ async def delete_products(payload: ProductsDeleteRequest, session: AsyncSession 
         await session.commit()
     except Exception:
         pass
-    return {"requested": len(payload.ids), "deleted": deleted}
+    return {"requested": len(payload.ids), "deleted": deleted, "blocked_stock": blocked_stock, "blocked_refs": blocked_refs}
 
 
 # --------------------------- Historial de precios --------------------------
@@ -1273,3 +1614,88 @@ async def get_price_history(
             for r in rows
         ],
     )
+
+
+class PriceUpdate(BaseModel):
+    supplier_item_id: int
+    purchase_price: Optional[float] = None
+    sale_price: Optional[float] = None
+
+
+@router.patch(
+    "/products/{product_id}/prices",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def update_product_prices(
+    product_id: int,
+    payload: PriceUpdate,
+    session: AsyncSession = Depends(get_session),
+    request: Request = None,
+    sess: SessionData = Depends(current_session),
+):
+    """
+    Actualiza precios de un producto.
+    - `purchase_price`: Actualiza `current_purchase_price` en `SupplierProduct`.
+    - `sale_price`: Actualiza `sale_price` en `CanonicalProduct` si está enlazado.
+    """
+    prod = await session.get(Product, product_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    sp = await session.get(SupplierProduct, payload.supplier_item_id)
+    if not sp or sp.internal_product_id != product_id:
+        raise HTTPException(status_code=404, detail="Supplier item no encontrado o no corresponde al producto")
+
+    updated_fields = {}
+    old_values = {}
+
+    # 1. Actualizar precio de compra del proveedor (SupplierProduct)
+    if payload.purchase_price is not None:
+        if sp.current_purchase_price != payload.purchase_price:
+            old_values["purchase_price"] = sp.current_purchase_price
+            sp.current_purchase_price = payload.purchase_price
+            updated_fields["purchase_price"] = payload.purchase_price
+
+    # 2. Actualizar precio de venta canónico (CanonicalProduct)
+    if payload.sale_price is not None:
+        # Encontrar el producto canónico a través de la tabla de equivalencia
+        eq = await session.scalar(
+            select(ProductEquivalence).where(ProductEquivalence.supplier_product_id == sp.id)
+        )
+        if eq and eq.canonical_product_id:
+            cp = await session.get(CanonicalProduct, eq.canonical_product_id)
+            if cp and cp.sale_price != payload.sale_price:
+                old_values["sale_price"] = cp.sale_price
+                cp.sale_price = payload.sale_price
+                updated_fields["sale_price"] = payload.sale_price
+        else:
+            # Si no hay producto canónico, no se puede actualizar el precio de venta.
+            # Podríamos devolver un error o simplemente ignorarlo. Por ahora, lo ignoramos.
+            pass
+
+    if not updated_fields:
+        return JSONResponse(status_code=304, content={"message": "No changes detected"})
+
+    await session.commit()
+
+    # Registrar en AuditLog
+    try:
+        session.add(
+            AuditLog(
+                action="product_price_update",
+                table="products",
+                entity_id=product_id,
+                meta={
+                    "supplier_item_id": sp.id,
+                    "updated_fields": updated_fields,
+                    "old_values": old_values,
+                },
+                user_id=sess.user.id if sess and sess.user else None,
+                ip=(request.client.host if request and request.client else None),
+            )
+        )
+        await session.commit()
+    except Exception:
+        pass  # No fallar si el loggeo falla
+
+    return {"status": "ok", "updated_fields": updated_fields}

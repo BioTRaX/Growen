@@ -94,18 +94,19 @@ class GenericExcelParser(BaseSupplierParser):
 
         stream = BytesIO(b)
         ftype = cfg.get("file_type", "xlsx").lower()
+        header_row = cfg.get("header_row", 0)
         if ftype == "xlsx":
             df = pd.read_excel(
                 stream,
                 sheet_name=cfg.get("sheet_name"),
-                header=cfg.get("header_row", 0),
+                header=header_row,
             )
         elif ftype == "csv":
             df = pd.read_csv(
                 stream,
                 delimiter=cfg.get("delimiter", ","),
                 encoding=cfg.get("encoding", "utf-8"),
-                header=cfg.get("header_row", 0),
+                header=header_row,
             )
         else:  # pragma: no cover - validado por configuración
             raise ValueError("Tipo de archivo no soportado: use 'xlsx' o 'csv'")
@@ -124,6 +125,31 @@ class GenericExcelParser(BaseSupplierParser):
 
         required = {"supplier_product_id", "title", "purchase_price", "sale_price"}
         missing = required - set(df.columns)
+        if missing and header_row != 1:
+            # Intento de fallback: algunos archivos traen una fila vacía y los encabezados en la 2da fila
+            try:
+                stream.seek(0)
+                df = pd.read_excel(
+                    stream,
+                    sheet_name=cfg.get("sheet_name"),
+                    header=1,
+                ) if ftype == "xlsx" else pd.read_csv(
+                    stream,
+                    delimiter=cfg.get("delimiter", ","),
+                    encoding=cfg.get("encoding", "utf-8"),
+                    header=1,
+                )
+                df.columns = [str(c).strip() for c in df.columns]
+                col_map = {}
+                for internal, options in cfg.get("columns", {}).items():
+                    for opt in options:
+                        if opt in df.columns:
+                            col_map[opt] = internal
+                            break
+                df = df.rename(columns=col_map)
+                missing = required - set(df.columns)
+            except Exception:
+                pass
         if missing:
             raise ValueError(f"Faltan columnas: {', '.join(sorted(missing))}")
 

@@ -58,8 +58,7 @@ async def _ensure_schema_if_memory() -> None:
             import db.models  # noqa: F401
             from db.base import Base  # local import to avoid cycles
             async with engine.begin() as conn:
-                # Asegurar una base limpia por proceso de test
-                await conn.run_sync(Base.metadata.drop_all)
+                # Crear el esquema si no existe; no borrar datos ya cargados por tests
                 await conn.run_sync(Base.metadata.create_all)
         _schema_initialized = True
     except Exception:

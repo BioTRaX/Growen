@@ -80,3 +80,18 @@
 
 ---
 
+## [0.2.1] - 2025-09-15
+
+### Changed
+- frontend: `deleteProducts` y `createProduct` ahora usan `/catalog/products` para alinearse con el backend.
+- frontend: mensajes de error al eliminar productos muestran las causas del backend (stock > 0, referencias) y resumen parcial "Borrados X / Y".
+- frontend: agregado "Seleccionar página"/"Deseleccionar página" en Stock y ProductsDrawer para selección rápida.
+
+### Docs
+- README: se documentó `DELETE /catalog/products` y `POST /catalog/products` en secciones relevantes; se ampliaron reglas y respuesta.
+- docs/roles-endpoints.md: añadidos endpoints `/catalog/products` (POST/DELETE).
+- README: sección de limpieza de logs ahora incluye `--skip-truncate` y nota sobre bloqueo de `backend.log` en Windows con marcador `backend.log.cleared`.
+
+### Build
+- frontend: build verificado con Vite (sin errores) tras los cambios anteriores.
+

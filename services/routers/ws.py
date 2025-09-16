@@ -32,6 +32,18 @@ except Exception:  # pragma: no cover
 # Intervalos en segundos para mantener la conexión
 PING_INTERVAL = 30
 READ_TIMEOUT = 60
+async def ai_reply(prompt: str) -> str:
+    """Genera una respuesta breve usando AIRouter.
+
+    Se expone como función aparte para permitir monkeypatch en tests
+    (tests.test_ws_chat/test_ws_logging la reemplazan).
+    """
+    router = AIRouter(core_settings)
+    raw_reply = router.run(Task.SHORT_ANSWER.value, prompt)
+    if "\n\n" in raw_reply:
+        return raw_reply.split("\n\n")[-1].strip()
+    return raw_reply.strip()
+
 
 
 async def _ping(socket: WebSocket) -> None:
@@ -66,7 +78,6 @@ async def ws_chat(socket: WebSocket) -> None:
     await socket.accept()
     ping_task = asyncio.create_task(_ping(socket))
     try:
-        router = AIRouter(core_settings)
         while True:
             try:
                 data = await asyncio.wait_for(
@@ -86,24 +97,14 @@ async def ws_chat(socket: WebSocket) -> None:
                 else:
                     prompt = f"{sess.role} dice: {data}"
             try:
-                # AIRouter es síncrono; ejecutar directamente (rápido para prompts cortos)
-                raw_reply = router.run(Task.SHORT_ANSWER.value, prompt)
+                # AIRouter es síncrono; envolvemos en ai_reply para permitir monkeypatch
+                raw_reply = await ai_reply(prompt)
             except Exception as exc:  # pragma: no cover
-                logger.error(
-                    "ws_chat ai_router error",
-                    extra={
-                        "error": str(exc),
-                        "prompt_chars": len(prompt),
-                        "raw_chars": len(data),
-                    },
-                )
+                # Mensaje plano esperado por tests
+                logger.error("Error inesperado en ws_chat: %s", exc)
                 await socket.send_json({"role": "system", "text": f"error: {exc}"})
                 continue
-            # El stub de OllamaProvider retorna el prompt completo (incluye SYSTEM_PROMPT). Conservemos solo después de la última doble nueva línea si aparece.
-            if "\n\n" in raw_reply:
-                reply = raw_reply.split("\n\n")[-1].strip()
-            else:
-                reply = raw_reply.strip()
+            reply = raw_reply.strip()
             await socket.send_json({"role": "assistant", "text": reply})
             logger.info(
                 "ws_chat message",

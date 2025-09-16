@@ -2,6 +2,8 @@
 // NG-HEADER: Ubicación: frontend/src/services/prices.ts
 // NG-HEADER: Descripción: Pendiente de descripción
 // NG-HEADER: Lineamientos: Ver AGENTS.md
+import http from './http'
+
 export interface PriceHistoryParams {
   supplier_product_id?: number
   product_id?: number
@@ -24,6 +26,12 @@ export interface PriceHistoryResponse {
   items: PriceHistoryItem[]
 }
 
+export interface PriceUpdatePayload {
+  supplier_item_id: number
+  purchase_price?: number
+  sale_price?: number
+}
+
 import { baseURL as base } from './http'
 
 export async function getPriceHistory(
@@ -36,4 +44,9 @@ export async function getPriceHistory(
   const res = await fetch(url.toString(), { credentials: 'include' })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
+}
+
+export async function updateProductPrices(productId: number, payload: PriceUpdatePayload): Promise<{ status: string; updated_fields: any }> {
+  const { data } = await http.patch(`/products/${productId}/prices`, payload)
+  return data
 }
