@@ -24,6 +24,8 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, RedirectResponse, FileResponse
+from sqlalchemy.exc import IntegrityError
+import re
 
 from agent_core.config import settings
 from db.session import engine, SessionLocal
@@ -47,6 +49,7 @@ from .routers import (
     health,
     services_admin,
 )
+from services.auth import require_csrf  # para override condicional en dev
 
 raw_level = os.getenv("LOG_LEVEL", "INFO") or "INFO"
 level_name = raw_level.strip().upper()
@@ -152,6 +155,42 @@ async def log_requests(request: Request, call_next):
             pass
     return resp
 
+# --- Exception Handlers Específicos ---
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(request: Request, exc: IntegrityError):  # type: ignore[override]
+    """Mapea errores de integridad conocidos a respuestas HTTP más útiles.
+
+    - variants_sku_key -> 409 duplicate_sku
+    - supplier_products (supplier_id, supplier_product_id) unique -> 409 duplicate_supplier_product
+    Otros: 409 conflict genérico sin filtrar información sensible.
+    """
+    raw = str(exc.orig) if getattr(exc, "orig", None) else str(exc)
+    # Detectar constraint por nombre o patrón
+    detail = "conflict"
+    code = "conflict"
+    field = None
+    status = 409
+    if "variants_sku_key" in raw or re.search(r"duplicate key value.*variants", raw, re.I):
+        code = "duplicate_sku"
+        detail = "SKU ya existente"
+        field = "sku"
+    elif "supplier_products" in raw and ("duplicate key" in raw.lower()):
+        code = "duplicate_supplier_product"
+        detail = "Producto de proveedor ya registrado"
+        field = "supplier_product_id"
+    # Intentar rollback de la sesión (si existe) para limpiar estado
+    try:  # best effort
+        from sqlalchemy.ext.asyncio import AsyncSession
+        sess = request.state.session if hasattr(request.state, "session") else None
+        if isinstance(sess, AsyncSession):
+            await sess.rollback()
+    except Exception:
+        pass
+    payload = {"detail": detail, "code": code}
+    if field:
+        payload["field"] = field
+    return JSONResponse(payload, status_code=status)
+
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -204,6 +243,14 @@ try:
 except Exception:
     pass
 app.include_router(debug.router, tags=["debug"])
+
+# Override CSRF en entorno de desarrollo para simplificar tests (no requiere cookie)
+try:
+    from agent_core.config import settings as _settings
+    if _settings.env == "dev":
+        app.dependency_overrides[require_csrf] = lambda: None
+except Exception:
+    pass
 
 @app.on_event("startup")
 async def _init_inmemory_db():

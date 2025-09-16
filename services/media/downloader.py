@@ -20,6 +20,11 @@ try:
 except Exception:  # pragma: no cover - optional import
     clamd = None  # type: ignore
 
+# Nota: la librería clamd puede disparar un warning por uso de pkg_resources en runtime.
+# Si se desea silenciarlo en tests sin ocultar otros DeprecationWarnings, añadir filtro fino en pytest.ini:
+# filterwarnings =
+#     ignore:.*pkg_resources.*:UserWarning:clamd
+
 from . import get_media_root
 from services.images.ratelimit import get_limiter
 

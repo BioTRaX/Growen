@@ -367,16 +367,27 @@ Backend:
     "initial_stock": 0,
     "supplier_id": 1,
     "supplier_sku": "OPCIONAL",
+    "sku": "SKU-INTERNO-OPC", 
     "purchase_price": 100.0,
     "sale_price": 150.0
   }
   ```
   - Requiere proveedor y precios de compra/venta.
-  - Crea `Product` + `Variant` (SKU = `sku_root`), valida SKU único global.
+  - Campo `sku` (opcional) permite forzar un SKU interno distinto del del proveedor; si se omite usa `supplier_sku` o el `title` normalizado (truncado a 50). Validación regex: `[A-Za-z0-9._\-]{2,50}`.
+  - Crea `Product` + `Variant` (SKU = `sku_root`), valida SKU único global antes de insertar (pre-check) y el constraint garantiza consistencia.
   - Crea `SupplierProduct` y registra `current_purchase_price`/`current_sale_price` e historial en `supplier_price_history`.
   - Respuesta incluye `id`, `sku_root`, `supplier_item_id`.
   - Compatibilidad: el endpoint `/products` completo sigue disponible para flujos avanzados (categoría, estado, enlaces canónicos).
   - Si el SKU ya existe, devuelve 409 con detalle.
+
+Notas adicionales:
+- Se registra un `SupplierPriceHistory` inicial con los precios enviados.
+- `initial_stock` > 0 crea registro en `inventory` y sincroniza `products.stock`.
+
+Eliminación segura (`DELETE /catalog/products`):
+- Reglas single-id: 400 si stock > 0; 409 si referencias en `purchase_lines`.
+- Éxito: elimina en orden manual dependencias sin ON DELETE CASCADE: `supplier_price_history`, `supplier_products`, `variants`, `inventory`, `images`, luego `product` y registra `audit_log` con conteos.
+- Respuesta: `{ requested, deleted, blocked_stock, blocked_refs }`.
 
 Frontend:
 - Botón "Nuevo producto" en panel Productos abre modal.

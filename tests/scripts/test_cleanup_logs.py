@@ -9,7 +9,7 @@ import pytest
 LOGS = Path("logs")
 SCRIPT = Path("scripts/cleanup_logs.py")
 
-pytestmark = pytest.mark.asyncio
+# Nota: las pruebas son síncronas; se removió pytest.mark.asyncio para evitar warnings.
 
 
 def write(p: Path, content: str):

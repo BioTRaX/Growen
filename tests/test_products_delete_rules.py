@@ -16,13 +16,23 @@ client = TestClient(app)
 
 def test_delete_product_blocked_by_stock(monkeypatch):
     # Crear proveedor y producto
-    r = client.post("/suppliers", json={"slug": "deltest", "name": "Del Test"})
+    import uuid
+    su = uuid.uuid4().hex[:6]
+    r = client.post("/suppliers", json={"slug": f"deltest-{su}", "name": f"Del Test {su}"})
     assert r.status_code in (200, 201)
     sup_id = r.json()["id"] if isinstance(r.json(), dict) else client.get("/suppliers").json()[0]["id"]
 
     prod = client.post(
         "/catalog/products",
-        json={"title": "Prod X", "initial_stock": 5, "supplier_id": sup_id, "supplier_sku": "SKU1"},
+        json={
+            "title": "Prod X",
+            "initial_stock": 5,
+            "supplier_id": sup_id,
+            "supplier_sku": f"SKU1-{su}",
+            "sku": f"INTPX-{su}",
+            "purchase_price": 1.0,
+            "sale_price": 2.0,
+        },
         headers={"X-CSRF-Token": "x"},
     )
     assert prod.status_code in (200, 201)
@@ -35,13 +45,23 @@ def test_delete_product_blocked_by_stock(monkeypatch):
 
 def test_delete_product_blocked_by_purchase_refs(monkeypatch):
     # Crear proveedor y producto sin stock
-    r = client.post("/suppliers", json={"slug": "deltest2", "name": "Del Test 2"})
+    import uuid
+    su = uuid.uuid4().hex[:6]
+    r = client.post("/suppliers", json={"slug": f"deltest2-{su}", "name": f"Del Test 2 {su}"})
     assert r.status_code in (200, 201)
     sup_id = r.json()["id"] if isinstance(r.json(), dict) else client.get("/suppliers").json()[0]["id"]
 
     prod = client.post(
         "/catalog/products",
-        json={"title": "Prod Y", "initial_stock": 0, "supplier_id": sup_id, "supplier_sku": "SKU2"},
+        json={
+            "title": "Prod Y",
+            "initial_stock": 0,
+            "supplier_id": sup_id,
+            "supplier_sku": f"SKU2-{su}",
+            "sku": f"INTPY-{su}",
+            "purchase_price": 1.0,
+            "sale_price": 2.0,
+        },
         headers={"X-CSRF-Token": "x"},
     )
     assert prod.status_code in (200, 201)
@@ -57,3 +77,30 @@ def test_delete_product_blocked_by_purchase_refs(monkeypatch):
     # Intentar borrar => 409
     resp = client.request("DELETE", "/catalog/products", json={"ids": [pid]}, headers={"X-CSRF-Token": "x"})
     assert resp.status_code == 409
+
+
+def test_delete_product_success(monkeypatch):
+    import uuid
+    su = uuid.uuid4().hex[:6]
+    r = client.post("/suppliers", json={"slug": f"deltest3-{su}", "name": f"Del Test 3 {su}"})
+    assert r.status_code in (200, 201)
+    sup_id = r.json()["id"]
+    prod = client.post(
+        "/catalog/products",
+        json={
+            "title": "Prod Z",
+            "initial_stock": 0,
+            "supplier_id": sup_id,
+            "supplier_sku": f"SKU3-{su}",
+            "sku": f"INTPZ-{su}",
+            "purchase_price": 1.0,
+            "sale_price": 2.0,
+        },
+        headers={"X-CSRF-Token": "x"},
+    )
+    assert prod.status_code in (200, 201)
+    pid = prod.json()["id"]
+    resp = client.request("DELETE", "/catalog/products", json={"ids": [pid]}, headers={"X-CSRF-Token": "x"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert pid in data.get("deleted", [])

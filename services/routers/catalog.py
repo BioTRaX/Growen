@@ -1,6 +1,7 @@
+#!/usr/bin/env python
 # NG-HEADER: Nombre de archivo: catalog.py
 # NG-HEADER: Ubicación: services/routers/catalog.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Endpoints de catálogo (productos mínimos, proveedores, archivos, categorías, etc.)
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Endpoints para gestionar proveedores y categorías."""
 from __future__ import annotations
@@ -51,6 +52,8 @@ class _ProductCreate(_PydModel):
     supplier_id: int
     # SKU del proveedor opcional; si no se informa se reutiliza sku_root
     supplier_sku: Optional[str] = None
+    # SKU interno deseado (permite diferenciar del supplier_sku). Si no se envía se toma supplier_sku o título.
+    sku: Optional[str] = None
     # Precios requeridos
     purchase_price: float
     sale_price: float
@@ -68,19 +71,24 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
     # Validar proveedor
     supplier = await session.get(Supplier, payload.supplier_id)
     if not supplier:
-        raise HTTPException(status_code=400, detail="supplier_id inválido")
+        raise HTTPException(status_code=400, detail={"code": "invalid_supplier_id", "message": "supplier_id inválido"})
 
-    prod = Product(sku_root=(payload.supplier_sku or payload.title)[:50], title=payload.title)
+    from db.models import Variant, Inventory, SupplierProduct, SupplierPriceHistory
+    desired_sku = (payload.sku or payload.supplier_sku or payload.title)[:50].strip()
+    if not desired_sku:
+        raise HTTPException(status_code=400, detail={"code": "invalid_sku", "message": "SKU inválido"})
+    # Validación de formato mínima (alfanumérico + -_. permitido)
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z0-9._\-]{2,50}", desired_sku):
+        raise HTTPException(status_code=400, detail={"code": "invalid_sku_format", "message": "Formato de SKU inválido"})
+    existing = await session.scalar(select(Variant).where(Variant.sku == desired_sku))
+    if existing:
+        raise HTTPException(status_code=409, detail={"code": "duplicate_sku", "message": "SKU ya existente"})
+
+    prod = Product(sku_root=desired_sku, title=payload.title)
     session.add(prod)
     await session.flush()
-
-    # Crear variante con SKU = sku_root y validar unicidad
-    from db.models import Variant, Inventory, SupplierProduct, SupplierPriceHistory
-    # Chequear duplicado
-    existing = await session.scalar(select(Variant).where(Variant.sku == prod.sku_root))
-    if existing:
-        raise HTTPException(status_code=409, detail="SKU ya existente para otra variante")
-    var = Variant(product_id=prod.id, sku=prod.sku_root)
+    var = Variant(product_id=prod.id, sku=desired_sku)
     session.add(var)
     await session.flush()
 
@@ -157,9 +165,18 @@ async def delete_products_guarded(payload: _ProductsDeleteReq, session: AsyncSes
         # Eliminar explícitamente dependencias para compatibilidad con motores sin ON DELETE CASCADE
         # 1) SupplierProduct vinculados
         sp_count = 0
+        sph_count = 0
         try:
             sps = (await session.execute(select(SupplierProduct).where(SupplierProduct.internal_product_id == pid))).scalars().all()
             for sp in sps:
+                # Borrar histories primero (FK sin ON DELETE CASCADE)
+                try:
+                    sph_list = (await session.execute(select(SupplierPriceHistory).where(SupplierPriceHistory.supplier_product_fk == sp.id))).scalars().all()
+                    for sph in sph_list:
+                        await session.delete(sph)
+                        sph_count += 1
+                except Exception:
+                    pass
                 await session.delete(sp)
                 sp_count += 1
         except Exception:
@@ -192,16 +209,16 @@ async def delete_products_guarded(payload: _ProductsDeleteReq, session: AsyncSes
         # 5) AuditLog por producto
         try:
             session.add(AuditLog(action="product_delete", table="products", entity_id=pid, meta={
-                "cascade": {"supplier_products": sp_count, "variants": var_count, "inventories": inv_count, "images": img_count}
+                "cascade": {"supplier_products": sp_count, "supplier_price_history": sph_count, "variants": var_count, "inventories": inv_count, "images": img_count}
             }))
         except Exception:
             pass
         deleted.append(pid)
     await session.commit()
     if len(payload.ids) == 1 and blocked_stock:
-        raise HTTPException(status_code=400, detail="Producto con stock no puede eliminarse")
+        raise HTTPException(status_code=400, detail={"code": "product_has_stock", "message": "Producto con stock no puede eliminarse"})
     if len(payload.ids) == 1 and blocked_refs:
-        raise HTTPException(status_code=409, detail="Producto referenciado por compras")
+        raise HTTPException(status_code=409, detail={"code": "product_has_references", "message": "Producto referenciado por compras"})
     return {"requested": payload.ids, "deleted": deleted, "blocked_stock": blocked_stock, "blocked_refs": blocked_refs}
 
 
