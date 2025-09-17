@@ -5,6 +5,16 @@
 # Changelog
 
 ## [Unreleased]
+- feat(import): Añadido scaffolding de fallback IA para remitos (fase 1: sólo cuando pipeline clásico produce 0 líneas). Incluye:
+	- (Fase 2) Trigger adicional por baja `classic_confidence` (< IMPORT_AI_CLASSIC_MIN_CONFIDENCE) y cálculo heurístico (`classic_confidence` event).
+	- Prompt enriquecido con hint de líneas y confianza.
+	- Nuevos modelos Pydantic (`RemitoAIItem`, `RemitoAIPayload`).
+	- Cliente `ai_fallback` con validación estricta JSON y retries.
+	- Variables de entorno: `IMPORT_AI_ENABLED`, `IMPORT_AI_MIN_CONFIDENCE`, `IMPORT_AI_MODEL`, `IMPORT_AI_TIMEOUT`, `IMPORT_AI_MAX_RETRIES`, `OPENAI_API_KEY`.
+	- Eventos de logging `ai:*` integrados a `ImportLog`.
+	- Documentación actualizada en `docs/IMPORT_PDF.md`.
+	- Safe merge: sólo agrega líneas IA si no hay líneas clásicas.
+
 - feat(catalog): eliminación segura ahora elimina primero `supplier_price_history` antes de `supplier_products` para evitar NOT NULL FK en SQLite/PG.
 - fix(catalog): error 500 al eliminar producto que no tenía stock ni referencias causado por FK `supplier_price_history.supplier_product_fk` -> ahora 200 con registro de cascada.
 - docs: README ampliado con campo opcional `sku` en creación y detalle de reglas de borrado incluyendo cascada manual.

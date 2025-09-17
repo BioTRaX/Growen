@@ -832,6 +832,38 @@ async def import_santaplanta_pdf(
             force_ocr=bool(force_ocr),
             debug=debug_flag,
         )
+        # --- Fallback IA (fase 2: no líneas O baja confianza) ---
+        try:
+            from agent_core.config import settings as _st
+            low_conf = False
+            if res.lines and hasattr(res, 'classic_confidence'):
+                try:
+                    low_conf = res.classic_confidence < _st.import_ai_classic_min_confidence
+                except Exception:
+                    low_conf = False
+            if (not res.lines or low_conf) and _st.import_ai_enabled:
+                from services.importers.ai_fallback import run_ai_fallback, merge_ai_lines
+                text_excerpt = (getattr(res, 'text_excerpt', None) or getattr(res, 'debug', {}).get('text_excerpt') or "")
+                ai_result = run_ai_fallback(
+                    correlation_id=correlation_id,
+                    text_excerpt=text_excerpt,
+                    classic_lines_hint=len(res.lines or []),
+                    classic_confidence=getattr(res, 'classic_confidence', None),
+                )
+                # Añadir eventos AI al final
+                for ev in ai_result.events:
+                    res.events.append(ev)
+                if ai_result.ok and ai_result.payload:
+                    merged, stats = merge_ai_lines(res.lines or [], ai_result.payload, _st.import_ai_min_confidence)
+                    res.lines = merged
+                    res.events.append({"level": "INFO", "stage": "ai", "event": "merged", "details": stats})
+                else:
+                    res.events.append({"level": "INFO", "stage": "ai", "event": "no_data", "details": {"reason": ai_result.error}})
+        except Exception as _ai_e:  # No debe abortar importación
+            try:
+                res.events.append({"level": "WARN", "stage": "ai", "event": "exception", "details": {"error": str(_ai_e)}})
+            except Exception:
+                pass
         log.info(f"Import[{correlation_id}]: Pipeline finalizado. Remito={res.remito_number}, Fecha={res.remito_date}, Líneas detectadas={len(res.lines) if res.lines else 0}")
 
         remito_number = res.remito_number or file.filename
