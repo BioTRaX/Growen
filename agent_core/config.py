@@ -64,6 +64,15 @@ class Settings:
     import_pdf_text_min_chars: int = int(os.getenv("IMPORT_PDF_TEXT_MIN_CHARS", "200"))
     import_allow_empty_draft: bool = os.getenv("IMPORT_ALLOW_EMPTY_DRAFT", "true").lower() == "true"
 
+    # Configuración IA fallback import remitos
+    import_ai_enabled: bool = os.getenv("IMPORT_AI_ENABLED", "false").lower() == "true"
+    import_ai_min_confidence: float = float(os.getenv("IMPORT_AI_MIN_CONFIDENCE", "0.86"))
+    import_ai_model: str = os.getenv("IMPORT_AI_MODEL", "gpt-4o-mini")
+    import_ai_timeout: int = int(os.getenv("IMPORT_AI_TIMEOUT", "40"))  # segundos
+    import_ai_max_retries: int = int(os.getenv("IMPORT_AI_MAX_RETRIES", "2"))
+    openai_api_key: str | None = os.getenv("OPENAI_API_KEY") or None
+    import_ai_classic_min_confidence: float = float(os.getenv("IMPORT_AI_CLASSIC_MIN_CONFIDENCE", "0.55"))
+
     def __post_init__(self) -> None:
         if not self.db_url:
             # Intentar construir desde variables sueltas

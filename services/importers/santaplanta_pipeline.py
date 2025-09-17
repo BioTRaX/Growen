@@ -46,6 +46,8 @@ class ParsedResult:
     totals: Dict[str, Decimal] = field(default_factory=dict)
     debug: Dict[str, Any] = field(default_factory=dict)
     events: List[Dict[str, Any]] = field(default_factory=list)
+    classic_confidence: float = 0.0
+    text_excerpt: Optional[str] = None
 
 
 def _norm_text(s: str) -> str:
@@ -364,6 +366,34 @@ def _try_camelot(pdf_path: Path, events: List[Dict[str, Any]], dbg: Dict[str, An
     return all_lines
 
 
+def compute_classic_confidence(lines: List[ParsedLine]) -> float:
+    """Heurística simple de confianza del parser clásico.
+
+    Métricas consideradas:
+    - Proporción de líneas con SKU (peso 0.45)
+    - Proporción de líneas con qty > 0 (peso 0.25)
+    - Proporción de líneas con unit_cost > 0 (peso 0.15)
+    - Diversidad SKU (SKU únicos / líneas) (peso 0.15)
+    Escala 0-1. Devuelve 0 si no hay líneas.
+    """
+    if not lines:
+        return 0.0
+    total = len(lines)
+    with_sku = sum(1 for l in lines if l.supplier_sku)
+    with_qty = sum(1 for l in lines if (l.qty or 0) > 0)
+    with_cost = sum(1 for l in lines if (l.unit_cost_bonif or 0) > 0)
+    unique_skus = len({l.supplier_sku for l in lines if l.supplier_sku})
+    diversity = unique_skus / total if total else 0
+    score = (
+        0.45 * (with_sku / total)
+        + 0.25 * (with_qty / total)
+        + 0.15 * (with_cost / total)
+        + 0.15 * diversity
+    )
+    # Clamp
+    return float(min(1.0, max(0.0, round(score, 4))))
+
+
 def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = True, force_ocr: bool = False, debug: bool = False) -> ParsedResult:
     """Parsea un remito PDF y devuelve líneas normalizadas y metadatos.
 
@@ -382,11 +412,14 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
     result.events.append({"level": "INFO", "stage": "start", "event": "parse_remito_called", "details": {"pdf": str(pdf_path), "force_ocr": force_ocr, "debug": debug}})
     try:
         data = pdf_path.read_bytes()
+        text_excerpt = ""
         try:
             import pdfplumber  # type: ignore
             with pdfplumber.open(str(pdf_path)) as pdf:
                 pages_text = [(p.extract_text() or "") for p in pdf.pages]
                 text_all = "\n".join(pages_text)
+                # Guardar excerpt limitado (para prompt IA potencial). Limitar tamaño para no exceder tokens.
+                text_excerpt = text_all[:12000]
                 try:
                     result.events.append({"level": "INFO", "stage": "header_extract", "event": "text_stats", "details": {"pages": len(pages_text), "len_text": sum(len(t) for t in pages_text)}})
                 except Exception:
@@ -464,6 +497,12 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
                             result.events.append({"level": "WARN", "stage": "ocr", "event": "retry_exception", "details": {"error": str(e)}})
         subtotal = sum(line.subtotal for line in result.lines if line.subtotal is not None)
         result.totals = {"subtotal": subtotal, "iva": Decimal("0"), "total": subtotal}
+        # Calcular confianza clásica
+        try:
+            result.classic_confidence = compute_classic_confidence(result.lines)
+            result.events.append({"level": "INFO", "stage": "summary", "event": "classic_confidence", "details": {"value": result.classic_confidence}})
+        except Exception as _ce:  # pragma: no cover
+            result.events.append({"level": "WARN", "stage": "summary", "event": "classic_confidence_error", "details": {"error": str(_ce)}})
         if not result.lines:
             try:
                 result.events.append({"level": "WARN", "stage": "summary", "event": "no_lines_after_pipeline", "details": {"ocr_applied": ocr_applied}})
@@ -476,5 +515,15 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
         result.events.append({"level": "ERROR", "stage": "exception", "event": "unhandled", "details": {"error": str(e), "stack": stack[-900:]}})
     if not debug:
         samples = result.debug.get("samples") if isinstance(result.debug, dict) else None
+        # Solo conservar excerpt si debug activo; si no, descartarlo por privacidad
         result.debug = {"samples": samples} if samples else {}
+    else:
+        # Adjuntar excerpt si se dispone
+        try:
+            if isinstance(result.debug, dict) and 'excerpt' not in result.debug and 'text_excerpt' not in result.debug:
+                # Variable local text_excerpt puede no existir si excepción previa; proteger
+                if 'text_excerpt' not in result.debug:
+                    result.debug['text_excerpt'] = locals().get('text_excerpt', '')[:4000]
+        except Exception:
+            pass
     return result
