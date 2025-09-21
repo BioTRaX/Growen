@@ -77,3 +77,16 @@ export async function installDeps(name: string): Promise<{ ok: boolean; detail?:
   const r = await http.post(`/admin/services/${encodeURIComponent(name)}/deps/install`)
   return r.data
 }
+
+// Tools health (qpdf, ghostscript, tesseract, playwright)
+export type ToolsHealth = {
+  qpdf: { ok: boolean; path?: string; version?: string | null }
+  ghostscript: { ok: boolean; path?: string; version?: string | null }
+  tesseract: { ok: boolean; path?: string; version?: string | null }
+  playwright: { ok: boolean; package: boolean; chromium: boolean; version?: string | null }
+}
+
+export async function toolsHealth(signal?: AbortSignal): Promise<ToolsHealth> {
+  const r = await http.get('/admin/services/tools/health', { signal })
+  return r.data as ToolsHealth
+}

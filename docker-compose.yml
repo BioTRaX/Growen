@@ -12,7 +12,8 @@ services:
       POSTGRES_PASSWORD: "GrowenBot01"
       POSTGRES_DB: growen
     ports:
-      - "5432:5432"
+      # Nota: en Windows a veces hay un Postgres local en 5432. Mapeamos a 5433 para evitar colisiones.
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
   api:

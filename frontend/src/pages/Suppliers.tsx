@@ -7,6 +7,7 @@ import AppToolbar from '../components/AppToolbar'
 import { Supplier, listSuppliers, createSupplier } from '../services/suppliers'
 import { Link, useNavigate } from 'react-router-dom'
 import { PATHS } from '../routes/paths'
+import { useTheme } from '../theme/ThemeProvider'
 
 export default function SuppliersPage() {
   const [items, setItems] = useState<Supplier[]>([])
@@ -16,6 +17,7 @@ export default function SuppliersPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
+  const theme = useTheme()
   useEffect(() => {
     (async () => {
       try { setItems(await listSuppliers()) } finally { setLoading(false) }
@@ -25,9 +27,9 @@ export default function SuppliersPage() {
   return (
     <>
       <AppToolbar />
-      <div className="panel p-4" style={{ maxWidth: 900, margin: '16px auto' }}>
+      <div className="panel p-4" style={{ maxWidth: 900, margin: '16px auto', background: theme.bg, color: theme.text }}>
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2>Proveedores</h2>
+          <h2 style={{ margin: 0 }}>Proveedores</h2>
           <div className="row" style={{ gap: 8 }}>
             <button className="btn-primary" onClick={() => setShowCreate(true)}>Nuevo proveedor</button>
             <Link to={PATHS.home} className="btn-secondary btn-lg" style={{ textDecoration: 'none' }}>Volver</Link>
@@ -36,20 +38,20 @@ export default function SuppliersPage() {
         {loading ? (
           <div>Cargando...</div>
         ) : (
-          <table className="table w-full table-fixed">
+          <table className="table w-full table-fixed" style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 8 }}>
             <thead>
               <tr>
-                <th style={{ width: 70 }}>ID</th>
-                <th>Nombre</th>
-                <th style={{ width: 180 }}>Slug</th>
-                <th style={{ width: 160 }}>Ubicación</th>
-                <th style={{ width: 140 }}>Contacto</th>
-                <th style={{ width: 100 }}>Archivos</th>
+                <th style={{ width: 70, textAlign: 'left' }}>ID</th>
+                <th style={{ textAlign: 'left' }}>Nombre</th>
+                <th style={{ width: 180, textAlign: 'left' }}>Slug</th>
+                <th style={{ width: 160, textAlign: 'left' }}>Ubicación</th>
+                <th style={{ width: 140, textAlign: 'left' }}>Contacto</th>
+                <th style={{ width: 100, textAlign: 'center' }}>Archivos</th>
               </tr>
             </thead>
             <tbody>
               {items.map(s => (
-                <tr key={s.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/proveedores/${s.id}`)}>
+                <tr key={s.id} style={{ cursor: 'pointer', borderTop: `1px solid ${theme.border}` }} onClick={() => navigate(`/proveedores/${s.id}`)}>
                   <td>{s.id}</td>
                   <td>{s.name}</td>
                   <td>{s.slug}</td>
@@ -66,27 +68,27 @@ export default function SuppliersPage() {
         </div>
         {showCreate && (
           <div className="modal-backdrop">
-            <div className="modal panel" style={{ maxWidth: 520 }}>
+            <div className="modal panel" style={{ maxWidth: 520, background: theme.card, color: theme.text, border: `1px solid ${theme.border}` }}>
               <h3>Nuevo proveedor</h3>
               {error && <div className="alert-error">{error}</div>}
               <div className="form-grid" style={{ display: 'grid', gap: 8 }}>
                 <label>Slug
-                  <input value={form.slug} onChange={e => setForm(f => ({ ...f, slug: e.target.value }))} placeholder="santaplanta" />
+                  <input value={form.slug} onChange={e => setForm(f => ({ ...f, slug: e.target.value }))} placeholder="santaplanta" style={{ background: theme.name === 'dark' ? '#111' : '#fff', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 6, padding: '6px 8px' }} />
                 </label>
                 <label>Nombre
-                  <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Santa Planta" />
+                  <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Santa Planta" style={{ background: theme.name === 'dark' ? '#111' : '#fff', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 6, padding: '6px 8px' }} />
                 </label>
                 <label>Ubicación
-                  <input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} />
+                  <input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} style={{ background: theme.name === 'dark' ? '#111' : '#fff', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 6, padding: '6px 8px' }} />
                 </label>
                 <label>Contacto nombre
-                  <input value={form.contact_name} onChange={e => setForm(f => ({ ...f, contact_name: e.target.value }))} />
+                  <input value={form.contact_name} onChange={e => setForm(f => ({ ...f, contact_name: e.target.value }))} style={{ background: theme.name === 'dark' ? '#111' : '#fff', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 6, padding: '6px 8px' }} />
                 </label>
                 <label>Contacto email
-                  <input value={form.contact_email} onChange={e => setForm(f => ({ ...f, contact_email: e.target.value }))} />
+                  <input value={form.contact_email} onChange={e => setForm(f => ({ ...f, contact_email: e.target.value }))} style={{ background: theme.name === 'dark' ? '#111' : '#fff', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 6, padding: '6px 8px' }} />
                 </label>
                 <label>Contacto teléfono
-                  <input value={form.contact_phone} onChange={e => setForm(f => ({ ...f, contact_phone: e.target.value }))} />
+                  <input value={form.contact_phone} onChange={e => setForm(f => ({ ...f, contact_phone: e.target.value }))} style={{ background: theme.name === 'dark' ? '#111' : '#fff', color: theme.text, border: `1px solid ${theme.border}`, borderRadius: 6, padding: '6px 8px' }} />
                 </label>
               </div>
               <div className="row" style={{ justifyContent: 'flex-end', marginTop: 16, gap: 8 }}>

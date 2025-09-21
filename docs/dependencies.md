@@ -133,6 +133,14 @@ Validar:
 python -c "from playwright.sync_api import sync_playwright; print('Playwright OK')"
 ```
 
+### Panel de salud de herramientas (Admin/Servicios)
+- La UI consulta `/admin/services/tools/health` y muestra estado de:
+	- QPDF: presencia en PATH y versión (`qpdf --version`).
+	- Ghostscript: binario `gswin64c`/`gswin32c`/`gs` y versión (`-v`).
+	- Tesseract: presencia y versión (`tesseract --version`).
+	- Playwright: paquete instalado y si Chromium está disponible.
+- Si falta alguna herramienta, se verán hints de instalación en esta doc.
+
 ### Actualización de dependencias
 Tras agregar nuevas librerías opcionales se debe:
 1. Añadir al `requirements.txt` (ya se agregó onnxruntime).

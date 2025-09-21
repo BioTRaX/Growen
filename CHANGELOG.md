@@ -5,6 +5,39 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+- ui: botón flotante global “Reportar” (abajo a la derecha) disponible en todas las secciones. Abre un modal con campo “Comentario” y envía reportes manuales al backend.
+- api: nuevo endpoint `POST /bug-report` que registra los reportes en `logs/BugReport.log` con rotación (5×5MB). Cada entrada incluye `ts` (UTC), `ts_gmt3` (servidor), `url`, `user_agent`, `cid` si está disponible y `context.client_ts_gmt3` desde el cliente.
+- docs: `docs/BUG_REPORTS.md` con guía de uso; `docs/roles-endpoints.md` lista `/bug-report`; `docs/SECURITY.md` documenta excepción CSRF controlada; `docs/FRONTEND_DEBUG.md` referencia el botón.
+ - ui: captura de pantalla opcional al enviar reporte; el backend persiste la imagen en `logs/bugreport_screenshots/` y agrega metadatos al log.
+- purchases: verificación de totales en confirmación (`purchase_total` vs `applied_total`) con tolerancia configurable (`PURCHASE_TOTAL_MISMATCH_TOLERANCE_PCT`). La respuesta incluye `totals` y `can_rollback` cuando hay mismatch.
+- api: nuevo endpoint `POST /purchases/{id}/rollback` que revierte el impacto de stock de una compra CONFIRMADA y la marca `ANULADA`; registra `purchase_rollback` con detalle de productos revertidos.
+- ui(compras): en `PurchaseDetail`, si al confirmar hay mismatch se ofrece ejecutar Rollback inmediato.
+- ui(compras): botón “Rollback” en el listado para compras en `CONFIRMADA`.
+### Changed
+- ops: `logs/BugReport.log` queda excluido de endpoint `/debug/clear-logs` y scripts de limpieza para preservar historial (persistente con rotación).
+ - ops: `logs/bugreport_screenshots/` se excluye de limpiezas generales hasta definir una política de retención específica.
+ - admin: nuevo endpoint `GET /admin/services/metrics/bug-reports` para contar reportes por día (con filtro `with_screenshot`) leyendo `logs/BugReport.log`.
+ - scripts: `scripts/cleanup_logs.py` agrega flags `--screenshots-keep-days` (por defecto 30) y `--screenshots-max-mb` (por defecto 200) para gestionar retención de capturas; `--dry-run` lista sin eliminar.
+- ui(proveedores): ficha de proveedor actualizada para usar el tema global (mejor contraste y soporte dark). Se reemplazaron fondos/bordes grises por tokens `bg/text/card/border` del ThemeProvider.
+ - ui(proveedores): listado y formulario modal de creación ajustados para respetar el modo oscuro (tokens de ThemeProvider en panel, tabla y campos).
+- ui(compras): en “Nueva compra” el campo Proveedor ahora es un autocompletado con soporte dark mode (reemplaza el input libre de ID).
+- ui: `SupplierAutocomplete` ahora respeta el tema (inputs y dropdown estilizados para dark/light).
+- ui(compras): toasts de confirmación incluyen ID de producto para facilitar depuración de “productos erróneos”.
+ - ui: el modal del botón “Reportar” ahora respeta el tema (dark/light) y usa los tokens del ThemeProvider; se reemplazaron colores fijos.
+ - ui(compras): se limita la cantidad de toasts individuales al confirmar (máximo 5) y se agrega un resumen “(+N más)” para evitar ruido visual en compras grandes.
+ - purchases: `POST /purchases/{id}/validate` ahora intenta auto-vincular líneas por `supplier_sku` del proveedor cuando falta vínculo, y devuelve en la respuesta `linked` (cantidad autovinculada) y `missing_skus` (lista de SKUs no encontrados). La UI muestra toasts con este detalle.
+ - import(SantaPlanta): heurística reforzada para no confundir medidas (500 ML, 250 G/GR, etc.) con SKUs cuando se extrae un número desde el título; se ignoran tokens numéricos seguidos por unidades.
+- feat(import): nuevo endpoint `GET /admin/services/pdf_import/ai_stats` con estad?sticas detalladas de fallback IA (latencias promedio/p95, uso por modelo, l?neas propuestas/agregadas e ignoradas, desglose de errores y ventana rolling 24h).
+- infra/tests: `pytest.ini` ahora marca `CryptographyDeprecationWarning` (ARC4) como error y se agreg? `tests/test_pytest_filter_arc4.py` para asegurar el filtro.
+- ai/router: fallback automático a Ollama cuando la política elige OpenAI pero falta OPENAI_API_KEY; evita ecos y resultados no JSON.
+- purchases(iAVaL): `preview` ahora maneja respuestas no-JSON del proveedor IA devolviendo propuesta vacía con comentarios en lugar de 502.
+- purchases(iAVaL): `POST /purchases/{id}/iaval/apply` ahora acepta flag `emit_log=1` para generar un archivo JSON de cambios con timestamp y metadatos del remito en `data/purchases/{id}/logs/iaval_changes_<timestamp>.json`; se agrega auditoría `purchase.iaval.emit_change_log` y el nombre de archivo en la respuesta.
+- ui(compras): en el modal iAVaL se agrega la casilla "Enviar logs de cambios" que activa `emit_log=1` y muestra un toast con el nombre del archivo generado.
+- docs/tests(iAVaL): `docs/PURCHASES.md` y `Roadmap.md` actualizados con el flujo de emisión de logs; se añadió prueba que valida `emit_log=1` (respuesta incluye `log.filename`).
+- purchases(iAVaL): nuevos endpoints `POST /purchases/{id}/iaval/preview` y `POST /purchases/{id}/iaval/apply` para validación IA de remitos y aplicación de cambios en BORRADOR. Incluye extracción de texto de PDF, prompt con esquema JSON estricto, parsing robusto y auditoría `purchase.iaval.apply`.
+- ui(compras): botón “iAVaL” en `PurchaseDetail` (sólo BORRADOR) y modal con confianza, comentarios y diffs (header y líneas) + confirmación “Sí, aplicar cambios”.
+- docs: `Roadmap.md` creado con estado actual y pendientes; `docs/PURCHASES.md` ampliado con sección iAVaL y variables de entorno IA.
 - feat(import): Añadido scaffolding de fallback IA para remitos (fase 1: sólo cuando pipeline clásico produce 0 líneas). Incluye:
 	- (Fase 2) Trigger adicional por baja `classic_confidence` (< IMPORT_AI_CLASSIC_MIN_CONFIDENCE) y cálculo heurístico (`classic_confidence` event).
 	- Prompt enriquecido con hint de líneas y confianza.
@@ -14,6 +47,10 @@
 	- Eventos de logging `ai:*` integrados a `ImportLog`.
 	- Documentación actualizada en `docs/IMPORT_PDF.md`.
 	- Safe merge: sólo agrega líneas IA si no hay líneas clásicas.
+	- Heurística refinada: añade métrica de densidad numérica y sanitización de outliers (cantidad >10k clamp, unit_cost>10M excluido).
+	- Registro estructurado de `classic_confidence` en `ImportLog` (`stage=heuristic`).
+	- Nuevo endpoint `GET /admin/services/pdf_import/metrics` con agregados (promedios de confianza, invocaciones IA, tasa de éxito, líneas añadidas, ventana 24h).
+	- Tests añadidos: `test_ai_fallback_merge.py`, `test_pdf_import_metrics.py` (smoke) y ajuste de umbral en `test_classic_confidence.py`.
 
 - feat(catalog): eliminación segura ahora elimina primero `supplier_price_history` antes de `supplier_products` para evitar NOT NULL FK en SQLite/PG.
 - fix(catalog): error 500 al eliminar producto que no tenía stock ni referencias causado por FK `supplier_price_history.supplier_product_fk` -> ahora 200 con registro de cascada.

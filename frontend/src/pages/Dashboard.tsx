@@ -17,7 +17,14 @@ export default function Dashboard() {
       <AppToolbar />
       {state.role !== 'guest' && (
         <div className="panel" style={{ margin: 16, padding: 12, display: 'flex', gap: 8 }}>
-          <button className="btn-dark btn-lg" onClick={() => nav(PATHS.purchases)}>Compras</button>
+          {/* Solo staff puede ver Compras/Clientes/Ventas */}
+          {['colaborador', 'admin'].includes(state.role) && (
+            <>
+              <button className="btn-dark btn-lg" onClick={() => nav(PATHS.purchases)}>Compras</button>
+              <button className="btn-dark btn-lg" onClick={() => nav(PATHS.customers)}>Clientes</button>
+              <button className="btn-dark btn-lg" onClick={() => nav(PATHS.sales)}>Ventas</button>
+            </>
+          )}
         </div>
       )}
       <ChatWindow />

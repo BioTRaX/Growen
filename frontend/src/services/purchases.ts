@@ -58,12 +58,26 @@ export async function updatePurchase(id: number, payload: Partial<Purchase> & { 
 
 export async function validatePurchase(id: number) {
   const r = await http.post(`/purchases/${id}/validate`, {})
-  return r.data as { status: string; unmatched: number; lines: number }
+  return r.data as { status: string; unmatched: number; lines: number; linked?: number; missing_skus?: string[] }
 }
 
 export async function confirmPurchase(id: number, debug: boolean = false) {
   const r = await http.post(`/purchases/${id}/confirm`, {}, { params: { debug: debug ? 1 : 0 } })
-  return r.data as { status: string; applied_deltas?: { product_id: number; product_title?: string | null; delta: number; new: number; old: number }[]; unresolved_lines?: number[] }
+  return r.data as {
+    status: string
+    applied_deltas?: { product_id: number; product_title?: string | null; delta: number; new: number; old: number }[]
+    unresolved_lines?: number[]
+    totals?: {
+      purchase_total: number
+      applied_total: number
+      diff: number
+      tolerance_abs: number
+      tolerance_pct: number
+      mismatch: boolean
+    }
+    can_rollback?: boolean
+    hint?: string
+  }
 }
 
 export async function resendPurchaseStock(id: number, apply: boolean, debug: boolean = false) {
@@ -74,6 +88,11 @@ export async function resendPurchaseStock(id: number, apply: boolean, debug: boo
 export async function cancelPurchase(id: number, note: string) {
   const r = await http.post(`/purchases/${id}/cancel`, { note })
   return r.data
+}
+
+export async function rollbackPurchase(id: number) {
+  const r = await http.post(`/purchases/${id}/rollback`, {})
+  return r.data as { status: string; reverted?: { product_id: number; delta: number }[] }
 }
 
 export async function importSantaPlanta(supplier_id: number, file: File, debug: boolean = false, forceOcr: boolean = false) {
@@ -89,6 +108,21 @@ export async function importSantaPlanta(supplier_id: number, file: File, debug: 
   return r.data as { purchase_id: number; status: string; filename: string; correlation_id?: string; parsed?: any; debug?: any }
 }
 
+// POP Email importer (sin PDF). Puede recibir .eml o contenido pegado.
+export async function importPopEmail(params: { supplier_id: number; kind?: 'eml' | 'html' | 'text'; file?: File; text?: string; }) {
+  const kind = params.kind || (params.file ? 'eml' : (params.text ? 'html' : 'text'))
+  if (kind === 'eml') {
+    if (!params.file) throw new Error('Falta file (.eml)')
+    const fd = new FormData()
+    fd.append('file', params.file)
+    const r = await http.post(`/purchases/import/pop-email`, fd, { params: { supplier_id: params.supplier_id, kind } })
+    return r.data as { purchase_id: number; status: string; parsed: any }
+  } else {
+    const r = await http.post(`/purchases/import/pop-email`, { text: params.text || '' }, { params: { supplier_id: params.supplier_id, kind } })
+    return r.data as { purchase_id: number; status: string; parsed: any }
+  }
+}
+
 export function exportUnmatched(id: number, fmt: 'csv' | 'xlsx' = 'csv') {
   window.open(`${http.defaults.baseURL}/purchases/${id}/unmatched/export?fmt=${fmt}`, '_blank')
 }
@@ -101,5 +135,16 @@ export async function deletePurchase(id: number) {
 export async function searchSupplierProducts(supplierId: number, sku: string) {
   const r = await http.get(`/suppliers/${supplierId}/items`, { params: { sku_like: sku } })
   return r.data as { id: number; supplier_product_id: string; title: string; product_id: number }[]
+}
+
+// iAVaL (IA Validator) services
+export async function iavalPreview(id: number) {
+  const r = await http.post(`/purchases/${id}/iaval/preview`, {})
+  return r.data as { proposal: any; diff: { header: any; lines: any[] }; confidence: number; comments: string[]; raw: string }
+}
+
+export async function iavalApply(id: number, proposal: any, emitLog?: boolean) {
+  const r = await http.post(`/purchases/${id}/iaval/apply`, { proposal }, { params: { emit_log: emitLog ? 1 : 0 } })
+  return r.data as { ok: boolean; applied: any; log?: { filename: string; path: string; csv_filename?: string | null; url_json?: string; url_csv?: string | null } }
 }
 

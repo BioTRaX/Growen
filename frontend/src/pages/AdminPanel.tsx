@@ -6,7 +6,8 @@ import { useEffect, useState, lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PATHS } from '../routes/paths'
 import http from '../services/http'
-import { listSuppliers, Supplier } from '../services/suppliers'
+import SupplierAutocomplete from '../components/supplier/SupplierAutocomplete'
+import type { SupplierSearchItem } from '../services/suppliers'
 const HealthPanel = lazy(() => import('../components/HealthPanel'))
 const ServicesPanel = lazy(() => import('../components/ServicesPanel'))
 
@@ -23,7 +24,7 @@ export default function AdminPanel() {
   const nav = useNavigate()
   const [tab, setTab] = useState<'servicios' | 'usuarios' | 'imagenes'>('servicios')
   const [users, setUsers] = useState<User[]>([])
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const [supplierSel, setSupplierSel] = useState<SupplierSearchItem | null>(null)
   const [form, setForm] = useState({
     identifier: '',
     email: '',
@@ -39,6 +40,7 @@ export default function AdminPanel() {
     role: '',
     supplier_id: '',
   })
+  const [editSupplierSel, setEditSupplierSel] = useState<SupplierSearchItem | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [job, setJob] = useState<any | null>(null)
@@ -52,7 +54,6 @@ export default function AdminPanel() {
 
   useEffect(() => {
     refresh()
-    listSuppliers().then(setSuppliers).catch(() => {})
     http.get('/admin/image-jobs/status').then((r) => { setJob(r.data); setJobForm({
       active: r.data.active,
       mode: r.data.mode,
@@ -96,6 +97,7 @@ export default function AdminPanel() {
       role: u.role,
       supplier_id: u.supplier_id?.toString() ?? '',
     })
+    setEditSupplierSel(u.supplier_id ? { id: u.supplier_id, name: String(u.supplier_id), slug: String(u.supplier_id) } : null)
   }
 
   const submitEdit = async (e: React.FormEvent) => {
@@ -206,18 +208,11 @@ export default function AdminPanel() {
           <option value="colaborador">colaborador</option>
           <option value="admin">admin</option>
         </select>
-        <select
-          className="select"
-          value={form.supplier_id}
-          onChange={(e) => setForm({ ...form, supplier_id: e.target.value })}
-        >
-          <option value="">Proveedor (opcional)</option>
-          {suppliers.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
+        <SupplierAutocomplete
+          value={supplierSel}
+          onChange={(item) => { setSupplierSel(item); setForm({ ...form, supplier_id: item ? String(item.id) : '' }) }}
+          placeholder="Proveedor (opcional)"
+        />
         <button className="btn-primary" type="submit" disabled={creating}>
           {creating ? 'Creando...' : 'Crear usuario'}
         </button>
@@ -249,18 +244,11 @@ export default function AdminPanel() {
             <option value="colaborador">colaborador</option>
             <option value="admin">admin</option>
           </select>
-          <select
-            className="select"
-            value={editForm.supplier_id}
-            onChange={(e) => setEditForm({ ...editForm, supplier_id: e.target.value })}
-          >
-            <option value="">Proveedor (opcional)</option>
-            {suppliers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
+          <SupplierAutocomplete
+            value={editSupplierSel}
+            onChange={(item) => { setEditSupplierSel(item); setEditForm({ ...editForm, supplier_id: item ? String(item.id) : '' }) }}
+            placeholder="Proveedor (opcional)"
+          />
           <button className="btn-primary" type="submit">
             Guardar cambios
           </button>

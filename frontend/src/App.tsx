@@ -19,14 +19,19 @@ const PurchaseNew = lazy(() => import('./pages/PurchaseNew'))
 const PurchaseDetail = lazy(() => import('./pages/PurchaseDetail'))
 const SuppliersPage = lazy(() => import('./pages/Suppliers'))
 const SupplierDetailPage = lazy(() => import('./pages/SupplierDetail'))
+const CustomersPage = lazy(() => import('./pages/Customers'))
+const SalesPage = lazy(() => import('./pages/Sales'))
 import { PATHS } from "./routes/paths";
 import { ToastProvider, InjectToastStyles } from './components/ToastProvider'
+import ErrorBoundary from './components/ErrorBoundary'
 import { ThemeProvider } from './theme/ThemeProvider'
+import BugReportButton from './components/BugReportButton'
 // New Admin sections (code-split per route)
 const AdminLayout = lazy(() => import('./pages/admin/AdminLayout'))
 const AdminUsers = lazy(() => import('./pages/admin/UsersPage'))
 const AdminServices = lazy(() => import('./pages/admin/ServicesPage'))
 const AdminImages = lazy(() => import('./pages/admin/ImagesCrawlerPage'))
+const AdminBackups = lazy(() => import('./pages/admin/BackupsPage'))
 const CatalogDiagnosticsPage = lazy(() => import('./pages/CatalogDiagnosticsPage'))
 
 export default function App() {
@@ -36,7 +41,8 @@ export default function App() {
         <ThemeProvider>
         <ToastProvider>
         <InjectToastStyles />
-        <Suspense fallback={<div style={{padding:12}}>Cargando…</div>}>
+  <ErrorBoundary>
+  <Suspense fallback={<div style={{padding:12}}>Cargando módulos… (si tarda, revisá consola)</div>}>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
@@ -74,15 +80,31 @@ export default function App() {
           <Route
             path={PATHS.suppliers}
             element={
-              <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
+              <ProtectedRoute roles={["colaborador", "admin"]}>
                 <SuppliersPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path={PATHS.customers}
+            element={
+              <ProtectedRoute roles={["colaborador", "admin"]}>
+                <CustomersPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path={PATHS.sales}
+            element={
+              <ProtectedRoute roles={["colaborador", "admin"]}>
+                <SalesPage />
               </ProtectedRoute>
             }
           />
           <Route
             path="/proveedores/:id"
             element={
-              <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
+              <ProtectedRoute roles={["colaborador", "admin"]}>
                 <SupplierDetailPage />
               </ProtectedRoute>
             }
@@ -90,7 +112,7 @@ export default function App() {
           <Route
             path="/productos/:id"
             element={
-              <ProtectedRoute roles={["guest", "cliente", "proveedor", "colaborador", "admin"]}>
+              <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
                 <ProductDetail />
               </ProtectedRoute>
             }
@@ -130,6 +152,7 @@ export default function App() {
           >
             <Route path="servicios" element={<AdminServices />} />
             <Route path="imagenes-productos" element={<AdminImages />} />
+            <Route path="backups" element={<AdminBackups />} />
             <Route path="catalogos/diagnostico" element={<CatalogDiagnosticsPage />} />
             {/* Users only for admins */}
             <Route
@@ -152,7 +175,10 @@ export default function App() {
           />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
-        </Suspense>
+  </Suspense>
+  </ErrorBoundary>
+  {/* Botón flotante global para reportes */}
+  <BugReportButton />
         </ToastProvider>
         </ThemeProvider>
       </AuthProvider>

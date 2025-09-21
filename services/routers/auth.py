@@ -5,6 +5,7 @@
 """Endpoints de autenticación y gestión de usuarios."""
 
 import secrets
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -38,8 +39,12 @@ class LoginIn(BaseModel):
     password: str
 
 
+logger = logging.getLogger("growen.auth")
+
 @router.post("/login")
 async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(get_session)):
+    t0 = secrets.token_hex(4)
+    logger.debug("[login:start] tag=%s ip=%s identifier=%s", t0, request.client.host if request.client else None, payload.identifier)
     ip = request.client.host if request.client else "unknown"
     check_login_rate_limit(ip)
 
@@ -52,6 +57,10 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
     )
     res = await db.execute(stmt)
     user = res.scalar_one_or_none()
+    if not user:
+        logger.debug("[login:not_found] tag=%s identifier=%s", t0, ident)
+    if user and not verify_pw(payload.password, user.password_hash):
+        logger.debug("[login:bad_password] tag=%s user_id=%s", t0, user.id)
     if not user or not verify_pw(payload.password, user.password_hash):
         record_failed_login(ip)
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
@@ -72,17 +81,21 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
         }
     )
     await set_session_cookies(resp, sess.id, csrf, request)
+    logger.debug("[login:ok] tag=%s user_id=%s role=%s session=%s", t0, user.id, user.role, sess.id[:12])
     return resp
 
 
 @router.post("/guest")
 async def login_guest(request: Request, db: AsyncSession = Depends(get_session)):
+    t0 = secrets.token_hex(4)
+    logger.debug("[guest:start] tag=%s ip=%s", t0, request.client.host if request.client else None)
     prev = await current_session(request, db)
     sess, csrf = await create_session(
         db, "guest", request, prev_session=prev.session
     )
     resp = JSONResponse({"role": "guest"})
     await set_session_cookies(resp, sess.id, csrf, request)
+    logger.debug("[guest:ok] tag=%s session=%s", t0, sess.id[:12])
     return resp
 
 
@@ -99,7 +112,12 @@ async def logout(request: Request, db: AsyncSession = Depends(get_session)):
 
 @router.get("/me")
 async def me(sess: SessionData = Depends(current_session)):
+    # En desarrollo, si no hay sesión persistida pero el resolvedor asignó un rol
+    # elevado (admin/colaborador), reflejamos autenticado para no bloquear el FE.
     if not sess.session:
+        from agent_core.config import settings as _settings
+        if _settings.env == "dev" and sess.role in ("admin", "colaborador"):
+            return {"is_authenticated": True, "role": sess.role}
         return {"is_authenticated": False, "role": "guest"}
     data = {"is_authenticated": True, "role": sess.role}
     if sess.user:
@@ -252,4 +270,49 @@ async def delete_user(user_id: int, db: AsyncSession = Depends(get_session)):
         pass
     await db.commit()
     return {"status": "ok"}
+
+
+# --- Debug endpoints (solo entorno dev) ---
+@router.get("/debug/current")
+async def debug_current(sess: SessionData = Depends(current_session)):
+    """Devuelve la sesión cruda (solo dev)."""
+    from agent_core.config import settings as _s
+    if _s.env != "dev":
+        raise HTTPException(status_code=404)
+    out = {"role": sess.role, "has_session": bool(sess.session)}
+    if sess.session:
+        out["session"] = {
+            "id": sess.session.id,
+            "user_id": sess.session.user_id,
+            "expires_at": sess.session.expires_at.isoformat() if sess.session.expires_at else None,
+        }
+    if sess.user:
+        out["user"] = {"id": sess.user.id, "identifier": sess.user.identifier, "role": sess.user.role}
+    return out
+
+
+@router.get("/debug/sessions")
+async def debug_sessions(db: AsyncSession = Depends(get_session)):
+    """Lista sesiones activas (solo dev): id, user, rol, expira."""
+    from agent_core.config import settings as _s
+    if _s.env != "dev":
+        raise HTTPException(status_code=404)
+    from sqlalchemy import select
+    from db.models import Session as DBSess, User as DBUser
+    rows = []
+    res = await db.execute(select(DBSess))
+    for s in res.scalars().all():
+        u_ident = None
+        if s.user_id:
+            u = await db.get(DBUser, s.user_id)
+            if u:
+                u_ident = u.identifier
+        rows.append({
+            "id": s.id,
+            "user_id": s.user_id,
+            "user_identifier": u_ident,
+            "role": s.role,
+            "expires_at": s.expires_at.isoformat() if s.expires_at else None,
+        })
+    return {"count": len(rows), "items": rows}
 

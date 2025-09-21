@@ -36,7 +36,7 @@ Durante la importación de remitos PDF (ej. proveedor Santa Planta) se observó 
 | 1 | Ejecutar `python scripts/check_pdf_crypto.py data/purchases --recursive --json` | Sin PDFs ARC4 | N/A |
 | 2 | Fijar versión explícita segura de `pypdf` (añadir a requirements si procede) | No warnings | Revertir pin |
 | 3 | Actualizar `cryptography` a última minor soportada y correr suite de importación | Import OK, sin warnings | Volver a versión previa en lock |
-| 4 | Añadir test que falla si aparece warning ARC4 (pytest filterwarnings) | Test verde | Deshabilitar test temporal |
+| 4 | A?adir test que falla si aparece warning ARC4 (pytest filterwarnings) | Implementado (`pytest.ini` + `tests/test_pytest_filter_arc4.py`) | Ajustar filtro si surge falso positivo |
 
 ### Próximos pasos
 - Crear issue: "Deprecación ARC4 / Auditoría PDFs" con checklist anterior.
@@ -63,4 +63,8 @@ Durante la importación de remitos PDF (ej. proveedor Santa Planta) se observó 
 - Se agregó validación de formato SKU `[A-Za-z0-9._-]{2,50}` y trimming.
 - Se añadió campo opcional `sku` en creación mínima (`POST /catalog/products`), derivando de `supplier_sku` o `title` si falta.
 - Próximo: reforzar validaciones en `POST /products` (rol y formato de SKU) y centralizar regex en constante reutilizable.
+
+## Excepciones CSRF controladas
+- `POST /bug-report` no requiere CSRF por diseño para permitir reportes sin sesión. Solo escribe en un log local (`logs/BugReport.log`) sin tocar datos de negocio.
+- El frontend advierte no incluir datos sensibles en el comentario. Se envían como contexto la URL actual, el User-Agent y hora local en GMT-3.
 

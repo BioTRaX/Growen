@@ -2,7 +2,7 @@
 // NG-HEADER: Ubicación: frontend/src/lib/http.ts
 // NG-HEADER: Descripción: Pendiente de descripción
 // NG-HEADER: Lineamientos: Ver AGENTS.md
-export type ChatResponse = { role: string; text: string }
+export type ChatResponse = { role: string; text: string; type?: string; data?: any }
 
 export async function chatHttp(text: string): Promise<ChatResponse> {
   const { baseURL: base } = await import('../services/http') as any
@@ -14,5 +14,6 @@ export async function chatHttp(text: string): Promise<ChatResponse> {
     body: JSON.stringify({ text }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  const data = await res.json()
+  return data as ChatResponse
 }

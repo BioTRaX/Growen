@@ -7,6 +7,7 @@ import { useParams, Link } from 'react-router-dom'
 import AppToolbar from '../components/AppToolbar'
 import { getSupplier, updateSupplier, Supplier, listSupplierFiles, uploadSupplierFile, SupplierFileMeta } from '../services/suppliers'
 import { PATHS } from '../routes/paths'
+import { useTheme } from '../theme/ThemeProvider'
 
 export default function SupplierDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -22,6 +23,7 @@ export default function SupplierDetailPage() {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [notes, setNotes] = useState('')
+  const theme = useTheme()
 
   useEffect(() => {
     (async () => {
@@ -97,13 +99,15 @@ export default function SupplierDetailPage() {
     }
   }
 
-  if (loading) return (<><AppToolbar /><div className="panel p-4" style={{ maxWidth: 1000, margin: '16px auto' }}>Cargando...</div></>)
-  if (!data) return (<><AppToolbar /><div className="panel p-4" style={{ maxWidth: 1000, margin: '16px auto' }}>No encontrado <Link to={PATHS.suppliers}>Volver</Link></div></>)
+  if (loading) return (<><AppToolbar /><div className="panel p-4" style={{ maxWidth: 1000, margin: '16px auto', background: theme.bg, color: theme.text }}>Cargando...</div></>)
+  if (!data) return (<><AppToolbar /><div className="panel p-4" style={{ maxWidth: 1000, margin: '16px auto', background: theme.bg, color: theme.text }}>No encontrado <Link to={PATHS.suppliers}>Volver</Link></div></>)
 
   return (
     <>
       <AppToolbar />
-      <div className="panel p-5" style={{ maxWidth: 1000, margin: '16px auto' }}>
+      <div className="panel p-5" style={{ maxWidth: 1000, margin: '16px auto', background: theme.bg, color: theme.text }}>
+        {/** Estilos base para inputs/textarea según tema */}
+        {(() => null)()}
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <h2 style={{ margin: 0 }}>Proveedor: {data.name}</h2>
           <div className="row" style={{ gap: 8 }}>
@@ -115,47 +119,136 @@ export default function SupplierDetailPage() {
         {error && <div className="alert-error" style={{ marginTop: 8 }}>{error}</div>}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 24, marginTop: 16 }}>
-          <div className="card" style={{ padding: 16, border: '1px solid #ddd', borderRadius: 8 }}>
+          <div className="card" style={{ background: theme.card, padding: 16, border: `1px solid ${theme.border}`, borderRadius: 8 }}>
             <h3 style={{ marginTop: 0 }}>Datos</h3>
             <label>Slug
-              <input disabled value={form.slug} />
+              <input
+                disabled
+                value={form.slug}
+                style={{
+                  background: theme.name === 'dark' ? '#0f0f0f' : '#fff',
+                  color: theme.text,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 6,
+                  padding: '6px 8px',
+                }}
+              />
             </label>
             <label>Nombre
-              <input disabled={!edit} value={form.name} onChange={e => setForm((f: any) => ({ ...f, name: e.target.value }))} />
+              <input
+                disabled={!edit}
+                value={form.name}
+                onChange={e => setForm((f: any) => ({ ...f, name: e.target.value }))}
+                style={{
+                  background: !edit ? (theme.name === 'dark' ? '#0f0f0f' : '#f9fafb') : (theme.name === 'dark' ? '#111' : '#fff'),
+                  color: theme.text,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 6,
+                  padding: '6px 8px',
+                }}
+              />
             </label>
             <label>Ubicación
-              <input disabled={!edit} value={form.location} onChange={e => setForm((f: any) => ({ ...f, location: e.target.value }))} />
+              <input
+                disabled={!edit}
+                value={form.location}
+                onChange={e => setForm((f: any) => ({ ...f, location: e.target.value }))}
+                style={{
+                  background: !edit ? (theme.name === 'dark' ? '#0f0f0f' : '#f9fafb') : (theme.name === 'dark' ? '#111' : '#fff'),
+                  color: theme.text,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 6,
+                  padding: '6px 8px',
+                }}
+              />
             </label>
             {edit && <button className="btn-primary" disabled={saving} onClick={doSave}>{saving ? 'Guardando...' : 'Guardar cambios'}</button>}
           </div>
-          <div className="card" style={{ padding: 16, border: '1px solid #ddd', borderRadius: 8 }}>
+          <div className="card" style={{ background: theme.card, padding: 16, border: `1px solid ${theme.border}`, borderRadius: 8 }}>
             <h3 style={{ marginTop: 0 }}>Contacto</h3>
             <label>Nombre
-              <input disabled={!edit} value={form.contact_name} onChange={e => setForm((f: any) => ({ ...f, contact_name: e.target.value }))} />
+              <input
+                disabled={!edit}
+                value={form.contact_name}
+                onChange={e => setForm((f: any) => ({ ...f, contact_name: e.target.value }))}
+                style={{
+                  background: !edit ? (theme.name === 'dark' ? '#0f0f0f' : '#f9fafb') : (theme.name === 'dark' ? '#111' : '#fff'),
+                  color: theme.text,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 6,
+                  padding: '6px 8px',
+                }}
+              />
             </label>
             <label>Email
-              <input disabled={!edit} value={form.contact_email} onChange={e => setForm((f: any) => ({ ...f, contact_email: e.target.value }))} />
+              <input
+                disabled={!edit}
+                value={form.contact_email}
+                onChange={e => setForm((f: any) => ({ ...f, contact_email: e.target.value }))}
+                style={{
+                  background: !edit ? (theme.name === 'dark' ? '#0f0f0f' : '#f9fafb') : (theme.name === 'dark' ? '#111' : '#fff'),
+                  color: theme.text,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 6,
+                  padding: '6px 8px',
+                }}
+              />
             </label>
             <label>Teléfono
-              <input disabled={!edit} value={form.contact_phone} onChange={e => setForm((f: any) => ({ ...f, contact_phone: e.target.value }))} />
+              <input
+                disabled={!edit}
+                value={form.contact_phone}
+                onChange={e => setForm((f: any) => ({ ...f, contact_phone: e.target.value }))}
+                style={{
+                  background: !edit ? (theme.name === 'dark' ? '#0f0f0f' : '#f9fafb') : (theme.name === 'dark' ? '#111' : '#fff'),
+                  color: theme.text,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 6,
+                  padding: '6px 8px',
+                }}
+              />
             </label>
           </div>
-          <div className="card" style={{ padding: 16, border: '1px solid #ddd', borderRadius: 8 }}>
+          <div className="card" style={{ background: theme.card, padding: 16, border: `1px solid ${theme.border}`, borderRadius: 8 }}>
             <h3 style={{ marginTop: 0 }}>Notas</h3>
-            <textarea rows={12} disabled={!edit} value={form.notes} onChange={e => setForm((f: any) => ({ ...f, notes: e.target.value }))} />
+            <textarea
+              rows={12}
+              disabled={!edit}
+              value={form.notes}
+              onChange={e => setForm((f: any) => ({ ...f, notes: e.target.value }))}
+              style={{
+                background: !edit ? (theme.name === 'dark' ? '#0f0f0f' : '#f9fafb') : (theme.name === 'dark' ? '#111' : '#fff'),
+                color: theme.text,
+                border: `1px solid ${theme.border}`,
+                borderRadius: 6,
+                padding: 8,
+                minHeight: 180,
+              }}
+            />
           </div>
-          <div className="card" style={{ padding: 16, border: '1px solid #ddd', borderRadius: 8 }}>
+          <div className="card" style={{ background: theme.card, padding: 16, border: `1px solid ${theme.border}`, borderRadius: 8 }}>
             <h3 style={{ marginTop: 0 }}>Archivos</h3>
-            <p style={{ marginTop: 0, fontSize: 12, color: '#555' }}>Formatos permitidos: pdf, txt, csv, xls, xlsx, ods, png, jpg, jpeg, webp (max 10MB)</p>
+            <p style={{ marginTop: 0, fontSize: 12, color: theme.name === 'dark' ? '#bbb' : '#555' }}>Formatos permitidos: pdf, txt, csv, xls, xlsx, ods, png, jpg, jpeg, webp (max 10MB)</p>
             {uploadError && <div className="alert-error" style={{ marginBottom: 8 }}>{uploadError}</div>}
             <label style={{ display: 'block', marginBottom: 8 }}>Notas (opcional)
-              <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Descripción breve" />
+              <input
+                value={notes}
+                onChange={e => setNotes(e.target.value)}
+                placeholder="Descripción breve"
+                style={{
+                  background: theme.name === 'dark' ? '#111' : '#fff',
+                  color: theme.text,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 6,
+                  padding: '6px 8px',
+                }}
+              />
             </label>
             <input type="file" onChange={onUpload} disabled={uploading} />
             {uploading && <div style={{ fontSize: 12, marginTop: 4 }}>Subiendo...</div>}
             <div style={{ marginTop: 12 }}>
               {filesLoading ? <div>Cargando archivos...</div> : (
-                files.length === 0 ? <div style={{ fontSize: 13, color: '#666' }}>Sin archivos</div> : (
+                files.length === 0 ? <div style={{ fontSize: 13, color: theme.name === 'dark' ? '#999' : '#666' }}>Sin archivos</div> : (
                   <table className="table" style={{ width: '100%', fontSize: 13 }}>
                     <thead>
                       <tr>

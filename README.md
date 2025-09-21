@@ -1,5 +1,21 @@
 # Growen
 
+## Documentacion
+
+- Hoja de ruta: [Roadmap.md](./Roadmap.md)
+- Arquitectura chatbot admin: [docs/CHATBOT_ARCHITECTURE.md](./docs/CHATBOT_ARCHITECTURE.md)
+- Roles del chatbot admin: [docs/CHATBOT_ROLES.md](./docs/CHATBOT_ROLES.md)
+- Compras (incluye iAVaL - Validador de IA del remito): [docs/PURCHASES.md](./docs/PURCHASES.md)
+- Persona de chat: [docs/CHAT_PERSONA.md](./docs/CHAT_PERSONA.md)
+
+## Chatbot Growen
+
+- Growen responde en espanol rioplatense con tono malhumorado, humor negro y sarcasmo directo.
+- Solo cubre temas de Nice Grow: catalogo, promociones, servicios y consejos de cultivo; desvia con ironia cualquier consulta ajena al rubro.
+- Mantiene limites de seguridad: nada de insultos personales, discursos de odio ni llamados a la violencia.
+- Cuando una consulta de precio coincide con varios productos, pide al usuario que aclare la opcion antes de informar montos.
+- Evolución próxima: chatbot corporativo diferenciado por roles con auditoría y acceso al repositorio controlado (ver documentación de arquitectura y roles).
+
 ## Endpoints clave (checklist rapido)
 
 - Autenticacion
@@ -40,6 +56,12 @@
   - `GET /health/summary`: resumen (DB/Redis/Storage/Workers/etc.)
   - `GET /health/service/{name}`: deps por servicio (pdf_import/playwright/...)
   - `GET /health/db|redis|storage|optional|dramatiq`: checks especificos
+  
+- Backups (DB)
+  - `GET /admin/backups`: listar backups
+  - `POST /admin/backups/run`: crear backup inmediato
+  - `GET /admin/backups/download/{filename}`: descargar
+  - Ver guía completa: [docs/BACKUPS.md](./docs/BACKUPS.md)
 
 - WebSocket
   - `WS /ws`: canal de chat; pings cada 30s; timeout lectura 60s
@@ -249,6 +271,16 @@ Orden de ejecución recomendado:
 3. `scripts\run_migrations.cmd`
 4. Inicio de backend y frontend
 
+### Base de datos (PostgreSQL) en Windows
+
+- En Windows suele estar ocupado el puerto 5432 por otra instalación. El docker-compose mapea Postgres del contenedor al puerto 5433 del host para evitar conflictos.
+  - Verificá que `.env` tenga `DB_URL=postgresql+psycopg://growen:GrowenBot01@127.0.0.1:5433/growen` (ya viene así por defecto).
+- Si se reutiliza un volumen previo del contenedor y la contraseña del usuario `growen` no coincide, podés ajustarla sin borrar datos:
+  1. `docker exec -it growen-postgres sh`
+  2. `psql -U growen -d growen -c "ALTER USER growen WITH PASSWORD 'NuevaPass';"`
+  3. Actualizá `.env` con la contraseña nueva y reiniciá la API.
+- Aplicá migraciones con `python -m alembic upgrade head` para crear/actualizar el esquema.
+
 ## Troubleshooting
 
 Al iniciar la API con `scripts\run_api.cmd`, el script registra cada paso en `logs\run_api.log` y Uvicorn redirige su salida a `logs\backend.log`. Estos archivos permiten diagnosticar fallas de arranque y pueden inspeccionarse con `type` o cualquier editor de texto:
@@ -273,6 +305,9 @@ Acciones del script:
 - Elimina `backend.log.*` y `.bak` (no borra `backend.log` principal; lo trunca).
 - Borra logs de diagnósticos y jobs de imágenes si coinciden con patrones.
 - Conserva estructura de carpetas. Usa `--keep-days N` para preservar archivos recientes.
+ - Opcional: limpieza de capturas del botón de reporte según política:
+   - `--screenshots-keep-days N` (por defecto 30; 0 = sin límite por días)
+   - `--screenshots-max-mb M` (por defecto 200; 0 = sin límite)
 
 Recomendado antes de reproducir un escenario (confirmar compra, probar WebSocket de chat, etc.) para aislar el nuevo output.
 
@@ -301,6 +336,12 @@ npm run dev
 ```
 
 En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8000`, evitando errores de CORS. Durante el arranque pueden mostrarse errores de proxy WebSocket si la API aún no está disponible; una vez arriba, la conexión se restablece sola. El chat abre un WebSocket en `/ws` y, si no está disponible, utiliza `POST /chat`, que admite la variante con o sin barra final para evitar redirecciones 307. El servidor envía un ping cada 30 s y corta la sesión tras 60 s sin recibir datos; el frontend ignora esos pings, cierra limpiamente y reintenta con backoff exponencial si la conexión se pierde. Para modificar las URLs se puede crear `frontend/.env.development` con `VITE_WS_URL` y `VITE_API_BASE`.
+
+### Botón de reporte de bugs
+- La UI incluye un botón flotante global (abajo a la derecha) para enviar reportes manuales de errores o problemas.
+- Opcionalmente adjunta una captura de pantalla del estado actual (guardada como archivo en `logs/bugreport_screenshots/`).
+- Los reportes se registran en `logs/BugReport.log` del backend mediante `POST /bug-report`.
+- Más info en `docs/BUG_REPORTS.md`.
 
 ### Producción: SPA fallback
 

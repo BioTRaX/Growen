@@ -7,6 +7,9 @@
 
 Este documento orienta a herramientas de asistencia de código (Copilot, Codex, Gemini, etc.) sobre cómo interactuar con este repositorio. No aplica a agentes internos de la aplicación.
 
+## Idioma obligatorio
+- Todas las respuestas y mensajes generados por agentes deben ser en español (tono claro y profesional latinoamericano). Si el usuario escribe en otro idioma, el agente puede citar fragmentos, pero la respuesta debe mantenerse en español.
+
 ## Estructura de prompt obligatoria
 1. **Contexto**
 2. **Observaciones**
@@ -20,6 +23,7 @@ Este documento orienta a herramientas de asistencia de código (Copilot, Codex, 
 - Mensajes de commit claros y en español.
 - Documentar cambios de esquema o infraestructura.
 - No introducir dependencias sin documentarlas y agregarlas a los requirements/README.
+ - Mantener documentación viva: actualizar `Roadmap.md`, `README.md` y docs bajo `docs/` cuando cambien comportamientos, endpoints, modelos, flujos o requisitos de entorno. Toda interacción de agentes debe verificar y actualizar estos documentos (incluyendo este Roadmap) como parte de la entrega.
 
 ## Encabezado obligatorio (NG-HEADER)
 Agregar al inicio de cada archivo de código y documentación `.md` (excepto `README.md`). Excepciones: `*.json`, `destinatarios.json`, binarios, imágenes, PDFs y otros archivos de datos.
@@ -92,6 +96,7 @@ Formato por lenguaje:
 - Confirmar impacto de cambios (migraciones, variables de entorno, dependencias nativas).
 - Dejar notas de migración cuando corresponda.
 - Adjuntar ejemplos mínimos de uso y pruebas cuando sea razonable.
+- Mantener consistencia de idioma en commits, PRs y documentación: español.
 
 ## Checklist para cada PR generado por un agente
 - [ ] Se agregó/actualizó encabezado NG-HEADER cuando corresponde.

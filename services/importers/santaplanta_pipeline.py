@@ -162,14 +162,24 @@ def _extract_lines_from_table(table: List[List[str]], dbg: Dict[str, Any]) -> Li
                     sku = m2.group("sku")
                     raw_title = m2.group("title")
 
-        # 3) Si aún no encontramos SKU, buscar cualquier token de 3-6 dígitos dentro del título
-        # (esto cubre casos donde el SKU está en una línea separada dentro de la misma celda)
+        # 3) Si aún no encontramos SKU, buscar token de 3-6 dígitos dentro del título,
+        # ignorando los que corresponden a unidades de medida (ML, G, KG, L, CM, MM, CC)
         if not sku:
             m3 = re.search(r"\b(\d{3,6})\b", raw_title)
             if m3:
-                sku = m3.group(1)
-                # Eliminar el token numérico del título
-                raw_title = (raw_title[:m3.start()] + raw_title[m3.end():]).strip()
+                token = m3.group(1)
+                # Verificar si el token está seguido inmediatamente por una unidad (indicador de medida, no SKU)
+                after = raw_title[m3.end():m3.end()+6].strip().upper()
+                next_token = re.split(r"\s+", after)[0] if after else ""
+                next_token = re.sub(r"[^A-Z0-9]", "", next_token)
+                units = {"ML", "G", "KG", "L", "CM", "MM", "CC"}
+                if next_token in units:
+                    # No considerar como SKU; mantener título intacto
+                    pass
+                else:
+                    sku = token
+                    # Eliminar el token numérico del título
+                    raw_title = (raw_title[:m3.start()] + raw_title[m3.end():]).strip()
 
         # Limpieza final de título y SKU: quitar asteriscos y colapsar espacios
         title = re.sub(r"\*", "", raw_title).strip()
@@ -367,30 +377,68 @@ def _try_camelot(pdf_path: Path, events: List[Dict[str, Any]], dbg: Dict[str, An
 
 
 def compute_classic_confidence(lines: List[ParsedLine]) -> float:
-    """Heurística simple de confianza del parser clásico.
+    """Heurística refinada de confianza del parser clásico.
 
-    Métricas consideradas:
-    - Proporción de líneas con SKU (peso 0.45)
-    - Proporción de líneas con qty > 0 (peso 0.25)
-    - Proporción de líneas con unit_cost > 0 (peso 0.15)
-    - Diversidad SKU (SKU únicos / líneas) (peso 0.15)
+    Métricas consideradas (peso entre paréntesis):
+    - Proporción de líneas con SKU (0.38)
+    - Proporción de líneas con qty > 0 (0.18)
+    - Proporción de líneas con unit_cost > 0 (0.12)
+    - Diversidad SKU únicos / total (0.12)
+    - Densidad numérica (0.20): proporción de caracteres dígitos sobre total en títulos limpios.
+
+    Sanitización de outliers antes del cómputo:
+    - Si qty > 10_000 se recorta a 10_000 (protege PDFs con merges extraños).
+    - Si unit_cost > 10_000_000 se ignora en la métrica de costo (>10M improbable).
+
     Escala 0-1. Devuelve 0 si no hay líneas.
     """
     if not lines:
         return 0.0
+    # Copia ligera sanitizada
+    norm_lines: List[ParsedLine] = []
+    for l in lines:
+        try:
+            qty = l.qty
+            if qty and qty > 10000:
+                qty = Decimal("10000")
+            cost = l.unit_cost_bonif
+            if cost and cost > Decimal("10000000"):
+                cost = Decimal("0")  # descartar para métrica de costo
+            norm = ParsedLine(
+                supplier_sku=l.supplier_sku,
+                title=l.title,
+                qty=qty,
+                unit_cost_bonif=cost,
+                pct_bonif=l.pct_bonif,
+                subtotal=l.subtotal,
+                iva=l.iva,
+                total=l.total,
+            )
+            norm_lines.append(norm)
+        except Exception:
+            norm_lines.append(l)
+    lines = norm_lines
     total = len(lines)
     with_sku = sum(1 for l in lines if l.supplier_sku)
     with_qty = sum(1 for l in lines if (l.qty or 0) > 0)
     with_cost = sum(1 for l in lines if (l.unit_cost_bonif or 0) > 0)
     unique_skus = len({l.supplier_sku for l in lines if l.supplier_sku})
     diversity = unique_skus / total if total else 0
+    # Densidad numérica en títulos
+    digit_chars = 0
+    all_chars = 0
+    for l in lines:
+        t = l.title or ""
+        all_chars += len(t)
+        digit_chars += sum(1 for ch in t if ch.isdigit())
+    density = (digit_chars / all_chars) if all_chars else 0
     score = (
-        0.45 * (with_sku / total)
-        + 0.25 * (with_qty / total)
-        + 0.15 * (with_cost / total)
-        + 0.15 * diversity
+        0.38 * (with_sku / total)
+        + 0.18 * (with_qty / total)
+        + 0.12 * (with_cost / total)
+        + 0.12 * diversity
+        + 0.20 * density
     )
-    # Clamp
     return float(min(1.0, max(0.0, round(score, 4))))
 
 

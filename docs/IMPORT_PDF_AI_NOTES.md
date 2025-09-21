@@ -17,7 +17,7 @@
    - Estrategia fuzzy SKU: si IA detecta título cercano >90 fuzz y sin SKU, reutilizar SKU de catálogo.
 4. Métricas y observabilidad:
    - Registrar tokens usados (input/output) cuando OpenAI lo exponga en response.
-   - Endpoint `/admin/services/pdf_import/ai_stats` con agregados (llamadas, tasa éxito, líneas añadidas, latencia media).
+   - [Implementado] Endpoint `/admin/services/pdf_import/ai_stats` con agregados (llamadas, tasa éxito, líneas añadidas, latencia media).
 5. Hardening:
    - Sanitizar big numbers fuera de rango (qty>5000 o unit_cost>1e6) -> descartar.
    - Limitar longitud acumulada de títulos IA (p.e. 8k chars) para proteger DB.

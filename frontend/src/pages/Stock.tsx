@@ -3,15 +3,17 @@
 // NG-HEADER: Descripción: Pendiente de descripción
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
-import { listSuppliers, Supplier } from '../services/suppliers'
+import type { SupplierSearchItem } from '../services/suppliers'
+import SupplierAutocomplete from '../components/supplier/SupplierAutocomplete'
 import { useNavigate } from 'react-router-dom'
 import { PATHS } from '../routes/paths'
 import { listCategories, Category } from '../services/categories'
 import { searchProducts, ProductItem, updateStock, deleteProducts } from '../services/products'
-import { updateSalePrice, updateSupplierBuyPrice } from '../services/productsEx'
+import { updateSalePrice, updateSupplierBuyPrice, updateSupplierSalePrice } from '../services/productsEx'
 import { useAuth } from '../auth/AuthContext'
 import { pushTNBulk } from '../services/images'
 import { generateCatalog, headLatestCatalog } from '../services/catalogs'
+import { baseURL as base } from '../services/http'
 import CatalogHistoryModal from '../components/CatalogHistoryModal'
 import { useToast } from '../components/ToastProvider'
 
@@ -20,9 +22,9 @@ export default function Stock() {
   const { state } = useAuth()
   const canEdit = state.role === 'admin' || state.role === 'colaborador'
   const navigate = useNavigate()
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [supplierId, setSupplierId] = useState('')
+  const [supplierSel, setSupplierSel] = useState<SupplierSearchItem | null>(null)
   const [categoryId, setCategoryId] = useState('')
   const [q, setQ] = useState('')
   const [items, setItems] = useState<ProductItem[]>([])
@@ -34,6 +36,8 @@ export default function Stock() {
   const [stockVal, setStockVal] = useState('')
   const [editSaleId, setEditSaleId] = useState<number | null>(null)
   const [saleVal, setSaleVal] = useState('')
+  const [editSupplierSaleId, setEditSupplierSaleId] = useState<number | null>(null)
+  const [supplierSaleVal, setSupplierSaleVal] = useState('')
   const [editBuyId, setEditBuyId] = useState<number | null>(null)
   const [buyVal, setBuyVal] = useState('')
   const [tab, setTab] = useState<'gt' | 'eq'>('gt')
@@ -42,6 +46,7 @@ export default function Stock() {
   const [showHistory, setShowHistory] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [filling, setFilling] = useState(false)
   const toggleSelect = (id: number) => {
     setSelected(prev => {
       const next = new Set(prev)
@@ -56,7 +61,6 @@ export default function Stock() {
   }
 
   useEffect(() => {
-    listSuppliers().then(setSuppliers).catch(() => {})
     listCategories().then(setCategories).catch(() => {})
   }, [])
 
@@ -114,6 +118,19 @@ export default function Stock() {
     }
   }
 
+  async function saveSupplierSalePrice(supplierItemId: number) {
+    const v = parseDecimalInput(supplierSaleVal)
+    if (v == null) { push({ kind: 'error', message: 'Precio de venta inválido' }); return }
+    try {
+      await updateSupplierSalePrice(supplierItemId, v)
+      setItems(prev => prev.map(it => (it as any).supplier_item_id === supplierItemId ? { ...it, precio_venta: v } : it))
+      push({ kind: 'success', message: 'Precio de venta (proveedor) actualizado' })
+      setEditSupplierSaleId(null)
+    } catch (e: any) {
+      push({ kind: 'error', message: e.message || 'Error actualizando precio de venta' })
+    }
+  }
+
   async function saveBuyPrice(supplierItemId: number) {
     const v = parseDecimalInput(buyVal)
     if (v == null) { push({ kind: 'error', message: 'Precio de compra inválido' }); return }
@@ -140,16 +157,56 @@ export default function Stock() {
     }}>Generar catálogo</button>
     <button className="btn" onClick={async () => {
       const ok = await headLatestCatalog(); if (!ok) { push({ kind:'error', message:'No hay catálogo disponible' }); return }
-      window.open('/api/catalogs/latest','_blank'); push({ kind:'info', message:'Abriendo catálogo actual' })
+  window.open(base + '/catalogs/latest','_blank'); push({ kind:'info', message:'Abriendo catálogo actual' })
     }}>Ver catálogo</button>
     <button className="btn" onClick={async () => {
       const ok = await headLatestCatalog(); if (!ok) { push({ kind:'error', message:'No hay catálogo disponible' }); return }
-      window.location.href = '/api/catalogs/latest/download'; push({ kind:'info', message:'Descargando catálogo' })
+  window.location.href = base + '/catalogs/latest/download'; push({ kind:'info', message:'Descargando catálogo' })
     }}>Descargar catálogo</button>
   <button className="btn" disabled={!items.length} onClick={toggleSelectAllOnPage}>{selected.size === items.length && items.length > 0 ? 'Deseleccionar página' : 'Seleccionar página'}</button>
   <button className="btn-secondary" disabled={!selected.size} onClick={clearSelection}>Limpiar selección</button>
   <button className="btn" disabled={!selected.size} onClick={() => setShowDeleteConfirm(true)}>Borrar seleccionados</button>
   <button className="btn" onClick={() => setShowHistory(true)}>Histórico catálogos</button>
+    <button className="btn-dark" onClick={() => {
+      const params = new URLSearchParams()
+      if (q) params.set('q', q)
+      if (supplierId) params.set('supplier_id', supplierId)
+      if (categoryId) params.set('category_id', categoryId)
+      params.set('stock', tab === 'gt' ? 'gt:0' : 'eq:0')
+      // mantener orden por defecto del listado
+      params.set('sort_by', 'updated_at')
+      params.set('order', 'desc')
+  const url = base + `/stock/export.xlsx?${params.toString()}`
+  window.location.href = url
+    }}>Descargar XLS</button>
+    {canEdit && (
+      <button className="btn" disabled={filling} onClick={async () => {
+        setFilling(true)
+        try {
+          // Llamado directo al endpoint bulk
+          const headers: Record<string, string> = {}
+          {
+            const m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/)
+            if (m) headers['X-CSRF-Token'] = decodeURIComponent(m[1])
+          }
+          const res = await fetch('/products-ex/supplier-items/fill-missing-sale', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json', ...headers },
+            body: JSON.stringify({ supplier_id: supplierId ? Number(supplierId) : null }),
+          })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const data = await res.json()
+          push({ kind: 'success', message: `Precios de venta completados: ${data.updated}` })
+          // Refrescar lista
+          setPage(1); setItems([])
+        } catch (e: any) {
+          push({ kind: 'error', message: e?.message || 'No se pudo completar precios de venta' })
+        } finally {
+          setFilling(false)
+        }
+      }}>Completar ventas faltantes</button>
+    )}
     <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.home)}>Volver</button>
   </div>
       </div>
@@ -164,12 +221,12 @@ export default function Stock() {
           value={q}
           onChange={(e) => { setQ(e.target.value); resetAndSearch() }}
         />
-        <select className="select" value={supplierId} onChange={(e) => { setSupplierId(e.target.value); resetAndSearch() }}>
-          <option value="">Proveedor</option>
-          {suppliers.map((s) => (
-            <option key={s.id} value={s.id}>{s.name}</option>
-          ))}
-        </select>
+        <SupplierAutocomplete
+          className="input"
+          value={supplierSel}
+          onChange={(item) => { setSupplierSel(item); setSupplierId(item ? String(item.id) : ''); resetAndSearch() }}
+          placeholder="Proveedor"
+        />
         <select className="select" value={categoryId} onChange={(e) => { setCategoryId(e.target.value); resetAndSearch() }}>
           <option value="">Categoría</option>
           {categories.map((c) => (
@@ -220,8 +277,26 @@ export default function Stock() {
               <button className="btn-secondary" style={{ marginLeft: 6 }} onClick={() => { setEditSaleId(it.canonical_product_id!); setSaleVal(String(it.canonical_sale_price ?? '')) }}>✎</button>
             </span>
           )
+        ) : canEdit && (it as any).supplier_item_id ? (
+          editSupplierSaleId === (it as any).supplier_item_id ? (
+            <span>
+              <input
+                className="input"
+                style={{ width: 100 }}
+                value={supplierSaleVal}
+                onChange={(e) => setSupplierSaleVal(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveSupplierSalePrice((it as any).supplier_item_id); if (e.key === 'Escape') setEditSupplierSaleId(null) }}
+                onBlur={() => saveSupplierSalePrice((it as any).supplier_item_id)}
+              />
+            </span>
+          ) : (
+            <span>
+              {(it as any).precio_venta != null ? `$ ${((it as any).precio_venta as number).toFixed(2)}` : '-'}
+              <button className="btn-secondary" style={{ marginLeft: 6 }} onClick={() => { setEditSupplierSaleId((it as any).supplier_item_id); setSupplierSaleVal(String((it as any).precio_venta ?? '')) }}>✎</button>
+            </span>
+          )
         ) : (
-          <span>{it.canonical_sale_price ?? ''}</span>
+          <span>{(it as any).precio_venta ?? it.canonical_sale_price ?? ''}</span>
         )}
       </td>
       <td className="text-center">

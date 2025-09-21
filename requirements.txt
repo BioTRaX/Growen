@@ -41,3 +41,7 @@ pdf2image
 pytesseract
 opencv-python-headless
 onnxruntime>=1.22.1  # runtime para rembg (model inference)
+
+# LLM proveedor OpenAI
+openai>=1.40.0
+notion-client>=2.2.1

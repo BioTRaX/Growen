@@ -129,6 +129,10 @@ def main() -> None:
         LOGS / "fix_deps.log",
     LOGS / "run_api.log",
     ]
+    # Política: NO limpiar/rotar BugReport.log desde este script
+    bug_log = LOGS / "BugReport.log"
+    if bug_log.exists():
+        print("excluded by policy: BugReport.log")
     for f in files:
         if f.exists():
             print(truncate_file(f))

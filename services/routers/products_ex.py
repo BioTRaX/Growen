@@ -36,6 +36,10 @@ class UpdateBuyPriceIn(BaseModel):
     buy_price: Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=2)]
     note: str | None = None
 
+class UpdateSupplierSalePriceIn(BaseModel):
+    sale_price: Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=2)]
+    note: str | None = None
+
 
 class BulkSalePriceIn(BaseModel):
     product_ids: list[int]
@@ -113,6 +117,9 @@ async def update_buy_price(
     old = Decimal(sp.current_purchase_price or 0)
     new = Decimal(data.buy_price)
     sp.current_purchase_price = new
+    # Si no hay precio de venta cargado aún, por defecto igualar a compra
+    if getattr(sp, "current_sale_price", None) is None:
+        sp.current_sale_price = new
     db.add(sp)
     db.add(
         PriceHistory(
@@ -138,6 +145,173 @@ async def update_buy_price(
     await db.commit()
     await db.refresh(sp)
     return {"id": sp.id, "buy_price": float(sp.current_purchase_price) if sp.current_purchase_price is not None else None}
+
+
+@router.patch(
+    "/supplier-items/{supplier_item_id}/sale-price",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def update_supplier_sale_price(
+    supplier_item_id: int,
+    data: UpdateSupplierSalePriceIn,
+    request: Request,
+    session_data: SessionData = Depends(current_session),
+    db: AsyncSession = Depends(get_session),
+):
+    """Actualiza el precio de venta a nivel SupplierProduct (cuando no hay canónico).
+
+    Registra PriceHistory con entity_type="supplier" y AuditLog.
+    """
+    sp = await db.get(SupplierProduct, supplier_item_id)
+    if not sp:
+        raise HTTPException(status_code=404, detail="Oferta de proveedor no encontrada")
+    old = Decimal(sp.current_sale_price or 0)
+    new = Decimal(data.sale_price)
+    sp.current_sale_price = new
+    db.add(sp)
+    db.add(
+        PriceHistory(
+            entity_type="supplier",
+            entity_id=supplier_item_id,
+            price_old=old,
+            price_new=new,
+            note=data.note,
+            user_id=session_data.user.id if session_data.user else None,
+            ip=_client_ip(request),
+        )
+    )
+    db.add(
+        AuditLog(
+            action="update",
+            table="supplier_products",
+            entity_id=supplier_item_id,
+            meta={"field": "current_sale_price", "old": str(old), "new": str(new), "note": data.note},
+            user_id=session_data.user.id if session_data.user else None,
+            ip=_client_ip(request),
+        )
+    )
+    await db.commit()
+    await db.refresh(sp)
+    return {"id": sp.id, "sale_price": float(sp.current_sale_price) if sp.current_sale_price is not None else None}
+
+
+class FillMissingSupplierSaleIn(BaseModel):
+    supplier_id: int | None = None
+
+
+@router.post(
+    "/supplier-items/fill-missing-sale",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def fill_missing_supplier_sale(
+    body: FillMissingSupplierSaleIn,
+    request: Request,
+    session_data: SessionData = Depends(current_session),
+    db: AsyncSession = Depends(get_session),
+):
+    """Completa precios de venta faltantes a nivel SupplierProduct con el valor de compra actual.
+
+    - Si `supplier_id` viene en el body, limita el alcance a ese proveedor.
+    - No genera PriceHistory (se considera un backfill de default), pero registra AuditLog.
+    """
+    q = select(SupplierProduct).where(SupplierProduct.current_sale_price.is_(None))
+    if body.supplier_id:
+        q = q.where(SupplierProduct.supplier_id == body.supplier_id)
+    q = q.where(SupplierProduct.current_purchase_price.is_not(None))
+    rows = (await db.execute(q)).scalars().all()
+    updated = 0
+    for sp in rows:
+        sp.current_sale_price = sp.current_purchase_price
+        db.add(sp)
+        updated += 1
+    if updated:
+        await db.commit()
+    db.add(
+        AuditLog(
+            action="supplier_items_fill_missing_sale",
+            table="supplier_products",
+            entity_id=None,
+            meta={
+                "updated": updated,
+                "scope_supplier_id": body.supplier_id,
+            },
+            user_id=session_data.user.id if session_data.user else None,
+            ip=_client_ip(request),
+        )
+    )
+    await db.commit()
+    return {"updated": updated}
+
+
+# ------------------------------- Diagnóstico -------------------------------
+class SupplierItemDiag(BaseModel):
+    id: int
+    supplier_id: int
+    supplier_sku: str | None
+    internal_product_id: int | None
+    current_purchase_price: float | None
+    current_sale_price: float | None
+    sale_missing: bool
+
+
+@router.get(
+    "/diagnostics/supplier-item/{supplier_item_id}",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+)
+async def diag_supplier_item(
+    supplier_item_id: int,
+    db: AsyncSession = Depends(get_session),
+):
+    sp = await db.get(SupplierProduct, supplier_item_id)
+    if not sp:
+        raise HTTPException(status_code=404, detail="Oferta de proveedor no encontrada")
+    return SupplierItemDiag(
+        id=sp.id,
+        supplier_id=sp.supplier_id,
+        supplier_sku=sp.supplier_product_id,
+        internal_product_id=sp.internal_product_id,
+        current_purchase_price=float(sp.current_purchase_price) if sp.current_purchase_price is not None else None,
+        current_sale_price=float(sp.current_sale_price) if sp.current_sale_price is not None else None,
+        sale_missing=(sp.current_sale_price is None),
+    )
+
+
+class MissingSaleSummary(BaseModel):
+    count: int
+    sample_ids: list[int]
+
+
+@router.get(
+    "/diagnostics/missing-sale",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+)
+async def diag_missing_sale(
+    supplier_id: int | None = None,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_session),
+):
+    q = select(SupplierProduct.id).where(SupplierProduct.current_sale_price.is_(None))
+    if supplier_id:
+        q = q.where(SupplierProduct.supplier_id == supplier_id)
+    all_ids = (await db.execute(q)).scalars().all()
+    return MissingSaleSummary(count=len(all_ids), sample_ids=list(map(int, all_ids[: max(0, min(limit, 100))])))
+
+
+@router.post(
+    "/diagnostics/supplier-item/{supplier_item_id}/clear-sale",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+)
+async def diag_clear_supplier_sale(
+    supplier_item_id: int,
+    db: AsyncSession = Depends(get_session),
+):
+    sp = await db.get(SupplierProduct, supplier_item_id)
+    if not sp:
+        raise HTTPException(status_code=404, detail="Oferta de proveedor no encontrada")
+    sp.current_sale_price = None
+    db.add(sp)
+    await db.commit()
+    return {"id": sp.id, "current_sale_price": None}
 
 
 @router.post(

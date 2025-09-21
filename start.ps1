@@ -42,5 +42,9 @@ if (-not (Test-Path .\node_modules)) {
   npm install
 }
 Write-Host "[INFO] Iniciando frontend..."
+# Asegurar puerto por defecto para Vite en PowerShell
+if (-not $env:VITE_PORT -or [string]::IsNullOrWhiteSpace($env:VITE_PORT)) {
+  $env:VITE_PORT = "5175"
+}
 npm run dev
 Pop-Location

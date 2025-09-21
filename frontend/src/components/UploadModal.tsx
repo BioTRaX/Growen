@@ -8,7 +8,8 @@ import {
   downloadTemplate,
   downloadGenericTemplate,
 } from '../services/imports'
-import { listSuppliers, Supplier } from '../services/suppliers'
+import SupplierAutocomplete from './supplier/SupplierAutocomplete'
+import type { SupplierSearchItem } from '../services/suppliers'
 import CreateSupplierModal from './CreateSupplierModal'
 import { useAuth } from '../auth/AuthContext'
 
@@ -21,18 +22,14 @@ interface Props {
 
 export default function UploadModal({ open, onClose, onUploaded, preselectedFile }: Props) {
   const { state } = useAuth()
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const [supplierSel, setSupplierSel] = useState<SupplierSearchItem | null>(null)
   const [supplierId, setSupplierId] = useState<number | ''>('')
   const [file, setFile] = useState<File | null>(preselectedFile || null)
   const [error, setError] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const MAX_MB = Number(import.meta.env.VITE_MAX_UPLOAD_MB ?? 15)
 
-  function refresh() {
-    listSuppliers()
-      .then(setSuppliers)
-      .catch((e) => setError(e.message))
-  }
+  function refresh() { /* ya no requiere prefetch: se usa autocomplete */ }
 
   useEffect(() => {
     if (open) refresh()
@@ -97,47 +94,27 @@ export default function UploadModal({ open, onClose, onUploaded, preselectedFile
       <div className="panel p-4" style={{ width: 400 }}>
         <h3>Adjuntar lista de precios</h3>
         {error && <div style={{ color: 'var(--primary)', marginBottom: 8 }}>{error}</div>}
-        {suppliers.length === 0 ? (
-          <div style={{ margin: '8px 0' }}>
-            <p>No hay proveedores aún.</p>
-            <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ margin: '8px 0' }}>
+          <SupplierAutocomplete
+            value={supplierSel}
+            onChange={(item) => { setSupplierSel(item); setSupplierId(item ? item.id : '') }}
+            placeholder="Selecciona proveedor"
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            {state.role !== 'proveedor' && (
               <button onClick={() => setCreateOpen(true)}>Crear proveedor</button>
-              <button onClick={downloadGenericTemplate}>
-                Descargar plantilla genérica
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ margin: '8px 0' }}>
-            <select
-              className="select w-full"
-              value={supplierId}
-              onChange={(e) => setSupplierId(Number(e.target.value))}
-              disabled={state.role === 'proveedor'}
+            )}
+            <button onClick={downloadGenericTemplate}>
+              Descargar plantilla genérica
+            </button>
+            <button
+              onClick={() => supplierId && downloadTemplate(Number(supplierId))}
+              disabled={!supplierId}
             >
-              <option value="">Selecciona proveedor</option>
-              {suppliers.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-              {state.role !== 'proveedor' && (
-                <button onClick={() => setCreateOpen(true)}>Crear proveedor</button>
-              )}
-              <button onClick={downloadGenericTemplate}>
-                Descargar plantilla genérica
-              </button>
-              <button
-                onClick={() => supplierId && downloadTemplate(Number(supplierId))}
-                disabled={!supplierId}
-              >
-                Descargar plantilla
-              </button>
-            </div>
+              Descargar plantilla
+            </button>
           </div>
-        )}
+        </div>
         <div style={{ margin: '8px 0' }}>
           <input
             type="file"

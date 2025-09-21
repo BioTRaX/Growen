@@ -2,7 +2,7 @@
 // NG-HEADER: Ubicación: frontend/src/lib/ws.ts
 // NG-HEADER: Descripción: Pendiente de descripción
 // NG-HEADER: Lineamientos: Ver AGENTS.md
-export type WSMessage = { role: string; text: string }
+export type WSMessage = { role: string; text: string; type?: string; data?: any; stream?: string }
 
 export function createWS(onMessage: (m: WSMessage) => void) {
   const url = (import.meta.env.VITE_WS_URL as string) || '/ws'

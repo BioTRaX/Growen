@@ -7,7 +7,7 @@ import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom'
 import { PATHS } from '../routes/paths'
 import AppToolbar from '../components/AppToolbar'
 import ToastContainer, { showToast } from '../components/Toast'
-import { getPurchase, updatePurchase, validatePurchase, confirmPurchase, cancelPurchase, exportUnmatched, PurchaseLine, deletePurchase, getPurchaseLogs, searchSupplierProducts, resendPurchaseStock } from '../services/purchases'
+import { getPurchase, updatePurchase, validatePurchase, confirmPurchase, cancelPurchase, exportUnmatched, PurchaseLine, deletePurchase, getPurchaseLogs, searchSupplierProducts, resendPurchaseStock, iavalPreview, iavalApply, rollbackPurchase } from '../services/purchases'
 import { createProduct } from '../services/products'
 
 type SuggestionResult = {
@@ -28,6 +28,19 @@ export default function PurchaseDetail() {
   const [lines, setLines] = useState<PurchaseLine[]>([])
   const [logsOpen, setLogsOpen] = useState(false)
   const [logs, setLogs] = useState<{ action: string; created_at?: string; meta: any }[]>([])
+  const [auditOpen, setAuditOpen] = useState(false)
+  const appliedDeltas = useMemo(() => {
+    // Buscar en logs eventos que contengan applied_deltas o applied deltas
+    const items: { when?: string; list: { product_id?: number; product_title?: string | null; delta?: number; new?: number; old?: number }[] }[] = []
+    for (const l of logs) {
+      const m = l?.meta || {}
+      const list = (m.applied_deltas || m.applied || []) as any[]
+      if (Array.isArray(list) && list.length > 0) {
+        items.push({ when: l.created_at, list: list as any })
+      }
+    }
+    return items
+  }, [logs])
   const corrId = useMemo(() => {
     for (const l of logs) {
       if ((l as any)?.meta?.correlation_id) return (l as any).meta.correlation_id as string
@@ -47,6 +60,13 @@ export default function PurchaseDetail() {
   const [bulkCreateOpen, setBulkCreateOpen] = useState(false)
   const [bulkPrefix, setBulkPrefix] = useState('')
   const [bulkCreating, setBulkCreating] = useState(false)
+  // iAVaL (AI Validator)
+  const [iavalOpen, setIavalOpen] = useState(false)
+  const [iavalLoading, setIavalLoading] = useState(false)
+  const [iavalResult, setIavalResult] = useState<any | null>(null)
+  const [iavalError, setIavalError] = useState<string | null>(null)
+  const [iavalEmitLog, setIavalEmitLog] = useState<boolean>(false)
+    const [iavalDownload, setIavalDownload] = useState<{ url_json?: string; url_csv?: string | null } | null>(null)
 
   const addLine = useCallback(() => {
     setLines((prev) => [...prev, { title: '', supplier_sku: '', qty: 1, unit_cost: 0, line_discount: 0 }])
@@ -163,8 +183,15 @@ export default function PurchaseDetail() {
 
   async function doValidate() {
     try {
-      const res = await validatePurchase(pid)
-      showToast('success', res.unmatched === 0 ? 'Validada, sin pendientes' : `Validada con ${res.unmatched} sin vincular`)
+      const res = await validatePurchase(pid) as any
+      const msgs: string[] = []
+      if (typeof res.linked === 'number' && res.linked > 0) msgs.push(`Autovinculadas ${res.linked}`)
+      if (typeof res.unmatched === 'number') msgs.push(res.unmatched === 0 ? 'sin pendientes' : `${res.unmatched} sin vincular`)
+      showToast('success', `Validada: ${msgs.join(' · ')}`)
+      if (Array.isArray(res.missing_skus) && res.missing_skus.length > 0) {
+        const list = res.missing_skus.slice(0, 6).join(', ')
+        showToast('info', `SKUs no encontrados para este proveedor: ${list}${res.missing_skus.length > 6 ? '…' : ''}`)
+      }
       const p = await getPurchase(pid)
       setData(p)
       setLines(p.lines || [])
@@ -178,13 +205,35 @@ export default function PurchaseDetail() {
       const res = await confirmPurchase(pid, true)
       showToast('success', 'Compra confirmada')
       if (Array.isArray(res.applied_deltas) && res.applied_deltas.length > 0) {
-        for (const d of res.applied_deltas) {
+        for (const d of res.applied_deltas.slice(0, 5)) {
           const name = d.product_title || `Producto ${d.product_id}`
-          showToast('info', `${name}: +${d.delta} (→ ${d.new})`)
+          const idLabel = d.product_id ? ` · ID ${d.product_id}` : ''
+          showToast('info', `${name}${idLabel}: +${d.delta} (→ ${d.new})`)
         }
+        if (res.applied_deltas.length > 5) showToast('info', `(+${res.applied_deltas.length - 5} más)`) 
       }
       if (Array.isArray(res.unresolved_lines) && res.unresolved_lines.length > 0) {
         showToast('warning', `Líneas sin producto: ${res.unresolved_lines.join(', ')}`)
+      }
+      // Si hay mismatch significativo ofrecer rollback inmediato
+      if (res?.totals?.mismatch && res.can_rollback) {
+        const pt = res.totals.purchase_total.toLocaleString('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 2 })
+        const at = res.totals.applied_total.toLocaleString('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 2 })
+        const ok = confirm(`Atención: los totales no coinciden.\nRemito: ${pt}\nAplicado a stock: ${at}\n\n¿Deseás hacer ROLLBACK ahora mismo?`)
+        if (ok) {
+          try {
+            const rb = await rollbackPurchase(pid)
+            showToast('success', 'Rollback aplicado')
+            if (Array.isArray(rb.reverted) && rb.reverted.length > 0) {
+              for (const d of rb.reverted.slice(0, 5)) {
+                showToast('info', `Prod ${d.product_id}: ${d.delta}`)
+              }
+              if (rb.reverted.length > 5) showToast('info', `(+${rb.reverted.length - 5} más)`) 
+            }
+          } catch (e:any) {
+            showToast('error', e?.response?.data?.detail || 'Error al hacer rollback')
+          }
+        }
       }
       const p = await getPurchase(pid)
       setData(p)
@@ -233,6 +282,34 @@ export default function PurchaseDetail() {
             <div style={{ fontWeight: 600 }}>Total: {totals.total.toLocaleString('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 2 })}</div>
             <button className="btn-dark btn-lg" onClick={save} disabled={saving}>{saving ? 'Guardando...' : 'Guardar (Ctrl+S)'}</button>
             <button className="btn btn-lg" onClick={doValidate}>Validar</button>
+            <button className="btn-secondary btn-lg" onClick={() => setAuditOpen(true)} title="Ver auditoría de stock aplicada">Auditoría</button>
+            {data?.status === 'BORRADOR' && (
+              <button
+                className="btn btn-lg"
+                onClick={async () => {
+                  setIavalOpen(true)
+                  setIavalLoading(true)
+                  setIavalError(null)
+                  setIavalResult(null)
+                  setIavalDownload(null)
+                  try {
+                    const res = await iavalPreview(pid)
+                    setIavalResult(res)
+                    const hasHeader = res?.diff && Object.keys(res.diff.header || {}).length > 0
+                    const hasLines = res?.diff && Array.isArray(res.diff.lines) && res.diff.lines.some((ln: any) => ln && Object.keys(ln).length > 0)
+                    if (!hasHeader && !hasLines) {
+                      showToast('info', 'IA: No se detectaron diferencias para aplicar')
+                    }
+                  } catch (e: any) {
+                    setIavalError(e?.response?.data?.detail || 'Error al ejecutar iAVaL')
+                  } finally {
+                    setIavalLoading(false)
+                  }
+                }}
+                disabled={!Array.isArray((data as any)?.attachments) || ((data as any)?.attachments?.length || 0) === 0}
+                title={!Array.isArray((data as any)?.attachments) || ((data as any)?.attachments?.length || 0) === 0 ? 'Necesita un PDF adjunto' : 'Validador de IA del remito'}
+              >iAVaL</button>
+            )}
             <button
               className="btn-primary btn-lg"
               onClick={doConfirm}
@@ -447,15 +524,139 @@ export default function PurchaseDetail() {
           </div>
         </div>
       )}
+      {iavalOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 92, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="panel" style={{ padding: 20, width: 720, maxWidth: '96%', maxHeight: '90%', overflow: 'auto' }}>
+            <h3 style={{ marginTop: 0 }}>iAVaL — Validador de IA del remito</h3>
+            {iavalLoading && (<div>Cargando análisis...</div>)}
+            {iavalError && (<div className="text-danger" style={{ marginBottom: 8 }}>{iavalError}</div>)}
+            {!iavalLoading && iavalResult && (
+              <>
+                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Confianza: {Math.round((iavalResult.confidence || 0) * 100)}%</div>
+                    {Array.isArray(iavalResult.comments) && iavalResult.comments.length > 0 && (
+                      <ul style={{ marginTop: 6 }}>
+                        {iavalResult.comments.map((c: string, i: number) => (<li key={i} style={{ fontSize: 13, opacity: .9 }}>{c}</li>))}
+                      </ul>
+                    )}
+                  </div>
+                  <div style={{ opacity: .8, fontSize: 12 }}>Solo en BORRADOR · Revisa y confirmá para aplicar</div>
+                </div>
+                <div style={{ marginTop: 12 }}>
+                  <h4 style={{ margin: '8px 0' }}>Cambios de encabezado</h4>
+                  {(() => {
+                    const h = iavalResult?.diff?.header || {}
+                    const keys = Object.keys(h)
+                    if (keys.length === 0) return <div style={{ opacity: .8 }}>Sin cambios propuestos</div>
+                    return (
+                      <table className="table w-full">
+                        <thead>
+                          <tr><th>Campo</th><th>Actual</th><th>Propuesto</th></tr>
+                        </thead>
+                        <tbody>
+                          {keys.map(k => (
+                            <tr key={k}>
+                              <td style={{ fontWeight: 600 }}>{k}</td>
+                              <td>{String((data as any)?.[k] ?? '')}</td>
+                              <td>{String((iavalResult?.proposal?.header || {})[k] ?? '')}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )
+                  })()}
+                </div>
+                <div style={{ marginTop: 12 }}>
+                  <h4 style={{ margin: '8px 0' }}>Cambios por línea</h4>
+                  {(() => {
+                    const diffs: any[] = iavalResult?.diff?.lines || []
+                    const anyDiff = diffs.some((d) => d && Object.keys(d).length > 0)
+                    if (!anyDiff) return <div style={{ opacity: .8 }}>Sin cambios propuestos</div>
+                    return (
+                      <table className="table w-full">
+                        <thead>
+                          <tr>
+                            <th>#</th>
+                            <th>Campo</th>
+                            <th>Actual</th>
+                            <th>Propuesto</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {diffs.map((d, idx) => (
+                            d && Object.keys(d).length > 0 ? (
+                              Object.keys(d).map((k, j) => (
+                                <tr key={`${idx}-${k}`}>
+                                  <td>{idx + 1}</td>
+                                  <td style={{ fontWeight: 600 }}>{k}</td>
+                                  <td>{String((lines[idx] as any)?.[k] ?? '')}</td>
+                                  <td>{String((((iavalResult?.proposal?.lines || [])[idx] || {}) as any)[k] ?? '')}</td>
+                                </tr>
+                              ))
+                            ) : null
+                          ))}
+                        </tbody>
+                      </table>
+                    )
+                  })()}
+                </div>
+                {iavalDownload && (iavalDownload.url_json || iavalDownload.url_csv) && (
+                  <div className="row" style={{ gap: 12, marginTop: 10 }}>
+                    {iavalDownload.url_json && (
+                      <a className="btn" href={iavalDownload.url_json} target="_blank" rel="noreferrer">Descargar log JSON</a>
+                    )}
+                    {iavalDownload.url_csv && (
+                      <a className="btn" href={iavalDownload.url_csv} target="_blank" rel="noreferrer">Descargar log CSV</a>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+            <div className="row" style={{ gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <div style={{ marginRight: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input id="emitLog" type="checkbox" checked={iavalEmitLog} onChange={(e) => setIavalEmitLog(e.target.checked)} />
+                <label htmlFor="emitLog" className="text-sm">Enviar logs de cambios</label>
+              </div>
+              <button className="btn" onClick={() => setIavalOpen(false)} disabled={iavalLoading}>Cerrar</button>
+              <button
+                className="btn-dark"
+                disabled={iavalLoading || !iavalResult || !data || data.status !== 'BORRADOR'}
+                onClick={async () => {
+                  if (!iavalResult) return
+                  try {
+                    setIavalLoading(true)
+                    const res = await iavalApply(pid, iavalResult.proposal, iavalEmitLog)
+                    showToast('success', 'Cambios aplicados')
+                    if (res?.log?.filename) {
+                      showToast('info', `Log generado: ${res.log.filename}`)
+                      setIavalDownload({ url_json: res.log.url_json, url_csv: res.log.url_csv })
+                    } else {
+                      setIavalDownload(null)
+                    }
+                    // Refrescar compra en pantalla sin cerrar el modal (para permitir descarga)
+                    const p = await getPurchase(pid)
+                    setData(p)
+                    setLines(p.lines || [])
+                  } catch (e: any) {
+                    showToast('error', e?.response?.data?.detail || 'No se pudo aplicar iAVaL')
+                  } finally {
+                    setIavalLoading(false)
+                  }
+                }}
+              >Sí, aplicar cambios</button>
+            </div>
+          </div>
+        </div>
+      )}
       {bulkCreateOpen && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className="panel" style={{ padding: 20, width: 560, maxWidth: '96%' }}>
             <h3 style={{ marginTop: 0 }}>Crear productos seleccionados</h3>
             <p className="text-sm" style={{ opacity: .85 }}>Se crearán productos para cada línea seleccionada SIN_VINCULAR. Podés definir un prefijo opcional que se antepone al título existente.</p>
-            <label className="label">Prefijo (opcional)</label>
             <input className="input w-full" value={bulkPrefix} onChange={e => setBulkPrefix(e.target.value)} placeholder="Ej: SP - " />
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
-              <button className="btn" disabled={bulkCreating} onClick={() => setBulkCreateOpen(false)}>Cancelar</button>
+            <div className="row" style={{ gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button className="btn" onClick={() => setBulkCreateOpen(false)} disabled={bulkCreating}>Cancelar</button>
               <button className="btn-dark" disabled={bulkCreating} onClick={async () => {
                 const targets = Array.from(selectedLines).filter(i => !lines[i]?.product_id && !lines[i]?.supplier_item_id)
                 if (!targets.length) { showToast('error', 'No hay líneas elegibles'); return }
@@ -516,6 +717,35 @@ export default function PurchaseDetail() {
         </div>
       )}
       <ToastContainer />
+      {auditOpen && (
+        <div className="panel p-4" style={{ position: 'fixed', right: 16, top: 80, width: 420, maxHeight: '70vh', overflowY: 'auto', zIndex: 30 }}>
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ fontWeight: 700 }}>Auditoría de Stock</div>
+            <button className="btn-secondary" onClick={() => setAuditOpen(false)}>Cerrar</button>
+          </div>
+          {appliedDeltas.length === 0 ? (
+            <div style={{ opacity: .8, marginTop: 8 }}>Sin deltas registrados en logs de esta compra.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              {appliedDeltas.map((grp, idx) => (
+                <div key={idx} className="card" style={{ padding: 8, borderRadius: 8 }}>
+                  <div style={{ fontSize: 12, opacity: .8 }}>Evento: {grp.when ? new Date(grp.when).toLocaleString('es-AR') : 's/d'}</div>
+                  <ul style={{ margin: '6px 0 0 16px' }}>
+                    {grp.list.map((d, i) => (
+                      <li key={i}>
+                        {(d.product_title || `Prod ${d.product_id || ''}`)}
+                        {d.product_id ? ` (ID ${d.product_id})` : ''}
+                        {typeof d.delta !== 'undefined' ? `: +${d.delta}` : ''}
+                        {typeof d.new !== 'undefined' && typeof d.old !== 'undefined' ? ` (de ${d.old} → ${d.new})` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </>
   )
 }

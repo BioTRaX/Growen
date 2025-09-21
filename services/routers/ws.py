@@ -1,12 +1,26 @@
 # NG-HEADER: Nombre de archivo: ws.py
 # NG-HEADER: Ubicación: services/routers/ws.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: WebSocket de chat que canaliza prompts al AIRouter (OpenAI/Ollama) y emite respuestas.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-"""WebSocket de chat que utiliza la IA de respaldo."""
+"""WebSocket de chat que utiliza la IA de respaldo.
+
+Flujo:
+- El cliente envía texto plain.
+- Se contextualiza con la sesión (si existe) para añadir nombre y rol.
+- Se invoca `AIRouter.run` con la tarea `short_answer` (ahora soportada por OpenAI).
+- Se normaliza y se retorna como `{role: "assistant", text: ...}`.
+
+Logs añadidos:
+- `[ai:request]` DEBUG: caracteres del prompt y si hay auth.
+- `[ai:response]` DEBUG: proveedor detectado, duración y tamaño respuesta.
+- INFO final por mensaje: `ws_chat message` con métricas agregadas.
+"""
 
 from datetime import datetime
 import time
 import asyncio
+import os
+import uuid
 import logging
 
 from fastapi import APIRouter, WebSocket
@@ -20,6 +34,13 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from agent_core.config import settings as core_settings
 from ai.router import AIRouter
 from ai.types import Task
+from services.chat.price_lookup import (
+    extract_price_query,
+    log_price_lookup,
+    render_price_response,
+    resolve_price,
+    serialize_result,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -35,11 +56,25 @@ READ_TIMEOUT = 60
 async def ai_reply(prompt: str) -> str:
     """Genera una respuesta breve usando AIRouter.
 
-    Se expone como función aparte para permitir monkeypatch en tests
-    (tests.test_ws_chat/test_ws_logging la reemplazan).
+    Expuesta como función aparte para permitir monkeypatch en tests.
+    Añadimos logging granular de latencia y proveedor efectivo.
     """
     router = AIRouter(core_settings)
+    t0 = time.perf_counter()
     raw_reply = router.run(Task.SHORT_ANSWER.value, prompt)
+    duration_ms = int((time.perf_counter() - t0) * 1000)
+    provider = None
+    try:
+        # Heurística de provider desde prefijo (openai:/ollama:). Si no, unknown.
+        if raw_reply.startswith("openai:"):
+            provider = "openai"
+        elif raw_reply.startswith("ollama:"):
+            provider = "ollama"
+        logger.debug(
+            "[ai:response] provider=%s ms=%s chars=%s", provider, duration_ms, len(raw_reply)
+        )
+    except Exception:  # pragma: no cover - logging defensivo
+        pass
     if "\n\n" in raw_reply:
         return raw_reply.split("\n\n")[-1].strip()
     return raw_reply.strip()
@@ -87,6 +122,27 @@ async def ws_chat(socket: WebSocket) -> None:
                 logger.warning("Timeout de lectura en ws_chat")
                 break
 
+            extracted = extract_price_query(data)
+            if extracted:
+                # Resolver precios de forma determinista y evitar delegar al provider streaming.
+                async with SessionLocal() as db:
+                    result = await resolve_price(extracted, db)
+                    await log_price_lookup(
+                        db,
+                        user_id=(sess.user.id if getattr(sess, 'user', None) else None),
+                        ip=getattr(socket.client, 'host', None),
+                        original_text=data,
+                        extracted_query=extracted,
+                        result=result,
+                    )
+                await socket.send_json({
+                    "role": "assistant",
+                    "text": render_price_response(result),
+                    "type": "price_answer",
+                    "data": serialize_result(result),
+                })
+                continue
+
             # Personalizar el prompt con los datos del usuario/rol si hay sesión.
             t0 = time.perf_counter()
             prompt = data
@@ -96,25 +152,94 @@ async def ws_chat(socket: WebSocket) -> None:
                     prompt = f"{nombre} ({sess.role}) dice: {data}"
                 else:
                     prompt = f"{sess.role} dice: {data}"
-            try:
-                # AIRouter es síncrono; envolvemos en ai_reply para permitir monkeypatch
-                raw_reply = await ai_reply(prompt)
-            except Exception as exc:  # pragma: no cover
-                # Mensaje plano esperado por tests
-                logger.error("Error inesperado en ws_chat: %s", exc)
-                await socket.send_json({"role": "system", "text": f"error: {exc}"})
-                continue
-            reply = raw_reply.strip()
-            await socket.send_json({"role": "assistant", "text": reply})
-            logger.info(
-                "ws_chat message",
-                extra={
-                    "prompt_chars": len(prompt),
-                    "reply_chars": len(reply),
-                    "duration_ms": int((time.perf_counter() - t0) * 1000),
-                    "auth": bool(sess),
-                },
-            )
+            streaming_enabled = os.getenv("AI_STREAM_WS", "false").lower() in {"1", "true", "yes"}
+            if streaming_enabled:
+                router_ai = AIRouter(core_settings)
+                msg_id = uuid.uuid4().hex
+                await socket.send_json({"role": "assistant", "stream": "start", "id": msg_id})
+                logger.debug(
+                    "[ai:stream:start] id=%s task=%s auth=%s prompt_chars=%s",
+                    msg_id,
+                    Task.SHORT_ANSWER.value,
+                    bool(sess),
+                    len(prompt),
+                )
+                acc = []
+                try:
+                    for chunk in router_ai.run_stream(Task.SHORT_ANSWER.value, prompt):
+                        # chunk incluye prefijo openai:/ollama: en el primer fragmento; eliminamos al vuelo
+                        if not acc and (chunk.startswith("openai:") or chunk.startswith("ollama:")):
+                            # quitar prefijo sólo primera vez
+                            _, _, chunk = chunk.partition(":")
+                        # Delta puro
+                        if chunk:
+                            acc.append(chunk)
+                            await socket.send_json({
+                                "role": "assistant",
+                                "stream": "chunk",
+                                "id": msg_id,
+                                "text": chunk,
+                            })
+                            logger.debug(
+                                "[ai:stream:chunk] id=%s delta_chars=%s total_chars=%s",
+                                msg_id,
+                                len(chunk),
+                                sum(len(c) for c in acc),
+                            )
+                    full = "".join(acc).strip()
+                    await socket.send_json({
+                        "role": "assistant",
+                        "stream": "end",
+                        "id": msg_id,
+                        "text": full,
+                        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                    })
+                    logger.debug(
+                        "[ai:stream:end] id=%s total_chars=%s ms=%s",
+                        msg_id,
+                        len(full),
+                        int((time.perf_counter() - t0) * 1000),
+                    )
+                    logger.info(
+                        "ws_chat message",
+                        extra={
+                            "prompt_chars": len(prompt),
+                            "reply_chars": len(full),
+                            "duration_ms": int((time.perf_counter() - t0) * 1000),
+                            "auth": bool(sess),
+                            "stream": True,
+                        },
+                    )
+                except Exception as exc:  # pragma: no cover
+                    logger.error("Error streaming ws_chat: %s", exc)
+                    await socket.send_json({
+                        "role": "system",
+                        "stream": "error",
+                        "id": msg_id,
+                        "error": str(exc),
+                    })
+            else:
+                try:
+                    logger.debug(
+                        "[ai:request] task=%s auth=%s prompt_chars=%s", Task.SHORT_ANSWER.value, bool(sess), len(prompt)
+                    )
+                    raw_reply = await ai_reply(prompt)
+                except Exception as exc:  # pragma: no cover
+                    logger.error("Error inesperado en ws_chat: %s", exc)
+                    await socket.send_json({"role": "system", "text": f"error: {exc}"})
+                    continue
+                reply = raw_reply.strip()
+                await socket.send_json({"role": "assistant", "text": reply})
+                logger.info(
+                    "ws_chat message",
+                    extra={
+                        "prompt_chars": len(prompt),
+                        "reply_chars": len(reply),
+                        "duration_ms": int((time.perf_counter() - t0) * 1000),
+                        "auth": bool(sess),
+                        "stream": False,
+                    },
+                )
     except WebSocketDisconnect:
         # El cliente cerró la conexión; Starlette maneja el cierre y no
         # es necesario llamar a ``close`` manualmente.

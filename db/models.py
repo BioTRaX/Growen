@@ -655,3 +655,99 @@ class StartupMetric(Base):
     app_ready_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+# --- Clientes y Ventas ---
+
+class Customer(Base):
+    __tablename__ = "customers"
+    __table_args__ = (
+        UniqueConstraint("email", name="ux_customers_email"),
+        UniqueConstraint("doc_id", name="ux_customers_doc"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    doc_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    address: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    sales: Mapped[list["Sale"]] = relationship(back_populates="customer")
+
+
+class Sale(Base):
+    __tablename__ = "sales"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('BORRADOR','CONFIRMADA','ANULADA')",
+            name="ck_sales_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[Optional[int]] = mapped_column(ForeignKey("customers.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="CONFIRMADA")
+    sale_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    total_amount: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    paid_total: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    customer: Mapped[Optional["Customer"]] = relationship(back_populates="sales")
+    lines: Mapped[list["SaleLine"]] = relationship(back_populates="sale")
+    payments: Mapped[list["SalePayment"]] = relationship(back_populates="sale")
+    attachments: Mapped[list["SaleAttachment"]] = relationship(back_populates="sale")
+
+
+class SaleLine(Base):
+    __tablename__ = "sale_lines"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id", ondelete="CASCADE"))
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+    qty: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    unit_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    line_discount: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
+    note: Mapped[Optional[str]] = mapped_column(Text)
+
+    sale: Mapped["Sale"] = relationship(back_populates="lines")
+    product: Mapped["Product"] = relationship()
+
+
+class SalePayment(Base):
+    __tablename__ = "sale_payments"
+    __table_args__ = (
+        CheckConstraint(
+            "method IN ('efectivo','debito','credito','transferencia','mercadopago','otro')",
+            name="ck_sale_payments_method",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id", ondelete="CASCADE"))
+    method: Mapped[str] = mapped_column(String(20), default="efectivo")
+    amount: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    reference: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+    sale: Mapped["Sale"] = relationship(back_populates="payments")
+
+
+class SaleAttachment(Base):
+    __tablename__ = "sale_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id", ondelete="CASCADE"))
+    filename: Mapped[str] = mapped_column(String(255))
+    mime: Mapped[Optional[str]] = mapped_column(String(100))
+    size: Mapped[Optional[int]] = mapped_column(Integer)
+    path: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+    sale: Mapped["Sale"] = relationship(back_populates="attachments")

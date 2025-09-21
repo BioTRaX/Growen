@@ -13,12 +13,14 @@ os.environ["AUTH_ENABLED"] = "true"
 
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import cast
 
 from services.api import app
 from services.auth import SessionData, current_session, require_csrf
 from db.base import Base
 from db.session import engine, SessionLocal
 from db.models import Supplier, SupplierFile
+import pytest
 
 
 async def _init_db() -> None:
@@ -31,6 +33,17 @@ asyncio.get_event_loop().run_until_complete(_init_db())
 client = TestClient(app)
 app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
 app.dependency_overrides[require_csrf] = lambda: None
+
+
+@pytest.fixture(autouse=True)
+def _override_auth_dependencies():
+    # Asegurar rol admin y CSRF deshabilitado en cada test para evitar contaminación entre casos
+    app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
+    app.dependency_overrides[require_csrf] = lambda: None
+    yield
+    # Restaurar overrides por si algún test los modifica (aunque FastAPI los mantiene globalmente)
+    app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
+    app.dependency_overrides[require_csrf] = lambda: None
 
 
 def test_supplier_crud() -> None:
@@ -47,7 +60,8 @@ def test_supplier_crud() -> None:
 
     # Insertar archivo asociado para probar listado de files
     async def _add_file() -> None:
-        async with SessionLocal() as session:  # type: AsyncSession
+        async with SessionLocal() as session:
+            session = cast(AsyncSession, session)
             file = SupplierFile(
                 supplier_id=supplier_id,
                 filename="test.csv",
