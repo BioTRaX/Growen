@@ -5,12 +5,13 @@
 // File consolidated below; removed duplicate earlier implementation
 import { useEffect, useMemo, useState } from 'react'
 import { FixedSizeList as List, ListChildComponentProps } from 'react-window'
-import { listSuppliers, Supplier } from '../services/suppliers'
-import { listCategories, Category } from '../services/categories'
+import SupplierAutocomplete from './supplier/SupplierAutocomplete'
+import type { SupplierSearchItem } from '../services/suppliers'
+import { listCategories, Category, createCategory } from '../services/categories'
 import { searchProducts, ProductItem, updateStock } from '../services/products'
 import { deleteProducts } from '../services/products'
 import ProductCreateModal from './ProductCreateModal'
-import { updateSalePrice } from '../services/productsEx'
+import { updateSalePrice, updateSupplierSalePrice } from '../services/productsEx'
 import { showToast } from './Toast'
 import PriceHistoryModal from './PriceHistoryModal'
 import CanonicalOffers from './CanonicalOffers'
@@ -34,9 +35,9 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const { state } = useAuth()
   const canEdit = state.role === 'admin' || state.role === 'colaborador'
 
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [supplierId, setSupplierId] = useState('')
+  const [supplierSel, setSupplierSel] = useState<SupplierSearchItem | null>(null)
   const [categoryId, setCategoryId] = useState('')
   const [q, setQ] = useState('')
   const [items, setItems] = useState<ProductItem[]>([])
@@ -49,6 +50,8 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [stockVal, setStockVal] = useState('')
   const [saleEditing, setSaleEditing] = useState<number | null>(null) // canonical_product_id
   const [saleVal, setSaleVal] = useState('')
+  const [editSupplierSaleId, setEditSupplierSaleId] = useState<number | null>(null)
+  const [supplierSaleVal, setSupplierSaleVal] = useState('')
   const [historyProduct, setHistoryProduct] = useState<number | null>(null)
   const [canonicalId, setCanonicalId] = useState<number | null>(null)
   const [editCanonicalId, setEditCanonicalId] = useState<number | null>(null)
@@ -63,6 +66,15 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [pendingDeleteIds, setPendingDeleteIds] = useState<number[] | null>(null)
+  const [filling, setFilling] = useState(false)
+  // New category/subcategory modals state
+  const [showNewCat, setShowNewCat] = useState(false)
+  const [newCatName, setNewCatName] = useState('')
+  const [savingCat, setSavingCat] = useState(false)
+  const [showNewSubcat, setShowNewSubcat] = useState(false)
+  const [newSubcatName, setNewSubcatName] = useState('')
+  const [newSubcatParent, setNewSubcatParent] = useState<number | ''>('')
+  const [savingSubcat, setSavingSubcat] = useState(false)
   const selectAllOnPage = () => setSelected(items.map(i => i.product_id))
   const toggleSelectAllOnPage = () => setSelected((prev) => prev.length === items.length ? [] : items.map(i => i.product_id))
   // Fixed row height for virtualized list to avoid overlap
@@ -232,10 +244,49 @@ export default function ProductsDrawer({ open, onClose }: Props) {
 
   useEffect(() => {
     if (open) {
-      listSuppliers().then(setSuppliers).catch(() => {})
       listCategories().then(setCategories).catch(() => {})
     }
   }, [open])
+
+  const topLevelCategories = useMemo(() => categories.filter(c => c.parent_id == null), [categories])
+
+  async function handleCreateCategory() {
+    const name = newCatName.trim()
+    if (!name) return
+    try {
+      setSavingCat(true)
+      await createCategory(name, null)
+      showToast('success', 'Categoría creada')
+      const list = await listCategories()
+      setCategories(list)
+      setShowNewCat(false)
+      setNewCatName('')
+    } catch (e: any) {
+      showToast('error', e?.message || 'No se pudo crear la categoría')
+    } finally {
+      setSavingCat(false)
+    }
+  }
+
+  async function handleCreateSubcategory() {
+    const name = newSubcatName.trim()
+    const parentId = typeof newSubcatParent === 'number' ? newSubcatParent : null
+    if (!name || !parentId) return
+    try {
+      setSavingSubcat(true)
+      await createCategory(name, parentId)
+      showToast('success', 'Subcategoría creada')
+      const list = await listCategories()
+      setCategories(list)
+      setShowNewSubcat(false)
+      setNewSubcatName('')
+      setNewSubcatParent('')
+    } catch (e: any) {
+      showToast('error', e?.message || 'No se pudo crear la subcategoría')
+    } finally {
+      setSavingSubcat(false)
+    }
+  }
 
   useEffect(() => {
     if (!open) return
@@ -284,6 +335,19 @@ export default function ProductsDrawer({ open, onClose }: Props) {
     }
   }
 
+  async function saveSupplierSalePrice(supplierItemId: number) {
+    const parsed = parseDecimalInput(supplierSaleVal)
+    if (parsed == null) return
+    try {
+      await updateSupplierSalePrice(supplierItemId, Number(parsed.toFixed(2)))
+      setItems(prev => prev.map(it => ((it as any).supplier_item_id === supplierItemId ? { ...it, precio_venta: parsed } : it)))
+      setEditSupplierSaleId(null)
+      showToast('success', 'Precio de venta (proveedor) actualizado')
+    } catch (e) {
+      showToast('error', 'No se pudo actualizar el precio de venta (proveedor)')
+    }
+  }
+
   if (!open) return null
 
   // Column definitions
@@ -325,7 +389,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
       },
       {
         id: 'sale_price',
-        label: 'Precio venta (canónico)',
+        label: 'Precio venta',
         defaultWidth: baseWidths.sale_price,
         renderCell: (it) => (
           it.canonical_product_id ? (
@@ -360,7 +424,36 @@ export default function ProductsDrawer({ open, onClose }: Props) {
               </span>
             )
           ) : (
-            <span style={{ opacity: 0.6 }}>—</span>
+            canEdit && (it as any).supplier_item_id ? (
+              editSupplierSaleId === (it as any).supplier_item_id ? (
+                <input
+                  autoFocus
+                  value={supplierSaleVal}
+                  onChange={(e) => setSupplierSaleVal(e.target.value)}
+                  onBlur={() => saveSupplierSalePrice((it as any).supplier_item_id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') saveSupplierSalePrice((it as any).supplier_item_id)
+                    if (e.key === 'Escape') setEditSupplierSaleId(null)
+                  }}
+                  style={{ width: 100 }}
+                />
+              ) : (
+                <span>
+                  {formatARS((it as any).precio_venta)}
+                  <button
+                    onClick={() => {
+                      setEditSupplierSaleId((it as any).supplier_item_id)
+                      setSupplierSaleVal(String((it as any).precio_venta ?? ''))
+                    }}
+                    style={{ marginLeft: 6 }}
+                  >
+                    ✎
+                  </button>
+                </span>
+              )
+            ) : (
+              <span>{formatARS((it as any).precio_venta)}</span>
+            )
           )
         ),
       },
@@ -545,6 +638,46 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         {canEdit && (
           <button className="btn" onClick={() => setShowCreate(true)}>Nuevo producto</button>
         )}
+        {canEdit && (
+          <button className="btn" onClick={() => setShowNewCat(true)}>Nueva categoría</button>
+        )}
+        {canEdit && (
+          <button className="btn" onClick={() => setShowNewSubcat(true)}>Nueva subcategoría</button>
+        )}
+        {canEdit && (
+          <button
+            className="btn"
+            disabled={filling}
+            onClick={async () => {
+              setFilling(true)
+              try {
+                const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+                try {
+                  const m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/)
+                  if (m) headers['X-CSRF-Token'] = decodeURIComponent(m[1])
+                } catch {}
+                const res = await fetch('/products-ex/supplier-items/fill-missing-sale', {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers,
+                  body: JSON.stringify({ supplier_id: supplierId ? Number(supplierId) : null }),
+                })
+                if (!res.ok) throw new Error(`HTTP ${res.status}`)
+                const data = await res.json()
+                showToast('success', `Precios de venta completados: ${data.updated}`)
+                // Refrescar lista
+                setPage(1)
+                setItems([])
+              } catch (e: any) {
+                showToast('error', e?.message || 'No se pudo completar precios de venta')
+              } finally {
+                setFilling(false)
+              }
+            }}
+          >
+            Completar ventas faltantes
+          </button>
+        )}
         <div style={{ marginLeft: 'auto', fontSize: 12, opacity: 0.8 }}>
           Click en casillas para seleccionar filas
         </div>
@@ -562,22 +695,17 @@ export default function ProductsDrawer({ open, onClose }: Props) {
             setQ(e.target.value)
           }}
         />
-        <select
-          className="select"
-          value={supplierId}
-          onChange={(e) => {
-            setSupplierId(e.target.value)
+        <SupplierAutocomplete
+          className="input"
+          value={supplierSel}
+          onChange={(item) => {
+            setSupplierSel(item)
+            setSupplierId(item ? String(item.id) : '')
             setItems([])
             setPage(1)
           }}
-        >
-          <option value="">Proveedor</option>
-          {suppliers.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
+          placeholder="Proveedor"
+        />
         <select
           className="select"
           value={categoryId}
@@ -700,7 +828,10 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           onClose={(updated) => {
             setShowBulk(false)
             if (updated != null) {
+              // Limpiar selección y refrescar la lista para reflejar nuevos precios
               setSelected([])
+              setPage(1)
+              setItems([])
             }
           }}
         />
@@ -741,6 +872,63 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         <ActivityPanel productId={activityFor} onClose={() => setActivityFor(null)} />
       )}
       <DiagnosticsDrawer open={showDiag} onClose={() => setShowDiag(false)} />
+      {showNewCat && (
+        <div className="modal-backdrop">
+          <div className="modal" style={{ maxWidth: 440 }}>
+            <h3 style={{ marginTop: 0 }}>Nueva categoría</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <label style={{ fontSize: 14 }}>Nombre</label>
+              <input
+                className="input"
+                value={newCatName}
+                onChange={(e) => setNewCatName(e.target.value)}
+                placeholder="Ej: Fertilizantes"
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button className="btn" disabled={savingCat} onClick={() => setShowNewCat(false)}>Cancelar</button>
+              <button className="btn-dark" disabled={savingCat || !newCatName.trim()} onClick={handleCreateCategory}>Crear</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showNewSubcat && (
+        <div className="modal-backdrop">
+          <div className="modal" style={{ maxWidth: 480 }}>
+            <h3 style={{ marginTop: 0 }}>Nueva subcategoría</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <label style={{ fontSize: 14 }}>Categoría padre</label>
+              <select
+                className="select"
+                value={newSubcatParent === '' ? '' : String(newSubcatParent)}
+                onChange={(e) => setNewSubcatParent(e.target.value ? Number(e.target.value) : '')}
+              >
+                <option value="">Seleccionar</option>
+                {topLevelCategories.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              <label style={{ fontSize: 14 }}>Nombre</label>
+              <input
+                className="input"
+                value={newSubcatName}
+                onChange={(e) => setNewSubcatName(e.target.value)}
+                placeholder="Ej: Líquidos"
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button className="btn" disabled={savingSubcat} onClick={() => setShowNewSubcat(false)}>Cancelar</button>
+              <button
+                className="btn-dark"
+                disabled={savingSubcat || !newSubcatName.trim() || typeof newSubcatParent !== 'number'}
+                onClick={handleCreateSubcategory}
+              >
+                Crear
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showDeleteConfirm && (
         <div className="modal-backdrop">
           <div className="modal" style={{ maxWidth: 440 }}>

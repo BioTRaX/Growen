@@ -56,11 +56,68 @@ se invoca un intento de extracción vía modelo de lenguaje. Eventos registrados
 - `ai:skip_disabled` → IA deshabilitada o falta API key
 - `ai:exception` → error interno no bloqueante
 
-`classic_confidence` (0–1) es una heurística basada en:
-- Proporción de líneas con SKU
+Todos los eventos IA (`stage="ai"`) registran `duration_s` (segundos) cuando aplica, lo que habilita calcular latencias en los endpoints de m?tricas.
+
+`classic_confidence` (0–1) es una heurística ponderada basada en:
+- Proporción de líneas con SKU (peso alto)
 - Proporción con cantidad > 0
 - Proporción con costo > 0
 - Diversidad de SKU (únicos / total)
+- Densidad numérica: proporción de tokens numéricos significativos respecto al total de tokens de títulos (mitiga escenarios de texto ruidoso sin datos transaccionales).
+
+### Densidad numérica
+Se calcula sobre los títulos normalizados: se tokeniza por `\W+`, se cuentan tokens numéricos de longitud 2–8 que no lucen como fechas triviales y se divide por el total de tokens (>=1). La densidad se trunca a [0,1].
+
+### Sanitización de outliers
+Antes de computar métricas de cantidad y costo se aplican reglas:
+- Cantidad > 10,000 se clampa a 10,000 (evita inflar artificialmente proporciones por OCR defectuoso).
+- `unit_cost_bonif` > 10,000,000 se ignora para la métrica de costo.
+Esto reduce el impacto de lecturas anómalas en PDFs mal escaneados.
+
+### Logging de la confianza
+Cada importación registra un evento `ImportLog` con:
+```
+stage = "heuristic"
+event = "classic_confidence"
+details = { "value": <float>, "lines": <int> }
+```
+Esto habilita agregaciones y monitoreo histórico.
+
+### Endpoint de métricas agregadas
+`GET /admin/services/pdf_import/metrics` devuelve:
+```json
+{
+  "total_imports": 123,
+  "avg_classic_confidence": 0.71,
+  "ai_invocations": 8,
+  "ai_success": 6,
+  "ai_success_rate": 0.75,
+  "ai_lines_added": 14,
+  "last_24h": {
+    "avg_classic_confidence": 0.69,
+    "ai_invocations": 2,
+    "ai_success": 2,
+    "ai_success_rate": 1.0,
+    "ai_lines_added": 5
+  }
+}
+```
+
+### Endpoint de estad?sticas IA
+
+`GET /admin/services/pdf_import/ai_stats` expone m?tricas granulares del fallback IA (acumuladas y para las ?ltimas 24 horas):
+
+- `requests`, `success`, `success_rate`, `no_data`, `skip_disabled`.
+- `errors` desglosa causas (`server_error`, `bad_status`, `json_decode_fail`, `validation_fail`, `empty_content`, `exception`).
+- `avg_overall_confidence` resume la confianza promedio de las respuestas IA.
+- `lines_proposed_total` / `lines_proposed_avg_per_success` y `lines_added_total` / `lines_added_avg_per_success` permiten medir aporte efectivo.
+- `ignored_low_conf_total` cuantifica l?neas descartadas por baja confianza.
+- `durations_ms` incluye `count`, `avg` y `p95` (milisegundos) a partir del campo `duration_s` registrado en ImportLog.
+- `model_usage` lista cada modelo invocado con su participaci?n (`share`).
+- `last_24h` repite la estructura limitada a la ventana de 24 horas.
+
+Con estas m?tricas se monitorea la latencia de la IA y su efectividad para enriquecer importaciones problem?ticas.
+Con esto se puede detectar degradaciones (ej. caída brusca de `avg_classic_confidence` o aumento de invocaciones IA con baja tasa de éxito).
 
 Si `classic_confidence` < `IMPORT_AI_CLASSIC_MIN_CONFIDENCE`, la IA actúa en modo “refuerzo” y puede agregar líneas adicionales (sin reemplazar las existentes) si superan el umbral de confianza individual.
 
@@ -92,4 +149,10 @@ Si `classic_confidence` < `IMPORT_AI_CLASSIC_MIN_CONFIDENCE`, la IA actúa en mo
 ## Limpieza de logs
 - Archivos (`logs/`): `python scripts/clear_logs.py`
 - Tablas de logs (no críticas): `python -m tools.clear_db_logs` (usar `--include-audit` para incluir `audit_log`).
+
+
+## Notas sobre confirmación y stock/precios (Sept 2025)
+- Al confirmar una compra (`POST /purchases/{id}/confirm`), si alguna línea no tenía `supplier_item_id` pero sí `supplier_sku`, el sistema intentará auto-vincularla con el `SupplierProduct` del proveedor por SKU al momento de la confirmación. Si el `SupplierProduct` ya está enlazado a un `Product` interno, se aplicará el impacto de stock y se actualizará `current_purchase_price` en `SupplierProduct` con registro en `price_history`.
+- Si una compra ya confirmada necesitara re-aplicar stock (por ejemplo, por fallas de listeners externos), usar `POST /purchases/{id}/resend-stock?apply=1`. Este endpoint ahora también intenta resolver el vínculo por SKU cuando sea posible antes de aplicar stock. Por diseño, no re-escribe historial de precios para evitar duplicar eventos de precio.
+- Política estricta opcional: si `PURCHASE_CONFIRM_REQUIRE_ALL_LINES=1`, la confirmación aborta con `422` si quedan líneas sin poder vincularse. Si está en `0` (default), se confirma y se registran `unresolved_lines` en `AuditLog`.
 

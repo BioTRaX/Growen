@@ -107,6 +107,7 @@ if os.getenv("ENV", "dev") != "production":
         """Trunca logs comunes y limpia logs de migraciones.
 
         No detiene procesos; si algún archivo está bloqueado, lo reporta y continúa.
+        Nota: por política de retención, NO se toca `logs/BugReport.log`.
         """
         ROOT = Path(__file__).resolve().parents[2]
         LOGS = ROOT / "logs"
@@ -198,6 +199,9 @@ if os.getenv("ENV", "dev") != "production":
             LOGS / "fix_deps.log",
             LOGS / "run_api.log",
         ]
+        # Excluir explícitamente BugReport.log (persistente)
+        if (LOGS / "BugReport.log").exists():
+            results.append("excluded by policy: BugReport.log")
         for f in files:
             if f.exists():
                 results.append(truncate_file(f))

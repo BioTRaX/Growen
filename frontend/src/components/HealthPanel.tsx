@@ -4,6 +4,7 @@
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import http from '../services/http'
+import { toolsHealth, type ToolsHealth } from '../services/servicesAdmin'
 
 interface HealthDetails {
   db: { ok: boolean; detail?: string }
@@ -27,6 +28,7 @@ export default function HealthPanel() {
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<'ok' | 'degraded' | 'unknown'>('unknown')
   const [details, setDetails] = useState<HealthDetails | null>(null)
+  const [tools, setTools] = useState<ToolsHealth | null>(null)
 
   async function refresh() {
     setLoading(true)
@@ -35,6 +37,9 @@ export default function HealthPanel() {
       const r = await http.get<{ status: 'ok' | 'degraded'; details: HealthDetails }>(`/health/summary`)
       setStatus(r.data.status)
       setDetails(r.data.details)
+      try {
+        setTools(await toolsHealth())
+      } catch { /* opcional */ }
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'No se pudo consultar la salud')
     } finally {
@@ -165,6 +170,52 @@ export default function HealthPanel() {
               ))}
             </ul>
           </div>
+          {/* Herramientas del sistema */}
+          {tools && (
+            <div className="card" style={{ padding: 8, gridColumn: '1 / -1' }}>
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                <strong>Herramientas (host)</strong>
+                <button className="btn" type="button" onClick={async () => { try { setTools(await toolsHealth()) } catch {} }}>
+                  Re-chequear
+                </button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <div className="card" style={{ padding: 8 }}>
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <strong>QPDF</strong>
+                    <Badge ok={tools.qpdf.ok} />
+                  </div>
+                  <div style={{ fontSize: 12 }}>Path: {tools.qpdf.path || '—'}</div>
+                  <div style={{ fontSize: 12 }}>Versión: {tools.qpdf.version || '—'}</div>
+                </div>
+                <div className="card" style={{ padding: 8 }}>
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <strong>Ghostscript</strong>
+                    <Badge ok={tools.ghostscript.ok} />
+                  </div>
+                  <div style={{ fontSize: 12 }}>Path: {tools.ghostscript.path || '—'}</div>
+                  <div style={{ fontSize: 12 }}>Versión: {tools.ghostscript.version || '—'}</div>
+                </div>
+                <div className="card" style={{ padding: 8 }}>
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <strong>Tesseract</strong>
+                    <Badge ok={tools.tesseract.ok} />
+                  </div>
+                  <div style={{ fontSize: 12 }}>Path: {tools.tesseract.path || '—'}</div>
+                  <div style={{ fontSize: 12 }}>Versión: {tools.tesseract.version || '—'}</div>
+                </div>
+                <div className="card" style={{ padding: 8 }}>
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <strong>Playwright / Chromium</strong>
+                    <Badge ok={tools.playwright.ok} />
+                  </div>
+                  <div style={{ fontSize: 12 }}>Paquete: {tools.playwright.package ? 'Instalado' : 'No instalado'}</div>
+                  <div style={{ fontSize: 12 }}>Chromium: {tools.playwright.chromium ? 'Instalado' : 'No instalado'}</div>
+                  <div style={{ fontSize: 12 }}>Versión: {tools.playwright.version || '—'}</div>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="card" style={{ padding: 8, gridColumn: '1 / -1' }}>
             <div><strong>Estado general:</strong> {status.toUpperCase()}</div>
           </div>

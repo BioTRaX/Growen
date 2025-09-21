@@ -2,9 +2,10 @@
 // NG-HEADER: Ubicación: frontend/src/components/ChatWindow.tsx
 // NG-HEADER: Descripción: Pendiente de descripción
 // NG-HEADER: Lineamientos: Ver AGENTS.md
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, ReactNode } from 'react'
 import { createWS, WSMessage } from '../lib/ws'
 import { chatHttp } from '../lib/http'
+import { formatARS } from '../lib/format'
 import UploadModal from './UploadModal'
 import ImportViewer from './ImportViewer'
 import SuppliersModal from './SuppliersModal'
@@ -12,7 +13,7 @@ import ProductsDrawer from './ProductsDrawer'
 import DragDropZone from './DragDropZone'
 import { useAuth } from '../auth/AuthContext'
 
-type Msg = { role: 'user' | 'assistant' | 'system'; text: string }
+type Msg = { role: 'user' | 'assistant' | 'system'; text: string; type?: string; data?: any; stream?: string }
 
 export default function ChatWindow() {
   const [messages, setMessages] = useState<Msg[]>([])
@@ -95,6 +96,47 @@ export default function ChatWindow() {
     }
   }
 
+
+  const formatCurrency = (currency: string, value: number): string => {
+    if (currency === 'ARS') return formatARS(value)
+    try {
+      return new Intl.NumberFormat('es-AR', { style: 'currency', currency, minimumFractionDigits: 2 }).format(value)
+    } catch {
+      return `${currency} ${value.toFixed(2)}`
+    }
+  }
+
+  const renderMessageContent = (m: Msg): ReactNode => {
+    if (m.type === 'price_answer' && m.data) {
+      const entries = Array.isArray(m.data.entries) ? m.data.entries : []
+      return (
+        <div data-testid="price-answer">
+          <div>{m.text}</div>
+          {entries.length > 0 && (
+            <ul style={{ margin: '4px 0 0 16px' }}>
+              {entries.slice(0, 5).map((entry: any, idx: number) => {
+                const key = entry.canonical_id ?? entry.supplier_item_id ?? idx
+                const amount = typeof entry.price === 'number' ? entry.price : null
+                const price = amount != null
+                  ? formatCurrency(entry.currency ?? 'ARS', amount)
+                  : (typeof entry.formatted_price === 'string' ? entry.formatted_price : '')
+                return (
+                  <li key={key}>
+                    <strong>{entry.name}</strong>
+                    {price ? <span> — {price}</span> : null}
+                    {entry.supplier_name ? <span> · {entry.supplier_name}</span> : null}
+                    {entry.sku ? <span> (SKU {entry.sku})</span> : null}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+      )
+    }
+    return m.text
+  }
+
   function handleUploaded(info: { jobId: number; summary: any }) {
     setImportInfo(info)
     setMessages((p) => [
@@ -109,6 +151,7 @@ export default function ChatWindow() {
   return (
     <div style={{ maxWidth: 800, margin: '40px auto', padding: 16 }}>
       <h1>Growen</h1>
+      <p style={{ color: '#555', marginBottom: 16 }}><strong>Tip:</strong> podés chatear con Growen para consultar precios de productos, pedir diagnósticos rápidos o lanzar acciones con comandos.</p>
       {canUpload && (
         <DragDropZone
           onFileDropped={(f) => {
@@ -136,7 +179,8 @@ export default function ChatWindow() {
           const label = m.role === 'assistant' ? 'Growen' : m.role === 'user' ? 'Tú' : m.role
           return (
             <div key={i} style={{ margin: '6px 0' }}>
-              <strong>{label}:</strong> {m.text}
+              <strong>{label}:</strong>{' '}
+              {renderMessageContent(m)}
             </div>
           )
         })}

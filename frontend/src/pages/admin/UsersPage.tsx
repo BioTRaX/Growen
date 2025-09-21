@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import http from '../../services/http'
-import { listSuppliers, Supplier } from '../../services/suppliers'
+import SupplierAutocomplete from '../../components/supplier/SupplierAutocomplete'
+import type { SupplierSearchItem } from '../../services/suppliers'
 
 interface User {
   id: number
@@ -13,12 +14,13 @@ interface User {
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([])
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const [supplierSel, setSupplierSel] = useState<SupplierSearchItem | null>(null)
   const [q, setQ] = useState('')
   const [role, setRole] = useState('')
   const [form, setForm] = useState({ identifier: '', email: '', name: '', password: '', role: 'cliente', supplier_id: '' })
   const [edit, setEdit] = useState<User | null>(null)
   const [editForm, setEditForm] = useState({ email: '', name: '', role: '', supplier_id: '' })
+  const [editSupplierSel, setEditSupplierSel] = useState<SupplierSearchItem | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
 
@@ -29,7 +31,6 @@ export default function UsersPage() {
 
   useEffect(() => {
     refresh()
-    listSuppliers().then(setSuppliers).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, role])
 
@@ -58,7 +59,8 @@ export default function UsersPage() {
 
   const startEdit = (u: User) => {
     setEdit(u)
-    setEditForm({ email: u.email ?? '', name: u.name ?? '', role: u.role, supplier_id: u.supplier_id?.toString() ?? '' })
+  setEditForm({ email: u.email ?? '', name: u.name ?? '', role: u.role, supplier_id: u.supplier_id?.toString() ?? '' })
+  setEditSupplierSel(u.supplier_id ? { id: u.supplier_id, name: String(u.supplier_id), slug: String(u.supplier_id) } : null)
   }
 
   const submitEdit = async (e: React.FormEvent) => {
@@ -104,10 +106,7 @@ export default function UsersPage() {
             <option value="colaborador">colaborador</option>
             <option value="admin">admin</option>
           </select>
-          <select className="select" value={form.supplier_id} onChange={(e) => setForm({ ...form, supplier_id: e.target.value })}>
-            <option value="">Proveedor (opcional)</option>
-            {suppliers.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
-          </select>
+          <SupplierAutocomplete value={supplierSel} onChange={(item) => { setSupplierSel(item); setForm({ ...form, supplier_id: item ? String(item.id) : '' }) }} placeholder="Proveedor (opcional)" />
           <button className="btn-primary" type="submit" disabled={creating}>{creating ? 'Creando...' : 'Crear usuario'}</button>
           {err && <div style={{color:'#fca5a5'}}>{err}</div>}
         </div>
@@ -124,10 +123,7 @@ export default function UsersPage() {
             <option value="colaborador">colaborador</option>
             <option value="admin">admin</option>
           </select>
-          <select className="select" value={editForm.supplier_id} onChange={(e) => setEditForm({ ...editForm, supplier_id: e.target.value })}>
-            <option value="">Proveedor (opcional)</option>
-            {suppliers.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
-          </select>
+          <SupplierAutocomplete value={editSupplierSel} onChange={(item) => { setEditSupplierSel(item); setEditForm({ ...editForm, supplier_id: item ? String(item.id) : '' }) }} placeholder="Proveedor (opcional)" />
           <div className="row" style={{ gap: 8 }}>
             <button className="btn-primary" type="submit">Guardar cambios</button>
             <button className="btn-secondary" type="button" onClick={() => setEdit(null)}>Cancelar</button>

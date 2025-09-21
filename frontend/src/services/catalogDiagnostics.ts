@@ -37,6 +37,11 @@ async function handleJson<T>(res: Response, fallback: string): Promise<T> {
   return res.json()
 }
 
+function csrfHeaders(): Record<string, string> {
+  const m = typeof document !== 'undefined' ? document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) : null
+  return m ? { 'X-CSRF-Token': decodeURIComponent(m[1]) } : {}
+}
+
 export async function getCatalogStatus(signal?: AbortSignal): Promise<CatalogStatus> {
   const res = await fetch(base + '/catalogs/diagnostics/status', { credentials: 'include', signal })
   return handleJson<CatalogStatus>(res, 'Error obteniendo estado de catálogos')
@@ -51,3 +56,18 @@ export async function getCatalogDetailLog(id: string, signal?: AbortSignal): Pro
   const res = await fetch(base + `/catalogs/diagnostics/log/${id}`, { credentials: 'include', signal })
   return handleJson<CatalogDetailLogResponse>(res, 'Error obteniendo log detallado')
 }
+
+export async function unlockCatalog(): Promise<{ status: string; previous: any; active_generation: CatalogStatus['active_generation'] }> {
+  const res = await fetch(base + '/catalogs/diagnostics/unlock', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders() },
+  })
+  return handleJson(res, 'No se pudo desbloquear el generador de catálogos')
+}
+
+  export async function getCatalogConfig(signal?: AbortSignal): Promise<{ lock_timeout_s: number; source: 'env' | 'default' }> {
+    const res = await fetch(base + '/catalogs/diagnostics/config', { credentials: 'include', signal })
+    if (!res.ok) throw new Error('No se pudo obtener configuración de catálogos')
+    return res.json()
+  }

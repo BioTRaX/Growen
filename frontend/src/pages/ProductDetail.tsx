@@ -9,6 +9,10 @@ import { uploadProductImage, addImageFromUrl, setPrimary, lockImage, deleteImage
 import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
 import { useAuth } from '../auth/AuthContext'
 import { getProductDetailStylePref, putProductDetailStylePref, ProductDetailStyle, updateSalePrice, updateSupplierBuyPrice } from '../services/productsEx'
+import { listProductVariants, linkSupplierProduct, ProductVariantItem, patchProduct, updateVariantSku } from '../services/products'
+import { listCategories, Category } from '../services/categories'
+import SupplierAutocomplete from '../components/supplier/SupplierAutocomplete'
+import type { SupplierSearchItem } from '../services/suppliers'
 import { showToast } from '../components/Toast'
 
 type Prod = {
@@ -18,6 +22,7 @@ type Prod = {
   stock: number
   sku_root?: string
   description_html?: string | null
+  category_path?: string | null
   images: { id: number; url: string; alt_text?: string; title_text?: string; is_primary?: boolean; locked?: boolean; active?: boolean }[]
   canonical_product_id?: number | null
   canonical_sale_price?: number | null
@@ -47,6 +52,18 @@ export default function ProductDetail() {
   const [prodDiag, setProdDiag] = useState<{ action: string; created_at?: string; meta?: any }[]>([])
   const [editingSale, setEditingSale] = useState(false)
   const [saleVal, setSaleVal] = useState('')
+  const [offeringsTick, setOfferingsTick] = useState(0)
+  const [linkOpen, setLinkOpen] = useState(false)
+  const [linkBusy, setLinkBusy] = useState(false)
+  const [variants, setVariants] = useState<ProductVariantItem[]>([])
+  const [selectedVariantId, setSelectedVariantId] = useState<number | null>(null)
+  const [supplierSel, setSupplierSel] = useState<SupplierSearchItem | null>(null)
+  const [supplierSku, setSupplierSku] = useState('')
+  const [supplierTitle, setSupplierTitle] = useState('')
+  const [categories, setCategories] = useState<Category[]>([])
+  const [savingCat, setSavingCat] = useState(false)
+  const [skuEditing, setSkuEditing] = useState<{ id: number; val: string } | null>(null)
+  const [selectedCatId, setSelectedCatId] = useState<string>('')
 
   const theme = useMemo(() => ({
     bg: styleVariant === 'minimalDark' ? '#0b0f14' : '#0d1117',
@@ -68,6 +85,39 @@ export default function ProductDetail() {
   useEffect(() => {
     if (pid) refresh()
   }, [pid])
+
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      if (!pid) return
+      try {
+        const v = await listProductVariants(pid)
+        if (mounted) setVariants(v)
+        if (mounted && v.length > 0) setSelectedVariantId(v[0].id)
+      } catch {
+        if (mounted) setVariants([])
+      }
+    })()
+    return () => { mounted = false }
+  }, [pid])
+
+  // Cargar categorías para selector
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      try { const cs = await listCategories(); if (mounted) setCategories(cs) } catch {}
+    })()
+    return () => { mounted = false }
+  }, [])
+
+  // Derivar selección actual por path si existe
+  useEffect(() => {
+    if (!prod) { setSelectedCatId(''); return }
+    const p = (prod.category_path || '').trim()
+    if (!p) { setSelectedCatId(''); return }
+    const match = categories.find(c => (c.path || '').trim() === p)
+    setSelectedCatId(match ? String(match.id) : '')
+  }, [prod, categories])
 
   // Preferencia de estética de ficha
   useEffect(() => {
@@ -222,6 +272,7 @@ export default function ProductDetail() {
           <button className="btn" onClick={onFromUrl} disabled={!url || loading}>Descargar</button>
           <button className="btn" onClick={async () => { await pushTN(pid); alert('Push Tiendanube encolado/ejecutado'); }}>Enviar a Tiendanube</button>
           <button className="btn" onClick={async () => { try { const a = await http.get(`/products/${pid}/images/audit-logs`, { params: { limit: 50 } }); setImgDiag(a.data.items || []); const b = await http.get(`/catalog/products/${pid}/audit-logs`, { params: { limit: 50 } }); setProdDiag(b.data.items || []) } catch (e: any) { showToast('error', e?.response?.data?.detail || 'No se pudieron obtener diagnósticos') } }}>Ver diagnósticos</button>
+          <button className="btn" onClick={() => { setSupplierSel(null); setSupplierSku(''); setSupplierTitle(''); setLinkOpen(true) }}>Agregar SKU de proveedor</button>
         </div>
       )}
 
@@ -288,6 +339,38 @@ export default function ProductDetail() {
             </div>
           ) : null}
         </div>
+        {/* Selector de categoría */}
+        <div className="row" style={{ gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 600 }}>Categoría</div>
+          <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+            <span style={{ opacity: .8, fontSize: 12 }}>Actual:</span>
+            <span>{prod?.category_path || 'Sin categoría'}</span>
+          </div>
+          {canEdit && (
+            <>
+              <select className="select" value={selectedCatId} onChange={(e) => setSelectedCatId(e.target.value)}>
+                <option value="">Seleccionar categoría…</option>
+                {categories.map(c => (
+                  <option key={c.id} value={String(c.id)}>{c.path || c.name}</option>
+                ))}
+              </select>
+              <button className="btn-primary" disabled={savingCat || !prod} onClick={async () => {
+                const cid = selectedCatId ? Number(selectedCatId) : null
+                if (cid == null) { showToast('error', 'Seleccione una categoría'); return }
+                setSavingCat(true)
+                try {
+                  await patchProduct(pid, { category_id: cid })
+                  await refresh()
+                  showToast('success', 'Categoría guardada')
+                } catch (e: any) {
+                  showToast('error', e?.message || 'No se pudo guardar la categoría')
+                } finally {
+                  setSavingCat(false)
+                }
+              }}>{savingCat ? 'Guardando...' : 'Guardar'}</button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Descripción */}
@@ -323,7 +406,61 @@ export default function ProductDetail() {
       </div>
 
       {/* Proveedores y precios */}
-      <SupplierOfferings productId={pid} theme={theme} />
+  <SupplierOfferings key={`offer-${offeringsTick}`} productId={pid} theme={theme} />
+
+      {/* Variantes y SKU propio */}
+      <div className="card" style={{ background: theme.card, padding: 12, borderRadius: theme.radius, border: `1px solid ${theme.border}`, marginTop: 12 }}>
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>Variantes (SKU propio)</div>
+        {variants.length === 0 ? (
+          <div style={{ opacity: .8 }}>Sin variantes.</div>
+        ) : (
+          <table className="table w-full">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>SKU</th>
+                <th>Nombre</th>
+                <th>Valor</th>
+                {canEdit && <th className="text-center" style={{ width: 120 }}>Acciones</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {variants.map(v => (
+                <tr key={v.id}>
+                  <td>{v.id}</td>
+                  <td>
+                    {skuEditing?.id === v.id ? (
+                      <input className="input" style={{ width: 180 }} value={skuEditing.val} onChange={(e) => setSkuEditing({ id: v.id, val: e.target.value })}
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Enter') {
+                            try { await updateVariantSku(v.id, skuEditing.val.trim()); setVariants(prev => prev.map(x => x.id === v.id ? ({ ...x, sku: skuEditing.val.trim() }) : x)); setSkuEditing(null); showToast('success', 'SKU actualizado') } catch (err: any) { showToast('error', err?.message || 'Error') }
+                          }
+                          if (e.key === 'Escape') setSkuEditing(null)
+                        }}
+                        onBlur={async () => {
+                          try { await updateVariantSku(v.id, skuEditing?.val.trim() || v.sku); setVariants(prev => prev.map(x => x.id === v.id ? ({ ...x, sku: skuEditing?.val.trim() || v.sku }) : x)); setSkuEditing(null); showToast('success', 'SKU actualizado') } catch (err: any) { showToast('error', err?.message || 'Error') }
+                        }} />
+                    ) : (
+                      <span>{v.sku}</span>
+                    )}
+                  </td>
+                  <td>{v.name || ''}</td>
+                  <td>{v.value || ''}</td>
+                  {canEdit && (
+                    <td className="text-center">
+                      {skuEditing?.id === v.id ? (
+                        <button className="btn-secondary" onClick={() => setSkuEditing(null)}>Cancelar</button>
+                      ) : (
+                        <button className="btn-secondary" onClick={() => setSkuEditing({ id: v.id, val: v.sku })}>✎</button>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
 
       {(isAdmin || canEdit) && (imgDiag.length > 0 || prodDiag.length > 0) && (
         <div className="card" style={{ background: theme.card, padding: 12, borderRadius: theme.radius, border: `1px solid ${theme.border}`, marginTop: 12 }}>
@@ -391,6 +528,58 @@ export default function ProductDetail() {
             <div className="row" style={{ gap: 8, marginTop: 10 }}>
               <button className="btn-secondary" onClick={() => { if (!loading) { setUploadOpen(false); setUploadFile(null); setUploadPct(0) } }} disabled={loading}>Cancelar</button>
               <button className="btn-primary" onClick={doUpload} disabled={!uploadFile || loading}>{loading ? 'Subiendo...' : 'Subir'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Agregar SKU de proveedor */}
+      {linkOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 70 }}>
+          <div className="panel" style={{ padding: 16, minWidth: 520 }}>
+            <h4 style={{ marginTop: 0 }}>Agregar SKU de proveedor</h4>
+            <div className="row" style={{ gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <label className="label">Proveedor</label>
+                <SupplierAutocomplete value={supplierSel} onChange={setSupplierSel} placeholder="Buscar proveedor..." />
+              </div>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <label className="label">SKU proveedor</label>
+                <input className="input" value={supplierSku} onChange={(e) => setSupplierSku(e.target.value)} placeholder="Ej: ABC-123" />
+              </div>
+            </div>
+            <div className="row" style={{ gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', marginTop: 10 }}>
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <label className="label">Variante interna</label>
+                <select className="select" value={selectedVariantId ?? ''} onChange={(e) => setSelectedVariantId(Number(e.target.value))}>
+                  {variants.map(v => (
+                    <option key={v.id} value={v.id}>{v.sku}{v.name ? ` — ${v.name}` : ''}{v.value ? ` (${v.value})` : ''}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <label className="label">Título (opcional)</label>
+                <input className="input" value={supplierTitle} onChange={(e) => setSupplierTitle(e.target.value)} placeholder="Nombre del item en proveedor" />
+              </div>
+            </div>
+            <div className="row" style={{ gap: 8, marginTop: 12 }}>
+              <button className="btn-secondary" onClick={() => setLinkOpen(false)} disabled={linkBusy}>Cancelar</button>
+              <button className="btn-primary" disabled={linkBusy || !supplierSel || !supplierSku.trim() || !selectedVariantId} onClick={async () => {
+                if (!supplierSel || !selectedVariantId) return
+                setLinkBusy(true)
+                try {
+                  await linkSupplierProduct({ supplier_id: supplierSel.id, supplier_product_id: supplierSku.trim(), internal_variant_id: selectedVariantId, title: supplierTitle || undefined })
+                  showToast('success', 'Vínculo creado')
+                  setLinkOpen(false)
+                  // Refrescar ofertas
+                  try { await refresh() } catch {}
+                  setOfferingsTick(t => t + 1)
+                } catch (e: any) {
+                  showToast('error', e?.message || 'No se pudo crear el vínculo')
+                } finally {
+                  setLinkBusy(false)
+                }
+              }}>{linkBusy ? 'Guardando...' : 'Guardar'}</button>
             </div>
           </div>
         </div>

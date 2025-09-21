@@ -144,3 +144,20 @@ export function downloadSupplierFile(fileId: number) {
   // Abrir en nueva pestaña para descarga directa
   window.open(url, '_blank')
 }
+
+// ------------ Supplier Search (Autocomplete) ------------
+
+export interface SupplierSearchItem {
+  id: number
+  name: string
+  slug: string
+}
+
+export async function searchSuppliers(q: string, limit = 20): Promise<SupplierSearchItem[]> {
+  const qp = new URLSearchParams({ q: q || '', limit: String(limit) })
+  const r = await fetch(`${base}/suppliers/search?${qp.toString()}`, { credentials: 'include' })
+  if (!r.ok) throw new Error('error de red')
+  const data = await r.json()
+  if (!Array.isArray(data)) return []
+  return data
+}

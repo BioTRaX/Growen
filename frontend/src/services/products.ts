@@ -53,6 +53,11 @@ export async function searchProducts(params: ProductSearchParams): Promise<Produ
   return res.json()
 }
 
+// Helper simple para UI que sólo necesita lista rápida
+export async function listProducts(params: ProductSearchParams): Promise<ProductSearchResponse> {
+  return searchProducts(params)
+}
+
 export interface ProductAuditItem {
   action: string
   created_at: string | null
@@ -159,5 +164,62 @@ export async function deleteProducts(ids: number[]): Promise<{
   }
 
   // Si la respuesta es OK, devuelve el cuerpo JSON normal.
+  return res.json()
+}
+
+// ------------ Variantes por producto ------------
+
+export interface ProductVariantItem {
+  id: number
+  sku: string
+  name?: string | null
+  value?: string | null
+}
+
+export async function listProductVariants(productId: number): Promise<ProductVariantItem[]> {
+  const res = await fetch(`${base}/products/${productId}/variants`, { credentials: 'include' })
+  if (res.status === 404) throw new Error('Producto no encontrado')
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = await res.json()
+  if (!Array.isArray(data)) return []
+  return data
+}
+
+// ------------ Vínculo supplier-product ↔ variant ------------
+
+export async function linkSupplierProduct(payload: { supplier_id: number; supplier_product_id: string; internal_variant_id: number; title?: string | null }): Promise<{ id: number } & Record<string, any>> {
+  const headers = { ...csrfHeaders(), 'Content-Type': 'application/json' }
+  const res = await fetch(`${base}/supplier-products/link`, { method: 'POST', credentials: 'include', headers, body: JSON.stringify(payload) })
+  if (res.status === 400) {
+    const j = await res.json().catch(() => null)
+    throw new Error(j?.detail?.message || j?.detail || 'Datos inválidos')
+  }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+// ------------ Update product (category, description) ------------
+
+export async function patchProduct(productId: number, data: { category_id?: number | null; description_html?: string | null }): Promise<{ status: string }> {
+  const headers = { ...csrfHeaders(), 'Content-Type': 'application/json' }
+  const res = await fetch(`${base}/products/${productId}`, { method: 'PATCH', credentials: 'include', headers, body: JSON.stringify(data) })
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try { const j = await res.json(); if (j?.detail) msg = j.detail } catch {}
+    throw new Error(msg)
+  }
+  return res.json()
+}
+
+// ------------ Update internal variant SKU ------------
+
+export async function updateVariantSku(variantId: number, sku: string, note?: string): Promise<{ status?: string } & Record<string, any>> {
+  const headers = { ...csrfHeaders(), 'Content-Type': 'application/json' }
+  const res = await fetch(`${base}/variants/${variantId}/sku`, { method: 'PUT', credentials: 'include', headers, body: JSON.stringify({ sku, note }) })
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try { const j = await res.json(); if (j?.detail?.message) msg = j.detail.message; else if (j?.detail) msg = j.detail } catch {}
+    throw new Error(msg)
+  }
   return res.json()
 }

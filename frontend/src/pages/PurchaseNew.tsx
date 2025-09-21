@@ -9,12 +9,15 @@ import ToastContainer, { showToast } from '../components/Toast'
 import { useNavigate, Link } from 'react-router-dom'
 import { PATHS } from '../routes/paths'
 import type { PurchaseLine } from '../services/purchases'
+import SupplierAutocomplete from '../components/supplier/SupplierAutocomplete'
+import type { SupplierSearchItem } from '../services/suppliers'
 
 export default function PurchaseNew() {
   const nav = useNavigate()
   const [form, setForm] = useState({ supplier_id: '', remito_number: '', remito_date: new Date().toISOString().slice(0,10), vat_rate: 0, note: '' })
   const [lines, setLines] = useState<PurchaseLine[]>([])
   const [saving, setSaving] = useState(false)
+  const [supplierSel, setSupplierSel] = useState<SupplierSearchItem | null>(null)
   const dirtyRef = useRef(false)
   const timerRef = useRef<number | null>(null)
   const draftIdRef = useRef<number | null>(null)
@@ -92,7 +95,13 @@ export default function PurchaseNew() {
           Primero elegí el proveedor y el número de remito; después podés cargar líneas y guardar.
         </div>
         <div className="row mb-3">
-          <input className="input" placeholder="Proveedor ID" value={form.supplier_id} onChange={(e) => setForm({ ...form, supplier_id: e.target.value })} />
+          <div style={{ minWidth: 320 }}>
+            <SupplierAutocomplete
+              value={supplierSel}
+              onChange={(it) => { setSupplierSel(it); setForm({ ...form, supplier_id: it ? String(it.id) : '' }) }}
+              placeholder="Proveedor"
+            />
+          </div>
           <input className="input" placeholder="N° de remito" value={form.remito_number} onChange={(e) => setForm({ ...form, remito_number: e.target.value })} />
           <input className="input" type="date" value={form.remito_date} onChange={(e) => setForm({ ...form, remito_date: e.target.value })} />
           {/* Descuento global removido; aplicar por línea */}

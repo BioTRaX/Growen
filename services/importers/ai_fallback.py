@@ -92,34 +92,35 @@ def run_ai_fallback(*, correlation_id: str, text_excerpt: str, classic_lines_hin
             with httpx.Client(timeout=timeout) as client:  # type: ignore
                 r = client.post(url, headers=headers, json=payload)
             dur = time.time() - start
+            dur_s = round(dur, 3)
             if r.status_code >= 500:
                 last_err = f"server_error_{r.status_code}"
-                events.append({"level": "WARN", "stage": "ai", "event": "server_error", "details": {"status": r.status_code, "duration_s": round(dur, 2)}})
+                events.append({"level": "WARN", "stage": "ai", "event": "server_error", "details": {"status": r.status_code, "duration_s": dur_s}})
                 continue
             if r.status_code != 200:
                 last_err = f"http_{r.status_code}"
-                events.append({"level": "WARN", "stage": "ai", "event": "bad_status", "details": {"status": r.status_code, "body": r.text[:400]}})
+                events.append({"level": "WARN", "stage": "ai", "event": "bad_status", "details": {"status": r.status_code, "body": r.text[:400], "duration_s": dur_s}})
                 break
             data = r.json()
             raw_text = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content")
             if not raw_text:
                 last_err = "empty_content"
-                events.append({"level": "WARN", "stage": "ai", "event": "empty_content", "details": {}})
+                events.append({"level": "WARN", "stage": "ai", "event": "empty_content", "details": {"duration_s": dur_s}})
                 continue
             try:
                 parsed = json.loads(raw_text)
             except Exception as e:  # JSON inválido
                 last_err = f"json_error:{e.__class__.__name__}"
-                events.append({"level": "WARN", "stage": "ai", "event": "json_decode_fail", "details": {"err": str(e), "excerpt": raw_text[:200]}})
+                events.append({"level": "WARN", "stage": "ai", "event": "json_decode_fail", "details": {"err": str(e), "excerpt": raw_text[:200], "duration_s": dur_s}})
                 continue
             try:
                 payload_obj = RemitoAIPayload(**parsed)
                 payload_obj.compute_overall()
             except Exception as e:  # Validación Pydantic
                 last_err = f"validation_error:{e.__class__.__name__}"
-                events.append({"level": "WARN", "stage": "ai", "event": "validation_fail", "details": {"err": str(e)[:300]}})
+                events.append({"level": "WARN", "stage": "ai", "event": "validation_fail", "details": {"err": str(e)[:300], "duration_s": dur_s}})
                 continue
-            events.append({"level": "INFO", "stage": "ai", "event": "ok", "details": {"lines": len(payload_obj.lines), "overall": payload_obj.overall_confidence}})
+            events.append({"level": "INFO", "stage": "ai", "event": "ok", "details": {"lines": len(payload_obj.lines), "overall": float(payload_obj.overall_confidence or 0), "duration_s": dur_s}})
             return AIFallbackResult(True, payload_obj, raw_text, None, events)
         except Exception as e:  # pragma: no cover (difícil de forzar)
             last_err = f"exception:{e.__class__.__name__}"

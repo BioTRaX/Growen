@@ -3,7 +3,8 @@
 // NG-HEADER: Descripción: Pendiente de descripción
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
-import { listSuppliers, Supplier } from '../services/suppliers'
+import SupplierAutocomplete from './supplier/SupplierAutocomplete'
+import type { SupplierSearchItem } from '../services/suppliers'
 import { importSantaPlanta } from '../services/purchases'
 import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
 import { ensureServiceRunning } from '../lib/ensureServiceRunning'
@@ -16,7 +17,7 @@ type Props = {
 }
 
 export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const [supplierSel, setSupplierSel] = useState<SupplierSearchItem | null>(null)
   const [supplierId, setSupplierId] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
@@ -29,7 +30,7 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
   const [gateBusy, setGateBusy] = useState(false)
   const [gateLogs, setGateLogs] = useState<ServiceLogItem[]>([])
 
-  useEffect(() => { if (open) listSuppliers().then(setSuppliers).catch(() => setSuppliers([])) }, [open])
+  useEffect(() => { /* no-op: autocomplete carga bajo demanda */ }, [open])
 
   if (!open) return null
 
@@ -114,10 +115,7 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
       <div className="panel" style={{ padding: 16, minWidth: 480, position: 'relative' }}>
         <h3 style={{ marginTop: 0 }}>Importar compra desde PDF</h3>
         <div className="row" style={{ gap: 8, marginBottom: 12 }}>
-          <select className="select w-full" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
-            <option value="">Proveedor</option>
-            {suppliers.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
-          </select>
+          <SupplierAutocomplete value={supplierSel} onChange={(item) => { setSupplierSel(item); setSupplierId(item ? String(item.id) : '') }} placeholder="Proveedor" />
         </div>
         <div className="row" style={{ gap: 8 }}>
           <input className="input w-full" type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] || null)} />

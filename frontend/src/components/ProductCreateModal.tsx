@@ -4,7 +4,9 @@
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useState } from 'react'
 import { createProduct } from '../services/products'
-import { listSuppliers, createSupplierItem } from '../services/suppliers'
+import { createSupplierItem } from '../services/suppliers'
+import SupplierAutocomplete from './supplier/SupplierAutocomplete'
+import type { SupplierSearchItem } from '../services/suppliers'
 import { listCategories, createCategory, Category } from '../services/categories'
 import { showToast } from './Toast'
 
@@ -18,7 +20,7 @@ export default function ProductCreateModal({ onCreated, onClose }: Props) {
   const [categoryId, setCategoryId] = useState('')
   const [initialStock, setInitialStock] = useState('0')
   const [categories, setCategories] = useState<Category[]>([])
-  const [suppliers, setSuppliers] = useState<{ id: number; name: string }[]>([])
+  const [supplierSel, setSupplierSel] = useState<SupplierSearchItem | null>(null)
   const [loading, setLoading] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [showCreateCat, setShowCreateCat] = useState(false)
@@ -34,8 +36,6 @@ export default function ProductCreateModal({ onCreated, onClose }: Props) {
     try {
       const cats = await listCategories()
       setCategories(cats)
-      // Cargar proveedores en paralelo
-      listSuppliers().then((s) => setSuppliers(s.map(x => ({ id: x.id, name: x.name })))).catch(() => {})
       setLoaded(true)
     } catch {}
   }
@@ -116,18 +116,11 @@ export default function ProductCreateModal({ onCreated, onClose }: Props) {
             autoFocus
           />
           <label className="label" style={{ marginTop: 12 }}>Proveedor</label>
-          <select
-            className="select w-full"
-            value={supplierId}
-            onFocus={ensureCats}
-            onChange={(e) => setSupplierId(e.target.value)}
-            required
-          >
-            <option value="">Seleccioná proveedor</option>
-            {suppliers.map(s => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
+          <SupplierAutocomplete
+            value={supplierSel}
+            onChange={(item) => { setSupplierSel(item); setSupplierId(item ? String(item.id) : '') }}
+            placeholder="Seleccioná proveedor"
+          />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
             <div>
               <label className="label">SKU del proveedor (opcional)</label>

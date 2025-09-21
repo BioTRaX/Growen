@@ -38,10 +38,68 @@ def test_create_validate_confirm_and_duplication():
     # Confirmar
     r = client.post(f"/purchases/{pid}/confirm")
     assert r.status_code == 200
+    assert r.json().get("already_confirmed") in (None, False)
 
     # Idempotencia (mismo remito)
     r = client.post("/purchases", json=payload)
     assert r.status_code == 409
+
+
+def test_confirm_idempotent_and_autolink_flow():
+    # Crear proveedor
+    resp = client.post("/suppliers", json={"slug": "sp_auto", "name": "Proveedor Auto"})
+    assert resp.status_code in (200, 201)
+    supplier_id = client.get("/suppliers").json()[0]["id"]
+
+    # Crear producto mínimo con SKU interno distinto al del proveedor y link mediante endpoint dedicado
+    # 1) Crear producto mínimo
+    prod = client.post(
+        "/catalog/products",
+        json={
+            "title": "Maceta 12cm",
+            "initial_stock": 0,
+            "supplier_id": supplier_id,
+            "supplier_sku": "SP-001",
+            "sku": "NG-MAC12",
+        },
+    )
+    assert prod.status_code == 200
+    # El endpoint de creación mínima ya crea SupplierProduct con internal_product_id/internal_variant_id
+    # y devuelve supplier_item_id; no es necesario llamar a /supplier-products/link aquí.
+    supplier_item_id = prod.json()["supplier_item_id"]
+
+    # Crear compra con una línea que tenga sólo supplier_sku (autolink debe completarla)
+    payload = {"supplier_id": supplier_id, "remito_number": "R-AL-1", "remito_date": "2025-08-31"}
+    r = client.post("/purchases", json=payload)
+    assert r.status_code == 200
+    pid = r.json()["id"]
+
+    # Agregar línea a la compra
+    r = client.put(
+        f"/purchases/{pid}",
+        json={
+            "lines": [
+                {
+                    "supplier_sku": "SP-001",
+                    "title": "Maceta 12cm",
+                    "qty": 3,
+                    "unit_cost": 100.0,
+                    "line_discount": 0.0,
+                }
+            ]
+        },
+    )
+    assert r.status_code == 200
+
+    # Confirmar: debe autovincular la línea al supplier_item y sumar stock 3 al producto
+    r1 = client.post(f"/purchases/{pid}/confirm")
+    assert r1.status_code == 200
+    assert r1.json().get("already_confirmed") in (None, False)
+
+    # Confirmación repetida: idempotente, no debe volver a sumar stock ni duplicar price history
+    r2 = client.post(f"/purchases/{pid}/confirm")
+    assert r2.status_code == 200
+    assert r2.json().get("already_confirmed") is True
 
 
 def test_cancel_requires_note():

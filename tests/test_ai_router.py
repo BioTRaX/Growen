@@ -2,6 +2,7 @@
 # NG-HEADER: Ubicación: tests/test_ai_router.py
 # NG-HEADER: Descripción: Pendiente de descripción
 # NG-HEADER: Lineamientos: Ver AGENTS.md
+import os
 from ai.router import AIRouter
 from ai.types import Task
 from agent_core.config import Settings
@@ -15,6 +16,8 @@ def test_router_openai_when_allowed():
 
 
 def test_router_falls_back_without_external():
+    # Asegurar que ollama esté habilitado para esta prueba
+    os.environ.pop("AI_DISABLE_OLLAMA", None)
     router = AIRouter(Settings(ai_allow_external=False))
     assert router.available_providers() == ["ollama"]
     out = router.run(Task.CONTENT.value, "hola")

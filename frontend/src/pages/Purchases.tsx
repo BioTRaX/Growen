@@ -9,7 +9,10 @@ import http from '../services/http'
 import ToastContainer, { showToast } from '../components/Toast'
 import { PATHS } from '../routes/paths'
 import PdfImportModal from '../components/PdfImportModal'
-import { deletePurchase } from '../services/purchases'
+import PopEmailImportModal from '../components/PopEmailImportModal'
+import { deletePurchase, rollbackPurchase } from '../services/purchases'
+import SupplierAutocomplete from '../components/supplier/SupplierAutocomplete'
+import type { SupplierSearchItem } from '../services/suppliers'
 
 interface PurchaseRow {
   id: number
@@ -24,7 +27,9 @@ export default function Purchases() {
   const [rows, setRows] = useState<PurchaseRow[]>([])
   const [menuOpen, setMenuOpen] = useState(false)
   const [openPdf, setOpenPdf] = useState(false)
+  const [openPop, setOpenPop] = useState(false)
   const [supplierId, setSupplierId] = useState('')
+  const [supplierSel, setSupplierSel] = useState<SupplierSearchItem | null>(null)
   const [status, setStatus] = useState('')
   const [remito, setRemito] = useState('')
   const [productName, setProductName] = useState('')
@@ -67,6 +72,7 @@ export default function Purchases() {
                 <div className="panel" style={{ position: 'absolute', right: 0, minWidth: 300, background: 'var(--panel-bg)', border: '1px solid var(--border)', padding: 12, marginTop: 6, display: 'flex', flexDirection: 'column', gap: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.35)' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
                     <button className="btn-dark btn-lg" onClick={() => { setOpenPdf(true); setMenuOpen(false) }}>Con PDF de proveedor</button>
+                    <button className="btn-dark btn-lg" onClick={() => { setOpenPop(true); setMenuOpen(false) }}>POP (Email)</button>
                     <Link to={PATHS.purchasesNew} className="btn-dark btn-lg" onClick={() => setMenuOpen(false)} style={{ textDecoration: 'none', display: 'block', textAlign: 'center' }}>Manual</Link>
                   </div>
                 </div>
@@ -79,7 +85,7 @@ export default function Purchases() {
           Tip: si el remito no coincide, no lo inventes, rey. Pedí otro.
         </div>
         <div className="row" style={{ gap: 8, marginBottom: 8 }}>
-          <input className="input" placeholder="Proveedor ID" value={supplierId} onChange={(e) => setSupplierId(e.target.value)} />
+          <SupplierAutocomplete value={supplierSel} onChange={(it) => setSupplierSel((prev) => { setSupplierId(it ? String(it.id) : ''); return it })} placeholder="Proveedor" />
           <select className="select" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">Estado</option>
             <option>BORRADOR</option>
@@ -114,6 +120,25 @@ export default function Purchases() {
                 <td>
                   <div className="row" style={{ justifyContent: 'flex-start', alignItems: 'center' }}>
                   <Link className="btn-secondary" to={`/compras/${r.id}`}>Abrir</Link>
+                  {r.status === 'CONFIRMADA' && (
+                    <button
+                      className="btn"
+                      style={{ marginLeft: 6 }}
+                      title="Revertir impacto de stock y ANULAR"
+                      onClick={async () => {
+                        const ok = confirm(`¿Hacer ROLLBACK de la compra #${r.id}? Esto restará el stock aplicado y marcará ANULADA.`)
+                        if (!ok) return
+                        try {
+                          const res = await rollbackPurchase(r.id)
+                          showToast('success', 'Rollback aplicado')
+                          // Refrescar estado en tabla
+                          setRows(prev => prev.map(x => x.id === r.id ? { ...x, status: 'ANULADA' } : x))
+                        } catch (e:any) {
+                          showToast('error', e?.response?.data?.detail || 'No se pudo aplicar rollback')
+                        }
+                      }}
+                    >Rollback</button>
+                  )}
                   {(r.status === 'BORRADOR' || r.status === 'ANULADA') && (
                     <button
                       className="btn btn-danger"
@@ -153,6 +178,13 @@ export default function Purchases() {
       } else {
         console.warn('Invalid purchase id from import:', id)
       }
+    }}
+  />
+  <PopEmailImportModal
+    open={openPop}
+    onClose={() => setOpenPop(false)}
+    onSuccess={(id) => {
+      if (Number.isFinite(Number(id))) nav(`/compras/${Number(id)}?logs=1`)
     }}
   />
     </>

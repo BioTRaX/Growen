@@ -39,6 +39,21 @@ export async function updateSupplierBuyPrice(
   return res.json()
 }
 
+export async function updateSupplierSalePrice(
+  supplierItemId: number,
+  sale_price: number,
+  note?: string,
+): Promise<{ id: number; sale_price: number | null }> {
+  const res = await fetch(`${base}/products-ex/supplier-items/${supplierItemId}/sale-price`, {
+    method: 'PATCH',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders() },
+    body: JSON.stringify({ sale_price, note }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
 export type BulkMode = 'set' | 'inc' | 'dec' | 'inc_pct' | 'dec_pct'
 
 export async function bulkUpdateSalePrice(

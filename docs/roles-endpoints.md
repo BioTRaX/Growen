@@ -5,6 +5,7 @@
 # Roles por endpoint
 
 Este documento enumera cada endpoint de la API con el método HTTP y los roles requeridos.
+Además, se planifica un chatbot corporativo diferenciado por roles; los endpoints se detallan en la sección de próximos hitos para asegurar controles de acceso y auditoría.
 Las rutas sin un rol específico son accesibles para cualquier usuario, incluido `guest`.
 
 | Método | Ruta | Roles requeridos |
@@ -28,7 +29,11 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /categories/search | cliente, proveedor, colaborador, admin |
 | POST | /categories/generate-from-supplier-file | admin (requiere CSRF) |
 | GET | /products | cliente, proveedor, colaborador, admin |
+| GET | /products/{product_id} | cliente, proveedor, colaborador, admin |
+| GET | /products/{product_id}/variants | cliente, proveedor, colaborador, admin |
+| PATCH | /products/{product_id} | colaborador, admin (requiere CSRF) |
 | PATCH | /products/{product_id}/stock | colaborador, admin (requiere CSRF) |
+| GET | /products/{product_id}/audit-logs | colaborador, admin |
 | GET | /price-history | cliente, proveedor, colaborador, admin |
 | POST | /canonical-products | admin (requiere CSRF) |
 | GET | /canonical-products | Ninguno |
@@ -40,12 +45,16 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | DELETE | /equivalences/{equivalence_id} | colaborador, admin (requiere CSRF) |
 | POST | /catalog/products | Ninguno (requiere CSRF) |
 | DELETE | /catalog/products | Ninguno (requiere CSRF) |
+| GET | /suppliers/search | cliente, proveedor, colaborador, admin |
+| PUT | /variants/{variant_id}/sku | colaborador, admin (requiere CSRF) |
+| POST | /supplier-products/link | colaborador, admin (requiere CSRF) |
 | PATCH | /products-ex/products/{product_id}/sale-price | colaborador, admin (requiere CSRF) |
 | PATCH | /products-ex/supplier-items/{supplier_item_id}/buy-price | colaborador, admin (requiere CSRF) |
 | POST | /products-ex/products/bulk-sale-price | colaborador, admin (requiere CSRF) |
 | GET | /products-ex/products/{product_id}/offerings | cliente, proveedor, colaborador, admin |
 | GET | /products-ex/users/me/preferences/products-table | cliente, proveedor, colaborador, admin |
 | PUT | /products-ex/users/me/preferences/products-table | cliente, proveedor, colaborador, admin (requiere CSRF) |
+| GET | /stock/export.xlsx | cliente, proveedor, colaborador, admin |
 | GET | /suppliers/price-list/template | cliente, proveedor, colaborador, admin |
 | GET | /suppliers/{supplier_id}/price-list/template | cliente, proveedor, colaborador, admin |
 | POST | /suppliers/{supplier_id}/price-list/upload | proveedor, colaborador, admin (requiere CSRF) |
@@ -60,7 +69,34 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /debug/db* | admin |
 | GET | /debug/config* | admin |
 | GET | /debug/imports/parsers* | admin |
+| POST | /bug-report | Ninguno (sin CSRF; solo registra log) |
+| POST | /purchases/{purchase_id}/rollback | colaborador, admin (requiere CSRF) |
+| GET | /admin/services/metrics/bug-reports | admin |
 
 Las rutas marcadas con * solo están disponibles cuando `ENV` es distinto de `production`.
 
 El canal `/ws` envía un ping JSON cada 30 s y se cierra tras 60 s sin recibir mensajes.
+
+## Visibilidad en el frontend (UI)
+
+Además de los permisos del backend, la interfaz limita qué opciones se muestran según el rol:
+
+- Invitado: solo ChatBot. No se muestran Proveedores, Clientes, Ventas, Compras, Admin, ni acciones de subida.
+- Cliente/Proveedor: pueden ver Productos y Stock. No ven Proveedores, Clientes, Ventas, Compras ni Admin.
+- Colaborador/Admin: ven todas las secciones y herramientas (incluye Proveedores, Clientes, Ventas, Compras, Admin, Imágenes productos, etc.).
+
+Nota: Estas reglas de visibilidad no cambian la seguridad de los endpoints (que sigue controlada en el backend); simplemente reducen la superficie visible para cada rol.
+
+## Próximos endpoints (planificados)
+
+Estos endpoints se agregarán en próximos hitos y pueden no estar disponibles aún en el entorno actual. Se documentan para alinear UI/roadmap.
+
+| Método | Ruta | Roles requeridos | Notas |
+|--------|------|------------------|-------|
+| POST | /chatbot/query | colaborador, admin | Enrutador con respuestas filtradas por rol y auditoría obligatoria.
+| POST | /chatbot/query/admin-context | admin | Variante que habilita contexto extendido (repositorio completo y métricas internas).
+| GET | /chatbot/repo/search?q= | admin | Búsqueda de texto sobre el repositorio (read-only).
+| GET | /chatbot/repo/file?path= | admin | Descarga controlada de archivos; aplica sanitización de path.
+| POST | /chatbot/pr-suggestion | admin | Permite subir sugerencias bajo `PR/` con validación de ruta y auditoría.
+| GET | /chatbot/audit/logs | admin | Consulta de auditoría con filtros por usuario, fechas y recursos.
+

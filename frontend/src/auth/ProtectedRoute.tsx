@@ -11,7 +11,13 @@ interface Props {
 }
 
 export default function ProtectedRoute({ roles, children }: Props) {
-  const { state } = useAuth()
+  const { state, hydrated } = useAuth()
+
+  // Evitar redireccionar mientras rehidratamos el estado de auth.
+  // Esto previene falsos negativos al cargar directamente rutas protegidas (e.g., /compras).
+  if (!hydrated) {
+    return <div style={{ padding: 12 }}>Cargando…</div>
+  }
 
   // Si la ruta permite 'guest', no exigimos autenticación previa; se muestra
   // el contenido con visibilidad mínima cuando el rol sea 'guest'.

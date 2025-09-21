@@ -29,6 +29,7 @@ interface AuthContextShape {
   loginAsGuest: () => Promise<void>
   logout: () => Promise<void>
   refreshMe: () => Promise<void>
+  hydrated: boolean
 }
 
 const AuthContext = createContext<AuthContextShape | undefined>(undefined)
@@ -58,6 +59,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const clearPersist = () => { try { localStorage.removeItem(AUTH_KEY) } catch {} }
 
   const refreshMe = async () => {
+    if (import.meta.env?.DEV) {
+      // eslint-disable-next-line no-console
+      console.debug('[Auth] refreshMe() iniciando fetch /auth/me')
+    }
     const resp = await http.get('/auth/me')
     if (resp.data.is_authenticated) {
       setState({ user: resp.data.user, role: resp.data.role, isAuthenticated: true })
@@ -67,6 +72,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       clearPersist()
     }
     if (!hydrated) setHydrated(true)
+    if (import.meta.env?.DEV) {
+      // eslint-disable-next-line no-console
+      console.debug('[Auth] refreshMe() resultado', resp.data)
+    }
   }
 
   useEffect(() => {
@@ -119,7 +128,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   }
 
   return (
-    <AuthContext.Provider value={{ state, login, loginAsGuest, logout, refreshMe }}>
+    <AuthContext.Provider value={{ state, login, loginAsGuest, logout, refreshMe, hydrated }}>
       {children}
     </AuthContext.Provider>
   )

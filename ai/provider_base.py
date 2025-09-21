@@ -19,3 +19,9 @@ class ILLMProvider(ABC):
     @abstractmethod
     def generate(self, prompt: str) -> Iterable[str]:  # pragma: no cover - interfaz
         """Devuelve tokens generados para el prompt."""
+
+    # Streaming opcional: proveedores pueden sobrescribirlo. Por defecto
+    # simplemente delega en generate.
+    def generate_stream(self, prompt: str) -> Iterable[str]:  # pragma: no cover - fallback simple
+        for chunk in self.generate(prompt):
+            yield chunk

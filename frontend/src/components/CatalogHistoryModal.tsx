@@ -4,6 +4,9 @@
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import React, { useEffect, useState } from 'react'
 import { listCatalogs, CatalogListItem, CatalogListResponse, deleteCatalog } from '../services/catalogs'
+import { getCatalogStatus, unlockCatalog, getCatalogConfig, type CatalogStatus } from '../services/catalogDiagnostics'
+import { baseURL as base } from '../services/http'
+import { useAuth } from '../auth/AuthContext'
 import { useToast } from './ToastProvider'
 
 interface Props {
@@ -20,7 +23,10 @@ export const CatalogHistoryModal: React.FC<Props> = ({ open, onClose }) => {
   const [pages, setPages] = useState(1)
   const [fromDt, setFromDt] = useState('')
   const [toDt, setToDt] = useState('')
+  const [status, setStatus] = useState<CatalogStatus | null>(null)
+  const [cfg, setCfg] = useState<{ lock_timeout_s: number; source: 'env' | 'default' } | null>(null)
   const { push } = useToast()
+  const { state } = useAuth()
 
   const load = () => {
     setLoading(true)
@@ -30,6 +36,18 @@ export const CatalogHistoryModal: React.FC<Props> = ({ open, onClose }) => {
       .finally(() => setLoading(false))
   }
   useEffect(() => { if (open) load() }, [open, page, fromDt, toDt])
+  useEffect(() => {
+    if (!open) return
+    let abort = new AbortController()
+    let timer: any
+    const loadStatus = async () => {
+      try { setStatus(await getCatalogStatus(abort.signal)) } catch {}
+      try { setCfg(await getCatalogConfig(abort.signal)) } catch {}
+    }
+    loadStatus()
+    timer = setInterval(loadStatus, 30000)
+    return () => { abort.abort(); clearInterval(timer) }
+  }, [open])
   const resetAndLoad = () => { setPage(1); setTimeout(load, 0) }
 
   if (!open) return null
@@ -45,7 +63,30 @@ export const CatalogHistoryModal: React.FC<Props> = ({ open, onClose }) => {
           <input type="date" value={fromDt} onChange={e => { setFromDt(e.target.value); setPage(1) }} style={dateInput} />
           <input type="date" value={toDt} onChange={e => { setToDt(e.target.value); setPage(1) }} style={dateInput} />
           <button style={smallBtn} onClick={() => { setFromDt(''); setToDt(''); resetAndLoad() }}>Limpiar filtros</button>
-          <a href={`/api/catalogs/export.csv${buildExportQS(fromDt,toDt)}`} style={smallLink} target="_blank" rel="noreferrer">Export CSV</a>
+          <a href={`${base}/catalogs/export.csv${buildExportQS(fromDt,toDt)}`} style={smallLink} target="_blank" rel="noreferrer">Export CSV</a>
+          <span style={{ marginLeft: 'auto', fontSize: 12, color: status?.active_generation.running ? '#f59e0b' : '#22c55e' }}>
+            {status?.active_generation.running ? (
+              (() => {
+                const started = status?.active_generation.started_at ? new Date(status.active_generation.started_at) : null
+                const ageSec = started ? Math.max(0, Math.floor((Date.now() - started.getTime()) / 1000)) : 0
+                const mm = Math.floor(ageSec / 60)
+                const ss = String(ageSec % 60).padStart(2, '0')
+                const left = cfg ? Math.max(0, cfg.lock_timeout_s - ageSec) : null
+                const lmm = left !== null ? Math.floor(left / 60) : null
+                const lss = left !== null ? String(left % 60).padStart(2, '0') : null
+                return `Generación en curso · ${mm}:${ss}${left!==null ? ` · Timeout: ${lmm}m ${lss}s (${cfg?.source})` : ''}`
+              })()
+            ) : 'Libre'}
+          </span>
+          {state.role === 'admin' && (
+            <button
+              style={smallBtn}
+              onClick={async () => {
+                try { const r = await unlockCatalog(); setStatus(s => s ? { ...s, active_generation: r.active_generation } : s); push({ kind:'success', message:'Generación desbloqueada' }); }
+                catch(e:any){ push({ kind:'error', message: e?.message || 'No se pudo desbloquear' }) }
+              }}
+            >Desbloquear</button>
+          )}
         </div>
         {loading && <div style={{ padding: '12px 4px' }}>Cargando...</div>}
         {!loading && items.length === 0 && <div style={{ padding: '12px 4px' }}>No hay catálogos generados.</div>}
@@ -60,8 +101,8 @@ export const CatalogHistoryModal: React.FC<Props> = ({ open, onClose }) => {
                   <div style={{ fontSize: 11, color: '#888' }}>{new Date(it.modified_at).toLocaleString()} · {(it.size / 1024).toFixed(1)} KB</div>
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <a href={`/api/catalogs/${it.id}`} target="_blank" rel="noreferrer" style={actionLink}>Ver</a>
-                  <a href={`/api/catalogs/${it.id}/download`} style={actionLink}>Descargar</a>
+                  <a href={`${base}/catalogs/${it.id}`} target="_blank" rel="noreferrer" style={actionLink}>Ver</a>
+                  <a href={`${base}/catalogs/${it.id}/download`} style={actionLink}>Descargar</a>
                   <button style={delBtn} onClick={async () => {
                     if (!window.confirm('¿Eliminar catálogo ' + it.id + '?')) return
                     try { await deleteCatalog(it.id); push({ kind:'success', message:'Catálogo eliminado' }); load() } catch(e:any){ push({ kind:'error', message:e.message||'Error' }) }

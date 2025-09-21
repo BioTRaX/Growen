@@ -144,7 +144,29 @@ def _render_pdf(html: str) -> bytes:
 
 
 MAX_DETAIL_LOGS = 40  # cantidad máxima de logs detallados que se conservan
+# Estado actual de generación en memoria
 _active_generation: dict[str, Any] = {"running": False, "started_at": None, "ids": 0}
+# Timeout automático para limpieza del lock (segundos). Por defecto 15 minutos.
+try:
+    CATALOG_LOCK_TIMEOUT = int(os.getenv("CATALOG_LOCK_TIMEOUT", "900"))
+except Exception:
+    CATALOG_LOCK_TIMEOUT = 900
+
+def _maybe_expire_lock() -> None:
+    """Si hay un lock activo y superó el timeout, liberarlo automáticamente."""
+    if not _active_generation.get("running"):
+        return
+    if not _active_generation.get("started_at"):
+        return
+    try:
+        started = datetime.fromisoformat(_active_generation["started_at"])  # type: ignore[arg-type]
+        age = (datetime.utcnow() - started).total_seconds()
+        if CATALOG_LOCK_TIMEOUT > 0 and age > CATALOG_LOCK_TIMEOUT:
+            logger.warning("[catalog] lock expired automatically after %.0fs (timeout=%ss)", age, CATALOG_LOCK_TIMEOUT)
+            _active_generation.update({"running": False})
+    except Exception:
+        # Si falla el parseo, no romper el flujo; logear y no hacer nada
+        logger.exception("[catalog] error checking lock timeout")
 
 
 def _clean_old_logs():
@@ -178,6 +200,7 @@ def _apply_retention():
 
 @router.post("/generate", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def generate_catalog(data: CatalogGenerateIn, session: AsyncSession = Depends(get_session), session_data: SessionData = Depends(current_session)):
+    _maybe_expire_lock()
     if not data.ids:
         raise HTTPException(400, detail="No hay productos seleccionados")
     if _active_generation["running"]:
@@ -497,6 +520,7 @@ async def download_latest():
 
 @router.get("/diagnostics/status", dependencies=[Depends(require_roles("admin", "colaborador"))])
 async def catalog_status():
+    _maybe_expire_lock()
     return {
         "active_generation": _active_generation,
         "detail_logs": len(list(DETAIL_LOG_DIR.glob('catalog_*.log'))),
@@ -504,8 +528,29 @@ async def catalog_status():
     }
 
 
+@router.get("/diagnostics/config", dependencies=[Depends(require_roles("admin", "colaborador"))])
+async def catalog_config():
+    """Devuelve configuración efectiva de diagnósticos (timeout de lock)."""
+    source = "env" if os.getenv("CATALOG_LOCK_TIMEOUT") else "default"
+    return {"lock_timeout_s": int(CATALOG_LOCK_TIMEOUT), "source": source}
+
+
+@router.post("/diagnostics/unlock", dependencies=[Depends(require_roles("admin")), Depends(require_csrf)])
+async def catalog_unlock():
+    """Desbloquea manualmente el estado de generación de catálogo.
+
+    Útil si una generación falló y dejó el flag en memoria activo. No cancela trabajos reales,
+    sólo limpia el marcador en memoria. Registrar en logs para auditoría.
+    """
+    prev = dict(_active_generation)
+    _active_generation.update({"running": False})
+    logger.warning("[catalog] unlock requested: %s -> %s", prev, _active_generation)
+    return {"status": "unlocked", "previous": prev, "active_generation": _active_generation}
+
+
 @router.get("/diagnostics/summaries", dependencies=[Depends(require_roles("admin", "colaborador"))])
 async def catalog_summaries(limit: int = Query(20, ge=1, le=200)):
+    _maybe_expire_lock()
     files = sorted(LOG_DIR.glob('summary_*.json'), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
     data = []
     for f in files:

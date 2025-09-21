@@ -34,7 +34,8 @@ asyncio.get_event_loop = _safe_get_event_loop
 ECHO = os.getenv("DEBUG_SQL", "0") == "1"
 
 # Soporte especial para SQLite en memoria durante tests: un solo pool/conn compartido
-db_url = settings.db_url
+# Priorizar variable de entorno DB_URL si está definida (p. ej., tests la setean a :memory:)
+db_url = os.getenv("DB_URL") or settings.db_url
 kwargs: dict = {"echo": ECHO, "pool_pre_ping": True, "future": True}
 if db_url.startswith("sqlite+") and ":memory:" in db_url:
     # Usar una DB en memoria compartida y con nombre para múltiples conexiones

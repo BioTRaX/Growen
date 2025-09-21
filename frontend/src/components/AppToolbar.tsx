@@ -13,10 +13,15 @@ export default function AppToolbar() {
     const el = document.documentElement
     el.dataset.theme = el.dataset.theme === 'dark' ? 'light' : 'dark'
   }
-  const canUpload = ['proveedor', 'colaborador', 'admin'].includes(state.role)
-  const canSeeSuppliers = state.role !== 'guest'
-  // Mostrar Compras para cualquier usuario autenticado (no-guest)
-  const canManagePurchases = state.role !== 'guest'
+  // Política de visibilidad:
+  // - Invitado: no ve botones de navegación (solo Chat en el Dashboard)
+  // - Staff (colaborador/admin): ve todo
+  // - Cliente/Proveedor: ven Productos y Stock, pero no Proveedores ni Compras
+  const isStaff = ['colaborador', 'admin'].includes(state.role)
+  const isGuest = state.role === 'guest'
+  const canUpload = isStaff
+  const canSeeSuppliers = isStaff
+  const canManagePurchases = isStaff
 
   return (
     <div
@@ -32,25 +37,29 @@ export default function AppToolbar() {
         color: 'var(--text-color)',
       }}
     >
-      {canUpload && (
+      {!isGuest && canUpload && (
         <button className="btn-dark btn-lg" onClick={() => window.dispatchEvent(new Event('open-upload'))}>
           Adjuntar Excel
         </button>
       )}
-      {canSeeSuppliers && (
+      {!isGuest && canSeeSuppliers && (
         <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.suppliers)}>
           Proveedores
         </button>
       )}
-      <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.products)}>
-        Productos
-      </button>
+      {!isGuest && (
+        <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.products)}>
+          Productos
+        </button>
+      )}
       <button className="btn-dark btn-lg" onClick={toggleTheme}>Modo oscuro</button>
-      <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.stock)}>Stock</button>
-      {canManagePurchases && (
+      {!isGuest && (
+        <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.stock)}>Stock</button>
+      )}
+      {!isGuest && canManagePurchases && (
         <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.purchases)}>Compras</button>
       )}
-      {['colaborador', 'admin'].includes(state.role) && (
+      {isStaff && (
         <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.imagesAdmin)}>Imágenes productos</button>
       )}
       <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>

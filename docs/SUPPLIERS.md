@@ -64,6 +64,16 @@ Roles: cliente | proveedor | colaborador | admin
 ```
 Devuelve listado con estadísticas (`files_count`, `last_upload_at`).
 
+### Buscar proveedores (autocomplete)
+```
+GET /suppliers/search?q=<texto>&limit=20
+Roles: cliente | proveedor | colaborador | admin
+Respuesta 200 JSON: [{ id, name, slug }]
+Notas:
+- Busca por coincidencia en `name` o `slug` (ilike), ordenado por `name`.
+- `limit` entre 1 y 50 (default 20).
+```
+
 ### Obtener detalle
 ```
 GET /suppliers/{id}
@@ -91,6 +101,27 @@ Body:
 ```
 Conflicto: 409 `supplier_item_exists`.
 
+### Vincular SKU de proveedor a variante interna (upsert)
+```
+POST /supplier-products/link
+Roles: colaborador | admin (requiere CSRF)
+Body:
+{
+  "supplier_id": 12,
+  "supplier_product_id": "SKU123",
+  "internal_variant_id": 456,
+  "title": "Sustrato Premium 5L" // opcional
+}
+```
+Comportamiento: si existe `(supplier_id, supplier_product_id)` se actualiza el vínculo a la variante indicada y el `title` si viene; si no existe, crea un `SupplierProduct` nuevo. Devuelve el registro resultante.
+
+### Listar variantes de un producto interno
+```
+GET /products/{product_id}/variants
+Roles: cliente | proveedor | colaborador | admin
+Respuesta: [{ id, sku, name, value }]
+```
+
 ## Flujo UI
 1. Vista `Proveedores`: tabla con ID, Nombre, Slug, Ubicación, Contacto, Archivos.
 2. Botón “Nuevo proveedor”: abre modal con campos básicos + contacto opcional.
@@ -98,6 +129,17 @@ Conflicto: 409 `supplier_item_exists`.
 4. Detalle permite editar (modo edición) y guardar vía PATCH.
 5. Notas se guardan junto con los demás campos (sin endpoint separado).
 6. Se reservaron secciones futuras para listar documentos/facturas.
+7. Ficha de producto: botón “Agregar SKU de proveedor” abre modal con:
+  - Autocompletado de proveedor (GET /suppliers/search)
+  - Campo `SKU proveedor`
+  - Selector de variante interna (GET /products/{product_id}/variants)
+  - Campo `Título` opcional
+  Al guardar, invoca `POST /supplier-products/link` y refresca la tabla de ofertas de ese producto.
+
+### Notas sobre SKUs en la ficha de producto
+
+- SKU propio (interno): se edita a nivel variante mediante `PUT /variants/{variant_id}/sku` desde la ficha. Valida formato y unicidad y registra auditoría.
+- SKU proveedor: se agrega/vincula usando el modal “Agregar SKU de proveedor” que invoca `POST /supplier-products/link`. Si el SKU ya existía para ese proveedor, el vínculo se actualiza a la variante seleccionada.
 
 ## Migración
 Revisión: `extend_supplier_fields_20250913` (depende de `20250901_merge_images_and_import_logs`). Añade columnas sin valores obligatorios: operación segura para despliegue incremental.
