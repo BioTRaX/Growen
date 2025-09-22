@@ -21,6 +21,38 @@ Esta documentación cubre el flujo de importación, validación, confirmación y
 - `POST /purchases/import/santaplanta` Importa PDF y genera líneas
 - `POST /purchases/{id}/resend-stock` Reenvía stock (nueva funcionalidad)
 
+### Validación de compras (`POST /purchases/{id}/validate`)
+
+Reglas clave de validación a partir del 2025-09-22:
+
+- Si una línea tiene `supplier_sku`, se valida su existencia exacta en la base del proveedor (`SupplierProduct`) por `(supplier_id, supplier_product_id)`.
+  - Si existe: la línea se marca `OK`. Si faltaba, se auto-completa `supplier_item_id` y (si corresponde) `product_id`.
+  - Si NO existe: la línea se marca `SIN_VINCULAR` y se agrega el SKU faltante al arreglo `missing_skus`.
+- Si una línea no tiene `supplier_sku`:
+  - Se mantiene el comportamiento previo: `OK` sólo si ya está vinculada por `product_id` o `supplier_item_id`; en caso contrario `SIN_VINCULAR`.
+
+Respuesta típica:
+
+```json
+{
+  "status": "ok",
+  "lines": 12,
+  "unmatched": 3,
+  "linked": 5,
+  "missing_skus": ["ABC-123", "XYZ-9"]
+}
+```
+
+Notas:
+- `missing_skus` es una lista única de SKUs de proveedor ausentes en la base (puede haber múltiples líneas afectadas por el mismo SKU).
+- `linked` cuenta cuántas líneas pudieron auto-vincularse durante la validación (por ejemplo, cuando existía el `SupplierProduct` pero la línea aún no tenía `supplier_item_id`).
+- Esta validación no crea productos ni ítems de proveedor; sólo detecta y vincula si ya existen.
+
+Impacto en importación de Santa Planta:
+- Se deshabilitó el enlace difuso por título para evitar falsos positivos. La importación prioriza coincidencia exacta por `supplier_sku` y, en su defecto, heurísticas seguras (p. ej. tokens numéricos), pero no realizará auto-vínculos por similitud de texto.
+- Recomendación: usar “Crear y vincular” desde Compras para los casos faltantes, o apoyarse en el validador IA (iAVaL) para sugerencias no vinculantes.
+
+
 ### iAVaL — Validador de IA del remito
 
 Valida y propone correcciones del encabezado y líneas de una compra en BORRADOR comparando el documento del remito (PDF o EML) con los datos importados.
@@ -151,6 +183,8 @@ Eventos relevantes:
 Cada apply exitoso añade entrada con `cooldown_seconds` y timestamp persistido.
 
 ## UI
+- UI compras: selector de proveedor unificado (autocompletado con lista inicial, soporte dark y feedback en modal PDF, ficha de proveedor y Nueva compra).
+
 En la vista `PurchaseDetail` se muestra (si existe) el último reenvío: `Último reenvío stock: <fecha local>`.
 
 - Auditoría de Stock (UI): se agregó un botón “Auditoría” que abre un panel lateral con los deltas aplicados (según AuditLog/ImportLog) mostrando producto, ID, delta y transición old→new por evento. Útil para diagnosticar casos reportados de “productos erróneos”.
@@ -160,6 +194,10 @@ En la vista `PurchaseDetail` se muestra (si existe) el último reenvío: `Últim
   - Al confirmar (“Sí, aplicar cambios”), llama al endpoint `apply` y refresca la compra.
   - Opcional: checkbox “Enviar logs de cambios” que, al aplicar, llama a `apply` con `emit_log=1`.
   - Si se generan logs, se muestran botones “Descargar log JSON/CSV” en el modal (usando el endpoint de descarga) sin cerrar inmediatamente el modal.
+
+Mejoras recientes en la pantalla de Compras:
+- Badge visual “SKU no encontrado”: después de ejecutar Validar, si la respuesta incluye `missing_skus`, en cada línea cuyo `supplier_sku` figure en esa lista se muestra un distintivo rojo junto al campo de SKU con el texto “SKU no encontrado”. Esto ayuda a detectar de inmediato qué líneas requieren creación/vinculación.
+- Atajo para agregar línea: se cambió el gesto para insertar una nueva línea a Alt+Enter. Esto evita inserciones accidentales al presionar Enter durante la edición.
 
 Variables de entorno relevantes para IA:
 - `OPENAI_API_KEY` (si se usa OpenAI u OpenAI-compatible)
@@ -177,6 +215,7 @@ En `Nueva compra`, el campo Proveedor usa un autocompletado con soporte dark mod
 Para proveedores que envían remitos por correo (ej. POP), el camino simple es extraer el PDF del email y usar el importador PDF existente (OCR/IA): ver `docs/IMPORT_EMAIL.md`. Más adelante se puede automatizar con un watcher IMAP.
 
 ## Buenas prácticas
+- Editar el campo `supplier_sku` en una linea limpia cualquier `supplier_item_id`/`product_id` previo; la linea quedara en `SIN_VINCULAR` hasta que se seleccione un item valido.
 - Usar siempre preview antes de aplicar en entornos sensibles.
 - Verificar que no existan líneas `SIN_VINCULAR` antes de confirmar inicialmente.
 - Monitorear audit logs para detectar patrones de reenvíos frecuentes (posible síntoma de otros problemas).

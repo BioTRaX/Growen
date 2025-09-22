@@ -58,6 +58,7 @@ from services.auth import require_csrf  # para override condicional en dev
 from services.routers import bug_report  # router para reportes de bugs
 from services.integrations.notion_errors import ErrorEvent, create_or_update_card  # type: ignore
 from services.integrations.notion_client import load_notion_settings  # type: ignore
+from services.integrations.notion_sections import upsert_report_as_child  # type: ignore
 
 raw_level = os.getenv("LOG_LEVEL", "INFO") or "INFO"
 level_name = raw_level.strip().upper()
@@ -165,12 +166,17 @@ async def log_requests(request: Request, call_next):
                     seccion=(
                         "Compras" if "/purchases" in request.url.path or "/compras" in request.url.path else
                         "Stock" if "/stock" in request.url.path or "/inventario" in request.url.path else
-                        "Productos" if "/products" in request.url.path or "/productos" in request.url.path else
+                        "App" if "/admin" in request.url.path else
                         None
                     ),
                 )
                 import asyncio
-                asyncio.create_task(asyncio.to_thread(create_or_update_card, ev))
+                if cfg.mode == "sections":
+                    # En modo sections NO enviar reportes 500 a Notion desde middleware.
+                    # Sólo dejamos el registro en logs para evitar ruido.
+                    pass
+                else:
+                    asyncio.create_task(asyncio.to_thread(create_or_update_card, ev))
         except Exception:
             logger.debug("No se pudo encolar tarjeta Notion para 500", exc_info=True)
         # Devolver error con tono argento, breve y claro (sin faltar el respeto)

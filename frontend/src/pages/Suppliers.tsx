@@ -27,18 +27,18 @@ export default function SuppliersPage() {
   return (
     <>
       <AppToolbar />
-      <div className="panel p-4" style={{ maxWidth: 900, margin: '16px auto', background: theme.bg, color: theme.text }}>
+      <div className="panel p-4" style={{ maxWidth: 900, margin: '16px auto' }}>
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ margin: 0 }}>Proveedores</h2>
+          <h2 className="fs-xl fw-600" style={{ margin: 0 }}>Proveedores</h2>
           <div className="row" style={{ gap: 8 }}>
             <button className="btn-primary" onClick={() => setShowCreate(true)}>Nuevo proveedor</button>
-            <Link to={PATHS.home} className="btn-secondary btn-lg" style={{ textDecoration: 'none' }}>Volver</Link>
+            <Link to={PATHS.home} className="btn-dark btn-lg" style={{ textDecoration: 'none' }}>Volver</Link>
           </div>
         </div>
         {loading ? (
           <div>Cargando...</div>
         ) : (
-          <table className="table w-full table-fixed" style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 8 }}>
+          <table className="table w-full table-fixed table-accent-hover">
             <thead>
               <tr>
                 <th style={{ width: 70, textAlign: 'left' }}>ID</th>
@@ -64,7 +64,7 @@ export default function SuppliersPage() {
           </table>
         )}
         <div className="row" style={{ justifyContent: 'center', marginTop: 12 }}>
-          <Link to={PATHS.home} className="btn-secondary btn-lg" style={{ textDecoration: 'none' }}>Volver al inicio</Link>
+          <Link to={PATHS.home} className="btn-dark btn-lg w-100" style={{ textDecoration: 'none' }}>Volver al inicio</Link>
         </div>
         {showCreate && (
           <div className="modal-backdrop">

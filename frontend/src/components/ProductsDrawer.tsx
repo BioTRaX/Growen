@@ -584,6 +584,16 @@ export default function ProductsDrawer({ open, onClose }: Props) {
     return order.map((id) => map[id]).filter((c) => c && (vis as any)[c.id] !== false)
   }, [colDefs, prefs])
 
+  // Canonical IDs for bulk price editing (backend expects canonical_product_id)
+  const selectedCanonicalIds = useMemo(() => {
+    const sel = new Set(selected)
+    const canon = items
+      .filter(it => sel.has(it.product_id) && it.canonical_product_id)
+      .map(it => it.canonical_product_id!)
+    // unique
+    return Array.from(new Set(canon))
+  }, [items, selected])
+
   return (
     <div
       className="panel p-4"
@@ -605,7 +615,20 @@ export default function ProductsDrawer({ open, onClose }: Props) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <button className="btn-dark btn-lg" onClick={onClose}>Volver</button>
         {!!selected.length && canEdit && (
-          <button className="btn" onClick={() => setShowBulk(true)}>
+          <button
+            className="btn"
+            onClick={() => {
+              if (selectedCanonicalIds.length === 0) {
+                showToast('info', 'Los seleccionados no tienen producto canónico. Vinculá equivalencias o abrí cada uno para editar precios a nivel proveedor.')
+                return
+              }
+              if (selectedCanonicalIds.length < selected.length) {
+                const skipped = selected.length - selectedCanonicalIds.length
+                showToast('info', `Se omitirán ${skipped} sin canónico. Se editarán ${selectedCanonicalIds.length}.`)
+              }
+              setShowBulk(true)
+            }}
+          >
             Editar precios ({selected.length})
           </button>
         )}
@@ -824,7 +847,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
       )}
       {showBulk && (
         <BulkSalePriceModal
-          productIds={selected}
+          productIds={selectedCanonicalIds}
           onClose={(updated) => {
             setShowBulk(false)
             if (updated != null) {

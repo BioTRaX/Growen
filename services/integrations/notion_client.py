@@ -38,6 +38,7 @@ class NotionSettings:
     dry_run: bool
     timeout: int
     max_retries: int
+    mode: str  # 'cards' (por defecto) | 'sections'
 
 
 def load_notion_settings() -> NotionSettings:
@@ -48,6 +49,7 @@ def load_notion_settings() -> NotionSettings:
         dry_run=_bool_env(os.getenv("NOTION_DRY_RUN"), True),
         timeout=int(os.getenv("NOTION_TIMEOUT", "25")),
         max_retries=int(os.getenv("NOTION_MAX_RETRIES", "3")),
+        mode=(os.getenv("NOTION_MODE") or "cards").strip().lower(),
     )
 
 
@@ -128,6 +130,43 @@ class NotionWrapper:
             LOG.exception("Error leyendo base Notion: %s", e)
             return None
 
+    def get_title_property_name(self, db_id: str) -> Optional[str]:
+        """Devuelve el nombre de la propiedad de tipo 'title' en la base."""
+        meta = self.retrieve_database(db_id)
+        if not meta or not isinstance(meta, dict):
+            return None
+        props = meta.get("properties", {})
+        if isinstance(props, dict):
+            for name, p in props.items():
+                if isinstance(p, dict) and p.get("type") == "title":
+                    return name
+        return None
+
+    def query_db_by_title(self, db_id: str, title_prop: str, title_equals: str) -> Optional[str]:
+        """Busca una página en la DB cuyo título (prop dada) sea exactamente title_equals."""
+        if self.cfg.dry_run or not self._client:
+            LOG.info("[dry-run=%s] query_db_by_title %s=%s", self.cfg.dry_run, title_prop, title_equals)
+            return None
+        try:
+            res = self._with_backoff(
+                self._client.databases.query,
+                **{
+                    "database_id": db_id,
+                    "filter": {
+                        "property": title_prop,
+                        "title": {"equals": title_equals},
+                    },
+                    "page_size": 1,
+                },
+            )
+            results = res.get("results", []) if isinstance(res, dict) else []
+            if results:
+                return results[0]["id"]
+            return None
+        except Exception as e:  # pragma: no cover
+            LOG.exception("Error consultando DB por título Notion: %s", e)
+            return None
+
     def query_by_fingerprint(self, db_id: str, fingerprint: str) -> Optional[str]:
         if self.cfg.dry_run or not self._client:
             LOG.info("[dry-run=%s] query_by_fingerprint %s", self.cfg.dry_run, fingerprint)
@@ -180,4 +219,77 @@ class NotionWrapper:
             return True
         except Exception as e:  # pragma: no cover
             LOG.exception("Error actualizando página Notion: %s", e)
+            return False
+
+    # ---- Blocks / Child pages (para modo 'sections')
+    def list_block_children(self, block_id: str, page_size: int = 100) -> list[dict]:
+        if not self._client:
+            LOG.info("[dry-run=%s] list_block_children %s", self.cfg.dry_run, block_id)
+            return []
+        try:
+            results: list[dict] = []
+            start_cursor = None
+            while True:
+                kwargs = {"block_id": block_id, "page_size": page_size}
+                if start_cursor:
+                    kwargs["start_cursor"] = start_cursor
+                res = self._with_backoff(self._client.blocks.children.list, **kwargs)
+                if isinstance(res, dict):
+                    results.extend(res.get("results", []))
+                    if res.get("has_more") and res.get("next_cursor"):
+                        start_cursor = res.get("next_cursor")
+                        continue
+                break
+            return results
+        except Exception as e:  # pragma: no cover
+            LOG.exception("Error listando hijos Notion: %s", e)
+            return []
+
+    def create_child_page(self, parent_page_id: str, title: str, children_blocks: Optional[list[dict]] = None) -> Optional[str]:
+        """Crea una subpágina bajo una página existente con contenido opcional."""
+        if self.cfg.dry_run or not self._client:
+            LOG.info("[dry-run=%s] create_child_page under %s: %s", self.cfg.dry_run, parent_page_id, title)
+            return None
+        try:
+            payload: Dict[str, Any] = {
+                "parent": {"page_id": parent_page_id},
+                "properties": {"title": {"title": [{"type": "text", "text": {"content": title}}]}},
+            }
+            if children_blocks:
+                payload["children"] = children_blocks
+            res = self._with_backoff(self._client.pages.create, **payload)
+            return res.get("id") if isinstance(res, dict) else None
+        except Exception as e:  # pragma: no cover
+            LOG.exception("Error creando subpágina Notion: %s", e)
+            return None
+
+    def find_child_page_by_title(self, parent_page_id: str, title: str) -> Optional[str]:
+        """Busca una subpágina (child_page) bajo parent_page_id por su título exacto.
+
+        Devuelve el id de la página (usa el id del block child_page, válido para appends).
+        """
+        children = self.list_block_children(parent_page_id)
+        for ch in children:
+            try:
+                if ch.get("object") == "block" and ch.get("type") == "child_page":
+                    cp = ch.get("child_page", {})
+                    if isinstance(cp, dict) and cp.get("title") == title:
+                        return ch.get("id")
+            except Exception:
+                continue
+        return None
+
+    def append_children(self, block_or_page_id: str, children_blocks: list[dict]) -> bool:
+        """Agrega bloques al final del contenido de una página o bloque contenedor."""
+        if self.cfg.dry_run or not self._client:
+            LOG.info("[dry-run=%s] append_children %s: %d blocks", self.cfg.dry_run, block_or_page_id, len(children_blocks))
+            return True
+        try:
+            self._with_backoff(
+                self._client.blocks.children.append,
+                **{"block_id": block_or_page_id, "children": children_blocks},
+            )
+            return True
+        except Exception as e:  # pragma: no cover
+            LOG.exception("Error anexando bloques en Notion: %s", e)
             return False

@@ -57,15 +57,102 @@ Notas
 
   ## Integración con Notion (Todos Errores)
 
-  - Si `NOTION_FEATURE_ENABLED=true` y se configuran `NOTION_API_KEY` y `NOTION_ERRORS_DATABASE_ID`, cada reporte de `/bug-report` intenta crear/actualizar una tarjeta en Notion en background (sin bloquear la respuesta).
-  - La sección (Compras/Stock/Productos) se deriva automáticamente a partir de la URL del cliente; si no aplica, queda "General".
-  - Los errores 500 no manejados también generan tarjeta (middleware en `services/api.py`) con deduplicación por fingerprint.
+  Modos soportados (controlados por `NOTION_MODE`):
+
+  - `cards` (por defecto): crea/actualiza tarjetas con propiedades enriquecidas (Estado, Severidad, Servicio, etc.). Requiere un esquema de DB completo.
+  - `sections`: DB mínima con una única propiedad de título (por ejemplo, "Sección"). Bajo cada página de sección ("Compras", "Stock", "App") se crean subpáginas por reporte con título `YYYY-MM-DD #N` y contenido de texto (path de screenshot y comentario).
+
+  Flujo en modo `sections`:
+  - `/bug-report` deriva la sección desde la URL del cliente: `/compras|/purchases` → Compras, `/stock` → Stock, `/admin` → App, resto → App.
+  - Si la página de sección no existe en la base, se crea on-demand (requiere permisos de escritura de la integración).
+  - Se crea una subpágina hija con título por fecha y número correlativo del día y se agregan párrafos con el path del screenshot (si hubo) y el comentario.
+  - El middleware de 500s NO publica en Notion cuando `NOTION_MODE=sections` (solo log local).
 
   Variables relevantes:
   - `NOTION_FEATURE_ENABLED` (boolean)
   - `NOTION_API_KEY` (token de integración)
   - `NOTION_ERRORS_DATABASE_ID` (ID de la base "Todos Errores")
   - `NOTION_DRY_RUN` (1=solo loguea, no crea páginas)
+  - `NOTION_MODE` (`cards` | `sections`)
 
-  Health:
+  Validación y salud:
+  - CLI: `python -m cli.ng notion validate-db` valida el esquema según el modo. En `sections` alcanza con tener una propiedad de tipo `title`; además advierte si faltan las páginas base (Compras/Stock/App).
   - `GET /admin/services/notion/health` devuelve `enabled/has_sdk/has_key/has_errors_db/dry_run` y `latency_ms` de una query simple.
+
+### Cómo probar rápidamente (modo `sections`)
+
+1) Variables de entorno (archivo `.env`):
+  - `NOTION_FEATURE_ENABLED=1`
+  - `NOTION_API_KEY=...` (token de la integración)
+  - `NOTION_ERRORS_DATABASE_ID=...` (ID de la base "Todos Errores")
+  - `NOTION_MODE=sections`
+  - `NOTION_DRY_RUN=1` (para no escribir en Notion durante la prueba)
+
+2) Validar base y conectividad:
+  - `python -m cli.ng notion validate-db` → debe indicar la propiedad de título y advertir si faltan páginas base.
+
+3) Smoke test sin servidor (dry-run):
+  - `python scripts/smoke_notion_sections.py`
+  - Esperado: tres líneas con `{ action: 'dry-run', parent: 'Compras|Stock|App', title: 'YYYY-MM-DD #1' }`.
+
+4) Smoke vía endpoint (opcional):
+  - Levantar la API y enviar `POST /bug-report` desde el frontend o con una llamada manual.
+  - En modo `sections` y `NOTION_DRY_RUN=1`, la creación en Notion se simula y no realiza escritura.
+
+5) Escritura real:
+  - Cambiar `NOTION_DRY_RUN=0` y repetir el envío. Se crearán (si faltan) las páginas base en la DB y una subpágina hija por reporte.
+
+### Checklist de despliegue (modo `sections`)
+
+- [ ] Variables definidas: `NOTION_FEATURE_ENABLED`, `NOTION_API_KEY`, `NOTION_ERRORS_DATABASE_ID`, `NOTION_MODE=sections`, `NOTION_DRY_RUN` (0 en prod).
+- [ ] La base de Notion tiene al menos una propiedad de tipo `title` (p.ej., "Sección").
+- [ ] Páginas base presentes (o permisos para crearlas on‑demand): "Compras", "Stock", "App".
+- [ ] Endpoint `/bug-report` operativo (revisa que `logs/BugReport.log` reciba entradas).
+- [ ] Middleware 500 en backend: no publica en Notion en `sections` (esperado para reducir ruido).
+- [ ] Documentación interna actualizada (esta página) y equipo informado del modo activo.
+
+### Permisos y notas de seguridad (Notion)
+
+- La integración debe tener acceso de lectura/escritura a la base `NOTION_ERRORS_DATABASE_ID` para crear páginas base y subpáginas.
+- En `NOTION_DRY_RUN=1` no se realizan escrituras; se registran logs informativos para diagnóstico.
+- El contenido publicado en subpáginas incluye texto del comentario y, si aplica, el path local del screenshot guardado por el backend.
+
+### Troubleshooting
+
+- `notion validate-db` falla con "No se pudo leer la base":
+  - Verificar `NOTION_API_KEY` y `NOTION_ERRORS_DATABASE_ID`.
+  - Confirmar que la integración tenga acceso a la base.
+- Sección derivada incorrecta:
+  - La heurística usa la URL del cliente: `/compras|/purchases` → Compras; `/stock` → Stock; `/admin` → App; caso contrario → App.
+- No aparecen subpáginas en Notion:
+  - Si `NOTION_DRY_RUN=1`, es esperable: no se escriben cambios. Cambiar a 0 para producir escrituras.
+  - Revisar permisos de la integración y el ID de base.
+
+## Catálogo de errores conocidos (modo `cards`)
+
+Esta funcionalidad es opcional y aplica sólo cuando `NOTION_MODE=cards`. Permite sincronizar un catálogo local de patrones de errores hacia Notion como tarjetas base para seguimiento.
+
+- Archivo de catálogo: `config/known_errors.json`
+  - Estructura esperada (por patrón):
+    - `id` (string, único)
+    - `regex` (string, expresión regular IGNORECASE)
+    - `servicio` (string: `api` | `frontend` | `worker_images` | ...)
+    - `severidad` (Low | Medium | High | Critical)
+    - `etiquetas` (array de strings)
+    - `titulo` (string, opcional; por defecto usa `id`)
+    - `sugerencia` (string, opcional)
+
+- Publicación (CLI):
+  - Pre-requisitos de entorno: `NOTION_FEATURE_ENABLED=1`, `NOTION_API_KEY=...`, `NOTION_ERRORS_DATABASE_ID=...`, `NOTION_MODE=cards`.
+  - Ensayo: `python -m cli.ng notion sync-known-errors --dry-run`
+  - Aplicar: `python -m cli.ng notion sync-known-errors`
+  - Idempotencia: el upsert utiliza un fingerprint estable derivado del `id` del patrón.
+
+- Propiedades esperadas en la base Notion (resumen):
+  - Title (title), Estado (select), Severidad (select), Servicio (select), Entorno (select), Sección (select),
+  - Fingerprint (rich_text), Mensaje (rich_text), Código (rich_text), URL (url),
+  - FirstSeen (date), LastSeen (date), Etiquetas (multi_select), Stacktrace (rich_text), CorrelationId (rich_text)
+
+Notas:
+- Si tu base no tiene estas propiedades, ajusta el esquema o adapta el mapeo en `services/integrations/notion_errors.py`.
+- Este catálogo no interfiere con el modo `sections`; son flujos independientes controlados por `NOTION_MODE`.

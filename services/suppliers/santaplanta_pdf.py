@@ -38,9 +38,26 @@ def _extract_text(data: bytes) -> str:
         log.info(f"Extracción con pdfplumber exitosa. Total caracteres: {len(full_text)}")
         return full_text
     except Exception as e:
-        log.warning(f"pdfplumber falló: {e}. Intentando con PyPDF2...")
+        log.warning(f"pdfplumber falló: {e}. Intentando con pypdf...")
         pass
-    try:  # PyPDF2
+    # Fallback 1: pypdf
+    try:
+        from pypdf import PdfReader  # type: ignore
+
+        reader = PdfReader(io.BytesIO(data))
+        text = []
+        for i, page in enumerate(reader.pages):
+            page_text = page.extract_text() or ""
+            text.append(page_text)
+            log.debug(f"  - Página {i+1} (pypdf): {len(page_text)} caracteres extraídos.")
+        full_text = "\n".join(text)
+        log.info(f"Extracción con pypdf exitosa. Total caracteres: {len(full_text)}")
+        return full_text
+    except Exception as e:
+        log.warning(f"pypdf falló: {e}. Intentando con PyPDF2...")
+        pass
+    # Fallback 2: PyPDF2
+    try:
         from PyPDF2 import PdfReader  # type: ignore
 
         reader = PdfReader(io.BytesIO(data))

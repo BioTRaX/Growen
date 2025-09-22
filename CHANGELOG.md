@@ -15,6 +15,8 @@
 - ui(compras): en `PurchaseDetail`, si al confirmar hay mismatch se ofrece ejecutar Rollback inmediato.
 - ui(compras): botón “Rollback” en el listado para compras en `CONFIRMADA`.
 ### Changed
+ - ui(proveedores): listado “Proveedores” ahora usa panel oscuro consistente, encabezado claro y tabla con buen contraste; botones “Volver” y “Volver al inicio” unificados a `btn-dark` (se mantiene “Nuevo proveedor” en fucsia). Hover de filas con acento translúcido.
+ - deps(PDF): se fijan versiones `pypdf>=4.3` y `pdfplumber>=0.11` para evitar `CryptographyDeprecationWarning` (ARC4) en importación de PDFs; verificar `requirements.txt`.
 - ops: `logs/BugReport.log` queda excluido de endpoint `/debug/clear-logs` y scripts de limpieza para preservar historial (persistente con rotación).
  - ops: `logs/bugreport_screenshots/` se excluye de limpiezas generales hasta definir una política de retención específica.
  - admin: nuevo endpoint `GET /admin/services/metrics/bug-reports` para contar reportes por día (con filtro `with_screenshot`) leyendo `logs/BugReport.log`.

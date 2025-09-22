@@ -27,7 +27,7 @@ Durante la importación de remitos PDF (ej. proveedor Santa Planta) se observó 
 ### Medidas adoptadas
 1. Script `scripts/check_pdf_crypto.py` para auditar PDFs y detectar uso de RC4.
 2. No se detecta uso directo de ARC4 en el código (`grep` sin coincidencias `ARC4|RC4`).
-3. Se planificará upgrade de librerías PDF priorizando versiones que eviten fallback RC4.
+3. Upgrade aplicado: dependencias fijadas a `pypdf>=4.3` y `pdfplumber>=0.11` (ver `requirements.txt`) que eliminan el warning por ARC4 en `cryptography`.
 4. Se mantendrá registro de hashes SHA256 para integridad básica (script).
 
 ### Plan de acción
@@ -41,6 +41,7 @@ Durante la importación de remitos PDF (ej. proveedor Santa Planta) se observó 
 ### Próximos pasos
 - Crear issue: "Deprecación ARC4 / Auditoría PDFs" con checklist anterior.
 - Añadir verificación periódica en pipeline (QA) usando el script.
+ - Ejecutar suite `tests/test_parse_remito_sample_pdf.py` y `tests/test_santaplanta_*` tras cambios de dependencia.
 
 ## Logging
 - Evitar duplicación de handlers (pendiente refactor). Cada request debe loguearse una sola vez.

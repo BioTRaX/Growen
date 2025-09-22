@@ -1,3 +1,8 @@
+#!/usr/bin/env python
+# NG-HEADER: Nombre de archivo: santaplanta_pipeline.py
+# NG-HEADER: Ubicación: services/importers/santaplanta_pipeline.py
+# NG-HEADER: Descripción: Pipeline robusto para parsear remitos Santa Planta (PDF) con fallback heurístico
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
 """Pipeline robusto para parsear remitos de Santa Planta desde PDF.
@@ -344,7 +349,21 @@ def _try_camelot(pdf_path: Path, events: List[Dict[str, Any]], dbg: Dict[str, An
     all_lines: List[ParsedLine] = []
     raw_tables: list[list[list[str]]] = []
     try:
-        import camelot  # type: ignore
+        # Algunos entornos elevan a error un CryptographyDeprecationWarning (ARC4)
+        # disparado transitivamente al importar dependencias. Lo silenciamos de forma
+        # acotada para permitir el fallback con Camelot sin afectar la política global.
+        import warnings
+        try:
+            from cryptography.utils import CryptographyDeprecationWarning as _CryDW  # type: ignore
+        except Exception:  # pragma: no cover
+            _CryDW = DeprecationWarning  # fallback genérico si no está disponible
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=_CryDW,
+                message=r".*ARC4 has been moved to cryptography\.hazmat\.decrepit\.ciphers\.algorithms.*",
+            )
+            import camelot  # type: ignore
         flavors = [
             ("lattice", {"line_scale": 40, "strip_text": "\n"}),
             ("stream", {"edge_tol": 200, "row_tol": 10, "column_tol": 10})
@@ -556,6 +575,61 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
                 result.events.append({"level": "WARN", "stage": "summary", "event": "no_lines_after_pipeline", "details": {"ocr_applied": ocr_applied}})
             except Exception:
                 pass
+        # Fallback final: parser heurístico textual si seguimos sin líneas
+        if not result.lines:
+            try:
+                from services.suppliers.santaplanta_pdf import parse_santaplanta_pdf  # type: ignore
+                result.events.append({"level": "INFO", "stage": "fallback", "event": "regex_parser_attempt", "details": {"reason": "no_lines_after_ocr"}})
+                # Leer bytes del PDF (si ya hicimos OCR y existe salida, priorizar esa para mejor texto)
+                data_for_text: bytes = b""
+                try:
+                    if 'ocr_applied' in result.debug:
+                        ocr_pdf = pdf_path.with_name(pdf_path.stem + "_ocr.pdf")
+                        if ocr_pdf.exists():
+                            data_for_text = ocr_pdf.read_bytes()
+                except Exception:
+                    data_for_text = b""
+                if not data_for_text:
+                    try:
+                        data_for_text = pdf_path.read_bytes()
+                    except Exception:
+                        data_for_text = b""
+                if data_for_text:
+                    parsed = parse_santaplanta_pdf(data_for_text)
+                    hl = parsed.get("lines") or []
+                    mapped: list[ParsedLine] = []
+                    for ln in hl:
+                        try:
+                            mapped.append(ParsedLine(
+                                supplier_sku=(ln.get("supplier_sku") or None),
+                                title=str(ln.get("title") or ""),
+                                qty=Decimal(str(ln.get("qty") or "0")),
+                                unit_cost_bonif=Decimal(str(ln.get("unit_cost") or "0")),
+                                pct_bonif=Decimal(str(ln.get("line_discount") or "0")),
+                                subtotal=None,
+                                iva=None,
+                                total=None,
+                            ))
+                        except Exception:
+                            continue
+                    if mapped:
+                        result.lines = mapped
+                        # Completar header si faltaba
+                        if not result.remito_number:
+                            rn = parsed.get("remito_number")
+                            if rn:
+                                result.remito_number = rn
+                        if not result.remito_date:
+                            rd = parsed.get("remito_date")
+                            if rd:
+                                result.remito_date = rd
+                        result.events.append({"level": "INFO", "stage": "fallback", "event": "regex_parser_ok", "details": {"count": len(mapped)}})
+                    else:
+                        result.events.append({"level": "WARN", "stage": "fallback", "event": "regex_parser_no_lines"})
+                else:
+                    result.events.append({"level": "WARN", "stage": "fallback", "event": "regex_parser_skipped", "details": {"reason": "no_data_bytes"}})
+            except Exception as _fe:
+                result.events.append({"level": "WARN", "stage": "fallback", "event": "regex_parser_error", "details": {"error": str(_fe)}})
         result.events.append({"level": "INFO", "stage": "summary", "event": "done", "details": {"lines": len(result.lines), "ocr": ocr_applied}})
     except Exception as e:  # top-level safeguard
         import traceback
