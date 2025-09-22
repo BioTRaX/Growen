@@ -5,7 +5,7 @@
 
 # Roadmap del Proyecto
 
-Última actualización: 2025-09-24
+Última actualización: 2025-09-21
 
 Este documento resume el estado actual del proyecto, las funcionalidades ya implementadas y los trabajos pendientes. Debe mantenerse actualizado por cada contribución (humana o de un agente) que cambie comportamiento, endpoints, modelos o UI relevante.
 
@@ -20,6 +20,8 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 
 - Se actualizo la persona del chatbot para reflejar un tono mas malhumorado, sarcastico y centrado en Nice Grow.
 - El chatbot de precios ahora pide aclaracion cuando hay multiples coincidencias antes de compartir montos.
+- Backend compras: update_purchase limpia los vinculos al editar SKUs y confirm_purchase expone deltas por linea.
+- UI compras: selector de proveedor unificado (autocompletado con lista inicial, soporte dark y feedback en modal PDF, ficha de proveedor y Nueva compra).
 - Flujo iAVaL (Validador de IA de remitos) — primera versión funcional:
   - Backend:
     - Endpoints nuevos:

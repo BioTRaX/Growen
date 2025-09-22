@@ -34,7 +34,8 @@ tenacity>=8.2.3
 playwright>=1.42.0
 
 # PDF/OCR processing
-pdfplumber
+pdfplumber>=0.11  # fija versión reciente que usa pypdf moderno
+pypdf>=4.3  # explícito: pypdf reciente evita warnings ARC4 con cryptography
 camelot-py[cv]
 ocrmypdf
 pdf2image

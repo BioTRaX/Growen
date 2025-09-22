@@ -168,38 +168,66 @@ def notion_validate_db() -> None:
         typer.echo("No se pudo leer la base de Notion. Verifica API key/ID.")
         raise typer.Exit(code=2)
     props = meta.get("properties", {}) if isinstance(meta, dict) else {}
-    expected = {
-        "Title": "title",
-        "Estado": "select",
-        "Severidad": "select",
-        "Servicio": "select",
-        "Entorno": "select",
-        "Sección": "select",
-        "Fingerprint": "rich_text",
-        "Mensaje": "rich_text",
-        "Código": "rich_text",
-        "FirstSeen": "date",
-        "LastSeen": "date",
-        "Etiquetas": "multi_select",
-    }
-    missing: list[str] = []
-    wrong_type: list[str] = []
-    for name, typ in expected.items():
-        p = props.get(name)
-        if not p:
-            missing.append(name)
-            continue
-        pt = p.get("type")
-        if pt != typ:
-            wrong_type.append(f"{name} (esperado {typ}, actual {pt})")
-    if not missing and not wrong_type:
-        typer.echo("OK: esquema mínimo válido.")
+    # Modo sections: sólo requerimos que exista alguna propiedad de tipo title
+    if cfg.mode == "sections":
+        title_name = None
+        if isinstance(props, dict):
+            for name, p in props.items():
+                if isinstance(p, dict) and p.get("type") == "title":
+                    title_name = name
+                    break
+        if title_name:
+            # Verificar existencia de páginas base de sección
+            nw = NotionWrapper()
+            missing_sections: list[str] = []
+            for section in ("Compras", "Stock", "App"):
+                page_id = nw.query_db_by_title(cfg.errors_db, title_name, section)  # type: ignore[arg-type]
+                if not page_id:
+                    missing_sections.append(section)
+            if missing_sections:
+                typer.echo(
+                    "Advertencia: faltan páginas base en Notion (se crean on-demand): "
+                    + ", ".join(missing_sections)
+                )
+            typer.echo(f"OK: modo sections con propiedad de título '{title_name}'.")
+            raise typer.Exit(code=0)
+        else:
+            typer.echo("Falta una propiedad de tipo 'title' en la DB.")
+            raise typer.Exit(code=1)
     else:
-        if missing:
-            typer.echo("Faltan propiedades: " + ", ".join(missing))
-        if wrong_type:
-            typer.echo("Tipos incorrectos: " + ", ".join(wrong_type))
-        raise typer.Exit(code=1)
+        # Modo cards: validar esquema extendido como antes
+        expected = {
+            "Title": "title",
+            "Estado": "select",
+            "Severidad": "select",
+            "Servicio": "select",
+            "Entorno": "select",
+            "Sección": "select",
+            "Fingerprint": "rich_text",
+            "Mensaje": "rich_text",
+            "Código": "rich_text",
+            "FirstSeen": "date",
+            "LastSeen": "date",
+            "Etiquetas": "multi_select",
+        }
+        missing: list[str] = []
+        wrong_type: list[str] = []
+        for name, typ in expected.items():
+            p = props.get(name)
+            if not p:
+                missing.append(name)
+                continue
+            pt = p.get("type")
+            if pt != typ:
+                wrong_type.append(f"{name} (esperado {typ}, actual {pt})")
+        if not missing and not wrong_type:
+            typer.echo("OK: esquema mínimo válido.")
+        else:
+            if missing:
+                typer.echo("Faltan propiedades: " + ", ".join(missing))
+            if wrong_type:
+                typer.echo("Tipos incorrectos: " + ", ".join(wrong_type))
+            raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

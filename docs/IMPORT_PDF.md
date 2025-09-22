@@ -9,6 +9,7 @@ El proceso de importación de PDF sigue el siguiente pipeline:
 1. `pdfplumber` intenta extraer texto y tablas.
 2. `Camelot` (lattice/stream) busca tablas si no hubo éxito con pdfplumber.
 3. Si el PDF no contiene suficiente texto o se fuerza el proceso, se ejecuta OCR con `ocrmypdf` y se reintenta la extracción.
+4. Si aún no se detectan líneas tras OCR y reintentos, se aplica un fallback heurístico textual (parser RegEx) para intentar recuperar líneas.
 
 ## Flags relevantes
 - `debug`: genera información adicional para diagnósticos (eventos del pipeline, muestras de filas).
@@ -41,6 +42,7 @@ El proceso de importación de PDF sigue el siguiente pipeline:
   - `pdfplumber:lines_detected` → cantidad de líneas normalizadas
   - `camelot:tables_found` → tablas detectadas por flavor
   - `ocr:ocrmypdf_run` → resultado de OCR (ok/tiempo/stdout/stderr)
+  - `fallback:regex_parser_attempt|ok|no_lines|error` → estado del fallback textual
   - `summary:done` / `summary:no_lines_after_pipeline`
 
 ### Eventos IA (fallback)

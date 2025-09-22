@@ -15,6 +15,7 @@ Backend (Python)
 - Seguridad archivos (opcional): clamd (ClamAV daemon externo)
 - Web scraping / parsing HTML (opcional): beautifulsoup4
 - PDF / OCR (opcional): pdfplumber, camelot-py[cv], ocrmypdf, pdf2image, pytesseract, opencv-python-headless
+	- Nota: se fija `pypdf>=4.3` y `pdfplumber>=0.11` para eliminar warnings de ARC4
 - Inferencia modelos (para rembg): onnxruntime
 - Navegación headless / scraping avanzado: playwright (+ navegadores instalados con `python -m playwright install <browser>`)
 - Otros para PDF avanzado (ya en core/extra): reportlab, weasyprint (no Windows)

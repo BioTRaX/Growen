@@ -100,6 +100,8 @@ export default function PurchaseNew() {
               value={supplierSel}
               onChange={(it) => { setSupplierSel(it); setForm({ ...form, supplier_id: it ? String(it.id) : '' }) }}
               placeholder="Proveedor"
+              autoFocus
+              className="w-full"
             />
           </div>
           <input className="input" placeholder="N° de remito" value={form.remito_number} onChange={(e) => setForm({ ...form, remito_number: e.target.value })} />

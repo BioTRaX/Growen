@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from services.auth import current_session, SessionData
 from services.integrations.notion_errors import ErrorEvent, create_or_update_card  # type: ignore
 from services.integrations.notion_client import load_notion_settings  # type: ignore
+from services.integrations.notion_sections import upsert_report_as_child  # type: ignore
 
 MAX_SCREENSHOT_BYTES = 1_200_000  # ~1.2 MB, defensa adicional en servidor
 
@@ -127,31 +128,38 @@ async def post_bug_report(payload: BugReportIn, request: Request, sess: SessionD
                 record["screenshot_error"] = f"save_failed: {se}"
         logger.info(json.dumps(record, ensure_ascii=False))
 
-        # Notion: crear/actualizar tarjeta si la feature está activada
+        # Notion: modo 'sections' crea subpáginas bajo Compras/Stock/App; 'cards' usa tarjetas con props
         try:
             cfg = load_notion_settings()
             if cfg.enabled and cfg.errors_db:
-                # Derivar sección a partir de la URL del cliente (Compras, Stock, Productos)
                 url_val = record.get("url") or ""
-                ev = ErrorEvent(
-                    servicio="frontend" if (record.get("url") or "").startswith("http") else "api",
-                    entorno=os.getenv("ENV", "dev"),
-                    url=url_val,
-                    codigo=None,
-                    mensaje=record.get("message") or "",
-                    stacktrace=record.get("stack"),
-                    correlation_id=record.get("cid"),
-                    etiquetas=["bugreport"],
-                    seccion=(
-                        "Compras" if ("/compras" in url_val or "/purchases" in url_val)
-                        else "Stock" if ("/stock" in url_val or "/inventario" in url_val)
-                        else "Productos" if ("/productos" in url_val or "/products" in url_val)
-                        else None
-                    ),
-                )
-                # ejecutar en background sin bloquear la respuesta
-                import asyncio
-                asyncio.create_task(asyncio.to_thread(create_or_update_card, ev))
+                if cfg.mode == "sections":
+                    # Crear subpágina con título por fecha (incluye id del reporte si está disponible)
+                    screenshot_path = record.get("screenshot_file")
+                    comment = record.get("message") or ""
+                    report_id = record.get("id")
+                    import asyncio
+                    asyncio.create_task(asyncio.to_thread(upsert_report_as_child, url_val, comment, screenshot_path, report_id))
+                else:
+                    # Modo tradicional de tarjetas con propiedades
+                    ev = ErrorEvent(
+                        servicio="frontend" if (record.get("url") or "").startswith("http") else "api",
+                        entorno=os.getenv("ENV", "dev"),
+                        url=url_val,
+                        codigo=None,
+                        mensaje=record.get("message") or "",
+                        stacktrace=record.get("stack"),
+                        correlation_id=record.get("cid"),
+                        etiquetas=["bugreport"],
+                        seccion=(
+                            "Compras" if ("/compras" in url_val or "/purchases" in url_val)
+                            else "Stock" if ("/stock" in url_val or "/inventario" in url_val)
+                            else "Productos" if ("/productos" in url_val or "/products" in url_val)
+                            else None
+                        ),
+                    )
+                    import asyncio
+                    asyncio.create_task(asyncio.to_thread(create_or_update_card, ev))
         except Exception:
             logging.getLogger("growen").warning("No se pudo encolar tarjeta Notion para bug-report", exc_info=True)
 

@@ -423,29 +423,40 @@ async def create_purchase(payload: dict, db: AsyncSession = Depends(get_session)
     return {"id": p.id, "status": p.status}
 
 
-@router.put("/{purchase_id}", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
+@router.put(
+    "/{purchase_id}",
+    dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)],
+)
 async def update_purchase(purchase_id: int, payload: dict, db: AsyncSession = Depends(get_session)):
-    """Actualiza encabezado y líneas de una compra.
+    """Actualiza encabezado y lineas de una compra.
 
     - Encabezado: global_discount, vat_rate, note, remito_date, depot_id, remito_number.
-    - Líneas: upsert/delete con `lines` [{ id?, op=upsert|delete, ... }].
+    - Lineas: upsert/delete con `lines` [{ id?, op=upsert|delete, ... }].
     """
     p = await db.get(Purchase, purchase_id)
     if not p:
         raise HTTPException(status_code=404, detail="Compra no encontrada")
-    # Encabezado
+
     for k in ("global_discount", "vat_rate", "note", "remito_date", "depot_id", "remito_number"):
         if k in payload and payload[k] is not None:
             if k == "remito_date" and isinstance(payload[k], str):
                 try:
                     p.remito_date = date.fromisoformat(payload[k])
                 except ValueError:
-                    raise HTTPException(status_code=400, detail="remito_date inválida")
+                    raise HTTPException(status_code=400, detail="remito_date invalida")
             else:
                 setattr(p, k, payload[k])
 
-    # Líneas: upsert/delete
     lines: list[dict[str, Any]] = payload.get("lines") or []
+    supplier_product_cache: dict[int, SupplierProduct | None] = {}
+
+    async def _get_supplier_product(sp_id: Optional[int]) -> Optional[SupplierProduct]:
+        if not sp_id:
+            return None
+        if sp_id not in supplier_product_cache:
+            supplier_product_cache[sp_id] = await db.get(SupplierProduct, sp_id)
+        return supplier_product_cache[sp_id]
+
     for ln in lines:
         op = (ln.get("op") or "upsert").lower()
         lid = ln.get("id")
@@ -454,20 +465,91 @@ async def update_purchase(purchase_id: int, payload: dict, db: AsyncSession = De
             if obj and obj.purchase_id == p.id:
                 await db.delete(obj)
             continue
-        # upsert
+
         if lid:
             obj = await db.get(PurchaseLine, int(lid))
             if not obj or obj.purchase_id != p.id:
-                raise HTTPException(status_code=404, detail="Línea no encontrada")
+                raise HTTPException(status_code=404, detail="Linea no encontrada")
         else:
             obj = PurchaseLine(purchase_id=p.id)
             db.add(obj)
-        for k in ("supplier_item_id", "product_id", "supplier_sku", "title", "qty", "unit_cost", "line_discount", "state", "note"):
-            if k in ln:
-                setattr(obj, k, ln[k])
+
+        prev_sku = (obj.supplier_sku or "") if lid else None
+        supplier_sku_provided = "supplier_sku" in ln
+        supplier_item_provided = "supplier_item_id" in ln
+        product_provided = "product_id" in ln
+        state_provided = "state" in ln
+
+        if supplier_sku_provided:
+            raw_sku = (ln.get("supplier_sku") or "").strip()
+            obj.supplier_sku = raw_sku or None
+        if "title" in ln:
+            obj.title = (ln.get("title") or "").strip()
+
+        if supplier_item_provided:
+            raw_item = ln.get("supplier_item_id")
+            if raw_item in (None, "", 0):
+                obj.supplier_item_id = None
+            else:
+                try:
+                    obj.supplier_item_id = int(raw_item)
+                except Exception:
+                    obj.supplier_item_id = None
+
+        if product_provided:
+            raw_prod = ln.get("product_id")
+            if raw_prod in (None, "", 0):
+                obj.product_id = None
+            else:
+                try:
+                    obj.product_id = int(raw_prod)
+                except Exception:
+                    obj.product_id = None
+
+        for key in ("qty", "unit_cost", "line_discount", "note"):
+            if key in ln:
+                setattr(obj, key, ln[key])
+
+        if state_provided:
+            obj.state = ln.get("state")
+
+        if obj.title:
+            obj.title = obj.title.strip()
+        else:
+            obj.title = ""
+
+        if obj.supplier_sku:
+            obj.supplier_sku = obj.supplier_sku.strip() or None
+
+        normalized_prev_sku = (prev_sku or "").strip() if prev_sku is not None else None
+        current_sku = (obj.supplier_sku or "")
+        sku_changed = supplier_sku_provided and normalized_prev_sku != current_sku
+
+        if sku_changed:
+            if not (supplier_item_provided and obj.supplier_item_id):
+                obj.supplier_item_id = None
+            if not (product_provided and obj.product_id):
+                obj.product_id = None
+
+        if supplier_item_provided and obj.supplier_item_id is None and not product_provided:
+            obj.product_id = None
+
+        if obj.supplier_item_id:
+            sp_obj = await _get_supplier_product(obj.supplier_item_id)
+            if sp_obj:
+                if not obj.supplier_sku:
+                    obj.supplier_sku = getattr(sp_obj, "supplier_product_id", None)
+                sp_product_id = getattr(sp_obj, "internal_product_id", None)
+                if sp_product_id:
+                    if not product_provided or not obj.product_id or obj.product_id != sp_product_id:
+                        obj.product_id = sp_product_id
+
+        if not state_provided:
+            obj.state = "OK" if (obj.product_id or obj.supplier_item_id) else "SIN_VINCULAR"
 
     await db.commit()
     return {"status": "ok"}
+
 
 
 @router.get("")
@@ -623,35 +705,47 @@ async def validate_purchase(purchase_id: int, db: AsyncSession = Depends(get_ses
     unmatched = 0
     auto_linked = 0
     missing_skus: set[str] = set()
-    # Intentar auto-vincular por supplier_sku cuando falte vínculo
+    # Reglas de validación:
+    # - Si la línea tiene supplier_sku: validar contra SupplierProduct del proveedor.
+    #   - Si existe: autovincular (supplier_item_id/product_id) y marcar OK.
+    #   - Si NO existe: marcar SIN_VINCULAR SIEMPRE, aunque tenga product_id precargado.
+    # - Si la línea NO tiene supplier_sku: mantener criterio previo (OK si ya está vinculada a producto o supplier_item).
     for l in p.lines:
         try:
-            linked = bool(l.product_id or l.supplier_item_id)
-            if not linked:
-                sku_txt = (l.supplier_sku or "").strip()
-                if sku_txt:
-                    try:
-                        sp = await db.scalar(
-                            select(SupplierProduct).where(
-                                SupplierProduct.supplier_id == p.supplier_id,
-                                SupplierProduct.supplier_product_id == sku_txt,
-                            )
+            sku_txt = (l.supplier_sku or "").strip()
+            if sku_txt:
+                try:
+                    sp = await db.scalar(
+                        select(SupplierProduct).where(
+                            SupplierProduct.supplier_id == p.supplier_id,
+                            SupplierProduct.supplier_product_id == sku_txt,
                         )
-                    except Exception:
-                        sp = None
-                    if sp:
+                    )
+                except Exception:
+                    sp = None
+                if sp:
+                    # Autovincular si no estaba
+                    if not l.supplier_item_id:
                         l.supplier_item_id = sp.id
-                        if not l.product_id and getattr(sp, "internal_product_id", None):
-                            l.product_id = sp.internal_product_id
-                        auto_linked += 1
-                        linked = True
-                    else:
-                        missing_skus.add(sku_txt)
-            # Marcar estado según resultado final
-            linked = bool(l.product_id or l.supplier_item_id)
-            l.state = "OK" if linked else "SIN_VINCULAR"
-            if not linked:
-                unmatched += 1
+                    if not l.product_id and getattr(sp, "internal_product_id", None):
+                        l.product_id = sp.internal_product_id
+                    # Estado final
+                    l.state = "OK"
+                    auto_linked += 1
+                else:
+                    # SKU no existe en la base del proveedor: pendiente
+                    # Limpieza defensiva: si había vínculos previos (inconsistentes), quitarlos para habilitar 'Crear producto'.
+                    l.supplier_item_id = None
+                    l.product_id = None
+                    l.state = "SIN_VINCULAR"
+                    missing_skus.add(sku_txt)
+                    unmatched += 1
+            else:
+                # Sin SKU proveedor: usar vínculo existente si lo hay
+                linked = bool(l.product_id or l.supplier_item_id)
+                l.state = "OK" if linked else "SIN_VINCULAR"
+                if not linked:
+                    unmatched += 1
         except Exception:
             # En caso de error silencioso, mantener estado previo y contar como sin vincular si aplica
             linked = bool(l.product_id or l.supplier_item_id)
@@ -1045,8 +1139,10 @@ async def confirm_purchase(
                     inc = max(0, qty)
                     prod.stock = old_stock + inc
                     applied_deltas.append({
-                        "product_id": prod.id,
-                        "product_title": getattr(prod, "title", None),
+                "product_id": prod.id,
+                "product_title": getattr(prod, "title", None),
+                "line_title": l.title,
+                "supplier_sku": l.supplier_sku,
                         "old": old_stock,
                         "delta": inc,
                         "new": prod.stock,
@@ -1323,9 +1419,11 @@ async def resend_stock(
         old_stock = int(prod.stock or 0)
         new_stock = old_stock + inc if apply else old_stock
         applied_deltas.append({
-            "product_id": prod.id,
-            "product_title": getattr(prod, "title", None),
-            "old": old_stock,
+                "product_id": prod.id,
+                "product_title": getattr(prod, "title", None),
+                "line_title": l.title,
+                "supplier_sku": l.supplier_sku,
+                "old": old_stock,
             "delta": inc,
             "new": new_stock if apply else old_stock + inc,  # expected new
             "line_id": l.id,
@@ -1899,37 +1997,8 @@ async def import_santaplanta_pdf(
                 if sp:
                     supplier_item_id = sp.id
                     product_id = sp.internal_product_id
-            if not supplier_item_id and title and len(title) >= 4:
-                try:
-                    from rapidfuzz import process, fuzz
-                    sp_query = select(SupplierProduct).where(SupplierProduct.supplier_id == supplier_id)
-                    all_supplier_products = (await db.execute(sp_query)).scalars().all()
-                    choices = {sp.id: (sp.title or "") for sp in all_supplier_products}
-                    best_match = process.extractOne(title, choices, scorer=fuzz.WRatio, score_cutoff=85)
-                    if best_match:
-                        sp_id = best_match[2]
-                        sp = await db.get(SupplierProduct, sp_id)
-                        if sp:
-                            supplier_item_id = sp.id
-                            product_id = sp.internal_product_id
-                    if not supplier_item_id:
-                        from db.models import CanonicalProduct
-                        cp_query = select(CanonicalProduct)
-                        all_canonicals = (await db.execute(cp_query)).scalars().all()
-                        choices_cp = {cp.id: (cp.name or "") for cp in all_canonicals}
-                        process.extractOne(title, choices_cp, scorer=fuzz.WRatio, score_cutoff=87)
-                except ImportError:
-                    key = max((w for w in re.split(r"\W+", title) if len(w) >= 5), key=len, default=title.split(" ")[0])
-                    cand_q = select(SupplierProduct).where(
-                        SupplierProduct.supplier_id==supplier_id,
-                        SupplierProduct.title.ilike(f"%{key}%")
-                    ).limit(1)
-                    sp = (await db.execute(cand_q)).scalar_one_or_none()
-                    if sp:
-                        supplier_item_id = sp.id
-                        product_id = sp.internal_product_id
-                except Exception:
-                    pass
+            # Fuzzy por título deshabilitado para evitar falsos positivos.
+            # La validación exige existencia por SKU proveedor.
             state = "OK" if (supplier_item_id or product_id) else "SIN_VINCULAR"
             db.add(PurchaseLine(
                 purchase_id=p.id,

@@ -1,6 +1,6 @@
-# NG-HEADER: Nombre de archivo: test_purchases_api.py
-# NG-HEADER: Ubicación: tests/test_purchases_api.py
-# NG-HEADER: Descripción: Pendiente de descripción
+﻿# NG-HEADER: Nombre de archivo: test_purchases_api.py
+# NG-HEADER: UbicaciÃ³n: tests/test_purchases_api.py
+# NG-HEADER: DescripciÃ³n: Pendiente de descripciÃ³n
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import io
 import os
@@ -18,7 +18,7 @@ app.dependency_overrides[require_csrf] = lambda: None
 
 
 def test_create_validate_confirm_and_duplication():
-    # Crear proveedor mínimo
+    # Crear proveedor mÃ­nimo
     # Nota: el endpoint de proveedores ya existe; creamos uno para usar su ID
     resp = client.post("/suppliers", json={"slug": "sp", "name": "Santa Planta"})
     assert resp.status_code in (200, 201)
@@ -30,13 +30,13 @@ def test_create_validate_confirm_and_duplication():
     assert r.status_code == 200
     pid = r.json()["id"]
 
-    # Validar (sin líneas)
+    # Validar (sin lÃ­neas)
     r = client.post(f"/purchases/{pid}/validate")
     assert r.status_code == 200
     assert r.json()["unmatched"] == 0
 
     # Confirmar
-    r = client.post(f"/purchases/{pid}/confirm")
+    r = client.post(f"/purchases/{pid}/confirm?debug=1")
     assert r.status_code == 200
     assert r.json().get("already_confirmed") in (None, False)
 
@@ -51,8 +51,8 @@ def test_confirm_idempotent_and_autolink_flow():
     assert resp.status_code in (200, 201)
     supplier_id = client.get("/suppliers").json()[0]["id"]
 
-    # Crear producto mínimo con SKU interno distinto al del proveedor y link mediante endpoint dedicado
-    # 1) Crear producto mínimo
+    # Crear producto mÃ­nimo con SKU interno distinto al del proveedor y link mediante endpoint dedicado
+    # 1) Crear producto mÃ­nimo
     prod = client.post(
         "/catalog/products",
         json={
@@ -64,17 +64,17 @@ def test_confirm_idempotent_and_autolink_flow():
         },
     )
     assert prod.status_code == 200
-    # El endpoint de creación mínima ya crea SupplierProduct con internal_product_id/internal_variant_id
-    # y devuelve supplier_item_id; no es necesario llamar a /supplier-products/link aquí.
+    # El endpoint de creaciÃ³n mÃ­nima ya crea SupplierProduct con internal_product_id/internal_variant_id
+    # y devuelve supplier_item_id; no es necesario llamar a /supplier-products/link aquÃ­.
     supplier_item_id = prod.json()["supplier_item_id"]
 
-    # Crear compra con una línea que tenga sólo supplier_sku (autolink debe completarla)
+    # Crear compra con una lÃ­nea que tenga sÃ³lo supplier_sku (autolink debe completarla)
     payload = {"supplier_id": supplier_id, "remito_number": "R-AL-1", "remito_date": "2025-08-31"}
     r = client.post("/purchases", json=payload)
     assert r.status_code == 200
     pid = r.json()["id"]
 
-    # Agregar línea a la compra
+    # Agregar lÃ­nea a la compra
     r = client.put(
         f"/purchases/{pid}",
         json={
@@ -91,12 +91,15 @@ def test_confirm_idempotent_and_autolink_flow():
     )
     assert r.status_code == 200
 
-    # Confirmar: debe autovincular la línea al supplier_item y sumar stock 3 al producto
+    # Confirmar: debe autovincular la lÃ­nea al supplier_item y sumar stock 3 al producto
     r1 = client.post(f"/purchases/{pid}/confirm")
     assert r1.status_code == 200
-    assert r1.json().get("already_confirmed") in (None, False)
+    body = r1.json()
+    assert body.get("already_confirmed") in (None, False)
+    deltas = body.get("applied_deltas") or []
+    assert any(d.get("line_title") == "Maceta 12cm" for d in deltas)
 
-    # Confirmación repetida: idempotente, no debe volver a sumar stock ni duplicar price history
+    # ConfirmaciÃ³n repetida: idempotente, no debe volver a sumar stock ni duplicar price history
     r2 = client.post(f"/purchases/{pid}/confirm")
     assert r2.status_code == 200
     assert r2.json().get("already_confirmed") is True
@@ -111,7 +114,7 @@ def test_cancel_requires_note():
     pid = r.json()["id"]
     r = client.post(f"/purchases/{pid}/cancel", json={})
     assert r.status_code == 400
-    r = client.post(f"/purchases/{pid}/cancel", json={"note": "me equivoqué"})
+    r = client.post(f"/purchases/{pid}/cancel", json={"note": "me equivoquÃ©"})
     assert r.status_code == 200
 
 
@@ -121,7 +124,7 @@ def test_import_santaplanta_pdf_creates_draft(tmp_path):
     assert resp.status_code in (200, 201)
     idx = client.get("/suppliers").json()[0]["id"]
 
-    # PDF mínimo (puede que el parser no lea texto; igual debe crear BORRADOR)
+    # PDF mÃ­nimo (puede que el parser no lea texto; igual debe crear BORRADOR)
     dummy_pdf = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj<</Type/Catalog>>endobj\ntrailer<>\n%%EOF"
     files = {"file": ("remito_sp.pdf", io.BytesIO(dummy_pdf), "application/pdf")}
     r = client.post(f"/purchases/import/santaplanta?supplier_id={idx}", files=files)
@@ -134,24 +137,24 @@ def test_import_santaplanta_pdf_policy(tmp_path):
     assert resp.status_code in (200, 201)
     idx = client.get("/suppliers").json()[0]["id"]
 
-    # PDF mínimo (garantizado sin líneas extraíbles)
+    # PDF mÃ­nimo (garantizado sin lÃ­neas extraÃ­bles)
     dummy_pdf = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj<</Type/Catalog>>endobj\ntrailer<>\n%%EOF"
     files = {"file": ("remito_policy.pdf", io.BytesIO(dummy_pdf), "application/pdf")}
 
-    # --- Política: IMPORT_ALLOW_EMPTY_DRAFT = true (default) ---
+    # --- PolÃ­tica: IMPORT_ALLOW_EMPTY_DRAFT = true (default) ---
     os.environ["IMPORT_ALLOW_EMPTY_DRAFT"] = "true"
     r_allow = client.post(f"/purchases/import/santaplanta?supplier_id={idx}", files=files)
     assert r_allow.status_code == 200
     assert r_allow.json()["status"] == "BORRADOR"
     assert "purchase_id" in r_allow.json()
 
-    # --- Política: IMPORT_ALLOW_EMPTY_DRAFT = false ---
+    # --- PolÃ­tica: IMPORT_ALLOW_EMPTY_DRAFT = false ---
     os.environ["IMPORT_ALLOW_EMPTY_DRAFT"] = "false"
     # Re-abrir el BytesIO para la nueva request
     files_false = {"file": ("remito_policy_false.pdf", io.BytesIO(dummy_pdf), "application/pdf")}
     r_disallow = client.post(f"/purchases/import/santaplanta?supplier_id={idx}", files=files_false)
     assert r_disallow.status_code == 422
-    assert "No se detectaron líneas" in r_disallow.json()["detail"]["detail"]
+    assert "No se detectaron lÃ­neas" in r_disallow.json()["detail"]["detail"]
 
     # Limpiar variable de entorno
     del os.environ["IMPORT_ALLOW_EMPTY_DRAFT"]
@@ -165,7 +168,7 @@ def test_import_santaplanta_pdf_force_ocr(tmp_path, monkeypatch):
 
     # Mock de run_ocrmypdf para no depender del binario
     def mock_ocr(*args, **kwargs):
-        # Simula que OCR se ejecutó y creó un archivo de salida
+        # Simula que OCR se ejecutÃ³ y creÃ³ un archivo de salida
         # El contenido no importa, solo que exista
         output_path = args[1]
         with open(output_path, "wb") as f:
@@ -180,9 +183,117 @@ def test_import_santaplanta_pdf_force_ocr(tmp_path, monkeypatch):
     # Llamada con force_ocr=1
     r = client.post(f"/purchases/import/santaplanta?supplier_id={idx}&force_ocr=1", files=files)
     
-    # Como el mock de OCR no produce líneas, el resultado depende de la política de empty draft
+    # Como el mock de OCR no produce lÃ­neas, el resultado depende de la polÃ­tica de empty draft
     if os.getenv("IMPORT_ALLOW_EMPTY_DRAFT", "true").lower() == "true":
         assert r.status_code == 200
         assert r.json()["status"] == "BORRADOR"
     else:
         assert r.status_code == 422
+
+def test_update_purchase_cleans_links_when_sku_changes():
+    resp = client.post("/suppliers", json={"slug": "sp_clean", "name": "Proveedor Clean"})
+    assert resp.status_code in (200, 201)
+    supplier_id = resp.json()["id"]
+
+    first_product = client.post(
+        "/catalog/products",
+        json={
+            "title": "Producto Clean 1",
+            "initial_stock": 0,
+            "supplier_id": supplier_id,
+            "supplier_sku": "CLEAN-001",
+            "sku": "NG-CLEAN-1",
+        },
+    )
+    assert first_product.status_code == 200
+    supplier_item_one = first_product.json()["supplier_item_id"]
+
+    second_product = client.post(
+        "/catalog/products",
+        json={
+            "title": "Producto Clean 2",
+            "initial_stock": 0,
+            "supplier_id": supplier_id,
+            "supplier_sku": "CLEAN-002",
+            "sku": "NG-CLEAN-2",
+        },
+    )
+    assert second_product.status_code == 200
+    supplier_item_two = second_product.json()["supplier_item_id"]
+
+    purchase = client.post(
+        "/purchases",
+        json={"supplier_id": supplier_id, "remito_number": "R-CLEAN", "remito_date": "2025-09-20"},
+    )
+    assert purchase.status_code == 200
+    pid = purchase.json()["id"]
+
+    create_line = client.put(
+        f"/purchases/{pid}",
+        json={
+            "lines": [
+                {
+                    "supplier_item_id": supplier_item_one,
+                    "supplier_sku": "CLEAN-001",
+                    "title": "Producto Clean 1",
+                    "qty": 5,
+                    "unit_cost": 100.0,
+                    "line_discount": 0.0,
+                }
+            ]
+        },
+    )
+    assert create_line.status_code == 200
+
+    purchase_data = client.get(f"/purchases/{pid}").json()
+    assert purchase_data["lines"], "se esperaba al menos una linea"
+    line = purchase_data["lines"][0]
+    line_id = line["id"]
+    assert line.get("supplier_item_id") == supplier_item_one
+    assert line.get("product_id") is not None
+
+    update_line = client.put(
+        f"/purchases/{pid}",
+        json={
+            "lines": [
+                {
+                    "id": line_id,
+                    "supplier_sku": "CLEAN-NEW",
+                    "title": "Producto editado",
+                    "qty": 5,
+                    "unit_cost": 110.0,
+                }
+            ]
+        },
+    )
+    assert update_line.status_code == 200
+
+    purchase_after_sku = client.get(f"/purchases/{pid}").json()["lines"][0]
+    assert purchase_after_sku.get("supplier_item_id") is None
+    assert purchase_after_sku.get("product_id") is None
+    assert purchase_after_sku.get("state") == "SIN_VINCULAR"
+
+    relink = client.put(
+        f"/purchases/{pid}",
+        json={
+            "lines": [
+                {
+                    "id": line_id,
+                    "supplier_item_id": supplier_item_two,
+                    "supplier_sku": "CLEAN-002",
+                    "title": "Producto final",
+                    "qty": 5,
+                    "unit_cost": 120.0,
+                }
+            ]
+        },
+    )
+    assert relink.status_code == 200
+
+    purchase_final = client.get(f"/purchases/{pid}").json()["lines"][0]
+    assert purchase_final.get("supplier_item_id") == supplier_item_two
+    assert purchase_final.get("product_id") is not None
+    assert purchase_final.get("state") == "OK"
+    assert purchase_final.get("supplier_sku") == "CLEAN-002"
+
+

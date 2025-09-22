@@ -1,6 +1,6 @@
-// NG-HEADER: Nombre de archivo: purchases.ts
-// NG-HEADER: Ubicación: frontend/src/services/purchases.ts
-// NG-HEADER: Descripción: Pendiente de descripción
+﻿// NG-HEADER: Nombre de archivo: purchases.ts
+// NG-HEADER: UbicaciÃ³n: frontend/src/services/purchases.ts
+// NG-HEADER: DescripciÃ³n: Pendiente de descripciÃ³n
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import http from './http'
 
@@ -65,7 +65,7 @@ export async function confirmPurchase(id: number, debug: boolean = false) {
   const r = await http.post(`/purchases/${id}/confirm`, {}, { params: { debug: debug ? 1 : 0 } })
   return r.data as {
     status: string
-    applied_deltas?: { product_id: number; product_title?: string | null; delta: number; new: number; old: number }[]
+    applied_deltas?: { product_id: number; product_title?: string | null; line_title?: string | null; supplier_sku?: string | null; delta: number; new: number; old: number }[]
     unresolved_lines?: number[]
     totals?: {
       purchase_total: number
@@ -82,7 +82,7 @@ export async function confirmPurchase(id: number, debug: boolean = false) {
 
 export async function resendPurchaseStock(id: number, apply: boolean, debug: boolean = false) {
   const r = await http.post(`/purchases/${id}/resend-stock`, {}, { params: { apply: apply ? 1 : 0, debug: debug ? 1 : 0 } })
-  return r.data as { status: string; mode: 'apply' | 'preview'; applied_deltas?: { product_id: number; product_title?: string | null; delta: number; new: number; old: number }[]; unresolved_lines?: number[] }
+  return r.data as { status: string; mode: 'apply' | 'preview'; applied_deltas?: { product_id: number; product_title?: string | null; line_title?: string | null; supplier_sku?: string | null; delta: number; new: number; old: number }[]; unresolved_lines?: number[] }
 }
 
 export async function cancelPurchase(id: number, note: string) {
@@ -147,4 +147,5 @@ export async function iavalApply(id: number, proposal: any, emitLog?: boolean) {
   const r = await http.post(`/purchases/${id}/iaval/apply`, { proposal }, { params: { emit_log: emitLog ? 1 : 0 } })
   return r.data as { ok: boolean; applied: any; log?: { filename: string; path: string; csv_filename?: string | null; url_json?: string; url_csv?: string | null } }
 }
+
 

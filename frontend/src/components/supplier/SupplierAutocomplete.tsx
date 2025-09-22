@@ -1,8 +1,8 @@
 // NG-HEADER: Nombre de archivo: SupplierAutocomplete.tsx
-// NG-HEADER: Ubicación: frontend/src/components/supplier/SupplierAutocomplete.tsx
-// NG-HEADER: Descripción: Componente de autocompletado de proveedor con debounce y estados
+// NG-HEADER: Ubicacion: frontend/src/components/supplier/SupplierAutocomplete.tsx
+// NG-HEADER: Descripcion: Autocompletado de proveedores con estilos tema y carga inmediata
 // NG-HEADER: Lineamientos: Ver AGENTS.md
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { searchSuppliers, SupplierSearchItem } from '../../services/suppliers'
 import { useTheme } from '../../theme/ThemeProvider'
 
@@ -16,94 +16,190 @@ export type SupplierAutocompleteProps = {
   className?: string
 }
 
-export function SupplierAutocomplete({ value, onChange, placeholder = 'Buscar proveedor...', disabled, autoFocus, debounceMs = 250, className }: SupplierAutocompleteProps) {
+export function SupplierAutocomplete({
+  value,
+  onChange,
+  placeholder = 'Buscar proveedor...',
+  disabled,
+  autoFocus,
+  debounceMs = 250,
+  className,
+}: SupplierAutocompleteProps) {
   const theme = useTheme()
-  const [q, setQ] = useState('')
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const timerRef = useRef<number | null>(null)
+  const lastQuery = useRef<string>('')
+
+  const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<SupplierSearchItem[]>([])
   const [highlight, setHighlight] = useState(0)
-  const inputRef = useRef<HTMLInputElement | null>(null)
 
-  const timer = useRef<number | null>(null)
+  const fetchSuppliers = useCallback(async (term: string) => {
+    setLoading(true)
+    try {
+      const results = await searchSuppliers(term, 20)
+      setItems(results)
+      setHighlight(0)
+    } catch {
+      setItems([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    if (!open) return
-    if (timer.current) window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(async () => {
-      if (!q.trim()) { setItems([]); setLoading(false); return }
-      setLoading(true)
-      try {
-        const results = await searchSuppliers(q, 20)
-        setItems(results)
-      } catch {
-        setItems([])
-      } finally {
-        setLoading(false)
+    if (!open || disabled) return undefined
+
+    const trimmed = query.trim()
+    if (timerRef.current) window.clearTimeout(timerRef.current)
+
+    if (!trimmed) {
+      if (lastQuery.current !== '' || items.length === 0) {
+        lastQuery.current = ''
+        fetchSuppliers('')
       }
+      return undefined
+    }
+
+    timerRef.current = window.setTimeout(() => {
+      if (lastQuery.current === trimmed) return
+      lastQuery.current = trimmed
+      fetchSuppliers(trimmed)
     }, debounceMs)
-    return () => { if (timer.current) window.clearTimeout(timer.current) }
-  }, [q, open, debounceMs])
+
+    return () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current)
+    }
+  }, [open, query, debounceMs, disabled, fetchSuppliers, items.length])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const handleClick = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [open])
 
   useEffect(() => {
     if (autoFocus && inputRef.current) inputRef.current.focus()
   }, [autoFocus])
 
-  const onKeyDown: React.KeyboardEventHandler<HTMLInputElement> = (e) => {
+  useEffect(() => {
     if (!open) return
-    if (e.key === 'ArrowDown') { e.preventDefault(); setHighlight(h => Math.min(h + 1, items.length - 1)) }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlight(h => Math.max(h - 1, 0)) }
-    else if (e.key === 'Enter') {
-      e.preventDefault()
-      const sel = items[highlight]
-      if (sel) { onChange(sel); setOpen(false) }
-    } else if (e.key === 'Escape') {
+    setHighlight(0)
+  }, [open])
+
+  useEffect(() => {
+    if (value) setQuery('')
+  }, [value])
+
+  const handleKeyDown: React.KeyboardEventHandler<HTMLInputElement> = (event) => {
+    if (!open) return
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setHighlight((prev) => Math.min(prev + 1, Math.max(items.length - 1, 0)))
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setHighlight((prev) => Math.max(prev - 1, 0))
+    } else if (event.key === 'Enter') {
+      event.preventDefault()
+      const selected = items[highlight]
+      if (selected) {
+        onChange(selected)
+        setOpen(false)
+      }
+    } else if (event.key === 'Escape') {
       setOpen(false)
     }
   }
 
+  const describe = (supplier: SupplierSearchItem) => `${supplier.name} (${supplier.slug})`
+
   return (
-    <div className={className} style={{ position: 'relative' }}>
+    <div
+      ref={containerRef}
+      className={className}
+      style={{ position: 'relative', width: '100%' }}
+    >
       <input
         ref={inputRef}
-        type="text"
-        value={value ? `${value.name} (${value.slug})` : q}
+        type='text'
+        value={value ? describe(value) : query}
         placeholder={placeholder}
         disabled={disabled}
-        onChange={e => { setQ(e.target.value); setOpen(true); onChange(null) }}
+        onChange={(event) => {
+          setQuery(event.target.value)
+          setOpen(true)
+          onChange(null)
+        }}
         onFocus={() => setOpen(true)}
-        onKeyDown={onKeyDown}
-        aria-autocomplete="list"
+        onBlur={() => window.setTimeout(() => setOpen(false), 150)}
+        onKeyDown={handleKeyDown}
+        aria-autocomplete='list'
         aria-expanded={open}
-        aria-controls="supplier-ac-list"
+        aria-controls='supplier-ac-list'
+        className='input w-full'
         style={{
-          width: '100%',
-          background: theme.name === 'dark' ? '#111' : '#fff',
-          color: theme.text,
-          border: `1px solid ${theme.border}`,
-          borderRadius: 6,
-          padding: '6px 8px',
+          background: 'var(--input-bg)',
+          color: 'var(--text)',
+          border: '1px solid var(--input-border)',
         }}
       />
       {open && (
-        <div id="supplier-ac-list" role="listbox" style={{ position: 'absolute', zIndex: 20, width: '100%', background: theme.card, border: `1px solid ${theme.border}`, maxHeight: 240, overflowY: 'auto', borderRadius: 6, marginTop: 4 }}>
-          {loading && <div style={{ padding: 8, color: theme.name === 'dark' ? '#bbb' : '#666' }}>Cargando…</div>}
-          {!loading && items.length === 0 && q.trim() && (
-            <div style={{ padding: 8, color: theme.name === 'dark' ? '#bbb' : '#666' }}>Sin resultados</div>
+        <div
+          id='supplier-ac-list'
+          role='listbox'
+          style={{
+            position: 'absolute',
+            zIndex: 24,
+            width: '100%',
+            background: 'var(--panel-bg)',
+            border: '1px solid var(--border)',
+            maxHeight: 240,
+            overflowY: 'auto',
+            borderRadius: 10,
+            marginTop: 4,
+            boxShadow: '0 16px 32px rgba(0,0,0,0.35)',
+          }}
+        >
+          {loading && (
+            <div style={{ padding: 10, color: 'var(--muted)' }}>Cargando proveedores...</div>
           )}
-          {!loading && items.map((it, idx) => (
-            <div
-              key={it.id}
-              role="option"
-              aria-selected={idx === highlight}
-              onMouseEnter={() => setHighlight(idx)}
-              onMouseDown={(e) => { e.preventDefault(); onChange(it); setOpen(false) }}
-              style={{ padding: 8, background: idx === highlight ? (theme.name === 'dark' ? '#2a2a2a' : '#f0f0f0') : theme.card, cursor: 'pointer', color: theme.text }}
-            >
-              <div style={{ fontWeight: 600 }}>{it.name}</div>
-              <div style={{ fontSize: 12, color: theme.name === 'dark' ? '#aaa' : '#888' }}>{it.slug}</div>
+          {!loading && items.length === 0 && (
+            <div style={{ padding: 10, color: 'var(--muted)' }}>
+              {query.trim() ? 'Sin resultados para tu busqueda.' : 'No hay proveedores disponibles todavia.'}
             </div>
-          ))}
+          )}
+          {!loading && items.map((item, idx) => {
+            const active = idx === highlight
+            return (
+              <div
+                key={item.id}
+                role='option'
+                aria-selected={active}
+                onMouseEnter={() => setHighlight(idx)}
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  onChange(item)
+                  setOpen(false)
+                }}
+                style={{
+                  padding: '10px 12px',
+                  cursor: 'pointer',
+                  background: active ? 'var(--table-row-hover)' : 'var(--panel-bg)',
+                }}
+              >
+                <div style={{ fontWeight: 600, color: theme.text }}>{item.name}</div>
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>{item.slug}</div>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

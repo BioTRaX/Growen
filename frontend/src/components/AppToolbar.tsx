@@ -1,44 +1,40 @@
 // NG-HEADER: Nombre de archivo: AppToolbar.tsx
-// NG-HEADER: Ubicación: frontend/src/components/AppToolbar.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Ubicacion: frontend/src/components/AppToolbar.tsx
+// NG-HEADER: Descripcion: Barra superior de navegacion con control de tema
 // NG-HEADER: Lineamientos: Ver AGENTS.md
-import { useAuth } from '../auth/AuthContext'
-import { useNavigate } from 'react-router-dom'
-import { PATHS } from '../routes/paths'
+import { useAuth } from "../auth/AuthContext"
+import { useNavigate } from "react-router-dom"
+import { PATHS } from "../routes/paths"
+import { useTheme } from "../theme/ThemeProvider"
 
 export default function AppToolbar() {
   const { state, logout } = useAuth()
   const navigate = useNavigate()
-  function toggleTheme() {
-    const el = document.documentElement
-    el.dataset.theme = el.dataset.theme === 'dark' ? 'light' : 'dark'
-  }
-  // Política de visibilidad:
-  // - Invitado: no ve botones de navegación (solo Chat en el Dashboard)
-  // - Staff (colaborador/admin): ve todo
-  // - Cliente/Proveedor: ven Productos y Stock, pero no Proveedores ni Compras
-  const isStaff = ['colaborador', 'admin'].includes(state.role)
-  const isGuest = state.role === 'guest'
+  const { toggle, name } = useTheme()
+
+  const isStaff = ["colaborador", "admin"].includes(state.role)
+  const isGuest = state.role === "guest"
   const canUpload = isStaff
   const canSeeSuppliers = isStaff
   const canManagePurchases = isStaff
+  const themeLabel = name === "dark" ? "Modo claro" : "Modo oscuro"
 
   return (
     <div
       style={{
-        position: 'sticky',
+        position: "sticky",
         top: 0,
-        background: 'var(--panel-bg)',
+        background: "var(--panel-bg)",
         padding: 8,
-        display: 'flex',
+        display: "flex",
         gap: 8,
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+        boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
         zIndex: 10,
-        color: 'var(--text-color)',
+        color: "var(--text-color)",
       }}
     >
       {!isGuest && canUpload && (
-        <button className="btn-dark btn-lg" onClick={() => window.dispatchEvent(new Event('open-upload'))}>
+        <button className="btn-dark btn-lg" onClick={() => window.dispatchEvent(new Event("open-upload"))}>
           Adjuntar Excel
         </button>
       )}
@@ -52,7 +48,7 @@ export default function AppToolbar() {
           Productos
         </button>
       )}
-      <button className="btn-dark btn-lg" onClick={toggleTheme}>Modo oscuro</button>
+      <button className="btn-dark btn-lg" onClick={toggle}>{themeLabel}</button>
       {!isGuest && (
         <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.stock)}>Stock</button>
       )}
@@ -60,17 +56,17 @@ export default function AppToolbar() {
         <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.purchases)}>Compras</button>
       )}
       {isStaff && (
-        <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.imagesAdmin)}>Imágenes productos</button>
+        <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.imagesAdmin)}>Imagenes productos</button>
       )}
-      <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-        {state.role === 'admin' && (
-          <button className="btn-dark btn-lg" onClick={() => navigate('/admin')}>Admin</button>
+      <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+        {state.role === "admin" && (
+          <button className="btn-dark btn-lg" onClick={() => navigate("/admin")}>Admin</button>
         )}
         <span style={{ opacity: 0.7 }}>Rol: {state.role}</span>
         {state.isAuthenticated ? (
           <button className="btn-dark btn-lg" onClick={logout}>Salir</button>
         ) : (
-          <button className="btn-dark btn-lg" onClick={() => navigate('/login')}>Cambiar usuario</button>
+          <button className="btn-dark btn-lg" onClick={() => navigate("/login")}>Cambiar usuario</button>
         )}
       </div>
     </div>
