@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: ng.py
 # NG-HEADER: Ubicación: cli/ng.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: CLI `ng` con utilidades operativas y diagnósticas.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """CLI principal de Growen usando Typer."""
 from __future__ import annotations
@@ -16,12 +16,17 @@ from services.ingest import loader, mapping as mapping_mod, normalize, upsert
 from db.session import SessionLocal
 from services.integrations.notion_client import NotionWrapper, load_notion_settings  # type: ignore
 from services.integrations.notion_errors import fingerprint_error, ErrorEvent  # type: ignore
+from services.importers.santaplanta_pipeline import parse_remito, ParsedLine  # type: ignore
+import uuid
+from decimal import Decimal
 
 app = typer.Typer(help="Herramientas de línea de comandos para Growen")
 ingest_app = typer.Typer(help="Comandos de ingestión de catálogos")
 app.add_typer(ingest_app, name="ingest")
 notion_app = typer.Typer(help="Comandos de integración con Notion")
 app.add_typer(notion_app, name="notion")
+pdf_app = typer.Typer(help="Utilidades de diagnóstico para PDFs de proveedores")
+app.add_typer(pdf_app, name="pdf")
 
 
 @app.command()
@@ -228,6 +233,79 @@ def notion_validate_db() -> None:
             if wrong_type:
                 typer.echo("Tipos incorrectos: " + ", ".join(wrong_type))
             raise typer.Exit(code=1)
+
+
+@pdf_app.command("parse-remito")
+def pdf_parse_remito(
+    pdf: Path,
+    force_ocr: bool = typer.Option(False, help="Forzar OCR (ocrmypdf) antes de intentar el parseo"),
+    debug: bool = typer.Option(True, help="Incluir eventos y excerpt en resultado para diagnóstico"),
+) -> None:
+    """Parsea un remito PDF (Santa Planta) y muestra líneas y validaciones.
+
+    Salida:
+    - Remito y Fecha detectados
+    - Tabla con: #, SKU, Cant, Unitario, Total, Título (recortado)
+    - Resumen: líneas detectadas, expected_items/footer, Importe Total/footer, suma líneas y validaciones
+    """
+    if not pdf.exists():
+        typer.echo(f"No existe el archivo: {pdf}")
+        raise typer.Exit(code=2)
+    cid = uuid.uuid4().hex
+    res = parse_remito(pdf, correlation_id=cid, use_ocr_auto=True, force_ocr=force_ocr, debug=debug)
+    typer.echo(f"Remito: {res.remito_number or '-'} | Fecha: {res.remito_date or '-'} | líneas={len(res.lines or [])}")
+    # Buscar expectativas del pie
+    exp_items = None
+    imp_total = None
+    for ev in (res.events or []):
+        if ev.get("stage") == "footer" and ev.get("event") == "expected_from_footer":
+            det = ev.get("details") or {}
+            try:
+                exp_items = int(det.get("expected_items") or 0) or None
+            except Exception:
+                exp_items = None
+            try:
+                v = det.get("importe_total")
+                imp_total = Decimal(str(v)) if v is not None else None
+            except Exception:
+                imp_total = None
+            break
+    # Imprimir líneas
+    def _num(v: Decimal | None) -> str:
+        return (f"{v:.2f}" if v is not None else "-")
+    total_sum = Decimal("0")
+    for i, ln in enumerate(res.lines or [], start=1):
+        unit = ln.unit_cost_bonif or Decimal("0")
+        tline = (ln.total if (ln.total is not None and ln.total > 0) else (ln.subtotal or (ln.qty * unit)))
+        total_sum += (tline or Decimal("0"))
+        sku = ln.supplier_sku or "-"
+        title = (ln.title or "").strip()
+        if len(title) > 80:
+            title = title[:77] + "..."
+        typer.echo(f"{i:>2}. {sku:>6} | {ln.qty} x {_num(unit)} = {_num(tline)} | {title}")
+    # Resumen y validaciones
+    typer.echo("")
+    if exp_items is not None:
+        status_items = "OK" if len(res.lines or []) == exp_items else f"MISMATCH got={len(res.lines or [])}"
+        typer.echo(f"Cantidad de Items (footer): {exp_items} -> {status_items}")
+    if imp_total is not None:
+        diff = abs((total_sum or Decimal("0")) - imp_total)
+        ok = diff <= Decimal("0.11")
+        typer.echo(f"Importe Total (footer): {imp_total:.2f} | suma líneas: {total_sum:.2f} | diff={diff:.2f} -> {'OK' if ok else 'MISMATCH'}")
+    # Clásico
+    try:
+        cc = getattr(res, "classic_confidence", None)
+        if cc is not None:
+            typer.echo(f"Confianza clásica: {cc}")
+    except Exception:
+        pass
+    # Nota de eventos relevantes
+    sel = [ev for ev in (res.events or []) if ev.get("stage") in {"selection", "fallback", "validation"}]
+    if sel:
+        typer.echo("\nEventos relevantes:")
+        for ev in sel[:8]:
+            stage = ev.get("stage"); event = ev.get("event"); details = ev.get("details") or {}
+            typer.echo(f" - {stage}:{event} {details}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: santa-planta.yml
 # NG-HEADER: Ubicación: config/suppliers/santa-planta.yml
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Perfil de configuración del proveedor Santa Planta.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 supplier_name: "Santa Planta"
 slug: "santa-planta"

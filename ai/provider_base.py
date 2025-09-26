@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: provider_base.py
 # NG-HEADER: Ubicación: ai/provider_base.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Interfaces base para implementar proveedores de IA.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Interfaz común para proveedores LLM."""
 from __future__ import annotations

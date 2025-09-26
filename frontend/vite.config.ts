@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: vite.config.ts
 // NG-HEADER: Ubicación: frontend/vite.config.ts
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Configuración de Vite para la SPA.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 /// <reference types="node" />
 import { defineConfig } from 'vite'

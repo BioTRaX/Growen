@@ -11,7 +11,7 @@ Este documento describe cómo crear categorías manualmente (2 niveles: Categori
 
 - Tabla `categories` con jerarquía simple por `parent_id`.
 - Nivel 1: `Categoria` (`parent_id = null`).
-- Nivel 2: `SubCategoria` (`parent_id = id de la Categoria`).
+- Nivel 2: `SubCategoria` (`parent_id = id de la Categoria`). En el formulario de canónicos, la "Subcategoría" puede seleccionarse de manera independiente como una categoría secundaria; el campo "padre" es opcional al crear una nueva subcategoría desde la UI.
 - Los productos (`products.category_id`) referencian la categoría final (nivel 2 o nivel 1 si no hay subcategoría).
 
 ## Endpoints existentes

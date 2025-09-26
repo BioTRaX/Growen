@@ -26,6 +26,18 @@ Descarga desde el Frontend
 - La descarga de XLS de stock usa `GET /stock/export.xlsx` (sin prefijo `/api`).
 - La visualización/descarga de PDF usa `GET /catalogs/latest` y `GET /catalogs/latest/download`.
 
+Detalles del XLS de stock
+- Columnas: NOMBRE DE PRODUCTO, PRECIO DE VENTA, CATEGORIA, SKU PROPIO.
+- Reglas de datos:
+  - NOMBRE: toma el nombre canónico si el producto está vinculado a un canónico; en caso contrario, usa el nombre interno.
+  - PRECIO DE VENTA: prioriza `CanonicalProduct.sale_price`; si no hay o no está definido, usa `SupplierProduct.current_sale_price`.
+  - CATEGORIA: prioriza subcategoría/categoría canónica si está disponible; si no, utiliza la categoría del producto interno.
+  - SKU PROPIO: muestra el `canonical_sku` (sku_custom o ng_sku) si existe; si no, usa el primer `Variant.sku` del producto interno.
+- Estilo aplicado:
+  - Encabezado con fondo oscuro y texto blanco en negrita, centrado.
+  - Cada celda de la columna de NOMBRE se exporta en negrita.
+  - Ancho de la primera columna ajustado automáticamente en base al contenido (límite máximo aplicado para evitar anchuras excesivas).
+
 Dependencias de sistema
 - Para convertir HTML→PDF (WeasyPrint) en Windows puede no estar disponible; hay fallback textual (ReportLab) si falla.
 - Recomendado para features de PDF/OCR avanzados: Ghostscript y QPDF en PATH.

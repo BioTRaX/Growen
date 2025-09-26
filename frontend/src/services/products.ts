@@ -10,6 +10,7 @@ export interface ProductSearchParams {
   created_since_days?: number
   page?: number
   page_size?: number
+  type?: 'all' | 'canonical' | 'supplier'
 }
 
 export interface ProductItem {
@@ -20,10 +21,16 @@ export interface ProductItem {
   precio_venta: number | null
   canonical_sale_price?: number | null
   compra_minima: number | null
-  category_path: string
+  category_path: string | null
   stock: number
   updated_at: string | null
   canonical_product_id: number | null
+  // Extras provided by backend for better UX
+  supplier_title?: string | null
+  canonical_name?: string | null
+  supplier_item_id?: number | null
+  canonical_sku?: string | null
+  first_variant_sku?: string | null
 }
 
 export interface ProductSearchResponse {

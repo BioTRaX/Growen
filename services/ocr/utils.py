@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: utils.py
 # NG-HEADER: Ubicación: services/ocr/utils.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Utilidades para OCR y extracción de texto.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 

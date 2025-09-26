@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_download_generic_template.py
 # NG-HEADER: Ubicación: tests/test_download_generic_template.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas de descarga de plantillas genéricas.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 import asyncio

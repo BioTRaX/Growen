@@ -25,13 +25,15 @@ import { useProductsTablePrefs } from '../lib/useTablePrefs'
 import { formatARS, parseDecimalInput } from '../lib/format'
 import { useAuth } from '../auth/AuthContext'
 import { Link } from 'react-router-dom'
+import { upsertEquivalence } from '../services/equivalences'
 
 interface Props {
   open: boolean
   onClose: () => void
+  mode?: 'overlay' | 'embedded'
 }
 
-export default function ProductsDrawer({ open, onClose }: Props) {
+export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Props) {
   const { state } = useAuth()
   const canEdit = state.role === 'admin' || state.role === 'colaborador'
 
@@ -46,6 +48,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [stockFilter, setStockFilter] = useState<string>('')
   const [recentFilter, setRecentFilter] = useState<string>('')
+  const [typeFilter, setTypeFilter] = useState<'all' | 'canonical' | 'supplier'>('all')
   const [editing, setEditing] = useState<number | null>(null)
   const [stockVal, setStockVal] = useState('')
   const [saleEditing, setSaleEditing] = useState<number | null>(null) // canonical_product_id
@@ -56,6 +59,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const [canonicalId, setCanonicalId] = useState<number | null>(null)
   const [editCanonicalId, setEditCanonicalId] = useState<number | null>(null)
   const [equivData, setEquivData] = useState<{ supplierId: number; supplierProductId: number } | null>(null)
+  const [createCanonicalCtx, setCreateCanonicalCtx] = useState<null | { initialName: string; supplierProductId: number; supplierId: number }>(null)
   const [selected, setSelected] = useState<number[]>([])
   const [showBulk, setShowBulk] = useState(false)
   const [activityFor, setActivityFor] = useState<number | null>(null)
@@ -80,12 +84,15 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   // Fixed row height for virtualized list to avoid overlap
   const ROW_HEIGHT = 56
   const [listHeight, setListHeight] = useState<number>(400)
+  // Forzar recarga aun si ya estamos en página 1
+  const [reloadTick, setReloadTick] = useState(0)
 
   const { prefs, setPrefs, reset } = useProductsTablePrefs()
 
   type ColId =
     | 'select'
     | 'product'
+    | 'sku'
     | 'supplier'
     | 'sale_price'
     | 'buy_price'
@@ -109,6 +116,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const defaultOrder: ColId[] = [
     'select',
     'product',
+    'sku',
     'supplier',
     'sale_price',
     'buy_price',
@@ -125,6 +133,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const defaultVisibility: Record<ColId, boolean> = {
     select: true,
     product: true,
+    sku: true,
     supplier: true,
     sale_price: true,
     buy_price: true,
@@ -141,6 +150,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
   const baseWidths: Record<ColId, number> = {
     select: 28,
     product: 300,
+    sku: 140,
     supplier: 160,
     sale_price: 140,
     buy_price: 120,
@@ -298,6 +308,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         category_id: categoryId ? Number(categoryId) : undefined,
         stock: stockFilter || undefined,
         created_since_days: recentFilter ? Number(recentFilter) : undefined,
+        type: typeFilter,
         page,
       })
         .then((r) => {
@@ -308,7 +319,14 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         .finally(() => setLoading(false))
     }, 300)
     return () => clearTimeout(t)
-  }, [q, supplierId, categoryId, stockFilter, recentFilter, page, open])
+  }, [q, supplierId, categoryId, stockFilter, recentFilter, typeFilter, page, open, reloadTick])
+
+  // Helper: refrescar lista (primera página) incluso si ya estamos en page=1
+  const forceRefreshFirstPage = () => {
+    setItems([])
+    setPage(1)
+    setReloadTick((t) => t + 1)
+  }
 
   async function saveStock(id: number) {
     const num = Number(stockVal)
@@ -371,15 +389,41 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         id: 'product',
         label: 'Producto',
         defaultWidth: baseWidths.product,
-        renderCell: (it) => (
-          <Link
-            to={`/productos/${it.product_id}`}
-            className="truncate product-title"
-            style={{ display: 'inline-block', maxWidth: widthFor('product') }}
-          >
-            {it.name}
-          </Link>
-        ),
+        renderCell: (it) => {
+          const skuDisplay = (it as any).canonical_sku || (it as any).first_variant_sku || ''
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', maxWidth: widthFor('product') }}>
+              <Link
+                to={`/productos/${it.product_id}`}
+                className="truncate product-title"
+                style={{ display: 'inline-block', maxWidth: widthFor('product') }}
+                title={it.name}
+              >
+                {it.name}
+              </Link>
+              {skuDisplay && (
+                <span style={{ fontSize: 12, opacity: 0.8 }} title={skuDisplay}>
+                  {skuDisplay}
+                </span>
+              )}
+            </div>
+          )
+        },
+      },
+      {
+        id: 'sku',
+        label: 'SKU',
+        defaultWidth: baseWidths.sku,
+        renderCell: (it) => {
+          const canonical = (it as any).canonical_sku as string | undefined
+          const preferred = canonical || (it as any).first_variant_sku || ''
+          return (
+            <span className="truncate" style={{ display: 'inline-block', maxWidth: widthFor('sku') }} title={preferred}>
+              {preferred}
+              {canonical ? <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.7 }}>(canónico)</span> : null}
+            </span>
+          )
+        },
       },
       {
         id: 'supplier',
@@ -517,7 +561,9 @@ export default function ProductsDrawer({ open, onClose }: Props) {
           it.canonical_product_id ? (
             <button onClick={() => setEditCanonicalId(it.canonical_product_id)}>Editar</button>
           ) : (
-            <button onClick={() => setEditCanonicalId(0)}>Nuevo</button>
+            <button onClick={() => { setCreateCanonicalCtx({ initialName: (it as any).supplier_title || it.name, supplierProductId: (it as any).supplier_item_id, supplierId: it.supplier.id }); setEditCanonicalId(0) }} disabled={!((it as any).supplier_item_id)}>
+              Nuevo
+            </button>
           )
         ),
       },
@@ -526,16 +572,20 @@ export default function ProductsDrawer({ open, onClose }: Props) {
         label: 'Equivalencia',
         defaultWidth: baseWidths.equivalence,
         renderCell: (it) => (
-          <button
-            onClick={() =>
-              setEquivData({
-                supplierId: it.supplier.id,
-                supplierProductId: it.product_id,
-              })
-            }
-          >
-            Vincular
-          </button>
+          (it as any).supplier_item_id ? (
+            <button
+              onClick={() =>
+                setEquivData({
+                  supplierId: it.supplier.id,
+                  supplierProductId: (it as any).supplier_item_id,
+                })
+              }
+            >
+              Vincular
+            </button>
+          ) : (
+            <span style={{ opacity: 0.6 }}>—</span>
+          )
         ),
       },
       {
@@ -594,26 +644,20 @@ export default function ProductsDrawer({ open, onClose }: Props) {
     return Array.from(new Set(canon))
   }, [items, selected])
 
+  const isEmbedded = mode === 'embedded'
+  const containerStyle: React.CSSProperties = mode === 'overlay' ? {
+    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', zIndex: 20,
+  } : {
+    position: 'relative', width: '100%', display: 'flex', flexDirection: 'column', overflow: 'visible', margin: '16px auto', maxWidth: 1400,
+  }
+
   return (
-    <div
-      className="panel p-4"
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        width: '100%',
-        maxWidth: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        zIndex: 20,
-      }}
-    >
+    <div className="panel p-4" style={containerStyle}>
       {/* Header actions */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <button className="btn-dark btn-lg" onClick={onClose}>Volver</button>
+        {mode === 'overlay' && (
+          <button className="btn-dark btn-lg" onClick={onClose}>Volver</button>
+        )}
         {!!selected.length && canEdit && (
           <button
             className="btn"
@@ -708,6 +752,11 @@ export default function ProductsDrawer({ open, onClose }: Props) {
       {showColsCfg && <ColumnsCfg />}
       <h3 style={{ marginTop: 0 }}>Consultar base</h3>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+        <div className="btn-group" role="group" aria-label="Tipo">
+          <button className={"btn" + (typeFilter === 'all' ? ' btn-dark' : '')} onClick={() => { setTypeFilter('all'); setItems([]); setPage(1) }}>Todos</button>
+          <button className={"btn" + (typeFilter === 'canonical' ? ' btn-dark' : '')} onClick={() => { setTypeFilter('canonical'); setItems([]); setPage(1) }}>Canónicos</button>
+          <button className={"btn" + (typeFilter === 'supplier' ? ' btn-dark' : '')} onClick={() => { setTypeFilter('supplier'); setItems([]); setPage(1) }}>Proveedor</button>
+        </div>
         <input
           className="input w-full"
           placeholder="Buscar..."
@@ -775,7 +824,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
       </div>
       <div style={{ fontSize: 12, marginBottom: 8 }}>{total} resultados</div>
       {/* Horizontal scroll container */}
-      <div style={{ flex: '1 1 auto', overflowX: 'auto', overflowY: 'hidden' }}>
+      <div style={{ flex: '1 1 auto', overflowX: 'auto', overflowY: isEmbedded ? 'visible' : 'hidden' }}>
         <div style={{ minWidth: orderedCols.reduce((sum, c) => sum + widthFor(c.id as ColId), 0) + 40 }}>
           <table className="table w-full table-fixed" style={{ marginBottom: 0 }}>
             <thead>
@@ -791,52 +840,92 @@ export default function ProductsDrawer({ open, onClose }: Props) {
               </tr>
             </thead>
           </table>
-          <List
-            height={listHeight}
-            itemCount={items.length}
-            itemSize={ROW_HEIGHT}
-            width={orderedCols.reduce((sum, c) => sum + widthFor(c.id as ColId), 0) + 40}
-            onItemsRendered={({ visibleStopIndex }) => {
-              if (visibleStopIndex >= items.length - 5 && !loading && items.length < total) {
-                setPage((p) => p + 1)
-              }
-            }}
-          >
-            {({ index, style }: ListChildComponentProps) => {
-              const it = items[index]
-              return (
-                <div key={it.product_id} style={{ ...style, height: ROW_HEIGHT, overflow: 'hidden' }}>
-                  <table className="table w-full table-fixed" style={{ marginBottom: 0 }}>
-                    <tbody>
-                      <tr>
-                        {orderedCols.map((c) => (
-                          <td
-                            key={c.id}
-                            className={c.id === 'product' || c.id === 'supplier' ? '' : 'text-center'}
-                            style={{ width: widthFor(c.id as ColId) }}
-                          >
-                            {c.renderCell(it)}
-                          </td>
-                        ))}
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              )
-            }}
-          </List>
+          {isEmbedded ? (
+            <table className="table w-full table-fixed" style={{ marginBottom: 0 }}>
+              <tbody>
+                {items.map((it) => (
+                  <tr key={it.product_id}>
+                    {orderedCols.map((c) => (
+                      <td
+                        key={c.id}
+                        className={c.id === 'product' || c.id === 'supplier' ? '' : 'text-center'}
+                        style={{ width: widthFor(c.id as ColId) }}
+                      >
+                        {c.renderCell(it)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <List
+              height={listHeight}
+              itemCount={items.length}
+              itemSize={ROW_HEIGHT}
+              width={orderedCols.reduce((sum, c) => sum + widthFor(c.id as ColId), 0) + 40}
+              onItemsRendered={({ visibleStopIndex }) => {
+                if (visibleStopIndex >= items.length - 5 && !loading && items.length < total) {
+                  setPage((p) => p + 1)
+                }
+              }}
+            >
+              {({ index, style }: ListChildComponentProps) => {
+                const it = items[index]
+                return (
+                  <div key={it.product_id} style={{ ...style, height: ROW_HEIGHT, overflow: 'hidden' }}>
+                    <table className="table w-full table-fixed" style={{ marginBottom: 0 }}>
+                      <tbody>
+                        <tr>
+                          {orderedCols.map((c) => (
+                            <td
+                              key={c.id}
+                              className={c.id === 'product' || c.id === 'supplier' ? '' : 'text-center'}
+                              style={{ width: widthFor(c.id as ColId) }}
+                            >
+                              {c.renderCell(it)}
+                            </td>
+                          ))}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              }}
+            </List>
+          )}
         </div>
       </div>
-      {/* Bottom scrollbar area to ensure always visible */}
-      <div style={{ height: 16, overflowX: 'auto' }}>
-        <div style={{ width: orderedCols.reduce((sum, c) => sum + widthFor(c.id as ColId), 0) + 40 }} />
-      </div>
+      {/* Bottom scrollbar area only for overlay/virtualized mode */}
+      {!isEmbedded && (
+        <div style={{ height: 16, overflowX: 'auto' }}>
+          <div style={{ width: orderedCols.reduce((sum, c) => sum + widthFor(c.id as ColId), 0) + 40 }} />
+        </div>
+      )}
       {historyProduct && (
         <PriceHistoryModal productId={historyProduct} onClose={() => setHistoryProduct(null)} />
       )}
       {canonicalId && <CanonicalOffers canonicalId={canonicalId} onClose={() => setCanonicalId(null)} />}
       {editCanonicalId !== null && (
-        <CanonicalForm canonicalId={editCanonicalId || undefined} onClose={() => setEditCanonicalId(null)} />
+        <CanonicalForm
+          canonicalId={editCanonicalId || undefined}
+          initialName={createCanonicalCtx?.initialName}
+          onClose={() => { setEditCanonicalId(null); setCreateCanonicalCtx(null) }}
+          onSaved={async (cp) => {
+            try {
+              if (createCanonicalCtx?.supplierProductId && createCanonicalCtx?.supplierId && cp?.id) {
+                await upsertEquivalence({ supplier_id: createCanonicalCtx.supplierId, supplier_product_id: createCanonicalCtx.supplierProductId, canonical_product_id: cp.id, source: 'manual' })
+              }
+            } catch (e) {
+              console.warn('Autovinculación falló', e)
+            } finally {
+              setEditCanonicalId(null)
+              setCreateCanonicalCtx(null)
+              // Refrescar lista volviendo a página 1 (forzar refetch)
+              forceRefreshFirstPage()
+            }
+          }}
+        />
       )}
       {equivData && (
         <EquivalenceLinker
@@ -853,8 +942,7 @@ export default function ProductsDrawer({ open, onClose }: Props) {
             if (updated != null) {
               // Limpiar selección y refrescar la lista para reflejar nuevos precios
               setSelected([])
-              setPage(1)
-              setItems([])
+              forceRefreshFirstPage()
             }
           }}
         />
@@ -862,9 +950,8 @@ export default function ProductsDrawer({ open, onClose }: Props) {
       {showCreate && (
         <ProductCreateModal
           onCreated={() => {
-            // Refrescar lista volviendo a página 1
-            setPage(1)
-            setItems([])
+            // Refrescar lista volviendo a página 1 (forzar refetch)
+            forceRefreshFirstPage()
             setShowCreate(false)
           }}
           onClose={() => setShowCreate(false)}

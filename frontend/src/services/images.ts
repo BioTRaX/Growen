@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: images.ts
 // NG-HEADER: Ubicación: frontend/src/services/images.ts
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Servicios HTTP para recursos de imágenes.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import http from './http'
 

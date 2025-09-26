@@ -28,13 +28,13 @@
 - [ ] Añadir ejemplos en los tests de prompts o fixtures para asegurar detección temprana.
 
 ## Observabilidad
-- [ ] Registrar métricas en `ServiceLog` o `ImportLog` (nueva categoría) con totales de consultas y tiempos.
+- [x] Registrar métricas en `ServiceLog` o `ImportLog` (nueva categoría) con totales de consultas y tiempos.
 - [ ] Añadir contador Prometheus o endpoint de métricas si ya existe patrón similar.
 
 ## Pruebas
-- [ ] Unit tests para matcher del intent (`tests/test_ai_router.py`).
-- [ ] Unit/integration tests para `price_lookup` (mock de base de datos).
-- [ ] Test API que simule mensaje de chat y verifique respuesta (`tests/test_chat_price_query.py`).
+- [x] Unit tests para matcher del intent (`tests/test_ai_router.py`).
+- [x] Unit/integration tests para `price_lookup` (mock de base de datos).
+- [x] Test API que simule mensaje de chat y verifique respuesta (`tests/test_chat_api.py`).
 - [x] Test E2E (Playwright) validando la tarjeta de precio en el chat.
 
 ## Documentación

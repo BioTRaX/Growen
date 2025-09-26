@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: CreateSupplierModal.tsx
 // NG-HEADER: Ubicación: frontend/src/components/CreateSupplierModal.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Modal para crear proveedores desde el frontend.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import { createSupplier, Supplier } from '../services/suppliers'

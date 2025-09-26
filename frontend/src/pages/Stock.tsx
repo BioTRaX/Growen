@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: Stock.tsx
 // NG-HEADER: Ubicación: frontend/src/pages/Stock.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Página de stock y existencias.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import type { SupplierSearchItem } from '../services/suppliers'
@@ -179,6 +179,29 @@ export default function Stock() {
   const url = base + `/stock/export.xlsx?${params.toString()}`
   window.location.href = url
     }}>Descargar XLS</button>
+    <button className="btn" onClick={() => {
+      const params = new URLSearchParams()
+      if (q) params.set('q', q)
+      if (supplierId) params.set('supplier_id', supplierId)
+      if (categoryId) params.set('category_id', categoryId)
+      params.set('stock', tab === 'gt' ? 'gt:0' : 'eq:0')
+      params.set('sort_by', 'updated_at')
+      params.set('order', 'desc')
+      const url = base + `/stock/export.csv?${params.toString()}`
+      window.location.href = url
+    }}>Descargar CSV</button>
+    <button className="btn" onClick={() => {
+      const params = new URLSearchParams()
+      if (q) params.set('q', q)
+      if (supplierId) params.set('supplier_id', supplierId)
+      if (categoryId) params.set('category_id', categoryId)
+      params.set('stock', tab === 'gt' ? 'gt:0' : 'eq:0')
+      params.set('sort_by', 'updated_at')
+      params.set('order', 'desc')
+      const url = base + `/stock/export.pdf?${params.toString()}`
+      // Abrir en nueva pestaña: el navegador puede previsualizar el PDF o descargar según configuración
+      window.open(url, '_blank')
+    }}>Exportar PDF</button>
     {canEdit && (
       <button className="btn" disabled={filling} onClick={async () => {
         setFilling(true)
@@ -273,8 +296,19 @@ export default function Stock() {
             </span>
           ) : (
             <span>
-              {it.canonical_sale_price != null ? `$ ${(it.canonical_sale_price as number).toFixed(2)}` : '-'}
-              <button className="btn-secondary" style={{ marginLeft: 6 }} onClick={() => { setEditSaleId(it.canonical_product_id!); setSaleVal(String(it.canonical_sale_price ?? '')) }}>✎</button>
+              {(() => {
+                const eff = (it.canonical_sale_price ?? (it as any).precio_venta) as number | null
+                return eff != null ? `$ ${Number(eff).toFixed(2)}` : '-'
+              })()}
+              <button
+                className="btn-secondary"
+                style={{ marginLeft: 6 }}
+                onClick={() => {
+                  setEditSaleId(it.canonical_product_id!)
+                  const eff = (it.canonical_sale_price ?? (it as any).precio_venta) as number | null
+                  setSaleVal(eff != null ? String(eff) : '')
+                }}
+              >✎</button>
             </span>
           )
         ) : canEdit && (it as any).supplier_item_id ? (
@@ -296,7 +330,10 @@ export default function Stock() {
             </span>
           )
         ) : (
-          <span>{(it as any).precio_venta ?? it.canonical_sale_price ?? ''}</span>
+          <span>{(() => {
+            const eff = (it.canonical_sale_price ?? (it as any).precio_venta) as number | null
+            return eff != null ? `$ ${Number(eff).toFixed(2)}` : ''
+          })()}</span>
         )}
       </td>
       <td className="text-center">

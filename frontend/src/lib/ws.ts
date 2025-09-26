@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: ws.ts
 // NG-HEADER: Ubicación: frontend/src/lib/ws.ts
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Cliente WebSocket reutilizable del frontend.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 export type WSMessage = { role: string; text: string; type?: string; data?: any; stream?: string }
 

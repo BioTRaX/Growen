@@ -32,6 +32,7 @@ dramatiq[redis]>=1.15.0
 rembg>=2.0.57
 tenacity>=8.2.3
 playwright>=1.42.0
+weasyprint>=61.0
 
 # PDF/OCR processing
 pdfplumber>=0.11  # fija versión reciente que usa pypdf moderno
@@ -42,6 +43,9 @@ pdf2image
 pytesseract
 opencv-python-headless
 onnxruntime>=1.22.1  # runtime para rembg (model inference)
+
+# Compatibilidad Camelot: requiere API antigua de PyPDF2 (PdfFileReader); fijamos <3
+PyPDF2>=2.10,<3
 
 # LLM proveedor OpenAI
 openai>=1.40.0

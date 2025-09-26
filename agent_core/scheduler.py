@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: scheduler.py
 # NG-HEADER: Ubicación: agent_core/scheduler.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Programador periódico de tareas del agente.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Planificador mínimo basado en funciones asíncronas."""
 from __future__ import annotations

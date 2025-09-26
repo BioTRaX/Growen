@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: logs.py
 # NG-HEADER: Ubicación: tools/logs.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Herramientas para inspeccionar y filtrar logs.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Utilities to purge or rotate project logs.
 

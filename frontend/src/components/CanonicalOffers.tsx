@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: CanonicalOffers.tsx
 // NG-HEADER: Ubicación: frontend/src/components/CanonicalOffers.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Componente que muestra ofertas y equivalencias canónicas.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 // File consolidated below; removed duplicate earlier implementation
 import { useEffect, useState } from 'react'

@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: 20250831_images_pipeline_tables.py
 # NG-HEADER: Ubicación: db/migrations/versions/20250831_images_pipeline_tables.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Migración Alembic: crea tablas del pipeline de imágenes.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """images pipeline tables and flags
 

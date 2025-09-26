@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: 20250120_add_summary_json_to_import_jobs.py
 # NG-HEADER: Ubicación: db/migrations/versions/20250120_add_summary_json_to_import_jobs.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Migración Alembic: agrega summary_json a import_jobs.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """add summary_json column to import_jobs (idempotent)
 

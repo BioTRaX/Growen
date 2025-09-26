@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_ai_provider.py
 # NG-HEADER: Ubicación: tests/test_ai_provider.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas unitarias de la fábrica de proveedores IA.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import asyncio
 import json

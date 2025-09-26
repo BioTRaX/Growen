@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # NG-HEADER: Nombre de archivo: start.sh
 # NG-HEADER: Ubicación: start.sh
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Script de arranque (Unix) para el entorno local.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 set -euo pipefail
 

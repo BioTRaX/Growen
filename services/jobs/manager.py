@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: manager.py
 # NG-HEADER: Ubicación: services/jobs/manager.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Administrador y scheduler de jobs backend.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Administrador muy básico de jobs."""
 from __future__ import annotations

@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: fallback.py
 # NG-HEADER: Ubicación: services/scrapers/fallback.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Scraper fallback para obtener datos de proveedores.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 

@@ -4,7 +4,7 @@
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import AppToolbar from '../components/AppToolbar'
-import { listCustomers, createSale, type Customer, type SaleItem, type Payment } from '../services/sales'
+import { listCustomers, createSale, listSales, annulSale, confirmSale, deliverSale, type Customer, type SaleItem } from '../services/sales'
 import { listProducts } from '../services/products'
 
 type ProductLite = { id: number; title: string; stock: number }
@@ -19,6 +19,7 @@ export default function SalesPage() {
   const [qty, setQty] = useState<number>(1)
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
+  const [recentSales, setRecentSales] = useState<any[]>([])
 
   useEffect(() => {
     (async () => {
@@ -26,6 +27,8 @@ export default function SalesPage() {
       setCustomers(c.items)
       const p = await listProducts({ page: 1, page_size: 200, stock: 'gt:0' } as any)
       setProducts(p.items.map((x:any)=>({ id: x.id, title: x.title, stock: x.stock })))
+      const s = await listSales({ page: 1, page_size: 10 })
+      setRecentSales(s.items)
     })()
   }, [])
 
@@ -42,7 +45,9 @@ export default function SalesPage() {
       const customer = customerId === 'new' ? { name: newCustomerName || 'Consumidor Final' } : { id: Number(customerId) }
       const r = await createSale({ customer, items, note })
       alert(`Venta #${r.sale_id} creada. Total $${r.total}`)
-      setItems([]); setCustomerId('new'); setNewCustomerName(''); setNote('')
+  setItems([]); setCustomerId('new'); setNewCustomerName(''); setNote('')
+  const s = await listSales({ page: 1, page_size: 10 })
+  setRecentSales(s.items)
     } catch (e:any) {
       alert(e?.response?.data?.detail || e.message)
     } finally {
@@ -82,6 +87,43 @@ export default function SalesPage() {
         <div style={{ marginTop:8 }}>
           <button disabled={saving || !items.length} className="btn-dark" onClick={onSave}>Guardar venta</button>
         </div>
+        <h3 style={{ marginTop:16 }}>Últimas ventas</h3>
+        <table className="table">
+          <thead><tr><th>ID</th><th>Fecha</th><th>Estado</th><th>Total</th><th>Acciones</th></tr></thead>
+          <tbody>
+            {recentSales.map(s => (
+              <tr key={s.id}>
+                <td>{s.id}</td>
+                <td>{new Date(s.sale_date).toLocaleString()}</td>
+                <td>{s.status}</td>
+                <td>${s.total?.toFixed?.(2) ?? s.total}</td>
+                <td style={{ display:'flex', gap:6 }}>
+                  {s.status==='BORRADOR' && (
+                    <button onClick={async()=>{
+                      try { await confirmSale(s.id); const ns = await listSales({ page: 1, page_size: 10 }); setRecentSales(ns.items) } catch (e:any) { alert(e?.response?.data?.detail || e.message) }
+                    }}>Confirmar</button>
+                  )}
+                  {s.status==='CONFIRMADA' && (
+                    <button onClick={async()=>{
+                      try { await deliverSale(s.id); const ns = await listSales({ page: 1, page_size: 10 }); setRecentSales(ns.items) } catch (e:any) { alert(e?.response?.data?.detail || e.message) }
+                    }}>Entregar</button>
+                  )}
+                  {(s.status==='CONFIRMADA' || s.status==='ENTREGADA') && (
+                    <button onClick={async()=>{
+                      const reason = prompt('Motivo de anulación:')
+                      if (!reason) return
+                      try {
+                        await annulSale(s.id, reason)
+                        const ns = await listSales({ page: 1, page_size: 10 })
+                        setRecentSales(ns.items)
+                      } catch (e:any) { alert(e?.response?.data?.detail || e.message) }
+                    }}>Anular</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </>
   )

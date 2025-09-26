@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_ai_policy.py
 # NG-HEADER: Ubicación: tests/test_ai_policy.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas de la política de ruteo entre modelos IA.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from ai.policy import choose
 from ai.types import Task

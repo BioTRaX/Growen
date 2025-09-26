@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: 20241005_canonical_products.py
 # NG-HEADER: Ubicación: db/migrations/versions/20241005_canonical_products.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Migración Alembic: crea productos canónicos.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """add canonical products and equivalences"""
 

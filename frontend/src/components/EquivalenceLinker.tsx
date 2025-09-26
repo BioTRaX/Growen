@@ -1,9 +1,11 @@
 // NG-HEADER: Nombre de archivo: EquivalenceLinker.tsx
 // NG-HEADER: Ubicación: frontend/src/components/EquivalenceLinker.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: UI que vincula productos equivalentes.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useState } from 'react'
 import { upsertEquivalence } from '../services/equivalences'
+import { showToast } from './Toast'
+import { baseURL as base } from '../services/http'
 
 interface Props {
   supplierId: number
@@ -20,8 +22,23 @@ export default function EquivalenceLinker({
   const [saving, setSaving] = useState(false)
 
   async function save() {
-    const id = Number(canonicalId)
-    if (!id) return
+    let id: number | null = null
+    const raw = canonicalId.trim().toUpperCase()
+    // Permitir: número, NG-######, o número directo
+    if (/^\d+$/.test(raw)) {
+      id = Number(raw)
+    } else {
+      try {
+        const res = await fetch(`${base}/canonical-products/resolve?sku=${encodeURIComponent(raw)}`, { credentials: 'include' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const j = await res.json()
+        id = Number(j?.id)
+        if (!id) throw new Error('SKU no resuelto')
+      } catch (e: any) {
+        showToast('error', 'No se pudo resolver el SKU. Ingresá el ID numérico o un SKU válido (NG-###### o XXX_####_YYY).')
+        return
+      }
+    }
     try {
       setSaving(true)
       await upsertEquivalence({
@@ -29,9 +46,10 @@ export default function EquivalenceLinker({
         supplier_product_id: supplierProductId,
         canonical_product_id: id,
       })
+      showToast('success', 'Equivalencia creada')
       onClose()
     } catch (e: any) {
-      alert(e.message)
+      showToast('error', e?.message || 'No se pudo crear la equivalencia')
     } finally {
       setSaving(false)
     }

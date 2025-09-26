@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: router.py
 # NG-HEADER: Ubicación: ai/router.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Router que delega intents hacia el proveedor IA adecuado.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 """Fachada para enrutar peticiones de IA."""

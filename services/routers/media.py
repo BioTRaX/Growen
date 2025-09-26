@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: media.py
 # NG-HEADER: Ubicación: services/routers/media.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: API para descargas y cargas de media.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Media endpoints: minimal upload for testing static serving.
 

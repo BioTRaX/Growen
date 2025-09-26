@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: loader.py
 # NG-HEADER: Ubicación: services/ingest/loader.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Carga archivos fuente dentro del pipeline de ingesta.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Carga archivos CSV/XLSX usando pandas."""
 from __future__ import annotations

@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: UploadModal.tsx
 // NG-HEADER: Ubicación: frontend/src/components/UploadModal.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Modal para subir archivos externos (PDF/EML).
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import {

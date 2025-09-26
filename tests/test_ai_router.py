@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_ai_router.py
 # NG-HEADER: Ubicación: tests/test_ai_router.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas del router de intents IA.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 from ai.router import AIRouter

@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: mapping.py
 # NG-HEADER: Ubicación: services/ingest/mapping.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Mapea datos crudos a estructuras internas.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Resuelve columnas externas a nombres internos."""
 from __future__ import annotations

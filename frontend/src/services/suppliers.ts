@@ -68,6 +68,29 @@ export async function updateSupplier(id: number, payload: SupplierCreatePayload)
   return r.json()
 }
 
+// ------------ Bulk Delete Suppliers ------------
+
+export interface BulkDeleteSuppliersResponse {
+  requested: number[]
+  deleted: number[]
+  blocked: { id: number; reasons: string[]; counts?: Record<string, number> }[]
+  not_found: number[]
+}
+
+export async function bulkDeleteSuppliers(ids: number[]): Promise<BulkDeleteSuppliersResponse> {
+  const headers = { ...csrfHeaders(), 'Content-Type': 'application/json' }
+  const r = await fetch(`${base}/suppliers`, {
+    method: 'DELETE',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({ ids })
+  })
+  if (r.status === 400) throw new Error('ids requerido')
+  if (r.status === 403) throw new Error('sin permisos')
+  if (!r.ok) throw new Error('error eliminando')
+  return r.json()
+}
+
 // ------------ Supplier Items ------------
 
 export interface SupplierItem {

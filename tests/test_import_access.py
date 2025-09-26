@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_import_access.py
 # NG-HEADER: Ubicación: tests/test_import_access.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas de permisos y acceso a importaciones.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 import asyncio

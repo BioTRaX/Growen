@@ -86,6 +86,40 @@ PATCH /suppliers/{id}
 Body parcial con los mismos campos (excepto `slug`). Rol: admin.
 ```
 
+### Borrado masivo de proveedores
+```
+DELETE /suppliers
+Roles: admin (requiere CSRF)
+Body JSON:
+{
+  "ids": [1, 2, 3]
+}
+```
+Respuesta 200 JSON:
+```jsonc
+{
+  "requested": [1,2,3],
+  "deleted": [1,3],
+  "blocked": [
+    { "id": 2, "reasons": ["has_purchases","has_files"], "counts": {"purchases": 2, "files": 1} }
+  ],
+  "not_found": []
+}
+```
+Reglas de bloqueo por proveedor:
+- `has_purchases`: existe alguna compra asociada al proveedor.
+- `has_files`: existen archivos cargados del proveedor.
+- `has_purchase_lines`: existen líneas de compra que referencian SKUs del proveedor.
+
+Si no hay bloqueos, se elimina en cascada segura: equivalencias, historial de precios y `supplier_products` del proveedor, y luego el proveedor.
+
+Ejemplo (PowerShell):
+```powershell
+curl -Method DELETE "http://localhost:8000/suppliers" `
+  -Headers @{ 'X-CSRF-Token' = '<token>'; 'Content-Type' = 'application/json' } `
+  -Body '{"ids":[10,11,12]}'
+```
+
 ### Crear ítem de proveedor (oferta / SKU externo)
 ```
 POST /suppliers/{supplier_id}/items

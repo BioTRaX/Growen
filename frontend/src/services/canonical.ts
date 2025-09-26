@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: canonical.ts
 // NG-HEADER: Ubicación: frontend/src/services/canonical.ts
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Servicios HTTP para productos canónicos.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import http from './http'
 
@@ -20,6 +20,9 @@ export interface CanonicalProduct {
   name: string
   brand: string | null
   specs_json: Record<string, any> | null
+  sku_custom?: string | null
+  category_id?: number | null
+  subcategory_id?: number | null
 }
 
 import { baseURL as base } from './http'
@@ -35,7 +38,7 @@ export async function getCanonicalProduct(
 }
 
 export async function createCanonicalProduct(
-  data: { name: string; brand?: string | null; specs_json?: any | null },
+  data: { name: string; brand?: string | null; specs_json?: any | null; sku_custom?: string | null; category_id?: number | null; subcategory_id?: number | null },
 ): Promise<CanonicalProduct> {
   const res = await http.post('/canonical-products', data)
   return res.data
@@ -43,7 +46,7 @@ export async function createCanonicalProduct(
 
 export async function updateCanonicalProduct(
   id: number,
-  data: { name?: string; brand?: string | null; specs_json?: any | null },
+  data: { name?: string; brand?: string | null; specs_json?: any | null; sku_custom?: string | null; category_id?: number | null; subcategory_id?: number | null },
 ): Promise<CanonicalProduct> {
   const res = await http.patch(`/canonical-products/${id}`, data)
   return res.data
@@ -58,4 +61,13 @@ export async function listOffersByCanonical(
   )
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
+}
+
+export async function getNextSeq(category_id: number | null | undefined): Promise<number> {
+  const params = new URLSearchParams()
+  if (category_id) params.set('category_id', String(category_id))
+  const res = await fetch(`${base}/catalog/next-seq?${params.toString()}`, { credentials: 'include' })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const j = await res.json().catch(() => ({} as any))
+  return Number(j?.next_seq ?? 1)
 }

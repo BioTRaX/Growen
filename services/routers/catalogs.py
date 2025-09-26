@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Product, Image, Category
+from db.models import Product, Image, Category, ProductEquivalence, SupplierProduct, CanonicalProduct
 from db.session import get_session
 from services.auth import require_roles, require_csrf, current_session, SessionData
 
@@ -214,7 +214,7 @@ async def generate_catalog(data: CatalogGenerateIn, session: AsyncSession = Depe
         detail_lines.append(json.dumps(line, ensure_ascii=False))
         logger.debug("[catalog] %s %s", msg, extra)
     log_step("start", count=len(data.ids), user=getattr(session_data.user, 'id', None))
-    # Cargar productos
+    # Cargar productos con variantes (para fallback de precio) y equivalencias a canónicos
     # Eager-load variants to avoid async lazy-load (MissingGreenlet)
     q = select(Product).options(selectinload(Product.variants)).where(Product.id.in_(data.ids))
     products = (await session.execute(q)).scalars().all()
@@ -236,7 +236,28 @@ async def generate_catalog(data: CatalogGenerateIn, session: AsyncSession = Depe
     if cat_ids:
         cats = (await session.execute(select(Category).where(Category.id.in_(cat_ids)))).scalars().all()
     cat_map = {c.id: c for c in cats}
-    # Armar estructura agrupada
+    # Resolver canónicos por producto interno (si existe equivalencia)
+    can_map: Dict[int, CanonicalProduct] = {}
+    try:
+        sp_rows = (await session.execute(
+            select(SupplierProduct.internal_product_id, ProductEquivalence.canonical_product_id)
+            .join(ProductEquivalence, ProductEquivalence.supplier_product_id == SupplierProduct.id)
+            .where(SupplierProduct.internal_product_id.in_([p.id for p in products]))
+        )).all()
+        can_ids = {cid for _, cid in sp_rows if cid}
+        if can_ids:
+            cps = (await session.execute(select(CanonicalProduct).where(CanonicalProduct.id.in_(list(can_ids))))).scalars().all()
+            idx = {c.id: c for c in cps}
+            for pid, cid in sp_rows:
+                if cid and pid not in can_map:
+                    cp = idx.get(cid)
+                    if cp:
+                        can_map[pid] = cp
+        log_step("canonical_resolved", count=len(can_map))
+    except Exception:
+        log_step("canonical_resolve_error")
+
+    # Armar estructura agrupada (preferir canónico)
     groups: Dict[str, list[dict[str, Any]]] = {}
     # Preparar función de sanitizado básico (descripcion "blanda")
     tag_re = re.compile(r"<[^>]+>")
@@ -253,9 +274,12 @@ async def generate_catalog(data: CatalogGenerateIn, session: AsyncSession = Depe
         return txt
 
     for p in products:
-        root = _category_root(cat_map, p.category_id)
-        # Determinar precio de venta: atributo directo `sale_price` en Product (si existe), si no variantes.
-        price = getattr(p, 'sale_price', None)
+        cp = can_map.get(p.id)
+        # Categoría raíz: priorizar canónica
+        can_cat_id = getattr(cp, 'subcategory_id', None) or getattr(cp, 'category_id', None)
+        root = _category_root(cat_map, can_cat_id or p.category_id)
+        # Determinar precio de venta: priorizar canónico
+        price = float(cp.sale_price) if (cp and getattr(cp, 'sale_price', None) is not None) else getattr(p, 'sale_price', None)
         if price is None:
             # Usar la variante con promo_price si disponible, sino price mínima.
             variants = getattr(p, 'variants', []) or []
@@ -270,9 +294,11 @@ async def generate_catalog(data: CatalogGenerateIn, session: AsyncSession = Depe
                     price = float(min(cand))
                 except Exception:
                     price = None
+        # Nombre: priorizar canónico
+        title = getattr(cp, 'name', None) or p.title
         entry = {
             "id": p.id,
-            "title": p.title,
+            "title": title,
             "price": float(price) if price is not None else None,
             "image": img_map.get(p.id),
             "description": _soft_description(getattr(p, 'description_html', None)),

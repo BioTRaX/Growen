@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: provider.py
 # NG-HEADER: Ubicación: services/ai/provider.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Factory para crear proveedores IA configurados.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Cliente de IA que se conecta a Ollama.
 

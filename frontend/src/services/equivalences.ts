@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: equivalences.ts
 // NG-HEADER: Ubicación: frontend/src/services/equivalences.ts
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Servicios HTTP para equivalencias de productos.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import http from './http'
 

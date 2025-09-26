@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: orchestrator.py
 # NG-HEADER: Ubicación: services/media/orchestrator.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Orquestador de pipelines de media y transformaciones.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 

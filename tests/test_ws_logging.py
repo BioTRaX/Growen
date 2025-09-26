@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_ws_logging.py
 # NG-HEADER: Ubicación: tests/test_ws_logging.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas del logging via WebSocket.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import logging
 

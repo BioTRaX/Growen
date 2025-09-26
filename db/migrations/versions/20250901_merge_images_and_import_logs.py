@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: 20250901_merge_images_and_import_logs.py
 # NG-HEADER: Ubicación: db/migrations/versions/20250901_merge_images_and_import_logs.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Migración Alembic: fusiona tablas de imágenes e import logs.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """merge heads: images pipeline + import logs
 

@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: report.py
 # NG-HEADER: Ubicación: services/ingest/report.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Genera reportes y métricas del pipeline de ingesta.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Generación simple de reportes."""
 from __future__ import annotations

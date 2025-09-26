@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: __init__.py
 # NG-HEADER: Ubicación: services/jobs/__init__.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Inicializa jobs asíncronos del backend.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 

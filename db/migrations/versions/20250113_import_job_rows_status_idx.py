@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: 20250113_import_job_rows_status_idx.py
 # NG-HEADER: Ubicación: db/migrations/versions/20250113_import_job_rows_status_idx.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Migración Alembic: crea índice por estado en import_job_rows.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from alembic import op
 import sqlalchemy as sa

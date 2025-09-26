@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: webhooks.py
 # NG-HEADER: Ubicación: adapters/tiendanube/webhooks.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Procesa webhooks entrantes provenientes de Tiendanube.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Webhook de ejemplo para Tiendanube."""
 from fastapi import APIRouter, Request

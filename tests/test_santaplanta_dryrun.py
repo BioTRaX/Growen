@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_santaplanta_dryrun.py
 # NG-HEADER: Ubicación: tests/test_santaplanta_dryrun.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas del modo dry-run de Santaplanta.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import pandas as pd
 import pytest

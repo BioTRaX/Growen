@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: http.ts
 // NG-HEADER: Ubicación: frontend/src/lib/http.ts
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Cliente HTTP del frontend con interceptores y manejo de sesión.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 export type ChatResponse = { role: string; text: string; type?: string; data?: any }
 

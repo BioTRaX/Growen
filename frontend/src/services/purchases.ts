@@ -1,6 +1,6 @@
 ﻿// NG-HEADER: Nombre de archivo: purchases.ts
 // NG-HEADER: UbicaciÃ³n: frontend/src/services/purchases.ts
-// NG-HEADER: DescripciÃ³n: Pendiente de descripciÃ³n
+// NG-HEADER: Descripción: Servicios HTTP para operaciones de compras.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import http from './http'
 

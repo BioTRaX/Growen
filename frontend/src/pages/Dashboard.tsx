@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: Dashboard.tsx
 // NG-HEADER: Ubicación: frontend/src/pages/Dashboard.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Dashboard principal con métricas y salud del sistema.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import AppToolbar from '../components/AppToolbar'
 import { useNavigate } from 'react-router-dom'

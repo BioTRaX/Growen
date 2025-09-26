@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: 20241105_auth_roles_sessions.py
 # NG-HEADER: Ubicación: db/migrations/versions/20241105_auth_roles_sessions.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Migración Alembic: gestiona roles y sesiones de autenticación.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from alembic import op
 import sqlalchemy as sa

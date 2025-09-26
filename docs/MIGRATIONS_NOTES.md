@@ -65,6 +65,12 @@ SELECT id, identifier, role FROM users WHERE role='admin';
 - Exponer health check que confirme estado migracional (`current_rev == head`).
 - Implementar util CLI `ng migrations status` para mostrar delta entre `current` y `head`.
 
+## Sept 2025 — Índices de rendimiento
+
+- Se añadió la migración `20250922_supplier_products_internal_variant_idx` que crea `ix_supplier_products_internal_variant_id`.
+- Motivo: acelerar lookups y vinculaciones por `internal_variant_id` durante importaciones y operaciones masivas.
+- La migración usa utilidades idempotentes (`has_column`, `index_exists`) para evitar errores si ya existía.
+
 ---
 Documentado el: 2025-09-13
 

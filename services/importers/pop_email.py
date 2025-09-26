@@ -84,10 +84,18 @@ def _title_is_valid_pop(title: str) -> bool:
 
 
 def _parse_money(s: str) -> Decimal:
-    s = (s or "").strip()
-    s = s.replace("$", "").replace("ARS", "").replace(".", "").replace(",", ".")
+    """Parser POP para montos del email.
+
+    Regla observada: las comas se usan como separador de miles (no decimales) en el subtotal.
+    En este contexto, los unitarios no vienen expresados, por lo que el valor monetario que
+    aparece junto a la línea corresponde al subtotal del producto.
+
+    Estrategia: eliminar todo excepto dígitos y parsear como entero decimal.
+    Ejemplos: "$ 4,113" -> 4113; "$ 2,335" -> 2335.
+    """
     try:
-        return Decimal(s)
+        digits = re.sub(r"[^0-9]", "", (s or ""))
+        return Decimal(digits or "0")
     except Exception:
         return Decimal("0")
 
@@ -149,6 +157,7 @@ def _parse_html(body_html: str, dbg: Dict[str, Any]) -> List[PopLine]:
     lines: List[PopLine] = []
     dbg.setdefault('html_tables', len(tables))
     best_rows: List[List[str]] = []
+    table_candidates_dbg: List[Dict[str, Any]] = []
     
     def _is_noise_title(title: str) -> bool:
         """Heurística simple para descartar filas que no son productos."""
@@ -160,6 +169,9 @@ def _parse_html(body_html: str, dbg: Dict[str, Any]) -> List[PopLine]:
             'esta es una orden de pedido', 'precios pueden sufrir modificaciones',
         ]
         return any(tok in t for tok in noise_tokens)
+    # Elegimos la tabla priorizando: encabezados comerciales + filas con moneda ($) + cantidad de filas
+    best_score: int = -1
+    best_meta: Dict[str, Any] = {}
     # Elegimos la tabla con más filas y columnas >= 2
     for t in tables:
         rows = []
@@ -179,10 +191,25 @@ def _parse_html(body_html: str, dbg: Dict[str, Any]) -> List[PopLine]:
                 for want in ('precio', 'unitario', 'p. unit', 'subtotal', 'total'):
                     score += sum(1 for c in h if want in c)
                 return score
-            if (not best_rows) or (len(rows) > len(best_rows)) or (
-                len(rows) == len(best_rows) and header_score(rows[0]) > header_score(best_rows[0])
-            ):
+            hdr = header_score(rows[0])
+            money_rows = 0
+            for r in rows[1:]:
+                try:
+                    if any(('$' in c) or re.search(r"\$\s*[0-9\.,]+", c) for c in r):
+                        money_rows += 1
+                except Exception:
+                    pass
+            # Ponderación: headers (x3) + filas con dinero (x2) + cantidad de filas (x1)
+            score = hdr * 3 + money_rows * 2 + len(rows)
+            table_candidates_dbg.append({'rows': len(rows), 'cols': max((len(r) for r in rows), default=0), 'header_score': hdr, 'money_rows': money_rows, 'score': score})
+            if score > best_score or (score == best_score and len(rows) > len(best_rows)):
+                best_score = score
                 best_rows = rows
+                best_meta = table_candidates_dbg[-1]
+    if table_candidates_dbg:
+        dbg['table_candidates'] = table_candidates_dbg
+    if best_meta:
+        dbg['table_selected'] = best_meta
     if not best_rows:
         # Como fallback, buscar listados por <li>
         for li in soup.find_all('li'):
@@ -202,6 +229,7 @@ def _parse_html(body_html: str, dbg: Dict[str, Any]) -> List[PopLine]:
     i_qty = idx(['cant', 'cantidad', 'unidades'])
     i_unit = idx(['precio', 'unitario', 'p. unit'])
     i_sub = idx(['subtotal'])
+    dbg.setdefault('columns_selected', {'title': i_title, 'qty': i_qty, 'unit': i_unit, 'subtotal': i_sub, 'method': 'header'})
     # Si el header elegido para título produce muchos títulos inválidos, intentar elegir la columna con más letras promedio
     def _letters_density(col_index: int) -> float:
         vals = [best_rows[r][col_index] for r in range(1, len(best_rows)) if col_index < len(best_rows[r])]
@@ -224,12 +252,27 @@ def _parse_html(body_html: str, dbg: Dict[str, Any]) -> List[PopLine]:
             if densities and densities[0][1] > 0:
                 i_title = densities[0][0]
                 dbg['retuned_title_col'] = i_title
+                dbg['columns_selected'] = {'title': i_title, 'qty': i_qty, 'unit': i_unit, 'subtotal': i_sub, 'method': 'density'}
+    # Conteo de filas con símbolo $ en la tabla seleccionada (para diagnóstico y heurística)
+    money_rows_best = 0
+    for rr in best_rows[1:]:
+        try:
+            if any(('$' in c) or re.search(r"\$\s*[0-9\.,]+", c) for c in rr):
+                money_rows_best += 1
+        except Exception:
+            pass
+    dbg['table_money_rows_selected'] = money_rows_best
+
+    unit_from_subtotal_count = 0
     for rr in best_rows[1:]:
         if not any(rr):
             continue
         raw_title = _norm_text(rr[i_title]) if i_title is not None and i_title < len(rr) else ''
         title = _clean_title_pop(raw_title)
         if not title:
+            continue
+        # Descartar títulos sin letras o demasiado pobres
+        if not _title_is_valid_pop(title):
             continue
         if _is_noise_title(title):
             # descartar filas de disclaimers o contacto
@@ -253,25 +296,92 @@ def _parse_html(body_html: str, dbg: Dict[str, Any]) -> List[PopLine]:
                 # No modificamos qty (que es cantidad de packs), sólo dejamos constancia en debug
                 dbg.setdefault('pack_hint', 0)
                 dbg['pack_hint'] += 1
-        unit_cost = Decimal("0")
-        if i_unit is not None and i_unit < len(rr):
-            unit_cost = _parse_money(rr[i_unit])
-        subtotal = None
+        # POP: no viene el precio unitario; el monto que aparece es el subtotal de la línea.
+        # Intentar detectar el subtotal desde la columna 'Subtotal'; si no existe, buscar el primer monto de la fila.
+        subtotal: Optional[Decimal] = None
         if i_sub is not None and i_sub < len(rr):
             subtotal = _parse_money(rr[i_sub])
+        if subtotal is None or subtotal == 0:
+            # Buscar en todas las celdas un valor monetario plausible
+            for cc in rr:
+                if "$" in cc or re.search(r"\$\s*[0-9\.,]+", cc):
+                    val = _parse_money(cc)
+                    if val > 0:
+                        subtotal = val
+                        break
+        # Calcular precio unitario desde subtotal/cantidad si es posible
+        unit_cost = Decimal("0")
+        if subtotal and qty > 0:
+            try:
+                unit_cost = (subtotal / qty).quantize(Decimal("0.01"))
+                unit_from_subtotal_count += 1
+            except Exception:
+                unit_cost = Decimal("0")
         # clamps de seguridad
         if qty <= 0 or qty >= Decimal('100000'):
             qty = Decimal('1')
         if unit_cost < 0 or unit_cost > Decimal('10000000'):
             unit_cost = Decimal('0')
         lines.append(PopLine(title=title, qty=qty, unit_cost=unit_cost, subtotal=subtotal))
-    return [ln for ln in lines if ln.title]
+    lines = [ln for ln in lines if ln.title]
+    if unit_from_subtotal_count:
+        dbg['unit_from_subtotal_html'] = unit_from_subtotal_count
+
+    # Si la tabla está muy fragmentada (muchas columnas) o subcontamos respecto a filas con $, hacer un segundo pase:
+    # unir celdas por fila y parsear con lógica de texto por presencia de $.
+    try:
+        many_cols = len(header) >= 20 or max((len(r) for r in best_rows), default=0) >= 20
+    except Exception:
+        many_cols = False
+    target_min = max(0, money_rows_best - 3)
+    if many_cols or (target_min and len(lines) < target_min):
+        def _extract_candidate_title_from_row(txt_row: str) -> str:
+            # Elegir mejor segmento con letras que no sea ruido típico y con 2+ palabras
+            candidates = re.split(r"\s+-\s+|·|\|", txt_row)
+            noise_terms = [
+                'pedido completado', 'el pedido se encuentra', 'detalles', 'método de pago', 'metodo de pago',
+                'subtotal', 'total', 'ahorro', 'envío', 'envio', 'retiro por pop', 'pago en efectivo',
+                'dirección de facturación', 'direccion de facturacion', 'email:', 'tel:'
+            ]
+            scored: list[tuple[int, str]] = []
+            for seg in candidates:
+                s = _clean_title_pop(seg)
+                if not _title_is_valid_pop(s):
+                    continue
+                low = s.lower()
+                if any(term in low for term in noise_terms):
+                    continue
+                letters = len(re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", s))
+                scored.append((letters, s))
+            if scored:
+                scored.sort(key=lambda x: x[0], reverse=True)
+                # limitar tamaño para no traer párrafos enteros
+                return scored[0][1][:120]
+            return ''
+        joined_extra: List[PopLine] = []
+        seen_titles = {ln.title for ln in lines}
+        for rr in best_rows[1:]:
+            txt_row = _norm_text(" ".join([c for c in rr if c]))
+            if "$" in txt_row and re.search(r"\$\s*[0-9\.,]+", txt_row) and re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", txt_row):
+                ln = _parse_line_from_text(txt_row)
+                # Mejorar título tomando un candidato contextual de la fila
+                cand = _extract_candidate_title_from_row(txt_row)
+                if cand:
+                    ln.title = cand
+                if ln.title and ln.title not in seen_titles and _title_is_valid_pop(ln.title):
+                    joined_extra.append(ln)
+                    seen_titles.add(ln.title)
+        if joined_extra:
+            dbg['table_join_extra'] = len(joined_extra)
+            lines.extend(joined_extra)
+    return lines
 
 
 def _parse_line_from_text(txt: str) -> PopLine:
     title = txt
     qty = Decimal("1")
     unit = Decimal("0")
+    subtotal = Decimal("0")
     # Buscar cantidad tipo "x 2" o "Cantidad: 2"
     m = re.search(r"(?:x\s*|cantidad\s*:?\s*)(\d{1,4})", txt, flags=re.I)
     if m:
@@ -282,11 +392,17 @@ def _parse_line_from_text(txt: str) -> PopLine:
     # Precio $999,99
     mp = re.search(r"\$\s*([0-9\.,]+)", txt)
     if mp:
-        unit = _parse_money(mp.group(1))
+        subtotal = _parse_money(mp.group(1))
     # Limpiar título quitando tokens triviales de cantidad/precio
     title = re.sub(r"\$\s*[0-9\.,]+", "", title)
     title = re.sub(r"\b(cantidad|unidades|x)\b\s*:?\s*\d{1,4}", "", title, flags=re.I)
     title = _clean_title_pop(_norm_text(title))
+    # Calcular unitario desde subtotal/cantidad si es posible
+    if subtotal and qty > 0:
+        try:
+            unit = (subtotal / qty).quantize(Decimal("0.01"))
+        except Exception:
+            unit = Decimal("0")
     # clamps de seguridad
     if qty <= 0 or qty >= Decimal('100000'):
         qty = Decimal('1')
@@ -295,12 +411,13 @@ def _parse_line_from_text(txt: str) -> PopLine:
     # Validar título mínimo POP
     if not _title_is_valid_pop(title):
         title = ''
-    return PopLine(title=title, qty=qty, unit_cost=unit)
+    return PopLine(title=title, qty=qty, unit_cost=unit, subtotal=(subtotal if subtotal > 0 else None))
 
 
 def _parse_text(body_text: str, dbg: Dict[str, Any]) -> List[PopLine]:
     lines: List[PopLine] = []
     dropped = 0
+    unit_from_subtotal_text = 0
     # Dividir por líneas y filtrar muy cortas
     for raw in (body_text or '').splitlines():
         txt = _norm_text(raw)
@@ -310,11 +427,15 @@ def _parse_text(body_text: str, dbg: Dict[str, Any]) -> List[PopLine]:
         if re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", txt) and re.search(r"\d", txt):
             ln = _parse_line_from_text(txt)
             if ln.title and _title_is_valid_pop(ln.title):
+                if (getattr(ln, 'subtotal', None) or Decimal('0')) > 0 and (ln.unit_cost or Decimal('0')) > 0:
+                    unit_from_subtotal_text += 1
                 lines.append(ln)
             else:
                 dropped += 1
     if dropped:
         dbg['text_lines_dropped'] = dropped
+    if unit_from_subtotal_text:
+        dbg['unit_from_subtotal_text'] = unit_from_subtotal_text
     return lines
 
 
@@ -332,13 +453,33 @@ def parse_pop_email(source: bytes | str, kind: str = 'eml') -> PopParsed:
         body_text = str(source)
     remito_number, _ = _extract_from_subject(subject)
     lines: List[PopLine] = []
+    # Helper: texto "plano" para heurísticas (contar "$" y fallback)
+    def _to_textish(html: str) -> str:
+        try:
+            return re.sub(r"<[^>]+>", " ", html)
+        except Exception:
+            return html
+
+    # Fallback por signos de $: cada línea con $ es probable línea de producto; al total restamos 3 (Subtotal, Total, Ahorro)
+    def _fallback_parse_by_dollars(textish: str) -> List[PopLine]:
+        out: List[PopLine] = []
+        seen: set[str] = set()
+        for raw in (textish or '').splitlines():
+            t = _norm_text(raw)
+            if "$" in t and re.search(r"\$\s*[0-9\.,]+", t) and re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", t):
+                ln = _parse_line_from_text(t)
+                if ln.title and ln.title not in seen and _title_is_valid_pop(ln.title):
+                    out.append(ln)
+                    seen.add(ln.title)
+        return out
+
     if body_html:
         lines = _parse_html(body_html, dbg)
         if not remito_number:
             # Quick text extraction from HTML to find Pedido 123456
             try:
                 # Evitar dependencia directa si no está bs4; usar regex para quitar tags
-                textish = re.sub(r"<[^>]+>", " ", body_html)
+                textish = _to_textish(body_html)
             except Exception:
                 textish = body_html
             remito_number = _extract_from_text_body(_norm_text(textish)) or remito_number
@@ -346,6 +487,44 @@ def parse_pop_email(source: bytes | str, kind: str = 'eml') -> PopParsed:
         lines = _parse_text(body_text, dbg)
     if not remito_number and body_text:
         remito_number = _extract_from_text_body(_norm_text(body_text)) or remito_number
+    # Heurística de conteo por símbolo $ (Subtotal/Total/Ahorro consumen 3)
+    text_from_html = _to_textish(body_html) if body_html else ''
+    html_dollar_signs = (text_from_html or '').count('$')
+    text_dollar_signs = (body_text or '').count('$') if body_text else 0
+    dollar_signs = max(html_dollar_signs, text_dollar_signs)
+    estimated_lines = max(0, max(html_dollar_signs - 3, text_dollar_signs - 3))
+    if html_dollar_signs:
+        dbg['html_dollar_signs'] = html_dollar_signs
+    if text_dollar_signs:
+        dbg['text_dollar_signs'] = text_dollar_signs
+    if dollar_signs:
+        dbg['dollar_signs'] = dollar_signs
+        dbg['estimated_product_lines'] = estimated_lines
+    # Si parseamos menos que la estimación, aplicar fallback combinando HTML(textish) y TEXT
+    if estimated_lines and len(lines) < estimated_lines:
+        extra_html = _fallback_parse_by_dollars(text_from_html)
+        extra_text = _fallback_parse_by_dollars(body_text or '') if body_text else []
+        extra = []
+        if extra_html:
+            extra.extend(extra_html)
+        if extra_text:
+            extra.extend(extra_text)
+        if extra:
+            # Mezclar sin duplicar por título
+            existing = {ln.title for ln in lines}
+            added = 0
+            unit_from_subtotal_dollar_fallback = 0
+            for ln in extra:
+                if ln.title and ln.title not in existing:
+                    lines.append(ln)
+                    existing.add(ln.title)
+                    added += 1
+                    if (getattr(ln, 'subtotal', None) or Decimal('0')) > 0 and (ln.unit_cost or Decimal('0')) > 0:
+                        unit_from_subtotal_dollar_fallback += 1
+            if added:
+                dbg['fallback_added'] = added
+            if unit_from_subtotal_dollar_fallback:
+                dbg['unit_from_subtotal_fallback'] = unit_from_subtotal_dollar_fallback
     # Fecha por defecto hoy si no vino
     if not rem_date:
         rem_date = _date.today().isoformat()

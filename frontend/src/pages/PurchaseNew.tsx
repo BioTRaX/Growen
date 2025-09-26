@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: PurchaseNew.tsx
 // NG-HEADER: Ubicación: frontend/src/pages/PurchaseNew.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Wizard para crear una compra nueva.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useCallback, useEffect, useRef, useState } from 'react'
 import AppToolbar from '../components/AppToolbar'

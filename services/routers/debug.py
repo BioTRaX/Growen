@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: debug.py
 # NG-HEADER: Ubicación: services/routers/debug.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Rutas de depuración y herramientas internas.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Endpoints de diagnóstico y salud."""
 
