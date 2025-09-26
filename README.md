@@ -221,6 +221,46 @@ SELECT column_name FROM information_schema.columns
 - Importación Santa Planta (PDF): parser heurístico que crea una compra en estado BORRADOR, adjunta el PDF y realiza matching preferente por SKU proveedor (fallback por título a futuro).
 - Confirmación: incrementa stock de producto, actualiza `current_purchase_price` del `supplier_product` y registra `price_history` (entity_type `supplier`). Audita la operación.
 
+### Notificaciones por Telegram (opcional)
+
+La app puede enviar notificaciones por Telegram, por ejemplo al confirmar una compra.
+
+Variables de entorno (ver `.env`):
+- `TELEGRAM_ENABLED`: `1` para habilitar la integración (por defecto `0`).
+- `TELEGRAM_BOT_TOKEN`: token del bot emitido por `@BotFather`.
+- `TELEGRAM_DEFAULT_CHAT_ID`: chat ID numérico por defecto (usuario, grupo o canal).
+- `PURCHASE_TELEGRAM_TOKEN` y `PURCHASE_TELEGRAM_CHAT_ID` (opcionales): overrides específicos para notificaciones de Compras; si están vacíos, se usan los valores globales.
+
+Cómo obtener el `chat_id`:
+- Escribí a tu bot y luego consultá `https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates` (en dev) para ver el `chat.id` numérico del último mensaje.
+- En grupos, asegurate de que el bot esté agregado y que la privacidad permita leer los mensajes necesarios.
+
+Notas de seguridad:
+- No publiques el token del bot. Si se filtra, revocalo con `@BotFather` y generá uno nuevo.
+- Mantené `.env` fuera del control de versiones y usá gestores de secretos en entornos de despliegue.
+
+### Webhook de Telegram para el Chatbot
+
+Podés hablarle al bot de Telegram y que responda con el mismo pipeline del chat HTTP:
+
+- Endpoint: `POST /telegram/webhook/{TELEGRAM_WEBHOOK_TOKEN}`
+- Variables:
+  - `TELEGRAM_ENABLED=1`
+  - `TELEGRAM_BOT_TOKEN=<tu token>`
+  - `TELEGRAM_WEBHOOK_TOKEN=<token de path>` (elige una cadena difícil de adivinar)
+  - `TELEGRAM_WEBHOOK_SECRET=<opcional>` para validar el header `X-Telegram-Bot-Api-Secret-Token`
+
+Pasos para configurar:
+1) Publicá temporalmente la API o usá un túnel (ngrok/localtunnel).
+2) Registrá el webhook en Telegram (opcionalmente con secret):
+   - URL base: `https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook`
+   - Query: `url=<PUBLIC_URL>/telegram/webhook/<TELEGRAM_WEBHOOK_TOKEN>` y `secret_token=<TELEGRAM_WEBHOOK_SECRET>` (si lo definiste).
+3) Escribí al bot: invocará el endpoint y responderá con el pipeline actual (intents de precio + fallback IA).
+
+Seguridad:
+- El path token más el secret header hacen que el webhook no sea invocable por terceros.
+- El servicio no responde a updates sin texto/chat_id.
+
 ### Mejoras recientes (Productos & Compras)
 
 - Tabla de productos: ahora cuenta con scroll horizontal para navegar todas las columnas cuando la suma de anchos excede el viewport. Se añadió un contenedor con `overflow-x: auto` y una barra inferior siempre accesible.
@@ -444,6 +484,12 @@ Limitaciones actuales / posibles mejoras:
 - Futuro: clonación, importación CSV, set de atributos iniciales.
 
 
+## Consultar precios y stock desde el chat
+
+- Preguntá "¿cuánto sale <producto>?" o "¿tenés <producto> en stock?" para obtener precio y disponibilidad con badge de stock.
+- Usá `/stock <sku>` o mencioná SKUs internos/proveedor para coincidencias exactas.
+- La respuesta del bot incluye proveedor, SKU y variantes relevantes; si no encuentra nada, ofrece abrir el listado de Productos.
+
 ## Subir listas de precios desde el chat
 
 - Arrastrá y soltá un archivo `.xlsx` o `.csv` sobre la zona punteada encima del chat para abrir el modal de carga.
@@ -603,12 +649,17 @@ El visor trabaja de forma paginada llamando a `GET /imports/{job_id}/preview`. C
 
 Para comparar precios entre proveedores se mantiene un catálogo propio de productos canónicos.
 Cada oferta puede asociarse a uno de ellos mediante equivalencias (ver sección siguiente).
-El frontend incluye el formulario **CanonicalForm** para crear o editar estos registros.
+- El frontend incluye el formulario **CanonicalForm** para crear o editar estos registros. El SKU propio (`sku_custom`) puede:
+  - Autogenerarse con el botón "Auto" usando el patrón `XXX_####_YYY` (prefijo/sufijo derivados de categoría y subcategoría, secuencia por categoría).
+  - Ser editado manualmente con validación de unicidad en backend.
 
-- **Crear canónico**: `POST /canonical-products` con `name`, `brand` y `specs_json` opcional. El sistema genera `ng_sku` con el formato `NG-000001`.
+- **Crear canónico**: `POST /canonical-products` con `name`, `brand` y `specs_json` opcional. El sistema genera `ng_sku` con el formato `NG-000001` y, si no se provee `sku_custom`, genera uno canónico como se indicó arriba.
 - **Buscar canónicos**: `GET /canonical-products?q=&page=` permite paginar y filtrar.
 - **Detalle/edición**: `GET /canonical-products/{id}` y `PATCH /canonical-products/{id}` devuelven y actualizan un canónico.
 - **Comparador**: `GET /canonical-products/{id}/offers` ordena las ofertas por precio de venta y marca la mejor con `mejor_precio`.
+
+Notas de UX:
+- Al crear un canónico desde la lista de productos (columna "Canónico" → "Nuevo"), el formulario se abre con el nombre del producto del proveedor prellenado. Al guardar, se autovincula una equivalencia con esa oferta del proveedor (si existe `supplier_item_id`).
 
 ## Equivalencias (`/equivalences`)
 
@@ -647,6 +698,7 @@ Parámetros soportados:
 - `page` y `page_size`: paginación (por defecto `1` y `20`).
 - `sort_by`: `updated_at`, `precio_venta`, `precio_compra` o `name`.
 - `order`: `asc` o `desc`.
+- `type`: `all` (default), `canonical` o `supplier`. Permite alternar entre ver solo filas con canónico, solo ofertas de proveedor o todo.
 
 Si se envían otros valores en `sort_by` u `order`, la API responde `400 Bad Request`.
 
@@ -674,6 +726,9 @@ Ejemplo de respuesta:
 ```
 
 Este endpoint se utiliza para consultar el catálogo existente desde el frontend.
+
+Comportamiento de campos (fallback canónico → proveedor):
+- Si un producto está vinculado a un canónico, la UI prioriza `canonical_sale_price` y `canonical_name` cuando están presentes; si no, cae a `precio_venta` y `supplier_title` del proveedor.
 
 Para modificar el stock manualmente existe `PATCH /products/{id}/stock` con cuerpo `{ "stock": <int> }`.
 

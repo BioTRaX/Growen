@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFil
 from fastapi.responses import JSONResponse, StreamingResponse
 from io import BytesIO
 from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,8 +51,9 @@ class _ProductCreate(_PydModel):
     title: str
     # Stock inicial opcional (para flujo mínimo de pruebas). Si se informan compras, se ignora.
     initial_stock: int = 0
-    # Proveedor obligatorio para este flujo
-    supplier_id: int
+    # Proveedor ahora opcional para facilitar tests unitarios rápidos.
+    # Si es None, se crea el producto sin SupplierProduct asociado.
+    supplier_id: Optional[int] = None
     # SKU del proveedor opcional; si no se informa se reutiliza sku_root
     supplier_sku: Optional[str] = None
     # SKU interno deseado (permite diferenciar del supplier_sku). Si no se envía se toma supplier_sku o título.
@@ -70,10 +72,12 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
 
     Nota: endpoint pensado para entorno de pruebas; en producción existen flujos más ricos.
     """
-    # Validar proveedor
-    supplier = await session.get(Supplier, payload.supplier_id)
-    if not supplier:
-        raise HTTPException(status_code=400, detail={"code": "invalid_supplier_id", "message": "supplier_id inválido"})
+    # Validar proveedor solo si se envía
+    supplier = None
+    if payload.supplier_id is not None:
+        supplier = await session.get(Supplier, payload.supplier_id)
+        if not supplier:
+            raise HTTPException(status_code=400, detail={"code": "invalid_supplier_id", "message": "supplier_id inválido"})
 
     from db.models import Variant, Inventory, SupplierProduct, SupplierPriceHistory
     desired_sku = (payload.sku or payload.supplier_sku or payload.title)[:50].strip()
@@ -102,42 +106,50 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
     # Guardar stock agregado también en Product.stock para compatibilidad
     prod.stock = int(payload.initial_stock or 0)
 
-    # Crear SupplierProduct asociado y precios actuales
-    sp = SupplierProduct(
-        supplier_id=payload.supplier_id,
-        supplier_product_id=(payload.supplier_sku or prod.sku_root),
-        title=payload.title[:200],
-        current_purchase_price=(payload.purchase_price if payload.purchase_price is not None else None),
-        current_sale_price=(payload.sale_price if payload.sale_price is not None else None),
-        internal_product_id=prod.id,
-        internal_variant_id=var.id,
-    )
-    session.add(sp)
-    await session.flush()
-
-    # Si se envió purchase_price pero no sale_price, por defecto igualar venta a compra
-    if payload.purchase_price is not None and payload.sale_price is None:
-        try:
-            sp.current_sale_price = payload.purchase_price
-        except Exception:
-            pass
-
-    # Registrar historial de precios solo si se enviaron ambos precios
-    if payload.purchase_price is not None and payload.sale_price is not None:
-        from datetime import date as _date
-        sph = SupplierPriceHistory(
-            supplier_product_fk=sp.id,
-            file_fk=None,
-            as_of_date=_date.today(),
-            purchase_price=payload.purchase_price,
-            sale_price=payload.sale_price,
-            delta_purchase_pct=None,
-            delta_sale_pct=None,
+    # Crear SupplierProduct asociado si hay supplier_id
+    if supplier is not None:
+        sp = SupplierProduct(
+            supplier_id=payload.supplier_id,
+            supplier_product_id=(payload.supplier_sku or prod.sku_root),
+            title=payload.title[:200],
+            current_purchase_price=(payload.purchase_price if payload.purchase_price is not None else None),
+            current_sale_price=(payload.sale_price if payload.sale_price is not None else None),
+            internal_product_id=prod.id,
+            internal_variant_id=var.id,
         )
-        session.add(sph)
+        session.add(sp)
+        await session.flush()
+
+        # Si se envió purchase_price pero no sale_price, por defecto igualar venta a compra
+        if payload.purchase_price is not None and payload.sale_price is None:
+            try:
+                sp.current_sale_price = payload.purchase_price
+            except Exception:
+                pass
+
+        # Registrar historial de precios solo si se enviaron ambos precios
+        if payload.purchase_price is not None and payload.sale_price is not None:
+            from datetime import date as _date
+            sph = SupplierPriceHistory(
+                supplier_product_fk=sp.id,
+                file_fk=None,
+                as_of_date=_date.today(),
+                purchase_price=payload.purchase_price,
+                sale_price=payload.sale_price,
+                delta_purchase_pct=None,
+                delta_sale_pct=None,
+            )
+            session.add(sph)
 
     await session.commit()
-    return {"id": prod.id, "title": prod.title, "sku_root": prod.sku_root, "supplier_item_id": sp.id}
+    response = {"id": prod.id, "title": prod.title, "sku_root": prod.sku_root}
+    if supplier is not None:
+        # sp puede existir si creamos SupplierProduct
+        try:  # defensivo en caso de refactors
+            response["supplier_item_id"] = sp.id  # type: ignore[name-defined]
+        except NameError:
+            pass
+    return response
 
 
 # ------------------------------- Proveedores: búsqueda (autocomplete) -------------------------------
@@ -235,6 +247,84 @@ async def update_variant_sku(
 
     await session.commit()
     return {"id": var.id, "sku": var.sku}
+
+
+# ------------------------------- Búsqueda rápida de catálogo (POS) -------------------------------
+class _CatalogSearchItem(_PydModel):
+    id: int
+    kind: str  # product|canonical
+    title: str
+    sku: str | None = None
+    stock: int | None = None
+    price: float | None = None
+
+
+@router.get(
+    "/catalog/search",
+    dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))],
+)
+async def catalog_search(
+    q: str = Query("", description="Texto a buscar en título/SKU"),
+    limit: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+):
+    """Búsqueda rápida para POS.
+
+    Prioriza productos con stock>0, combinando:
+      - Products: título contiene q o sku_root contiene q.
+      - CanonicalProducts: name contiene q o sku_custom contiene q (si existe).
+    Devuelve hasta 'limit' resultados ordenados por (stock desc, título asc).
+    """
+    term = (q or "").strip()
+    if not term:
+        # Top por stock (productos con stock)
+        rows = (
+            await session.execute(
+                select(Product.id, Product.title, Product.sku_root, Product.stock)
+                .where((Product.stock != None) & (Product.stock > 0))
+                .order_by(Product.stock.desc(), Product.title.asc())
+                .limit(limit)
+            )
+        ).all()
+        return [
+            {"id": r[0], "kind": "product", "title": r[1], "sku": r[2], "stock": int(r[3] or 0), "price": None}
+            for r in rows
+        ]
+
+    like = f"%{term}%"
+    # Buscar en productos
+    prod_rows = (
+        await session.execute(
+            select(Product.id, Product.title, Product.sku_root, Product.stock)
+            .where(or_(Product.title.ilike(like), Product.sku_root.ilike(like)))
+            .order_by(Product.stock.desc().nullslast(), Product.title.asc())
+            .limit(limit)
+        )
+    ).all()
+
+    # Buscar en canónicos
+    can_rows = (
+        await session.execute(
+            select(CanonicalProduct.id, CanonicalProduct.name, CanonicalProduct.sku_custom, CanonicalProduct.sale_price)
+            .where(or_(CanonicalProduct.name.ilike(like), CanonicalProduct.sku_custom.ilike(like)))
+            .order_by(CanonicalProduct.name.asc())
+            .limit(limit)
+        )
+    ).all()
+
+    # Merge priorizando productos con stock
+    items: list[dict] = []
+    for r in prod_rows:
+        items.append({"id": r[0], "kind": "product", "title": r[1], "sku": r[2], "stock": int(r[3] or 0), "price": None})
+    for r in can_rows:
+        items.append({"id": r[0], "kind": "canonical", "title": r[1], "sku": r[2], "stock": None, "price": float(r[3]) if r[3] is not None else None})
+
+    # Orden: productos con stock primero; luego canónicos/otros
+    def _key(it: dict):
+        return (0 if (it.get("kind") == "product" and (it.get("stock") or 0) > 0) else 1, (it.get("title") or ""))
+
+    items.sort(key=_key)
+    return items[:limit]
 
 
 # ------------------------------- SupplierProduct: link ↔ Variant (upsert) -------------------------------
@@ -1110,6 +1200,7 @@ async def list_products(
     page_size: int = 20,
     sort_by: str = "updated_at",
     order: str = "desc",
+    type: Optional[str] = Query(None, pattern="^(all|canonical|supplier)$"),
     *,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
@@ -1172,6 +1263,13 @@ async def list_products(
         cutoff = datetime.utcnow() - timedelta(days=created_since_days)
         stmt = stmt.where(p.created_at >= cutoff)
 
+    # Filtro por tipo (canónicos|proveedor|todos)
+    if type and type != "all":
+        if type == "canonical":
+            stmt = stmt.where(eq.canonical_product_id.is_not(None))
+        elif type == "supplier":
+            stmt = stmt.where(eq.canonical_product_id.is_(None))
+
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = await session.scalar(count_stmt) or 0
 
@@ -1192,6 +1290,21 @@ async def list_products(
     )
     result = await session.execute(stmt)
     rows = result.all()
+
+    # Prefetch primer SKU por producto para evitar N+1
+    product_ids = [p_obj.id for _, p_obj, *_ in rows]
+    skus_by_product: dict[int, str | None] = {}
+    if product_ids:
+        vs = (
+            await session.execute(
+                select(Variant.product_id, Variant.sku)
+                .where(Variant.product_id.in_(product_ids))
+                .order_by(Variant.product_id.asc(), Variant.id.asc())
+            )
+        ).all()
+        for pid, sku in vs:
+            if pid not in skus_by_product:
+                skus_by_product[pid] = sku
 
     items = []
     for sp_obj, p_obj, s_obj, eq_obj, cp_obj in rows:
@@ -1222,6 +1335,9 @@ async def list_products(
                 else None,
                 "canonical_product_id": eq_obj.canonical_product_id if eq_obj else None,
                 "canonical_sale_price": float(cp_obj.sale_price) if (cp_obj and cp_obj.sale_price is not None) else None,
+                "canonical_sku": (cp_obj.sku_custom if (cp_obj and cp_obj.sku_custom) else (cp_obj.ng_sku if cp_obj else None)),
+                "canonical_name": (cp_obj.name if cp_obj else None),
+                "first_variant_sku": skus_by_product.get(p_obj.id),
             }
         )
 
@@ -1245,7 +1361,9 @@ async def export_stock_xlsx(
     created_since_days: Optional[int] = None,
     sort_by: str = "updated_at",
     order: str = "desc",
+    type: Optional[str] = Query(None, pattern="^(all|canonical|supplier)$"),
     *,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ):
     """Exporta un XLS de stock con columnas: NOMBRE DE PRODUCTO, PRECIO DE VENTA, CATEGORIA, SKU PROPIO.
@@ -1303,6 +1421,13 @@ async def export_stock_xlsx(
         cutoff = datetime.utcnow() - timedelta(days=created_since_days)
         stmt = stmt.where(p.created_at >= cutoff)
 
+    # Filtro por tipo (canónicos|proveedor|todos)
+    if type and type != "all":
+        if type == "canonical":
+            stmt = stmt.where(eq.canonical_product_id.is_not(None))
+        elif type == "supplier":
+            stmt = stmt.where(eq.canonical_product_id.is_(None))
+
     sort_map = {
         ProductSortBy.updated_at: sp.last_seen_at,
         ProductSortBy.precio_venta: sp.current_sale_price,
@@ -1340,12 +1465,24 @@ async def export_stock_xlsx(
             if by_product[p_obj.id]["canonical_sale_price"] is None and (cp_obj and cp_obj.sale_price is not None):
                 by_product[p_obj.id]["canonical_sale_price"] = float(cp_obj.sale_price)
             continue
+        # Calcular campos canónicos si existen
+        canonical_name = cp_obj.name if cp_obj and getattr(cp_obj, "name", None) else None
+        canonical_sku = None
+        if cp_obj:
+            canonical_sku = cp_obj.sku_custom or cp_obj.ng_sku
+        canonical_cat_id = getattr(cp_obj, "category_id", None) if cp_obj else None
+        canonical_subcat_id = getattr(cp_obj, "subcategory_id", None) if cp_obj else None
+
         by_product[p_obj.id] = {
             "product_id": p_obj.id,
             "name": p_obj.title,
             "category_id": p_obj.category_id,
             "supplier_sale_price": float(sp_obj.current_sale_price) if sp_obj.current_sale_price is not None else None,
             "canonical_sale_price": float(cp_obj.sale_price) if (cp_obj and cp_obj.sale_price is not None) else None,
+            "canonical_name": canonical_name,
+            "canonical_sku": canonical_sku,
+            "canonical_category_id": canonical_cat_id,
+            "canonical_subcategory_id": canonical_subcat_id,
         }
 
     # Crear workbook
@@ -1353,24 +1490,74 @@ async def export_stock_xlsx(
     ws = wb.active
     ws.title = "Stock"
     ws.append(["NOMBRE DE PRODUCTO", "PRECIO DE VENTA", "CATEGORIA", "SKU PROPIO"])
+    # Estilos de encabezado: fondo oscuro, texto claro y negrita, centrado
+    header_fill = PatternFill(start_color="FF333333", end_color="FF333333", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFFFF")
+    header_alignment = Alignment(horizontal="center")
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = header_alignment
 
     # Completar filas
+    max_name_len = 0
+    max_cat_len = 0
+    max_sku_len = 0
     for pid, rec in by_product.items():
-        cat_path = await _category_path(session, rec["category_id"])  # puede ser None
+        # Preferir datos canónicos si están disponibles
+        # Nombre
+        name = rec.get("canonical_name") or rec["name"]
+        # Categoría: priorizar subcategoría canónica si existe; luego categoría canónica; si no, categoría del producto interno
+        can_subcat_id = rec.get("canonical_subcategory_id")
+        can_cat_id = rec.get("canonical_category_id")
+        if can_subcat_id:
+            cat_path = await _category_path(session, can_subcat_id)
+        elif can_cat_id:
+            cat_path = await _category_path(session, can_cat_id)
+        else:
+            cat_path = await _category_path(session, rec["category_id"])  # puede ser None
+        # Precio
         precio = rec["canonical_sale_price"] if rec["canonical_sale_price"] is not None else rec["supplier_sale_price"]
-        sku = skus_by_product.get(pid)
+        # SKU
+        sku = rec.get("canonical_sku") or skus_by_product.get(pid)
         ws.append([
-            rec["name"],
+            name,
             float(precio) if precio is not None else None,
             cat_path or "",
             sku or "",
         ])
+        # Negrita para nombre
+        ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+        # Actualizar métricas de ancho sugerido
+        name_len = len(str(name or ""))
+        cat_len = len(str(cat_path or ""))
+        sku_len = len(str(sku or ""))
+        max_name_len = max(max_name_len, name_len)
+        max_cat_len = max(max_cat_len, cat_len)
+        max_sku_len = max(max_sku_len, sku_len)
+
+    # Ancho automático para la primera columna (estimación basada en caracteres)
+    try:
+        ws.column_dimensions['A'].width = min(max(12, max_name_len + 2), 60)
+        ws.column_dimensions['C'].width = min(max(12, max_cat_len + 2), 60)
+        ws.column_dimensions['D'].width = min(max(12, max_sku_len + 2), 60)
+    except Exception:
+        pass
 
     # Serializar
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
+    # Correlation id: usar el que inyecta el middleware si está presente
+    cid = None
+    try:
+        # No hay API pública directa; replicamos regla de middleware
+        cid = request.headers.get("x-correlation-id") or request.headers.get("x-request-id")
+    except Exception:
+        cid = None
     headers = {"Content-Disposition": "attachment; filename=stock.xlsx"}
+    if cid:
+        headers["X-Correlation-Id"] = cid
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
 
 
@@ -1724,6 +1911,8 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
     # Resolver canónico (si existe) a partir de equivalencias del/los SupplierProduct asociados a este producto interno
     canonical_id = None
     canonical_sale = None
+    canonical_sku = None
+    canonical_name = None
     try:
         sp_rows = (await session.execute(
             select(ProductEquivalence.canonical_product_id)
@@ -1737,6 +1926,9 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
                 cp = await session.get(CanonicalProduct, canonical_id)
                 if cp and cp.sale_price is not None:
                     canonical_sale = float(cp.sale_price)
+                if cp:
+                    canonical_sku = cp.sku_custom or cp.ng_sku
+                    canonical_name = cp.name
     except Exception:
         pass
     cat_path = await _category_path(session, prod.category_id)
@@ -1750,6 +1942,8 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
         "description_html": prod.description_html,
         "canonical_product_id": canonical_id,
         "canonical_sale_price": canonical_sale,
+    "canonical_sku": canonical_sku,
+    "canonical_name": canonical_name,
         "images": [
             {
                 "id": im.id,

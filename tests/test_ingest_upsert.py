@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_ingest_upsert.py
 # NG-HEADER: Ubicación: tests/test_ingest_upsert.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas de upsert en el pipeline de ingesta.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import pandas as pd
 import pytest

@@ -6,10 +6,11 @@
 # Importación de PDF
 
 El proceso de importación de PDF sigue el siguiente pipeline:
-1. `pdfplumber` intenta extraer texto y tablas.
-2. `Camelot` (lattice/stream) busca tablas si no hubo éxito con pdfplumber.
-3. Si el PDF no contiene suficiente texto o se fuerza el proceso, se ejecuta OCR con `ocrmypdf` y se reintenta la extracción.
-4. Si aún no se detectan líneas tras OCR y reintentos, se aplica un fallback heurístico textual (parser RegEx) para intentar recuperar líneas.
+1. `pdfplumber` extrae texto y se detectan encabezado (remito/fecha) y anchors del pie: “Cantidad De Items: N” e “Importe Total: $ …”. Estos datos funcionan como control de calidad del parser.
+2. `pdfplumber` intenta extraer tablas; se unen títulos multilínea (wrap) hasta encontrar una fila válida (SKU/Cant./números). Se generan métricas y muestras de filas.
+3. Si no cierra el conteo de líneas esperado o `pdfplumber` no produce resultados, se prueba `Camelot` en dos sabores: lattice y stream. Se elige el mejor resultado y se corta si se alcanza exactamente el conteo esperado.
+4. Si el PDF no contiene suficiente texto o se fuerza el proceso, se ejecuta OCR con `ocrmypdf` y se reintenta la extracción (primero `pdfplumber`, luego `Camelot` por sabores). Se limpia la salida OCR temporal al finalizar.
+5. Si aún no se detectan líneas, se aplica un fallback heurístico textual (parser RegEx) para intentar recuperar líneas.
 
 ## Flags relevantes
 - `debug`: genera información adicional para diagnósticos (eventos del pipeline, muestras de filas).
@@ -44,6 +45,11 @@ El proceso de importación de PDF sigue el siguiente pipeline:
   - `ocr:ocrmypdf_run` → resultado de OCR (ok/tiempo/stdout/stderr)
   - `fallback:regex_parser_attempt|ok|no_lines|error` → estado del fallback textual
   - `summary:done` / `summary:no_lines_after_pipeline`
+   - `footer:expected_from_footer` → N de ítems esperado e importe total
+   - `validation:expected_items_check` → comparación esperado vs obtenido
+   - `validation:importe_total_check` → comparación de sumatoria vs importe total del documento (tolerancia de centavos)
+
+  Además se persiste un resumen de intentos (`stage=attempts,event=summary`) con los tiempos por estrategia (pdfplumber, camelot-lattice, camelot-stream, ocr-*) y cantidad de líneas.
 
 ### Eventos IA (fallback)
 Cuando la característica está habilitada (`IMPORT_AI_ENABLED=true`) y:
@@ -149,7 +155,15 @@ Si `classic_confidence` < `IMPORT_AI_CLASSIC_MIN_CONFIDENCE`, la IA actúa en mo
   - `GET /health/service/pdf_import` (chequea `ocrmypdf`, `tesseract`, `qpdf`, `ghostscript`, `camelot`)
 
 ## Limpieza de logs
+Al finalizar cada importación, el backend ejecuta una limpieza ligera de archivos de `logs/` para dejar el entorno listo para un nuevo inicio (no bloqueante):
+
+- Elimina rotaciones antiguas y archivos auxiliares grandes.
+- Trunca `logs/backend.log` si es posible (si está bloqueado en Windows se deja un marcador).
+- Mantiene `BugReport.log` y sus rotaciones.
+
+Herramientas relacionadas:
 - Archivos (`logs/`): `python scripts/clear_logs.py`
+- Limpieza avanzada (`logs/` + capturas): `python scripts/cleanup_logs.py`
 - Tablas de logs (no críticas): `python -m tools.clear_db_logs` (usar `--include-audit` para incluir `audit_log`).
 
 

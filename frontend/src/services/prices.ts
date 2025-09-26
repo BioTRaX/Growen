@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: prices.ts
 // NG-HEADER: Ubicación: frontend/src/services/prices.ts
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Servicios HTTP para operaciones de precios.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import http from './http'
 

@@ -22,6 +22,7 @@ Este documento resume el flujo de importación de remitos/correos de POP y las h
 - Precio unitario: tolerante a formatos `es-AR` (`$1.234,56`). Clamp: `< 0` o `> 10.000.000` → `0`.
 - Filtrado de ruido: se descartan filas típicas de disclaimers o contacto (por ejemplo: “WhatsApp de Atención al cliente…”, “Distribuidora Pop … Todos Derechos Reservados”).
 - Si no se identifica cantidad/precio, se crea la línea con `qty=1` y `unit_cost=0` (editable en la app).
+ - Estimación de cantidad de líneas por símbolos `$`: se cuenta el total de `$` en el cuerpo (HTML convertido a texto) y se resta 3 por los sumarios estándar (`Subtotal`, `Total`, `Ahorro`). Si el parser detecta menos líneas que esta estimación, se aplica un fallback que extrae líneas basadas en renglones que contienen `$` y texto, para no subcontar. Esta estimación se expone en `parse_debug` como `dollar_signs` y `estimated_product_lines`.
 
 ### Reglas específicas POP para títulos
 - Limpieza de ruido en títulos: se eliminan tokens “Comprar por:x N”, “Tamaño:…”, y sufijos “- x N” cuando son solo empaque.
@@ -29,10 +30,12 @@ Este documento resume el flujo de importación de remitos/correos de POP y las h
 - No confundir “pack x N” con cantidad comprada: la cantidad se toma de su columna/celda si existe; la pista de pack no altera qty y solo se registra en debug.
 
 ## iAVaL (validación asistida) – reglas POP en el prompt
-- Exigir títulos descriptivos y evitar títulos puramente numéricos.
-- Ignorar/limpiar tokens de ruido de POP (mencionados arriba).
-- No confundir “pack x N” con cantidad comprada; preferir columnas explícitas.
-- Ante dudas, preferir la columna con mayor densidad de letras como candidata de título.
+- Títulos descriptivos: al menos 2 palabras con letras y ≥5 letras totales. Evitar títulos puramente numéricos.
+- Limpiar tokens de ruido: “Comprar por:x N”, “Tamaño:…”, sufijos “- x N”.
+- No confundir “pack x N” con cantidad comprada; priorizar columna/celda “Cantidad”. No inferir qty desde pack si ya hay columna cantidad.
+- Preferir columnas/segmentos con mayor densidad de letras y descartar disclaimers/contacto o sumarios (Subtotal/Total/Ahorro).
+- El importador estima renglones por símbolos “$” y resta 3 por sumarios; no proponer eliminar líneas únicamente por desbalance con esa estimación.
+- El importador puede haber aplicado un “segundo pase” uniendo celdas por fila cuando la tabla está fragmentada; considerar títulos más largos como válidos si cumplen las reglas de POP y no son ruido.
 
 ## Pruebas rápidas
 
@@ -149,4 +152,4 @@ Requisitos a definir:
  - Para POP-email: si no se detectan bien las columnas HTML, el parser cae a heurísticas de texto. Podés editar cantidades/precios en la UI.
 
 ---
-Actualizado: 2025-09-18.
+Actualizado: 2025-09-23.

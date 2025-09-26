@@ -5,7 +5,7 @@
 
 # Roadmap del Proyecto
 
-Última actualización: 2025-09-21
+Última actualización: 2025-09-26
 
 Este documento resume el estado actual del proyecto, las funcionalidades ya implementadas y los trabajos pendientes. Debe mantenerse actualizado por cada contribución (humana o de un agente) que cambie comportamiento, endpoints, modelos o UI relevante.
 
@@ -21,6 +21,7 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 - Se actualizo la persona del chatbot para reflejar un tono mas malhumorado, sarcastico y centrado en Nice Grow.
 - El chatbot de precios ahora pide aclaracion cuando hay multiples coincidencias antes de compartir montos.
 - Backend compras: update_purchase limpia los vinculos al editar SKUs y confirm_purchase expone deltas por linea.
+- UI compras: se corrigió la codificación de textos en frontend/src/pages/PurchaseDetail.tsx para eliminar caracteres extra (acento, guion largo, preguntas).
 - UI compras: selector de proveedor unificado (autocompletado con lista inicial, soporte dark y feedback en modal PDF, ficha de proveedor y Nueva compra).
 - Flujo iAVaL (Validador de IA de remitos) — primera versión funcional:
   - Backend:
@@ -176,6 +177,31 @@ Hito 5 - Chatbot administrativo con acceso controlado
   - Capa de gateway para repositorio en modo lectura y endpoint restringido para sugerencias en `PR/`.
   - Pipeline RAG con chunking etiquetado por rol y actualización incremental tras cambios en el repositorio.
   - Auditoría centralizada de consultas, respuestas y modificaciones, con reportes para admins.
+
+### Ventas / Clientes (Sprint 1 + Sprint 2 parcial)
+- Modelos y endpoints base de Customers y Sales (BORRADOR/CONFIRMADA/ENTREGADA/ANULADA) con líneas, pagos y adjuntos.
+- Devoluciones parciales: `POST /sales/{id}/returns` + reposición de stock y auditoría `return_create`.
+- Timeline consolidado: `GET /sales/{id}/timeline` (audit + pagos + devoluciones) para UI.
+- Reportes agregados:
+  - Ventas netas: `GET /sales/reports/net` (bruto, devoluciones, neto, ventas_count, devoluciones_count).
+  - Top productos: `GET /sales/reports/top-products` (qty/monto vendidos, devueltos y netos).
+  - Top clientes: `GET /sales/reports/top-customers` (bruto, devoluciones, neto, conteos).
+- Cache in-memory TTL (60s) para reportes con invalidación autom. al confirmar venta o crear devolución.
+- Libro de stock inicial: tabla `stock_ledger` + hooks en confirmación de venta (delta negativo) y devolución (delta positivo) con `balance_after`.
+- Historial de stock por producto: `GET /products/{id}/stock/history` paginado.
+- Búsqueda rápida de clientes: `GET /sales/customers/search?q=` con ranking (document_number exacta, nombre prefix, etc.).
+- Endpoint dedicado de pagos `GET /sales/{id}/payments` (optimiza UI polling).
+- Clamp automático de `discount_amount` al confirmar si excede `subtotal` (`sale_discount_clamped` audit).
+- Indexación adicional ventas (status+sale_date, customer_id+sale_date) para acelerar filtros y reportes.
+- Auditoría extendida: `sale_lines_ops`, `sale_payment_add`, `sale_confirm`, `sale_discount_clamped` con `elapsed_ms` y `stock_deltas`.
+- Tests: lifecycle, timeline, reportes (net/top), ledger consistencia, clamp de descuento.
+
+Pendiente siguiente iteración Ventas:
+- Margen / costo en reportes (integrar costos de compra o precio promedio).
+- Apoyo a notas de crédito / facturación y numeración de comprobantes.
+- Depósitos múltiples y proyección de stock (reservas vs disponible).
+- Paginación y filtros avanzados en historial de stock (fuente, rango fechas, tipo de movimiento).
+- Prorrateo de descuento global a líneas para métrica de margen por producto.
 - Entregables
   - Documentación viva: nuevos archivos `docs/CHATBOT_ARCHITECTURE.md`, `docs/CHATBOT_ROLES.md`, actualización de `README.md` y `docs/roles-endpoints.md`.
   - Suite de pruebas (unitarias/integración) para autenticación, gateway del repositorio, RAG y auditoría.

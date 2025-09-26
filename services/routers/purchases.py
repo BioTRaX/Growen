@@ -49,6 +49,7 @@ import uuid
 from agent_core.config import settings
 from ai.router import AIRouter
 from ai.types import Task
+from services.notifications.telegram import send_message as tg_send
 
 # PDF text extraction (opcional)
 try:  # pragma: no cover - import opcional
@@ -166,8 +167,10 @@ Estrategia de matching para líneas:
 Reglas específicas si el proveedor es POP (Distribuidora Pop):
 - Los títulos de productos deben ser descriptivos: al menos 2 palabras con letras y 5 letras en total. Evitar títulos puramente numéricos.
 - Ignorá o limpiá tokens como "Comprar por:x N", "Tamaño:..", o sufijos de empaque "- x N" al comparar títulos.
-- Si hay pack/"x N" en el texto, no lo confundas con cantidad comprada; la cantidad suele estar en su propia columna/celda.
-- Preferí títulos con mayor densidad de letras si hay dudas.
+- Si hay pack/"x N" en el texto, NO lo confundas con cantidad comprada; la cantidad suele estar en su propia columna/celda. No infieras qty desde pack si ya hay columna cantidad.
+- Preferí títulos con mayor densidad de letras si hay dudas. Evitá textos de disclaimers/contacto (WhatsApp, dirección, métodos de pago, Total/Ahorro/Subtotal).
+- El importador estima la cantidad de renglones de productos contando símbolos "$" y restando 3 por los sumarios (Subtotal, Total, Ahorro). Por lo tanto, no propongas eliminar líneas sólo porque el conteo no coincide exactamente.
+- El importador puede haber usado un "segundo pase" uniendo celdas de una fila para extraer título/cantidad/precio cuando la tabla está fragmentada. Considerá eso para no descartar títulos válidos largos.
 
 Esquema de salida EXACTO:
 {
@@ -194,10 +197,12 @@ Ejemplo mínimo (sólo cambios seguros):
     if (supplier_name or "").strip().lower().find("pop") != -1:
         extra = (
             "\n\nReglas específicas para POP (Distribuidora Pop):\n"
-            "- Los títulos de productos deben ser descriptivos: al menos 2 palabras con letras y 5 letras en total. Evitar títulos puramente numéricos.\n"
-            "- Ignorá o limpiá tokens como 'Comprar por:x N', 'Tamaño:..', o sufijos de empaque '- x N' al comparar títulos.\n"
-            "- Si hay pack/'x N' en el texto, no lo confundas con cantidad comprada; la cantidad suele estar en su propia columna/celda.\n"
-            "- Preferí títulos con mayor densidad de letras si hay dudas.\n"
+            "- Títulos descriptivos (≥2 palabras con letras y ≥5 letras totales); evitar títulos puramente numéricos.\n"
+            "- Limpiar tokens de ruido: 'Comprar por:x N', 'Tamaño:..', sufijos de empaque '- x N'.\n"
+            "- No confundir pack/'x N' con cantidad comprada; priorizar columna/celda 'Cantidad'.\n"
+            "- Preferir columnas/segmentos con alta densidad de letras; descartar disclaimers/contacto o sumarios (Subtotal/Total/Ahorro).\n"
+            "- El importador estima renglones por símbolos '$' (menos 3 por Subtotal/Total/Ahorro); no propongas eliminar líneas sólo por desbalance de ese conteo.\n"
+            "- El importador puede haber unido celdas por fila (segundo pase) para extraer título/precio; no descartes títulos válidos largos por eso.\n"
         )
     return (
         f"Proveedor (referencia esperada): {supplier_name}\n"
@@ -1297,16 +1302,15 @@ async def confirm_purchase(
     # Confirmar transacción de cambios (stock, precios, estado y auditoría)
     await db.commit()
 
-    # Notificación Telegram opcional
-    token = os.getenv("PURCHASE_TELEGRAM_TOKEN")
-    chat_id = os.getenv("PURCHASE_TELEGRAM_CHAT_ID")
-    if token and chat_id:
-        try:
-            text = f"Compra confirmada: proveedor {p.supplier_id}, remito {p.remito_number}, líneas {len(p.lines)}"
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": text})
-        except Exception:
-            pass
+    # Notificación Telegram opcional (respeta TELEGRAM_ENABLED y overrides de compras)
+    try:
+        text = f"Compra confirmada: proveedor {p.supplier_id}, remito {p.remito_number}, líneas {len(p.lines)}"
+        tok = os.getenv("PURCHASE_TELEGRAM_TOKEN") or None
+        chat = os.getenv("PURCHASE_TELEGRAM_CHAT_ID") or None
+        # Si no hay overrides, se usarán los defaults dentro del servicio
+        await tg_send(text, chat_id=chat, token=tok)
+    except Exception:
+        pass
     resp: dict[str, Any] = {"status": "ok"}
     if debug:
         resp["applied_deltas"] = applied_deltas
@@ -2066,6 +2070,34 @@ async def import_santaplanta_pdf(
                         details=_sanitize_for_json(details),
                     )
                 )
+            # Persistir resumen de intentos si vienen en debug.attempts
+            try:
+                attempts = None
+                if isinstance(res.debug, dict):
+                    attempts = res.debug.get("attempts")
+                if attempts and isinstance(attempts, list):
+                    # Limitar a primeras 8 entradas y campos esenciales
+                    at = [
+                        {
+                            "name": (a.get("name") if isinstance(a, dict) else getattr(a, "name", "")),
+                            "ok": bool(a.get("ok")) if isinstance(a, dict) else bool(getattr(a, "ok", False)),
+                            "lines_found": int(a.get("lines_found") or 0) if isinstance(a, dict) else int(getattr(a, "lines_found", 0) or 0),
+                            "elapsed_ms": int(a.get("elapsed_ms") or 0) if isinstance(a, dict) else int(getattr(a, "elapsed_ms", 0) or 0),
+                        }
+                        for a in attempts[:8]
+                    ]
+                    db.add(
+                        ImportLog(
+                            purchase_id=p.id,
+                            correlation_id=correlation_id,
+                            level="INFO",
+                            stage="attempts",
+                            event="summary",
+                            details={"items": at},
+                        )
+                    )
+            except Exception:
+                pass
             # Registrar métrica de confianza clásica (heurística) para diagnósticos
             try:
                 if hasattr(res, "classic_confidence") and res.classic_confidence is not None:
@@ -2112,6 +2144,24 @@ async def import_santaplanta_pdf(
             "unmatched_count": 0,
             "debug": (res.debug if debug_flag else None),
         }
+        # Limpieza de logs (mejor esfuerzo) al finalizar el flujo, para dejar entorno listo
+        try:
+            # Ejecutar limpieza con políticas por defecto; no bloquear ante errores
+            from scripts import cleanup_logs as _cleanup
+            # Conservar capturas recientes 30 días y limitar a 200 MB (defaults de script)
+            _ = _cleanup.main(["--screenshots-keep-days", "30", "--screenshots-max-mb", "200"])  # type: ignore
+            db.add(ImportLog(
+                purchase_id=p.id,
+                correlation_id=correlation_id,
+                level="INFO",
+                stage="cleanup",
+                event="logs_cleanup_done",
+                details={"result": "ok"},
+            ))
+            await db.commit()
+        except Exception:
+            # No bloquear respuesta por fallas en limpieza
+            pass
         return JSONResponse(content=response_data, headers={"X-Correlation-ID": correlation_id})
 
     except HTTPException as e:

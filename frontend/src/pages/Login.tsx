@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: Login.tsx
 // NG-HEADER: Ubicación: frontend/src/pages/Login.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Página de inicio de sesión para usuarios.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";

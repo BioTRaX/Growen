@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: parsers.py
 # NG-HEADER: Ubicación: services/suppliers/parsers.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Parsers de catálogos y remitos de proveedores.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Parsers de listas de precios de proveedores.
 

@@ -45,6 +45,10 @@ Notas
 - Este botón es complementario para registrar casos de negocio o flujos inesperados reportados por usuarios.
  - Privacidad: la captura incluye lo visible en la pantalla (texto, nombres, precios). Evitar incluir datos sensibles en pantalla al enviar reportes. El tamaño se limita en el cliente para no superar unos pocos cientos de KB por imagen.
 
+## Historial de incidencias
+
+- 2025-09-22 · br-1758572908: Se corrigió la codificación de textos en la vista de detalle de compras para eliminar caracteres extra (frontend/src/pages/PurchaseDetail.tsx).
+
 ## Métricas (admin)
 
 - Endpoint: `GET /admin/services/metrics/bug-reports` (rol requerido: admin)

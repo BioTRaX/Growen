@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_ingest_dryrun.py
 # NG-HEADER: Ubicación: tests/test_ingest_dryrun.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas del modo dry-run del pipeline de ingesta.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import pandas as pd
 import pytest

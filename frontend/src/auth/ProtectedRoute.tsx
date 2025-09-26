@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: ProtectedRoute.tsx
 // NG-HEADER: Ubicación: frontend/src/auth/ProtectedRoute.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Ruta protegida que valida autenticación en la SPA.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { Navigate } from 'react-router-dom'
 import { Role, useAuth } from './AuthContext'

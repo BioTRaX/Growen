@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: tiendanube.py
 # NG-HEADER: Ubicación: services/integrations/tiendanube.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Integración backend con la API de Tiendanube.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 

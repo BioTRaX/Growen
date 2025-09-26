@@ -1,6 +1,6 @@
 ﻿# NG-HEADER: Nombre de archivo: test_purchases_api.py
 # NG-HEADER: UbicaciÃ³n: tests/test_purchases_api.py
-# NG-HEADER: DescripciÃ³n: Pendiente de descripciÃ³n
+# NG-HEADER: Descripción: Pruebas de la API de compras.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import io
 import os

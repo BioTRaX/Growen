@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: 20241103_imports_tables.py
 # NG-HEADER: Ubicación: db/migrations/versions/20241103_imports_tables.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Migración Alembic: crea tablas base para importaciones.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """create import tables and price history"""
 

@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: runserver.py
 # NG-HEADER: Ubicación: services/runserver.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Script de arranque del servidor ASGI con uvicorn.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Local development server runner.
 

@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_ws_chat.py
 # NG-HEADER: Ubicación: tests/test_ws_chat.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas del canal WebSocket de chat.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 import asyncio

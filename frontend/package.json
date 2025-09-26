@@ -7,7 +7,8 @@
     "dev": "vite --host 127.0.0.1 --port %VITE_PORT%",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1 --port %VITE_PORT%",
-    "doctor": "node tools/check-deps.cjs"
+    "doctor": "node tools/check-deps.cjs",
+    "test": "vitest --run"
   },
   "dependencies": {
     "@tanstack/react-table": "^8.19.2",
@@ -24,7 +25,12 @@
     "@types/react-dom": "^18.3.0",
     "@types/react-window": "^1.8.8",
     "@vitejs/plugin-react": "^4.3.1",
+    "@testing-library/jest-dom": "^6.5.0",
+    "@testing-library/react": "^16.0.1",
+    "@testing-library/user-event": "^14.5.2",
+    "jsdom": "^25.0.1",
     "typescript": "^5.5.4",
-    "vite": "^7.1.5"
+    "vite": "^7.1.5",
+    "vitest": "^2.1.3"
   }
 }

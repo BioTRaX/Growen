@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: docker-compose.yml
 # NG-HEADER: Ubicación: docker-compose.yml
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Orquestación de servicios locales mediante Docker Compose.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 services:
   db:

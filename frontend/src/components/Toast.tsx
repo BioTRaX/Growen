@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: Toast.tsx
 // NG-HEADER: Ubicación: frontend/src/components/Toast.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Contenedor de notificaciones tipo toast.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 

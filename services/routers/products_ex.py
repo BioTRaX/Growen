@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: products_ex.py
 # NG-HEADER: Ubicación: services/routers/products_ex.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: API de productos extendidos y catálogos.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 

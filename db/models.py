@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: models.py
 # NG-HEADER: Ubicación: db/models.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Modelos ORM principales del dominio.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Modelos principales de la base de datos."""
 from __future__ import annotations
@@ -350,11 +350,16 @@ class CanonicalProduct(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     # ng_sku se genera post-inserción; es nullable a nivel DB
     ng_sku: Mapped[Optional[str]] = mapped_column(String(20), unique=True, nullable=True)
+    # SKU canónico personalizado (formato XXX_####_YYY). Debe ser único si se define.
+    sku_custom: Mapped[Optional[str]] = mapped_column(String(32), unique=True, nullable=True)
     name: Mapped[str] = mapped_column(String(200))
     brand: Mapped[Optional[str]] = mapped_column(String(100))
     # Precio de venta a nivel canónico
     sale_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
     specs_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # Taxonomía: categoría padre y subcategoría (opcional)
+    category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True)
+    subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -671,8 +676,15 @@ class Customer(Base):
     email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     doc_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # Extensiones CRM mínimas
+    document_type: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    document_number: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    province: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    kind: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # cf/ri/minorista/mayorista
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -683,21 +695,30 @@ class Sale(Base):
     __tablename__ = "sales"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('BORRADOR','CONFIRMADA','ANULADA')",
+            "status IN ('BORRADOR','CONFIRMADA','ENTREGADA','ANULADA')",
             name="ck_sales_status",
         ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     customer_id: Mapped[Optional[int]] = mapped_column(ForeignKey("customers.id", ondelete="SET NULL"), nullable=True)
-    status: Mapped[str] = mapped_column(String(16), default="CONFIRMADA")
+    status: Mapped[str] = mapped_column(String(16), default="BORRADOR")
     sale_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    sale_kind: Mapped[str] = mapped_column(String(16), default="MOSTRADOR")  # MOSTRADOR|PEDIDO
+    # Totales y descuentos
+    discount_percent: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
+    discount_amount: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
+    subtotal: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    tax: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     total_amount: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     paid_total: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
+    payment_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # PENDIENTE/PARCIAL/PAGADA
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+    correlation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     customer: Mapped[Optional["Customer"]] = relationship(back_populates="sales")
     lines: Mapped[list["SaleLine"]] = relationship(back_populates="sale")
@@ -715,6 +736,15 @@ class SaleLine(Base):
     unit_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     line_discount: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
     note: Mapped[Optional[str]] = mapped_column(Text)
+    # Snapshots y totales por línea
+    title_snapshot: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    sku_snapshot: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    line_discount_percent: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
+    subtotal: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
+    tax: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
+    total: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
+    supplier_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    state: Mapped[Optional[str]] = mapped_column(String(16), default="OK")  # OK/SIN_VINCULAR
 
     sale: Mapped["Sale"] = relationship(back_populates="lines")
     product: Mapped["Product"] = relationship()
@@ -735,6 +765,8 @@ class SalePayment(Base):
     amount: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     reference: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     sale: Mapped["Sale"] = relationship(back_populates="payments")
 
@@ -751,3 +783,44 @@ class SaleAttachment(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
     sale: Mapped["Sale"] = relationship(back_populates="attachments")
+
+
+# --- Devoluciones (Returns) ---
+
+class Return(Base):
+    __tablename__ = "returns"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('BORRADOR','REGISTRADA','ANULADA')",
+            name="ck_returns_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(16), default="REGISTRADA")
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    total_amount: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    correlation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    sale: Mapped["Sale"] = relationship()
+    lines: Mapped[list["ReturnLine"]] = relationship(back_populates="return_ref")
+
+
+class ReturnLine(Base):
+    __tablename__ = "return_lines"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    return_id: Mapped[int] = mapped_column(ForeignKey("returns.id", ondelete="CASCADE"))
+    sale_line_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sale_lines.id", ondelete="SET NULL"), nullable=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+    qty: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    unit_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    subtotal: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    return_ref: Mapped["Return"] = relationship(back_populates="lines")
+    sale_line: Mapped[Optional["SaleLine"]] = relationship()
+    product: Mapped["Product"] = relationship()

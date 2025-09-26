@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: normalize.py
 # NG-HEADER: Ubicación: services/ingest/normalize.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Normaliza datos de importación antes de persistir.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Funciones de limpieza de datos."""
 from __future__ import annotations

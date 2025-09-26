@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: patch_summary_json.py
 # NG-HEADER: Ubicación: scripts/patch_summary_json.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Parche que completa el campo summary_json en importaciones.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 from sqlalchemy import create_engine, text

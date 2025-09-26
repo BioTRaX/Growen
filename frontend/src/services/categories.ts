@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: categories.ts
 // NG-HEADER: Ubicación: frontend/src/services/categories.ts
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Servicios HTTP para categorías.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 export interface Category {
   id: number

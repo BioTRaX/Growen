@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: db_check.py
 # NG-HEADER: Ubicación: scripts/db_check.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Chequeos básicos de conexión y latencia de la base.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 from agent_core.config import settings

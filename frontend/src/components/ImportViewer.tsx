@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: ImportViewer.tsx
 // NG-HEADER: Ubicación: frontend/src/components/ImportViewer.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Visor de resultados y logs de importaciones.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import { commitImport, getImportPreview } from '../services/imports'

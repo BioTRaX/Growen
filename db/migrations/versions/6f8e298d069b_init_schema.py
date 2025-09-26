@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: 6f8e298d069b_init_schema.py
 # NG-HEADER: Ubicación: db/migrations/versions/6f8e298d069b_init_schema.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Migración Alembic: crea el esquema inicial.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """init schema
 

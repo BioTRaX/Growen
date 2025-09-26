@@ -1,6 +1,6 @@
-﻿// NG-HEADER: Nombre de archivo: PurchaseDetail.tsx
-// NG-HEADER: UbicaciÃ³n: frontend/src/pages/PurchaseDetail.tsx
-// NG-HEADER: DescripciÃ³n: Pendiente de descripciÃ³n
+// NG-HEADER: Nombre de archivo: PurchaseDetail.tsx
+// NG-HEADER: Ubicación: frontend/src/pages/PurchaseDetail.tsx
+// NG-HEADER: Descripción: Vista de detalle editable para una compra.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom'
@@ -189,10 +189,10 @@ export default function PurchaseDetail() {
       const msgs: string[] = []
       if (typeof res.linked === 'number' && res.linked > 0) msgs.push(`Autovinculadas ${res.linked}`)
       if (typeof res.unmatched === 'number') msgs.push(res.unmatched === 0 ? 'sin pendientes' : `${res.unmatched} sin vincular`)
-      showToast('success', `Validada: ${msgs.join(' Â· ')}`)
+      showToast('success', `Validada: ${msgs.join(' · ')}`)
       if (Array.isArray(res.missing_skus) && res.missing_skus.length > 0) {
         const list = res.missing_skus.slice(0, 6).join(', ')
-        showToast('info', `SKUs no encontrados para este proveedor: ${list}${res.missing_skus.length > 6 ? 'â€¦' : ''}`)
+        showToast('info', `SKUs no encontrados para este proveedor: ${list}${res.missing_skus.length > 6 ? '…' : ''}`)
         setLastMissingSkus(res.missing_skus)
       } else {
         setLastMissingSkus([])
@@ -212,19 +212,19 @@ export default function PurchaseDetail() {
       if (Array.isArray(res.applied_deltas) && res.applied_deltas.length > 0) {
         for (const d of res.applied_deltas.slice(0, 5)) {
           const name = d.product_title || d.line_title || `Producto ${d.product_id}`
-          const idLabel = d.product_id ? ` Â· ID ${d.product_id}` : ''
-          showToast('info', `${name}${idLabel}: +${d.delta} (â†’ ${d.new})`)
+          const idLabel = d.product_id ? ` · ID ${d.product_id}` : ''
+          showToast('info', `${name}${idLabel}: +${d.delta} (→ ${d.new})`)
         }
-        if (res.applied_deltas.length > 5) showToast('info', `(+${res.applied_deltas.length - 5} mÃ¡s)`) 
+        if (res.applied_deltas.length > 5) showToast('info', `(+${res.applied_deltas.length - 5} más)`) 
       }
       if (Array.isArray(res.unresolved_lines) && res.unresolved_lines.length > 0) {
-        showToast('warning', `LÃ­neas sin producto: ${res.unresolved_lines.join(', ')}`)
+        showToast('warning', `Líneas sin producto: ${res.unresolved_lines.join(', ')}`)
       }
       // Si hay mismatch significativo ofrecer rollback inmediato
       if (res?.totals?.mismatch && res.can_rollback) {
         const pt = res.totals.purchase_total.toLocaleString('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 2 })
         const at = res.totals.applied_total.toLocaleString('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 2 })
-        const ok = confirm(`AtenciÃ³n: los totales no coinciden.\nRemito: ${pt}\nAplicado a stock: ${at}\n\nÂ¿DeseÃ¡s hacer ROLLBACK ahora mismo?`)
+        const ok = confirm(`Atención: los totales no coinciden.\nRemito: ${pt}\nAplicado a stock: ${at}\n\n¿Deseás hacer ROLLBACK ahora mismo?`)
         if (ok) {
           try {
             const rb = await rollbackPurchase(pid)
@@ -233,7 +233,7 @@ export default function PurchaseDetail() {
               for (const d of rb.reverted.slice(0, 5)) {
                 showToast('info', `Prod ${d.product_id}: ${d.delta}`)
               }
-              if (rb.reverted.length > 5) showToast('info', `(+${rb.reverted.length - 5} mÃ¡s)`) 
+              if (rb.reverted.length > 5) showToast('info', `(+${rb.reverted.length - 5} más)`) 
             }
           } catch (e:any) {
             showToast('error', e?.response?.data?.detail || 'Error al hacer rollback')
@@ -248,7 +248,7 @@ export default function PurchaseDetail() {
   }
 
   async function doCancel() {
-    const note = prompt('Motivo de anulaciÃ³n (obligatorio)')
+    const note = prompt('Motivo de anulación (obligatorio)')
     if (!note) return
     try {
       await cancelPurchase(pid, note)
@@ -262,10 +262,10 @@ export default function PurchaseDetail() {
   async function doDelete() {
     if (!data) return
     if (!(data.status === 'BORRADOR' || data.status === 'ANULADA')) {
-      showToast('error', 'Solo se puede eliminar si estÃ¡ en BORRADOR o ANULADA')
+      showToast('error', 'Solo se puede eliminar si está en BORRADOR o ANULADA')
       return
     }
-    if (!confirm('Â¿Eliminar compra? Esta acciÃ³n no se puede deshacer.')) return
+    if (!confirm('¿Eliminar compra? Esta acción no se puede deshacer.')) return
     try {
       await deletePurchase(pid)
       showToast('success', 'Compra eliminada')
@@ -282,12 +282,12 @@ export default function PurchaseDetail() {
       <AppToolbar />
       <div className="panel p-4">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2>Compra #{data?.id} â€” {data?.status}</h2>
+          <h2>Compra #{data?.id} — {data?.status}</h2>
           <div className="row" style={{ gap: 12, alignItems: 'center' }}>
             <div style={{ fontWeight: 600 }}>Total: {totals.total.toLocaleString('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 2 })}</div>
             <button className="btn-dark btn-lg" onClick={save} disabled={saving}>{saving ? 'Guardando...' : 'Guardar (Ctrl+S)'}</button>
             <button className="btn btn-lg" onClick={doValidate}>Validar</button>
-            <button className="btn-secondary btn-lg" onClick={() => setAuditOpen(true)} title="Ver auditorÃ­a de stock aplicada">AuditorÃ­a</button>
+            <button className="btn-secondary btn-lg" onClick={() => setAuditOpen(true)} title="Ver auditoría de stock aplicada">Auditoría</button>
             {data?.status === 'BORRADOR' && (
               <button
                 className="btn btn-lg"
@@ -319,7 +319,7 @@ export default function PurchaseDetail() {
               className="btn-primary btn-lg"
               onClick={doConfirm}
               disabled={data?.status === 'CONFIRMADA' || (lines?.length || 0) === 0 || (totals?.total || 0) === 0}
-              title={(lines?.length || 0) === 0 ? 'No hay lÃ­neas importadas' : ((totals?.total || 0) === 0 ? 'Total de la compra es 0' : '')}
+              title={(lines?.length || 0) === 0 ? 'No hay líneas importadas' : ((totals?.total || 0) === 0 ? 'Total de la compra es 0' : '')}
             >
               Confirmar
             </button>
@@ -332,7 +332,7 @@ export default function PurchaseDetail() {
                       showToast('info', 'Sin deltas de stock para re-aplicar')
                       return
                     }
-                    if (confirm(`Se volverÃ­an a sumar ${prev.applied_deltas.reduce((a,b)=>a+(b.delta||0),0)} unidades en ${prev.applied_deltas.length} productos. Â¿Aplicar?`)) {
+                    if (confirm(`Se volverían a sumar ${prev.applied_deltas.reduce((a,b)=>a+(b.delta||0),0)} unidades en ${prev.applied_deltas.length} productos. ¿Aplicar?`)) {
                       const res = await resendPurchaseStock(pid, true, true)
                       showToast('success', 'Stock reenviado')
                       if (res.applied_deltas) {
@@ -340,7 +340,7 @@ export default function PurchaseDetail() {
                           const name = d.product_title || `Prod ${d.product_id}`
                           showToast('info', `${name}: +${d.delta}`)
                         }
-                        if (res.applied_deltas.length > 5) showToast('info', `(+${res.applied_deltas.length - 5} mÃ¡s)`) 
+                        if (res.applied_deltas.length > 5) showToast('info', `(+${res.applied_deltas.length - 5} más)`) 
                       }
                     }
                   } catch (e:any) {
@@ -356,7 +356,7 @@ export default function PurchaseDetail() {
         <div className="text-sm" style={{ opacity: 0.8, marginBottom: 8 }}>
           Consejo amistoso: si el remito no coincide, no lo inventes, rey.
           {data?.meta?.last_resend_stock_at && (
-            <span style={{ marginLeft: 16, fontWeight: 500 }}>Ãšltimo reenvÃ­o stock: {new Date(data.meta.last_resend_stock_at).toLocaleString('es-AR')}</span>
+            <span style={{ marginLeft: 16, fontWeight: 500 }}>Último reenvío stock: {new Date(data.meta.last_resend_stock_at).toLocaleString('es-AR')}</span>
           )}
         </div>
 
@@ -366,10 +366,10 @@ export default function PurchaseDetail() {
             <input className="input" style={{ minWidth: 220 }} type="date" value={data?.remito_date || ''} onChange={(e) => setData({ ...data, remito_date: e.target.value })} disabled={(data?.attachments?.length || 0) > 0 && (data?.lines?.length || 0) > 0 && data?.status === 'BORRADOR'} />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <label className="label">NÂº de remito</label>
+            <label className="label">Nº de remito</label>
             <input className="input" value={data?.remito_number || ''} onChange={(e) => setData({ ...data, remito_number: e.target.value })} disabled={(data?.attachments?.length || 0) > 0 && (data?.lines?.length || 0) > 0 && data?.status === 'BORRADOR'} />
           </div>
-          {/* Quitar descuento global del header segÃºn especificaciÃ³n */}
+          {/* Quitar descuento global del header según especificación */}
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <label className="label">IVA %</label>
             <input className="input" type="number" step={0.01} value={data?.vat_rate ?? 0} onChange={(e) => setData({ ...data, vat_rate: Number(e.target.value) })} />
@@ -382,9 +382,9 @@ export default function PurchaseDetail() {
         <textarea className="input w-full" rows={3} placeholder="Nota" value={data?.note || ''} onChange={(e) => setData({ ...data, note: e.target.value })} />
 
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}>
-          <h3 style={{ margin: 0 }}>LÃ­neas ({lines.length}) {unmatched ? `â€” ${unmatched} SIN_VINCULAR` : ''}</h3>
+          <h3 style={{ margin: 0 }}>Líneas ({lines.length}) {unmatched ? `— ${unmatched} SIN_VINCULAR` : ''}</h3>
           <div className="row" style={{ gap: 8 }}>
-            <button className="btn" onClick={addLine}>Agregar lÃ­nea (Alt+Enter)</button>
+            <button className="btn" onClick={addLine}>Agregar línea (Alt+Enter)</button>
             {Array.from(selectedLines).some(i => !lines[i]?.product_id && !lines[i]?.supplier_item_id) && (
               <button className="btn-dark" onClick={() => setBulkCreateOpen(true)}>Crear productos seleccionados</button>
             )}
@@ -395,7 +395,7 @@ export default function PurchaseDetail() {
             <tr>
               <th></th>
               <th>SKU prov.</th>
-              <th>TÃ­tulo</th>
+              <th>Título</th>
               <th className="text-center">Cant.</th>
               <th className="text-center">P. Unit. (bonif)</th>
               <th className="text-center">Desc. %</th>
@@ -485,7 +485,7 @@ export default function PurchaseDetail() {
           <div><b>IVA:</b> {totals.iva.toLocaleString('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 2 })}</div>
           <div><b>Total:</b> {totals.total.toLocaleString('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 2 })}</div>
         </div>
-        <div className="text-sm" style={{ opacity: 0.8, marginTop: 8 }}>Chicana del dÃ­a: Si el PDF estÃ¡ torcido, no es arte: es el scanner del proveedor.</div>
+        <div className="text-sm" style={{ opacity: 0.8, marginTop: 8 }}>Chicana del día: Si el PDF está torcido, no es arte: es el scanner del proveedor.</div>
         <div className="row" style={{ marginTop: 16, justifyContent: 'center' }}>
           <button className="btn-dark btn-lg" onClick={save} disabled={saving}>{saving ? 'Guardando...' : 'Guardar (Ctrl+S)'}</button>
           <button className="btn-secondary btn-lg" onClick={doCancel}>Anular</button>
@@ -495,7 +495,7 @@ export default function PurchaseDetail() {
       {createForLine !== null && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className="panel" style={{ padding: 20, width: 480, maxWidth: '95%' }}>
-            <h3 style={{ marginTop: 0 }}>Crear producto para lÃ­nea #{createForLine + 1}</h3>
+            <h3 style={{ marginTop: 0 }}>Crear producto para línea #{createForLine + 1}</h3>
             <label className="label">Nombre</label>
             <input className="input w-full" value={newProdName} onChange={e => setNewProdName(e.target.value)} />
             <label className="label" style={{ marginTop: 8 }}>Stock inicial (usar 0 si se crea desde la compra)</label>
@@ -510,7 +510,7 @@ export default function PurchaseDetail() {
                   setCreating(true)
                   try {
                     // Para evitar doble carga de stock, forzamos 0 cuando el producto
-                    // se crea desde una compra (la confirmaciÃ³n aplicarÃ¡ la cantidad de la lÃ­nea).
+                    // se crea desde una compra (la confirmación aplicará la cantidad de la línea).
                     const stockNum = 0
                     const prod = await createProduct({
                       title: newProdName.trim(),
@@ -535,8 +535,8 @@ export default function PurchaseDetail() {
       {iavalOpen && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 92, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className="panel" style={{ padding: 20, width: 720, maxWidth: '96%', maxHeight: '90%', overflow: 'auto' }}>
-            <h3 style={{ marginTop: 0 }}>iAVaL â€” Validador de IA del remito</h3>
-            {iavalLoading && (<div>Cargando anÃ¡lisis...</div>)}
+            <h3 style={{ marginTop: 0 }}>iAVaL — Validador de IA del remito</h3>
+            {iavalLoading && (<div>Cargando análisis...</div>)}
             {iavalError && (<div className="text-danger" style={{ marginBottom: 8 }}>{iavalError}</div>)}
             {!iavalLoading && iavalResult && (
               <>
@@ -549,7 +549,7 @@ export default function PurchaseDetail() {
                       </ul>
                     )}
                   </div>
-                  <div style={{ opacity: .8, fontSize: 12 }}>Solo en BORRADOR Â· Revisa y confirmÃ¡ para aplicar</div>
+                  <div style={{ opacity: .8, fontSize: 12 }}>Solo en BORRADOR · Revisa y confirmá para aplicar</div>
                 </div>
                 <div style={{ marginTop: 12 }}>
                   <h4 style={{ margin: '8px 0' }}>Cambios de encabezado</h4>
@@ -576,7 +576,7 @@ export default function PurchaseDetail() {
                   })()}
                 </div>
                 <div style={{ marginTop: 12 }}>
-                  <h4 style={{ margin: '8px 0' }}>Cambios por lÃ­nea</h4>
+                  <h4 style={{ margin: '8px 0' }}>Cambios por línea</h4>
                   {(() => {
                     const diffs: any[] = iavalResult?.diff?.lines || []
                     const anyDiff = diffs.some((d) => d && Object.keys(d).length > 0)
@@ -652,7 +652,7 @@ export default function PurchaseDetail() {
                     setIavalLoading(false)
                   }
                 }}
-              >SÃ­, aplicar cambios</button>
+              >Sí, aplicar cambios</button>
             </div>
           </div>
         </div>
@@ -661,13 +661,13 @@ export default function PurchaseDetail() {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className="panel" style={{ padding: 20, width: 560, maxWidth: '96%' }}>
             <h3 style={{ marginTop: 0 }}>Crear productos seleccionados</h3>
-            <p className="text-sm" style={{ opacity: .85 }}>Se crearÃ¡n productos para cada lÃ­nea seleccionada SIN_VINCULAR. PodÃ©s definir un prefijo opcional que se antepone al tÃ­tulo existente.</p>
+            <p className="text-sm" style={{ opacity: .85 }}>Se crearán productos para cada línea seleccionada SIN_VINCULAR. Podés definir un prefijo opcional que se antepone al título existente.</p>
             <input className="input w-full" value={bulkPrefix} onChange={e => setBulkPrefix(e.target.value)} placeholder="Ej: SP - " />
             <div className="row" style={{ gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
               <button className="btn" onClick={() => setBulkCreateOpen(false)} disabled={bulkCreating}>Cancelar</button>
               <button className="btn-dark" disabled={bulkCreating} onClick={async () => {
                 const targets = Array.from(selectedLines).filter(i => !lines[i]?.product_id && !lines[i]?.supplier_item_id)
-                if (!targets.length) { showToast('error', 'No hay lÃ­neas elegibles'); return }
+                if (!targets.length) { showToast('error', 'No hay líneas elegibles'); return }
                 setBulkCreating(true)
                 let ok = 0
                 try {
@@ -677,7 +677,7 @@ export default function PurchaseDetail() {
                     try {
                       const prod = await createProduct({
                         title: (bulkPrefix + (ln.title || '')) || 'Producto',
-                        // Evitar doble suma: siempre crear con stock 0, confirm sumarÃ¡ la cantidad.
+                        // Evitar doble suma: siempre crear con stock 0, confirm sumará la cantidad.
                         initial_stock: 0,
                         supplier_id: data?.supplier_id || null,
                         supplier_sku: ln.supplier_sku || null,
@@ -702,7 +702,7 @@ export default function PurchaseDetail() {
       {logsOpen && (
         <div style={{ position: 'fixed', top: 0, right: 0, height: '100%', width: 420, background: 'var(--panel-bg)', borderLeft: '1px solid var(--border)', boxShadow: '0 0 24px rgba(0,0,0,0.35)', zIndex: 60, display: 'flex', flexDirection: 'column' }}>
           <div className="row" style={{ padding: 12, borderBottom: '1px solid var(--border)', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ fontWeight: 600 }}>Logs de importaciÃ³n</div>
+            <div style={{ fontWeight: 600 }}>Logs de importación</div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               {corrId ? <button className="btn" onClick={() => { navigator.clipboard.writeText(corrId) }}>Copiar ID</button> : null}
               <a className="btn" href={`/purchases/${pid}/logs?format=json`} target="_blank" rel="noreferrer">Descargar JSON</a>
@@ -716,7 +716,7 @@ export default function PurchaseDetail() {
             ) : (
               logs.map((l, i) => (
                 <div key={i} style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 12, opacity: 0.7 }}>{l.created_at || ''} Â· {l.action}</div>
+                  <div style={{ fontSize: 12, opacity: 0.7 }}>{l.created_at || ''} · {l.action}</div>
                   <pre className="code" style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(l.meta || {}, null, 2)}</pre>
                 </div>
               ))
@@ -728,7 +728,7 @@ export default function PurchaseDetail() {
       {auditOpen && (
         <div className="panel p-4" style={{ position: 'fixed', right: 16, top: 80, width: 420, maxHeight: '70vh', overflowY: 'auto', zIndex: 30 }}>
           <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontWeight: 700 }}>AuditorÃ­a de Stock</div>
+            <div style={{ fontWeight: 700 }}>Auditoría de Stock</div>
             <button className="btn-secondary" onClick={() => setAuditOpen(false)}>Cerrar</button>
           </div>
           {appliedDeltas.length === 0 ? (
@@ -744,7 +744,7 @@ export default function PurchaseDetail() {
                         {(d.product_title || `Prod ${d.product_id || ''}`)}
                         {d.product_id ? ` (ID ${d.product_id})` : ''}
                         {typeof d.delta !== 'undefined' ? `: +${d.delta}` : ''}
-                        {typeof d.new !== 'undefined' && typeof d.old !== 'undefined' ? ` (de ${d.old} â†’ ${d.new})` : ''}
+                        {typeof d.new !== 'undefined' && typeof d.old !== 'undefined' ? ` (de ${d.old} → ${d.new})` : ''}
                       </li>
                     ))}
                   </ul>

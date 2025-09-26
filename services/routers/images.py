@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: images.py
 # NG-HEADER: Ubicación: services/routers/images.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: API REST de imágenes y sus metadatos.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
@@ -20,7 +20,11 @@ from services.media.downloader import download_product_image, DownloadError, _cl
 from services.media.processor import to_square_webp_set, apply_watermark, remove_bg
 from services.media.seo import gen_alt_title
 from services.integrations.tiendanube import upload_product_images, bulk_upload
-from PIL import Image as PILImage
+try:
+    from PIL import Image as PILImage
+    PIL_AVAILABLE = True
+except Exception:
+    PIL_AVAILABLE = False
 
 
 router = APIRouter(prefix="/products", tags=["images"])
@@ -55,6 +59,14 @@ async def upload_image(
     db: AsyncSession = Depends(get_session),
     sess: SessionData = Depends(current_session),
 ):
+    # Verificar disponibilidad de Pillow (entorno)
+    if not PIL_AVAILABLE:
+        # Auditar y devolver mensaje claro para el operador
+        try:
+            await _audit(db, "upload_env_missing", "images", None, {"product_id": pid, "filename": getattr(file, 'filename', None)}, sess, request)
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="Entorno de imágenes incompleto: Pillow no está disponible. Verifique requirements e instalación.")
     prod = await db.get(Product, pid)
     if not prod:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
@@ -169,6 +181,18 @@ async def upload_image(
         await _audit(db, "derive_error", "images", img.id if 'img' in locals() else None, {"product_id": pid, "cid": cid, "filename": file.filename}, sess, request)
     try:
         await _audit(db, "upload_image", "images", img.id, {"product_id": pid, "filename": file.filename, "size": size, "cid": cid}, sess, request)
+    except Exception:
+        pass
+    # Si no hay imagen primaria activa, establecer ésta como primaria
+    try:
+        # Buscar si existe alguna imagen activa primaria para el producto
+        has_primary = (await db.execute(select(Image).where(Image.product_id == pid, Image.active == True, Image.is_primary == True).limit(1))).first()
+        if not has_primary:
+            # Asegurar que todas las demás queden en False y marcar esta como primaria
+            from sqlalchemy import update as _update
+            await db.execute(_update(Image).where(Image.product_id == pid).values(is_primary=False))
+            img.is_primary = True
+            await _audit(db, "auto_set_primary", "images", img.id, {"product_id": pid}, sess, request)
     except Exception:
         pass
     await db.commit()

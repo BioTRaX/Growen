@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: default.yml
 # NG-HEADER: Ubicación: config/suppliers/default.yml
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Perfil de configuración por defecto para proveedores.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 supplier_name: "Generico"
 file_type: "xlsx"

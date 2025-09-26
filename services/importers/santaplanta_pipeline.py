@@ -55,6 +55,25 @@ class ParsedResult:
     text_excerpt: Optional[str] = None
 
 
+@dataclass
+class ImportAttempt:
+    """Métrica de intento de extracción, para logging y diagnóstico.
+
+    name: 'plumber' | 'camelot-lattice' | 'camelot-stream' | 'ocr-plumber' | 'ocr-camelot-lattice' | 'ocr-camelot-stream' | 'regex'
+    ok: si se obtuvieron líneas (len>0)
+    lines_found: cantidad de líneas detectadas
+    elapsed_ms: duración
+    sample_rows: strings con ejemplos crudos/normalizados
+    notes: parámetros usados u observaciones
+    """
+    name: str
+    ok: bool
+    lines_found: int
+    elapsed_ms: int
+    sample_rows: List[str] = field(default_factory=list)
+    notes: Dict[str, Any] = field(default_factory=dict)
+
+
 def _norm_text(s: str) -> str:
     """Normaliza texto: NFKC, reemplaza \xa0, colapsa espacios."""
     if not s:
@@ -65,14 +84,53 @@ def _norm_text(s: str) -> str:
 
 
 def _parse_money(s: str) -> Decimal:
-    """Convierte un string monetario (ej: 1.234,56) a Decimal."""
+    """Convierte un string monetario a Decimal manejando variantes:
+
+    Acepta:
+    - "1.234,56" (EU/AR) -> 1234.56
+    - "1,234.56" (US) -> 1234.56
+    - "1234,56" -> 1234.56
+    - "1234.56" -> 1234.56
+    - con o sin símbolos de moneda y espacios.
+    """
     if not s:
         return Decimal("0")
-    s = str(s).strip().replace(".", "").replace(",", ".")
-    try:
-        return Decimal(s)
-    except Exception:
+    s0 = str(s)
+    # quitar símbolos y espacios frecuentes
+    s1 = re.sub(r"[^0-9.,-]", "", s0).strip()
+    if not s1:
         return Decimal("0")
+    # Si contiene ambos separadores, decidir por el último como decimal
+    has_dot = "." in s1
+    has_comma = "," in s1
+    try:
+        if has_dot and has_comma:
+            last_dot = s1.rfind(".")
+            last_comma = s1.rfind(",")
+            if last_dot > last_comma:
+                # Formato estilo US: 1,234.56 -> quitar comas, mantener punto decimal
+                canon = s1.replace(",", "")
+            else:
+                # Formato estilo EU/AR: 1.234,56 -> quitar puntos, cambiar coma a punto
+                canon = s1.replace(".", "").replace(",", ".")
+        elif has_comma and not has_dot:
+            # Probable decimal con coma
+            canon = s1.replace(",", ".")
+        elif has_dot and not has_comma:
+            # Puede ser decimal con punto o miles. Heurística: si hay exactamente 3 dígitos tras el punto y más de 4 antes, tratar como miles.
+            parts = s1.split(".")
+            if len(parts) == 2 and len(parts[1]) == 3 and len(parts[0]) >= 2 and len(parts[0]) % 3 == 0:
+                canon = s1.replace(".", "")
+            else:
+                canon = s1
+        else:
+            canon = s1
+        return Decimal(canon)
+    except Exception:
+        try:
+            return Decimal(s1)
+        except Exception:
+            return Decimal("0")
 
 
 def _parse_int(s: str) -> int:
@@ -81,6 +139,29 @@ def _parse_int(s: str) -> int:
         return 0
     m = re.search(r"\d+", str(s))
     return int(m.group()) if m else 0
+
+
+def _extract_expected_counts_and_totals(pdf_text: str) -> Dict[str, Optional[Decimal]]:
+    """Extrae "Cantidad De Items: N" e "Importe Total: $ X" del texto del PDF.
+
+    Retorna { expected_items: int|None, importe_total: Decimal|None }.
+    """
+    t = _norm_text(pdf_text or "")
+    expected_items: Optional[int] = None
+    importe_total: Optional[Decimal] = None
+    try:
+        m_items = re.search(r"Cantidad\s+De\s+Items:\s*(\d+)", t, re.I)
+        if m_items:
+            expected_items = int(m_items.group(1))
+    except Exception:
+        expected_items = None
+    try:
+        m_total = re.search(r"Importe\s+Total:\s*\$?\s*([\d\.,]+)", t, re.I)
+        if m_total:
+            importe_total = _parse_money(m_total.group(1))
+    except Exception:
+        importe_total = None
+    return {"expected_items": expected_items, "importe_total": importe_total}
 
 
 def _parse_header_text(text: str, events: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
@@ -112,22 +193,33 @@ def _parse_header_text(text: str, events: List[Dict[str, Any]]) -> Tuple[Optiona
 
 
 def _map_columns(header: List[str]) -> Dict[str, Optional[int]]:
-    """Mapea columnas conocidas a sus índices usando fuzzy matching."""
-    col_map = {}
+    """Mapea columnas conocidas a sus índices usando fuzzy matching más robusto.
+
+    Compara cada alias individualmente contra cada encabezado y toma el mejor índice con umbral.
+    """
+    col_map: Dict[str, Optional[int]] = {}
     aliases = {
         "sku": ["codigo", "código", "cod.", "sku", "id"],
-        "title": ["producto/servicio", "producto", "servicio", "descripcion", "descripción", "titulo"],
-        "qty": ["cant.", "cantidad"],
-        "unit_bonif": ["p. unitario bonificado", "p. unit. bonificado", "p unit bonif", "unit bonif"],
-        "pct_bonif": ["% bonif", "bonif %"],
+        "title": ["producto/servicio", "producto", "servicio", "descripcion", "descripción", "titulo", "descrip"],
+        "qty": ["cant.", "cantidad", "cant"],
+        "unit_bonif": ["p. unitario bonificado", "p. unit. bonificado", "p unit bonif", "unit bonif", "precio unitario"],
+        "pct_bonif": ["% bonif", "bonif %", "% bonif."],
         "subtotal": ["subtotal"],
         "iva": ["iva"],
         "total": ["total"],
     }
-    
+
+    header_norm = [(_norm_text(h or "").lower()) for h in header]
     for key, names in aliases.items():
-        best_match = process.extractOne(" ".join(names), header, scorer=fuzz.WRatio, score_cutoff=80)
-        col_map[key] = header.index(best_match[0]) if best_match else None
+        best_idx: Optional[int] = None
+        best_score = 0
+        for i, h in enumerate(header_norm):
+            for n in names:
+                score = fuzz.WRatio(n.lower(), h)
+                if score > best_score:
+                    best_score = score
+                    best_idx = i
+        col_map[key] = best_idx if best_score >= 78 else None
     return col_map
 
 
@@ -152,6 +244,31 @@ def _extract_lines_from_table(table: List[List[str]], dbg: Dict[str, Any]) -> Li
 
         raw_title = _norm_text(r[i_title]) if i_title is not None and i_title < len(r) else ""
         sku = _norm_text(r[i_sku]) if i_sku is not None and i_sku < len(r) else ""
+
+        # Detección de fila de continuación (wrap de título):
+        # Si no hay SKU y no hay números en columnas clave, pero sí hay título, concatenar al título de la última línea
+        def _has_numeric(v: Optional[str]) -> bool:
+            if v is None:
+                return False
+            s = str(v).strip()
+            return bool(re.search(r"\d", s))
+        numeric_cells = []
+        for idx in (i_qty, i_unit, i_pct, i_sub, i_iva, i_tot):
+            if idx is not None and idx < len(r):
+                numeric_cells.append(r[idx])
+        has_any_numeric = any(_has_numeric(v) for v in numeric_cells)
+        if raw_title and not sku and not has_any_numeric and lines:
+            # concatenar como continuación del título anterior
+            try:
+                prev = lines[-1]
+                j = (" " if (prev.title and not prev.title.endswith(" ")) else "")
+                prev.title = (prev.title or "") + j + raw_title
+                # agregar muestra
+                if len(dbg.setdefault("samples", [])) < 8:
+                    dbg["samples"].append({"raw_row": r, "parsed": {"wrap_appended_to": prev.supplier_sku or "", "new_title_excerpt": prev.title[:80]}})
+                continue
+            except Exception:
+                pass
 
         # Heurística SKU-en-título
         if not sku:
@@ -219,6 +336,45 @@ def _extract_lines_from_table(table: List[List[str]], dbg: Dict[str, Any]) -> Li
             dbg["samples"].append({"raw_row": r, "parsed": line.__dict__})
 
     return lines
+
+
+def _try_camelot_flavor(pdf_path: Path, flavor: str, params: Dict[str, Any], dbg: Dict[str, Any], events: List[Dict[str, Any]]) -> List[ParsedLine]:
+    """Ejecuta Camelot en un flavor específico y devuelve líneas parseadas.
+
+    No levanta, sólo loguea eventos de error.
+    """
+    out: List[ParsedLine] = []
+    raw_tables: List[List[List[str]]] = []
+    try:
+        import warnings
+        try:
+            from cryptography.utils import CryptographyDeprecationWarning as _CryDW  # type: ignore
+        except Exception:  # pragma: no cover
+            _CryDW = DeprecationWarning
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=_CryDW,
+                message=r".*ARC4 has been moved to cryptography\.hazmat\.decrepit\.ciphers\.algorithms.*",
+            )
+            import camelot  # type: ignore
+        tables = camelot.read_pdf(str(pdf_path), flavor=flavor, pages="all", **(params or {}))
+        events.append({"level": "INFO", "stage": "camelot", "event": "tables_found", "details": {"flavor": flavor, "count": len(tables)}})
+        for tbl in tables:
+            df_list = tbl.df.astype(str).values.tolist()
+            raw_tables.append(df_list)
+            out.extend(_extract_lines_from_table(df_list, dbg))
+    except Exception as e:
+        events.append({"level": "WARN", "stage": "camelot", "event": "flavor_exception", "details": {"flavor": flavor, "msg": str(e)}})
+    # Si no pudimos mapear columnas pero sí obtuvimos tablas crudas, aplicar heurística
+    if not out and raw_tables:
+        try:
+            fallback = _heuristic_fallback_rows(raw_tables, events, dbg)
+            if fallback:
+                out = fallback
+        except Exception as _e:
+            events.append({"level": "WARN", "stage": "camelot", "event": "heuristic_fallback_error", "details": {"flavor": flavor, "msg": str(_e)}})
+    return out
 
 
 def _try_pdfplumber_tables(data: bytes, dbg: Dict[str, Any], events: List[Dict[str, Any]]) -> List[ParsedLine]:
@@ -461,6 +617,100 @@ def compute_classic_confidence(lines: List[ParsedLine]) -> float:
     return float(min(1.0, max(0.0, round(score, 4))))
 
 
+def _try_text_multiline_heuristic(text: str, events: List[Dict[str, Any]], expected_items: Optional[int] = None) -> List[ParsedLine]:
+    """Heurística textual que une títulos multilínea y detecta qty + precio en la línea de cierre.
+
+    Estrategia:
+    - Delimitar la sección de líneas entre la fila de encabezados y el pie ("Cantidad De Items" o "Importe Total").
+    - Acumular líneas de título hasta encontrar una línea con patrón de precio monetario y una cantidad entera.
+    - Extraer SKU como token numérico 3-6 dígitos distinto de qty y no seguido por unidades (ML, G, KG, L, CM, MM, CC).
+    """
+    def _find_all_money(line: str) -> list[str]:
+        # Captura montos con coma como decimal y puntos opcionales de miles
+        return re.findall(r"\d{1,3}(?:\.\d{3})*,\d{2}", line)
+    def _find_qty(tokens: list[str]) -> Optional[int]:
+        # tomar el último entero inmediato antes del precio
+        for tok in reversed(tokens):
+            if re.fullmatch(r"\d+", tok):
+                try:
+                    return int(tok)
+                except Exception:
+                    continue
+        return None
+    U = {"ML", "G", "KG", "L", "CM", "MM", "CC", "GR"}
+    def _infer_sku(from_text: str, qty: Optional[int]) -> Optional[str]:
+        # buscar 3-6 dígitos no medida y distinto de qty
+        for m in re.finditer(r"\b(\d{3,6})\b", from_text):
+            val = m.group(1)
+            if qty is not None and str(qty) == val:
+                continue
+            after = from_text[m.end():m.end()+6].strip().upper()
+            nxt = re.split(r"\s+", after)[0] if after else ""
+            nxt = re.sub(r"[^A-Z0-9]", "", nxt)
+            if nxt in U:
+                continue
+            return val
+        return None
+    t = text or ""
+    # Delimitar región de items
+    start_idx = 0
+    end_idx = len(t)
+    m_header = re.search(r"C[oó]digo.*?Producto/Servicio.*?Cant\.", t, flags=re.I|re.S)
+    if m_header:
+        start_idx = m_header.end()
+    m_footer = re.search(r"Cantidad\s+De\s+Items:|Importe\s+Total:", t, flags=re.I)
+    if m_footer:
+        end_idx = m_footer.start()
+    region = t[start_idx:end_idx]
+    lines_raw = [re.sub(r"\s+", " ", ln.strip()) for ln in region.splitlines()]
+    buf: list[str] = []
+    out: list[ParsedLine] = []
+    for raw in lines_raw:
+        if not raw:
+            continue
+        monies = _find_all_money(raw)
+        if monies:
+            # tokens para qty (antes del precio)
+            last_money = monies[-1]
+            left = raw.split(last_money)[0].strip()
+            tokens = [tok for tok in re.split(r"\s+", left) if tok]
+            qty = _find_qty(tokens)
+            title = (" ".join(buf + tokens)).strip()
+            # limpiar título (quitar repeticiones de espacios)
+            title = re.sub(r"\s+", " ", title)
+            if not title:
+                buf = []
+                continue
+            sku = _infer_sku(title, qty)
+            # Determinar costos: si hay 2+ montos en la línea, asumimos primero=unitario, último=total
+            line_total = _parse_money(last_money)
+            unit_cost = _parse_money(monies[0]) if len(monies) >= 2 else (line_total / Decimal(qty) if qty else line_total)
+            q = Decimal(qty or 0)
+            line = ParsedLine(
+                supplier_sku=(sku or None),
+                title=title,
+                qty=q,
+                unit_cost_bonif=unit_cost,
+                pct_bonif=Decimal("0"),
+                subtotal=(line_total if len(monies) >= 1 else (q * unit_cost)),
+                iva=None,
+                total=(line_total if len(monies) >= 1 else None),
+            )
+            out.append(line)
+            buf = []
+            # cortar si alcanzamos esperado
+            if expected_items and len(out) >= expected_items:
+                break
+        else:
+            # seguir acumulando como parte del título
+            buf.append(raw)
+    if out:
+        events.append({"level": "INFO", "stage": "fallback", "event": "regex_multiline_ok", "details": {"count": len(out)}})
+    else:
+        events.append({"level": "INFO", "stage": "fallback", "event": "regex_multiline_empty"})
+    return out
+
+
 def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = True, force_ocr: bool = False, debug: bool = False) -> ParsedResult:
     """Parsea un remito PDF y devuelve líneas normalizadas y metadatos.
 
@@ -495,15 +745,67 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
             text_all = ""
             result.events.append({"level": "WARN", "stage": "header_extract", "event": "pdfplumber_failed", "details": {"error": str(e)}})
         result.remito_number, result.remito_date = _parse_header_text(text_all, result.events)
+        # Extraer expectativas del pie (Cantidad de Items / Importe Total)
+        exp = _extract_expected_counts_and_totals(text_all)
+        expected_items = int(exp.get("expected_items") or 0) or None
+        importe_total = exp.get("importe_total")
+        try:
+            result.events.append({"level": "INFO", "stage": "footer", "event": "expected_from_footer", "details": {"expected_items": expected_items, "importe_total": (float(importe_total) if importe_total is not None else None)}})
+        except Exception:
+            pass
         header_ok = bool(result.remito_number and result.remito_date)
+        attempts: List[ImportAttempt] = []
+        # Intento 1: pdfplumber tablas
+        from time import perf_counter
+        t0 = perf_counter()
         result.lines = _try_pdfplumber_tables(data, result.debug, result.events)
+        t1 = perf_counter()
+        try:
+            attempts.append(ImportAttempt(
+                name="plumber",
+                ok=bool(result.lines),
+                lines_found=len(result.lines or []),
+                elapsed_ms=int((t1 - t0) * 1000),
+                sample_rows=[str((getattr(x, 'title', '') or '')[:80]) for x in (result.lines or [])[:3]],
+                notes={"tables": True},
+            ))
+        except Exception:
+            pass
         if result.lines:
             try:
                 result.events.append({"level": "INFO", "stage": "pdfplumber", "event": "lines_detected", "details": {"count": len(result.lines)}})
             except Exception:
                 pass
-        if not result.lines:
-            result.lines = _try_camelot(pdf_path, result.events, result.debug)
+        # Decisión por conteo esperado: si faltan líneas, intentar Camelot por flavor
+        if (not result.lines) or (expected_items and len(result.lines) < expected_items):
+            flavors = [
+                ("lattice", {"line_scale": 40, "strip_text": "\n"}),
+                ("stream", {"edge_tol": 200, "row_tol": 10, "column_tol": 10}),
+            ]
+            best: List[ParsedLine] = list(result.lines or [])
+            for fl, kw in flavors:
+                t2 = perf_counter()
+                cand = _try_camelot_flavor(pdf_path, fl, kw, result.debug, result.events)
+                t3 = perf_counter()
+                try:
+                    attempts.append(ImportAttempt(
+                        name=f"camelot-{fl}",
+                        ok=bool(cand),
+                        lines_found=len(cand or []),
+                        elapsed_ms=int((t3 - t2) * 1000),
+                        sample_rows=[str((getattr(x, 'title', '') or '')[:80]) for x in (cand or [])[:3]],
+                        notes=kw,
+                    ))
+                except Exception:
+                    pass
+                if cand and len(cand) > len(best):
+                    best = cand
+                # Si cerramos el esperado exacto, detener
+                if expected_items and cand and len(cand) == expected_items:
+                    best = cand
+                    break
+            if best and (not result.lines or len(best) >= len(result.lines)):
+                result.lines = best
         ocr_applied = False
         min_chars_for_text = settings.import_pdf_text_min_chars
         has_enough_text = pdf_has_text(pdf_path, min_chars=min_chars_for_text)
@@ -528,9 +830,46 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
             result.events.append({"level": "INFO" if ok else "ERROR", "stage": "ocr", "event": "ocrmypdf_run", "details": {"ok": ok, "duration_s": ocr_duration, "output": str(ocr_out), "stdout": (stdout or "")[-300:], "stderr": (stderr or "")[-300:]}})
             if ok and ocr_out.exists():
                 data_ocr = ocr_out.read_bytes()
+                # OCR + pdfplumber
+                t4 = perf_counter()
                 lines_ocr = _try_pdfplumber_tables(data_ocr, result.debug, result.events)
-                if not lines_ocr:
-                    lines_ocr = _try_camelot(ocr_out, result.events, result.debug)
+                t5 = perf_counter()
+                try:
+                    attempts.append(ImportAttempt(
+                        name="ocr-plumber",
+                        ok=bool(lines_ocr),
+                        lines_found=len(lines_ocr or []),
+                        elapsed_ms=int((t5 - t4) * 1000),
+                        sample_rows=[str((getattr(x, 'title', '') or '')[:80]) for x in (lines_ocr or [])[:3]],
+                        notes={"ocr": True},
+                    ))
+                except Exception:
+                    pass
+                # Si falta, probar Camelot por flavors
+                if (not lines_ocr) or (expected_items and len(lines_ocr) < expected_items):
+                    best_ocr = list(lines_ocr or [])
+                    for fl, kw in [("lattice", {"line_scale": 40, "strip_text": "\n"}), ("stream", {"edge_tol": 200, "row_tol": 10, "column_tol": 10})]:
+                        t6 = perf_counter()
+                        cand2 = _try_camelot_flavor(ocr_out, fl, kw, result.debug, result.events)
+                        t7 = perf_counter()
+                        try:
+                            attempts.append(ImportAttempt(
+                                name=f"ocr-camelot-{fl}",
+                                ok=bool(cand2),
+                                lines_found=len(cand2 or []),
+                                elapsed_ms=int((t7 - t6) * 1000),
+                                sample_rows=[str((getattr(x, 'title', '') or '')[:80]) for x in (cand2 or [])[:3]],
+                                notes=kw,
+                            ))
+                        except Exception:
+                            pass
+                        if cand2 and len(cand2) > len(best_ocr):
+                            best_ocr = cand2
+                        if expected_items and cand2 and len(cand2) == expected_items:
+                            best_ocr = cand2
+                            break
+                    if best_ocr and (not lines_ocr or len(best_ocr) >= len(lines_ocr)):
+                        lines_ocr = best_ocr
                 if lines_ocr:
                     result.lines = lines_ocr
                     try:
@@ -554,16 +893,78 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
                             )
                             if ok2 and retry_out.exists():
                                 result.events.append({"level": "INFO" if ok2 else "WARN", "stage": "ocr", "event": "retry_ocr", "details": {"ok": ok2, "output": str(retry_out)}})
-                                data_ocr2 = retry_out.read_bytes()
-                                lines_ocr2 = _try_pdfplumber_tables(data_ocr2, result.debug, result.events)
-                                if not lines_ocr2:
-                                    lines_ocr2 = _try_camelot(retry_out, result.events, result.debug)
+                            data_ocr2 = retry_out.read_bytes()
+                            t8 = perf_counter()
+                            lines_ocr2 = _try_pdfplumber_tables(data_ocr2, result.debug, result.events)
+                            t9 = perf_counter()
+                            try:
+                                attempts.append(ImportAttempt(
+                                    name="ocr2-plumber",
+                                    ok=bool(lines_ocr2),
+                                    lines_found=len(lines_ocr2 or []),
+                                    elapsed_ms=int((t9 - t8) * 1000),
+                                    sample_rows=[str((getattr(x, 'title', '') or '')[:80]) for x in (lines_ocr2 or [])[:3]],
+                                    notes={"ocr": True, "retry": 2},
+                                ))
+                            except Exception:
+                                pass
+                            if (not lines_ocr2) or (expected_items and len(lines_ocr2) < expected_items):
+                                best_ocr2 = list(lines_ocr2 or [])
+                                for fl, kw in [("lattice", {"line_scale": 40, "strip_text": "\n"}), ("stream", {"edge_tol": 200, "row_tol": 10, "column_tol": 10})]:
+                                    t10 = perf_counter()
+                                    cand3 = _try_camelot_flavor(retry_out, fl, kw, result.debug, result.events)
+                                    t11 = perf_counter()
+                                    try:
+                                        attempts.append(ImportAttempt(
+                                            name=f"ocr2-camelot-{fl}",
+                                            ok=bool(cand3),
+                                            lines_found=len(cand3 or []),
+                                            elapsed_ms=int((t11 - t10) * 1000),
+                                            sample_rows=[str((getattr(x, 'title', '') or '')[:80]) for x in (cand3 or [])[:3]],
+                                            notes=kw,
+                                        ))
+                                    except Exception:
+                                        pass
+                                    if cand3 and len(cand3) > len(best_ocr2):
+                                        best_ocr2 = cand3
+                                    if expected_items and cand3 and len(cand3) == expected_items:
+                                        best_ocr2 = cand3
+                                        break
+                                if best_ocr2 and (not lines_ocr2 or len(best_ocr2) >= len(lines_ocr2)):
+                                    lines_ocr2 = best_ocr2
                                 if lines_ocr2:
                                     result.lines = lines_ocr2
                         except Exception as e:
                             result.events.append({"level": "WARN", "stage": "ocr", "event": "retry_exception", "details": {"error": str(e)}})
+            # Limpieza best-effort de archivos temporales OCR
+            try:
+                for suf in ("_ocr.pdf", "_ocr2.pdf"):
+                    p = pdf_path.with_name(pdf_path.stem + suf)
+                    if p.exists():
+                        p.unlink(missing_ok=True)  # type: ignore[arg-type]
+                result.events.append({"level": "INFO", "stage": "cleanup", "event": "ocr_temp_deleted"})
+            except Exception:
+                pass
         subtotal = sum(line.subtotal for line in result.lines if line.subtotal is not None)
         result.totals = {"subtotal": subtotal, "iva": Decimal("0"), "total": subtotal}
+        # Validación contra Importe Total del documento si está disponible
+        try:
+            if importe_total is not None:
+                # Usar suma de 'total' si existe, caso contrario subtotal
+                sum_total = sum([(l.total if (l.total is not None and l.total > 0) else (l.subtotal or Decimal("0"))) for l in (result.lines or [])])
+                diff = abs((sum_total or Decimal("0")) - importe_total)
+                ok_amount = diff <= Decimal("0.11")  # tolerancia de 11 centavos
+                result.events.append({"level": ("INFO" if ok_amount else "WARN"), "stage": "validation", "event": "importe_total_check", "details": {"sum_lines": float(sum_total), "importe_total": float(importe_total), "diff": float(diff), "ok": ok_amount}})
+        except Exception:
+            pass
+        # Validación contra expected_items si está disponible
+        try:
+            if expected_items:
+                mismatch = (len(result.lines or []) - int(expected_items))
+                ok_count = (mismatch == 0)
+                result.events.append({"level": ("INFO" if ok_count else "WARN"), "stage": "validation", "event": "expected_items_check", "details": {"expected": int(expected_items), "got": len(result.lines or []), "ok": ok_count}})
+        except Exception:
+            pass
         # Calcular confianza clásica
         try:
             result.classic_confidence = compute_classic_confidence(result.lines)
@@ -630,6 +1031,91 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
                     result.events.append({"level": "WARN", "stage": "fallback", "event": "regex_parser_skipped", "details": {"reason": "no_data_bytes"}})
             except Exception as _fe:
                 result.events.append({"level": "WARN", "stage": "fallback", "event": "regex_parser_error", "details": {"error": str(_fe)}})
+        # Heurística textual multilínea adicional si difiere el conteo vs expected_items (menos o más)
+        try:
+            # Sólo si contamos con el texto base
+            if 'text_excerpt' in locals():
+                # Determinar expected_items si se detectó antes
+                exp = _extract_expected_counts_and_totals(locals().get('text_excerpt', '') or '')
+                exp_items = int(exp.get('expected_items') or 0) or None
+                # Ejecutar si el conteo actual es distinto al esperado (ya sea menor o mayor)
+                if (exp_items and (len(result.lines or []) != exp_items)):
+                    from time import perf_counter
+                    _t0 = perf_counter()
+                    extra = _try_text_multiline_heuristic(locals().get('text_excerpt', '') or '', result.events, exp_items)
+                    _t1 = perf_counter()
+                    try:
+                        # Registrar intento
+                        attempts = result.debug.setdefault('attempts', []) if isinstance(result.debug, dict) else None
+                        if isinstance(attempts, list):
+                            attempts.append({
+                                'name': 'regex-multiline',
+                                'ok': bool(extra),
+                                'lines_found': len(extra or []),
+                                'elapsed_ms': int((_t1 - _t0) * 1000),
+                            })
+                    except Exception:
+                        pass
+                    if extra:
+                        # Decidir si reemplazamos: preferir exact match de items; si no, comparar distancia a importe_total
+                        def _sum_amount(lines: List[ParsedLine]) -> Decimal:
+                            return sum([(ln.total if (ln.total is not None and ln.total > 0) else (ln.subtotal or Decimal("0"))) for ln in (lines or [])])
+                        current = result.lines or []
+                        choose_extra = False
+                        # 1) Si extra logra conteo exacto y el actual no, preferir extra
+                        if (exp_items and len(extra) == exp_items and len(current) != exp_items):
+                            choose_extra = True
+                        # 2) Si ambos difieren, comparar por cercanía de total si tenemos importe_total
+                        elif importe_total is not None:
+                            diff_curr = abs((_sum_amount(current) or Decimal("0")) - importe_total)
+                            diff_extra = abs((_sum_amount(extra) or Decimal("0")) - importe_total)
+                            if diff_extra < diff_curr:
+                                choose_extra = True
+                        # 3) Si no hay total, preferir el que esté más cerca del esperado
+                        elif exp_items:
+                            if abs(len(extra) - exp_items) < abs(len(current) - exp_items):
+                                choose_extra = True
+                        if choose_extra:
+                            result.events.append({"level": "INFO", "stage": "selection", "event": "replaced_with_regex_multiline", "details": {"prev_count": len(current), "new_count": len(extra)}})
+                            result.lines = extra
+                            # Update totals
+                            subtotal = sum(line.subtotal for line in result.lines if line.subtotal is not None)
+                            result.totals = {"subtotal": subtotal, "iva": Decimal("0"), "total": subtotal}
+                            # Revalidar conteos
+                            try:
+                                mismatch = (len(result.lines or []) - int(exp_items))
+                                ok_count = (mismatch == 0)
+                                result.events.append({"level": ("INFO" if ok_count else "WARN"), "stage": "validation", "event": "expected_items_check", "details": {"expected": int(exp_items), "got": len(result.lines or []), "ok": ok_count}})
+                            except Exception:
+                                pass
+                            # Revalidar importe total si lo teníamos
+                            try:
+                                if importe_total is not None:
+                                    sum_total = sum([(l.total if (l.total is not None and l.total > 0) else (l.subtotal or Decimal("0"))) for l in (result.lines or [])])
+                                    diff = abs((sum_total or Decimal("0")) - importe_total)
+                                    ok_amount = diff <= Decimal("0.11")
+                                    result.events.append({"level": ("INFO" if ok_amount else "WARN"), "stage": "validation", "event": "importe_total_check", "details": {"sum_lines": float(sum_total), "importe_total": float(importe_total), "diff": float(diff), "ok": ok_amount, "after": "regex_multiline"}})
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+        # Incluir attempts en debug si están
+        try:
+            if attempts:
+                # serializar attempts para debug
+                result.debug.setdefault("attempts", [
+                    {
+                        "name": a.name,
+                        "ok": a.ok,
+                        "lines_found": a.lines_found,
+                        "elapsed_ms": a.elapsed_ms,
+                        "sample_rows": a.sample_rows,
+                        "notes": a.notes,
+                    }
+                    for a in attempts
+                ])
+        except Exception:
+            pass
         result.events.append({"level": "INFO", "stage": "summary", "event": "done", "details": {"lines": len(result.lines), "ocr": ocr_applied}})
     except Exception as e:  # top-level safeguard
         import traceback

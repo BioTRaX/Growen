@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: router.py
 # NG-HEADER: Ubicación: services/intents/router.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Router que dirige intents a sus handlers.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Enrutador de intents y dispatcher de handlers."""
 

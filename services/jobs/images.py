@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: images.py
 # NG-HEADER: Ubicación: services/jobs/images.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Jobs dedicados al procesamiento de imágenes.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 

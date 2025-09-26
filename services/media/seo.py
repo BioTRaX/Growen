@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: seo.py
 # NG-HEADER: Ubicación: services/media/seo.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Utilidades de SEO para recursos multimedia.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 

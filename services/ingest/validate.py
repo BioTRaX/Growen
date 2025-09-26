@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: validate.py
 # NG-HEADER: Ubicación: services/ingest/validate.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Valida datos normalizados previo al guardado.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Validaciones simples de filas."""
 from __future__ import annotations

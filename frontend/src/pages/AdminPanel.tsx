@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: AdminPanel.tsx
 // NG-HEADER: Ubicación: frontend/src/pages/AdminPanel.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Página de administración con herramientas internas.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState, lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'

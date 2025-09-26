@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: 20250825_add_identifier_to_users.py
 # NG-HEADER: Ubicación: db/migrations/versions/20250825_add_identifier_to_users.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Migración Alembic: agrega identificadores a usuarios.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """add identifier to users if missing (idempotent)"""
 

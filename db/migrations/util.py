@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: util.py
 # NG-HEADER: Ubicación: db/migrations/util.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Utilidades compartidas para scripts de migración.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 

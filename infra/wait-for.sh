@@ -1,7 +1,7 @@
 #!/bin/sh
 # NG-HEADER: Nombre de archivo: wait-for.sh
 # NG-HEADER: Ubicación: infra/wait-for.sh
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Script que espera disponibilidad de servicios antes de iniciar.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 set -e
 host="$1"

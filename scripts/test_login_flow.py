@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_login_flow.py
 # NG-HEADER: Ubicación: scripts/test_login_flow.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Smoke test automatizado del flujo de login.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import requests, sys
 base = 'http://localhost:8000'

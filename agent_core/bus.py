@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: bus.py
 # NG-HEADER: Ubicación: agent_core/bus.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Bus de eventos y mensajes del agente.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Bus de eventos en memoria."""
 from collections import defaultdict

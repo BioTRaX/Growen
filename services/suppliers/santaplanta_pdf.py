@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: santaplanta_pdf.py
 # NG-HEADER: Ubicación: services/suppliers/santaplanta_pdf.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Parser PDF especializado para Santa Planta.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Parser de remitos Santa Planta (PDF).
 

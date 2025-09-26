@@ -5,6 +5,41 @@
 # Changelog
 
 ## [Unreleased]
+### Sprint 2 (Ventas Reporting & Stock Ledger Parcial) - 2025-09-26
+#### Added
+- sales: endpoint timeline `GET /sales/{id}/timeline` consolidando audit/pagos/devoluciones ordenado por fecha.
+- sales: reportes agregados `GET /sales/reports/net`, `GET /sales/reports/top-products`, `GET /sales/reports/top-customers`.
+- sales: cache in-memory TTL (60s) para reportes con invalidación en confirmación y devoluciones.
+- stock: tabla `stock_ledger` con `product_id, source_type(sale|return), source_id, delta, balance_after, created_at`.
+- stock: endpoint `GET /products/{id}/stock/history` (paginado, descendente) para auditoría de movimientos.
+- sales: búsqueda rápida de clientes `GET /sales/customers/search?q=` con ranking heurístico.
+- sales: endpoint dedicado `GET /sales/{id}/payments` para UI modular.
+- sales: auditoría `sale_discount_clamped` cuando `discount_amount` se reduce al subtotal al confirmar.
+- tests: cobertura para timeline, reportes (net/top), ledger consistencia y clamp descuento.
+#### Changed
+- sales: confirmación ahora recalcula y aplica clamp de descuento antes de validar stock y afectar inventario.
+#### Docs
+- docs/SALES.md actualizado con timeline, reportes, búsqueda rápida, ledger y clamp de descuento.
+- Roadmap: sección Ventas ampliada (Sprint 1 + Sprint 2 parcial) y próximos pasos.
+
+### Sprint 1 (Ventas / Auditoría) - 2025-09-26
+#### Added
+- sales: campo `sale_kind` (MOSTRADOR|PEDIDO) + validación en creación.
+- sales: índices sobre `sale_lines.product_id` y compuesto (`product_id`,`sale_id`) para consultas de productos en ventas.
+- sales: endpoints de devoluciones (`POST /sales/{id}/returns`, `GET /sales/{id}/returns`) con validaciones de saldo y reposición de stock.
+- sales: reporting básico (`GET /reports/sales`, `GET /reports/sales/export.csv`).
+- sales: snapshots de producto (`title_snapshot`, `sku_snapshot`) poblados al confirmar la venta.
+- audit: helper unificado `_audit` con `correlation_id`, `user_id`, IP y `elapsed_ms`.
+- audit: logs detallados de operaciones de líneas (`sale_lines_ops`) con before/after y de pagos (`sale_payment_add`) con estado previo y posterior (paid_total/payment_status).
+- tests: unidad para `_recalc_totals` cubriendo descuentos %, prioridad discount_amount, estados de pago y guard de total negativo.
+#### Changed
+- sales: confirmación ahora rellena snapshots sólo si están vacíos (idempotente) y registra deltas de stock.
+- customers: normalización y validación de documento (`document_number`) para CUIT/DNI (limpieza de separadores, reglas básicas de longitud).
+#### Docs
+- docs/SALES.md: actualizado con devoluciones, reporting, snapshots, auditoría extendida y normalización de CUIT/DNI.
+#### Notes
+- Próximos pasos propuestos (Sprint 2): timeline consolidado de venta (audit + pagos + devoluciones), reportes avanzados (top productos / clientes / neto post devoluciones), refactor a libro de stock, métricas de margen, endpoints de búsqueda rápida de clientes/productos optimizados.
+
 ### Added
 - ui: botón flotante global “Reportar” (abajo a la derecha) disponible en todas las secciones. Abre un modal con campo “Comentario” y envía reportes manuales al backend.
 - api: nuevo endpoint `POST /bug-report` que registra los reportes en `logs/BugReport.log` con rotación (5×5MB). Cada entrada incluye `ts` (UTC), `ts_gmt3` (servidor), `url`, `user_agent`, `cid` si está disponible y `context.client_ts_gmt3` desde el cliente.

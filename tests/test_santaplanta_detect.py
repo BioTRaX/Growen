@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_santaplanta_detect.py
 # NG-HEADER: Ubicación: tests/test_santaplanta_detect.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas de detección de archivos Santaplanta.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import pandas as pd
 from services.ingest import detect

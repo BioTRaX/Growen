@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: 20250114_supplier_price_history_idx.py
 # NG-HEADER: Ubicación: db/migrations/versions/20250114_supplier_price_history_idx.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Migración Alembic: crea índice de historial de precios por proveedor.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from alembic import op
 import sqlalchemy as sa

@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: actions.py
 # NG-HEADER: Ubicación: services/routers/actions.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Endpoints de acciones rápidas y diagnósticos.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Lista de acciones rápidas disponibles."""
 from fastapi import APIRouter

@@ -26,6 +26,9 @@ type Prod = {
   images: { id: number; url: string; alt_text?: string; title_text?: string; is_primary?: boolean; locked?: boolean; active?: boolean }[]
   canonical_product_id?: number | null
   canonical_sale_price?: number | null
+  canonical_sku?: string | null
+  canonical_ng_sku?: string | null
+  canonical_name?: string | null
 }
 
 export default function ProductDetail() {
@@ -316,7 +319,11 @@ export default function ProductDetail() {
         <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
           <div><span style={{ opacity: 0.7 }}>ID:</span> {prod?.id}</div>
           {prod?.slug && <div><span style={{ opacity: 0.7 }}>Slug:</span> {prod.slug}</div>}
-          {prod?.sku_root && <div><span style={{ opacity: 0.7 }}>SKU:</span> {prod.sku_root}</div>}
+            {(prod?.canonical_sku || prod?.sku_root) && (
+              <div title={prod?.canonical_sku ? 'Si hay canónico, se muestra su SKU (preferido)' : 'SKU propio del producto interno'}>
+                <span style={{ opacity: 0.7 }}>SKU:</span> {prod?.canonical_sku || prod?.sku_root}
+              </div>
+            )}
           <div><span style={{ opacity: 0.7 }}>Stock:</span> {prod?.stock}</div>
           <div><span style={{ opacity: 0.7 }}>Tiene imagen:</span> {(prod?.images?.length || 0) > 0 ? 'Sí' : 'No'}</div>
           {prod?.canonical_product_id ? (

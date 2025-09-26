@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: http.ts
 // NG-HEADER: Ubicación: frontend/src/services/http.ts
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Cliente HTTP base con manejo de autenticación.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import axios from "axios";
 import { diagAdd } from "../lib/corrStore";

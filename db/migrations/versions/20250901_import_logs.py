@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: 20250901_import_logs.py
 # NG-HEADER: Ubicación: db/migrations/versions/20250901_import_logs.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Migración Alembic: crea registros para import logs.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """import logs table
 

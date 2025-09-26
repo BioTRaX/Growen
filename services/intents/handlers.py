@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: handlers.py
 # NG-HEADER: Ubicación: services/intents/handlers.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Handlers que resuelven intents soportados.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Handlers de intents de ejemplo."""
 

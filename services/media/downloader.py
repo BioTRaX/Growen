@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: downloader.py
 # NG-HEADER: Ubicación: services/media/downloader.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Descarga y persistencia de archivos multimedia.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 

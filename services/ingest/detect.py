@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: detect.py
 # NG-HEADER: Ubicación: services/ingest/detect.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Detecta proveedor y tipo de archivo en la ingesta.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Heurísticas básicas para detectar proveedor."""
 from __future__ import annotations

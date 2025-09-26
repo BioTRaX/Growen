@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: auth.py
 # NG-HEADER: Ubicación: services/auth.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Utilidades de autenticación y hashing del backend.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Utilidades de autenticación y manejo de sesiones."""
 

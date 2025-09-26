@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_debug_endpoints.py
 # NG-HEADER: Ubicación: tests/test_debug_endpoints.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas de los endpoints de depuración.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 from fastapi.testclient import TestClient

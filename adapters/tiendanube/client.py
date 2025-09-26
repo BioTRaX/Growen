@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: client.py
 # NG-HEADER: Ubicación: adapters/tiendanube/client.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Cliente HTTP para comunicarse con la API de Tiendanube.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Cliente simulado de Tiendanube para pruebas (lista productos, actualiza stock)."""
 from typing import Any, Dict, List

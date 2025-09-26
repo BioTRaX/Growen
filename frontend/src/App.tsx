@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: App.tsx
 // NG-HEADER: Ubicación: frontend/src/App.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Shell principal de la SPA de compras.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthContext";

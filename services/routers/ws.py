@@ -35,10 +35,10 @@ from agent_core.config import settings as core_settings
 from ai.router import AIRouter
 from ai.types import Task
 from services.chat.price_lookup import (
-    extract_price_query,
-    log_price_lookup,
-    render_price_response,
-    resolve_price,
+    extract_product_query,
+    log_product_lookup,
+    render_product_response,
+    resolve_product_info,
     serialize_result,
 )
 
@@ -122,24 +122,42 @@ async def ws_chat(socket: WebSocket) -> None:
                 logger.warning("Timeout de lectura en ws_chat")
                 break
 
-            extracted = extract_price_query(data)
-            if extracted:
-                # Resolver precios de forma determinista y evitar delegar al provider streaming.
+            # Saneamiento básico y límites para evitar abuso del canal
+            if not isinstance(data, str):
+                await socket.send_json({"role": "system", "text": "Entrada inválida."})
+                continue
+            data = data.strip()
+            if not data:
+                await socket.send_json({"role": "system", "text": "Decime algo para responder."})
+                continue
+            if len(data) > 2000:
+                await socket.send_json({
+                    "role": "system",
+                    "text": "Tu mensaje es muy largo. Por favor, resumilo (máx. 2000 caracteres).",
+                })
+                continue
+
+            product_query = extract_product_query(data)
+            if product_query:
+                # Resolver consultas de producto de forma determinista evitando delegar al streaming.
                 async with SessionLocal() as db:
-                    result = await resolve_price(extracted, db)
-                    await log_price_lookup(
+                    result = await resolve_product_info(product_query, db)
+                    await log_product_lookup(
                         db,
-                        user_id=(sess.user.id if getattr(sess, 'user', None) else None),
-                        ip=getattr(socket.client, 'host', None),
+                        user_id=(sess.user.id if getattr(sess, "user", None) else None),
+                        ip=getattr(socket.client, "host", None),
                         original_text=data,
-                        extracted_query=extracted,
+                        product_query=product_query,
                         result=result,
                     )
+                payload = serialize_result(result)
                 await socket.send_json({
                     "role": "assistant",
-                    "text": render_price_response(result),
-                    "type": "price_answer",
-                    "data": serialize_result(result),
+                    "text": render_product_response(result),
+                    "type": "product_answer",
+                    "data": payload,
+                    "intent": result.intent,
+                    "took_ms": result.took_ms,
                 })
                 continue
 

@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: health.py
 # NG-HEADER: Ubicación: services/routers/health.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Endpoints de healthcheck y estado de servicios.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 

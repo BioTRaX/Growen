@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_intents_handlers.py
 # NG-HEADER: Ubicación: tests/test_intents_handlers.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas de los handlers de intents.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Pruebas de los handlers de intents."""
 

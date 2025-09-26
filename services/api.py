@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: api.py
 # NG-HEADER: Ubicación: services/api.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Instancia principal de FastAPI y middlewares globales.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Aplicación FastAPI principal del agente."""
 
@@ -39,6 +39,7 @@ from .routers import (
     actions,
     chat,
     ws,
+    telegram,
     catalog,
     imports,
     canonical_products,
@@ -53,6 +54,7 @@ from .routers import (
     services_admin,
     backups_admin,
     sales,
+    reports,
 )
 from services.auth import require_csrf  # para override condicional en dev
 from services.routers import bug_report  # router para reportes de bugs
@@ -306,18 +308,22 @@ if os.getenv("RUN_DOCTOR_ON_BOOT", "1") == "1":
     except Exception:
         logger.exception("Doctor check failed")
 app.include_router(chat.router)
+app.include_router(telegram.router)
 app.include_router(auth.router)
 app.include_router(actions.router)
 app.include_router(ws.router)
 from services.routers import catalogs as catalogs_router  # import after logger setup
+from services.routers import products_stock  # nuevo router historial stock
 app.include_router(catalogs_router.router)
 app.include_router(catalog.router)
 app.include_router(imports.router)
 app.include_router(canonical_products.canonical_router)
 app.include_router(canonical_products.equivalences_router)
 app.include_router(products_ex.router)
+app.include_router(products_stock.router)
 app.include_router(purchases.router)
 app.include_router(sales.router)
+app.include_router(reports.router)
 app.include_router(media.router)
 app.include_router(image_jobs.router)
 app.include_router(images.router)

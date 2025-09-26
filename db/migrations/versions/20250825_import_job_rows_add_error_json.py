@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: 20250825_import_job_rows_add_error_json.py
 # NG-HEADER: Ubicación: db/migrations/versions/20250825_import_job_rows_add_error_json.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Migración Alembic: agrega error_json a filas de importación.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """add missing columns to import_job_rows and ensure import_jobs.summary_json
 

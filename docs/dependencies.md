@@ -19,6 +19,7 @@ Backend (Python)
 - Inferencia modelos (para rembg): onnxruntime
 - Navegación headless / scraping avanzado: playwright (+ navegadores instalados con `python -m playwright install <browser>`)
 - Otros para PDF avanzado (ya en core/extra): reportlab, weasyprint (no Windows)
+ - Exportación PDF (WeasyPrint): `weasyprint` (HTML→PDF con CSS). En Windows requiere dependencias de Cairo/Pango/GTK; ver notas abajo.
 
 Install (entorno limpio):
 ```
@@ -91,6 +92,14 @@ python -m playwright install chromium
 2. Ghostscript: https://www.ghostscript.com/download/gsdnld.html (agregar a PATH)
 3. QPDF: https://sourceforge.net/projects/qpdf/files/ (agregar `bin` a PATH)
 4. (Opcional) Poppler: https://github.com/oschwartz10612/poppler-windows/releases/ (agregar `Library\bin` a PATH) si se necesita compat extra para camelot.
+5. WeasyPrint (Windows):
+	- Instalar runtime de Cairo, Pango, GDK-PixBuf (por ejemplo, a través de MSYS2 o paquetes precompilados de GTK). Referencia: https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#windows
+	- Asegurar que los DLLs estén en PATH (cairo, pango, gobject-2.0, etc.). Alternativamente usar contenedor Linux para exportación PDF si se dificulta en Windows.
+
+Validación rápida WeasyPrint (Python):
+```
+python -c "import weasyprint; print('WeasyPrint', weasyprint.__version__)"
+```
 
 ### Validación rápida Python (imports)
 Crear archivo temporal `verify_imports.py`:

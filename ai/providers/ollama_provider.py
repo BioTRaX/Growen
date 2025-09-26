@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: ollama_provider.py
 # NG-HEADER: Ubicación: ai/providers/ollama_provider.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Proveedor IA implementado sobre Ollama.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Proveedor local Ollama real (HTTP API).
 

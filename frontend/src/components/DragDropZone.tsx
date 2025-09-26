@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: DragDropZone.tsx
 // NG-HEADER: Ubicación: frontend/src/components/DragDropZone.tsx
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Zona de arrastre y suelta para adjuntar archivos.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useState } from 'react'
 

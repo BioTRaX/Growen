@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: test_ingest_normalize.py
 # NG-HEADER: Ubicación: tests/test_ingest_normalize.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Pruebas de la normalización en la ingesta.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import pandas as pd
 

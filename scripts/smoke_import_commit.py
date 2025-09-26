@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: smoke_import_commit.py
 # NG-HEADER: Ubicación: scripts/smoke_import_commit.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Smoke test del flujo de importación y commit final.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import json
 import os

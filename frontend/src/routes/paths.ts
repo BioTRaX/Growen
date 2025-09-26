@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: paths.ts
 // NG-HEADER: Ubicación: frontend/src/routes/paths.ts
-// NG-HEADER: Descripción: Pendiente de descripción
+// NG-HEADER: Descripción: Constantes de rutas para react-router.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 export const PATHS = {
   home: "/",

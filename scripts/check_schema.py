@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: check_schema.py
 # NG-HEADER: Ubicación: scripts/check_schema.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Reporte del esquema y versiones de Alembic.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 from sqlalchemy import create_engine, text

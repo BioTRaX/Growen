@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: image_jobs.py
 # NG-HEADER: Ubicación: services/routers/image_jobs.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: API para jobs de procesamiento de imágenes.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 

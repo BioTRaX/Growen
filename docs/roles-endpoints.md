@@ -1,6 +1,6 @@
 <!-- NG-HEADER: Nombre de archivo: roles-endpoints.md -->
 <!-- NG-HEADER: Ubicación: docs/roles-endpoints.md -->
-<!-- NG-HEADER: Descripción: Pendiente de descripción -->
+<!-- NG-HEADER: Descripción: Roles y endpoints expuestos por la API. -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Roles por endpoint
 
@@ -25,6 +25,7 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /suppliers/{supplier_id}/files | cliente, proveedor, colaborador, admin |
 | POST | /suppliers | admin (requiere CSRF) |
 | PATCH | /suppliers/{supplier_id} | admin (requiere CSRF) |
+| DELETE | /suppliers | admin (requiere CSRF) |
 | GET | /categories | cliente, proveedor, colaborador, admin |
 | GET | /categories/search | cliente, proveedor, colaborador, admin |
 | POST | /categories/generate-from-supplier-file | admin (requiere CSRF) |
@@ -55,6 +56,7 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /products-ex/users/me/preferences/products-table | cliente, proveedor, colaborador, admin |
 | PUT | /products-ex/users/me/preferences/products-table | cliente, proveedor, colaborador, admin (requiere CSRF) |
 | GET | /stock/export.xlsx | cliente, proveedor, colaborador, admin |
+| GET | /catalog/next-seq | colaborador, admin |
 | GET | /suppliers/price-list/template | cliente, proveedor, colaborador, admin |
 | GET | /suppliers/{supplier_id}/price-list/template | cliente, proveedor, colaborador, admin |
 | POST | /suppliers/{supplier_id}/price-list/upload | proveedor, colaborador, admin (requiere CSRF) |
@@ -86,6 +88,15 @@ Además de los permisos del backend, la interfaz limita qué opciones se muestra
 - Colaborador/Admin: ven todas las secciones y herramientas (incluye Proveedores, Clientes, Ventas, Compras, Admin, Imágenes productos, etc.).
 
 Nota: Estas reglas de visibilidad no cambian la seguridad de los endpoints (que sigue controlada en el backend); simplemente reducen la superficie visible para cada rol.
+
+## Parámetros y comportamientos recientes
+
+- GET `/products` ahora acepta `type` para filtrar el listado:
+	- `type=all` (default), `type=canonical` (sólo con producto canónico vinculado) o `type=supplier` (sin canónico).
+	- El backend normaliza el título (`name`) y el precio de venta (`precio_venta`) priorizando los datos del canónico cuando existen; si no, usa los del proveedor.
+
+- GET `/catalog/next-seq?category_id=…` devuelve la próxima secuencia por categoría para proponer SKUs canónicos bajo la regla `XXX_####_YYY`.
+	- Uso: la UI lo consume para vista previa; la generación/validación real del SKU se hace en backend.
 
 ## Próximos endpoints (planificados)
 

@@ -1,6 +1,6 @@
 # NG-HEADER: Nombre de archivo: santaplanta.py
 # NG-HEADER: Ubicación: services/scrapers/santaplanta.py
-# NG-HEADER: Descripción: Pendiente de descripción
+# NG-HEADER: Descripción: Scraper específico del proveedor Santa Planta.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
