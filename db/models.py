@@ -34,6 +34,8 @@ class Product(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     sku_root: Mapped[str] = mapped_column(String(50))
+    # SKU canónico (Sept 2025). Puede ser nulo para legacy hasta normalización.
+    canonical_sku: Mapped[Optional[str]] = mapped_column(String(32), unique=True, nullable=True)
     title: Mapped[str] = mapped_column(String(200))
     brand_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))

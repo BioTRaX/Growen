@@ -30,12 +30,15 @@ def _ensure_supplier() -> int:
 def test_create_minimal_product_without_prices_ok_and_no_history():
     sup_id = _ensure_supplier()
     uniq = uuid.uuid4().hex[:6]
+    # Generar SKU canónico válido: PRD_<4dig>_A<2hex>
+    canonical_num = int(uniq[:4], 16) % 9999
+    canonical_sku = f"PRD_{canonical_num:04d}_A{uniq[:2].upper()}"
     payload = {
         "title": f"Prod sin precios {uniq}",
         "initial_stock": 0,
         "supplier_id": sup_id,
-        "supplier_sku": f"SP-{uniq}",
-        "sku": f"INT-{uniq}",
+    "supplier_sku": f"SP-{uniq}",
+    "sku": canonical_sku,
         # precios omitidos
     }
     r = client.post("/catalog/products", json=payload, headers={"X-CSRF-Token": "x"})
@@ -55,12 +58,14 @@ def test_create_minimal_product_without_prices_ok_and_no_history():
 def test_create_minimal_product_duplicate_sku_conflict():
     sup_id = _ensure_supplier()
     uniq = uuid.uuid4().hex[:6]
+    canonical_num = int(uniq[:4], 16) % 9999
+    canonical_sku = f"PRD_{canonical_num:04d}_B{uniq[:2].upper()}"
     payload = {
         "title": f"Prod dup {uniq}",
         "initial_stock": 0,
         "supplier_id": sup_id,
-        "supplier_sku": f"SP-{uniq}",
-        "sku": f"INT-{uniq}",
+    "supplier_sku": f"SP-{uniq}",
+    "sku": canonical_sku,
         # precios omitidos, no requeridos
     }
     r1 = client.post("/catalog/products", json=payload, headers={"X-CSRF-Token": "x"})
@@ -80,14 +85,16 @@ def test_create_minimal_product_duplicate_sku_conflict():
 def test_create_minimal_product_with_prices_history_created():
     sup_id = _ensure_supplier()
     uniq = uuid.uuid4().hex[:6]
+    canonical_num = int(uniq[:4], 16) % 9999
+    canonical_sku = f"PRD_{canonical_num:04d}_C{uniq[:2].upper()}"
     purchase = 123.45
     sale = 199.99
     payload = {
         "title": f"Prod con precios {uniq}",
         "initial_stock": 0,
         "supplier_id": sup_id,
-        "supplier_sku": f"SP-{uniq}",
-        "sku": f"INT-{uniq}",
+    "supplier_sku": f"SP-{uniq}",
+    "sku": canonical_sku,
         "purchase_price": purchase,
         "sale_price": sale,
     }
