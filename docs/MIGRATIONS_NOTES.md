@@ -154,3 +154,81 @@ Notas de compatibilidad:
 Downgrade:
 - Eliminar tabla `stock_ledger` y los índices agregados.
 - NOTA: Perderá histórico de movimientos; considerar export previo si se requiere auditoría.
+
+---
+
+## 2025-09-27 Hotfix Idempotencia (stock_ledger, returns, sales)
+
+### Contexto
+Se detectó un estado histórico inconsistente con múltiples migraciones duplicadas / variantes para `stock_ledger` y luego errores en cadena al aplicar `alembic upgrade head`:
+
+- `DuplicateTable` en `stock_ledger` (v2 vs variantes previas marcadas luego como deprecated).
+- `DuplicateTable` en `returns` (la tabla ya existía por ejecución previa parcial).
+- `DuplicateColumn` en `sales.sale_kind` (columna ya aplicada en un ciclo anterior).
+
+Objetivo: permitir que la base alcance el head sin intervención manual, preservando datos existentes.
+
+### Acciones aplicadas
+1. Migración `20250926_stock_ledger_and_sales_indexes_v2.py` modificada para ser idempotente:
+  - Inspección previa de tablas e índices mediante `sa.inspect`.
+  - Creación condicional de cada índice (`try/except` defensivo) y del índice parcial único en `customers` (usa `IF NOT EXISTS` en PostgreSQL, índice simple fallback en otros motores).
+2. Migración `20250926_returns_module.py` ajustada con:
+  - Early noop si `returns` y `return_lines` ya existen (evita transacción abortada por duplicados).
+  - Creación condicional de tablas, índices y constraint `ck_returns_status` (envoltura `try/except`).
+3. Se identificó siguiente bloqueo (`DuplicateColumn` en `20250926_add_sale_kind_and_line_idx.py`), pendiente de idempotentizar (ver Próximos pasos).
+
+### Riesgos / Consideraciones
+- El early noop de `returns_module` no reconstruye el constraint `ck_returns_status` si faltara; se recomienda verificación posterior (`pg_catalog.pg_constraint`).
+- Estos parches reducen la señal de errores “reales” porque silencian duplicados; mitigación: agregar script de auditoría de integridad de migraciones.
+- Downgrade de las migraciones parchadas permanece best-effort; en escenarios mixtos podría dejar residuos si ya existían objetos parcialmente.
+
+### Próximos pasos recomendados
+1. Idempotentizar `20250926_add_sale_kind_and_line_idx.py` (verificar existencia de columna `sale_kind` y índice en `sale_lines.product_id`).
+2. Agregar script `scripts/audit_schema.py` que valide:
+  - Presencia de constraints claves (`ck_returns_status`).
+  - Índices esperados de performance (`ix_stock_ledger_*`, `ix_returns_*`).
+3. Documentar convención: nuevas migraciones deben usar helpers de inspección antes de crear tablas/índices/columnas.
+4. Evaluar migración de consolidación futura que marque rutas deprecated y deje un único head lineal limpio.
+
+### Notas operativas
+- Entornos ya “medio migrados” pueden ahora completar el upgrade sin necesidad de borrar la base.
+- Si se requiere limpieza total: drop schema + recrear + correr todas las migraciones en un entorno aislado y comparar salida de `scripts/check_schema.py` para detectar divergencias.
+
+### Relación con SKU Canónico
+Este hotfix fue habilitador para continuar con la nueva lógica de SKU canónico (tabla `sku_sequences` + generación transaccional). Sin resolver los duplicados de ledger/returns no era posible validar las pruebas de creación de productos canónicos.
+
+---
+Actualizado: 2025-09-27
+
+## Plan de consolidación futura (Squash / Cleanup)
+
+Motivación:
+- Historial reciente incorporó migraciones parcheadas e inutilizadas ("deprecated") para resolver divergencias (`stock_ledger` variantes, noop returns, etc.). Mantenerlas a largo plazo aumenta ruido y tiempo de revisión.
+
+Objetivo del plan (no ejecutado todavía):
+1. Crear rama de mantenimiento `migrations-consolidation`.
+2. Generar un snapshot único del esquema actual en una migración nueva `YYYYMMDD_consolidated_base` que re-crea (create_all style) sólo las estructuras vigentes.
+3. Marcar todas las migraciones previas a la consolidación como congeladas (sin edits futuros). Documentar SHA final.
+4. Incluir en la migración consolidada helpers idempotentes (pattern usado en hotfix) para permitir reinstalación limpia sobre entornos con restos parciales.
+5. Probar en entorno fresco:
+  - a) `alembic upgrade head` sobre DB vacía.
+  - b) Restaurar dump de producción previa al squash + aplicar cadena (conservando historial viejo) → validar que no se rompe.
+6. Publicar guía de transición: quienes tengan clones antiguos pueden:
+  - Opción A: hacer checkout, terminar de migrar al último head pre-consolidación y luego aplicar la nueva migración merge.
+  - Opción B: recrear schema desde cero y reimportar datos (dev only).
+
+Consideraciones técnicas:
+- Alembic no recomienda borrar historia; la consolidación se hará agregando una migración que conceptualmente reemplaza a muchas, y un merge para cerrar ramas antiguas.
+- No se eliminarán archivos históricos de inmediato; se evaluará archivarlos bajo `db/migrations/_legacy/` tras dos ciclos de releases estables.
+- Se añadirá script `scripts/compare_schema_snapshot.py` (pendiente) para asegurar que `Base.metadata` == estado DB después del upgrade consolidado.
+
+Riesgos:
+- Inconsistencias silenciosas si el snapshot omite constraints específicos agregados en parches intermedios (mitigar con auditoría previa y diff db reflection vs metadata).
+- Pipelines que referencian revisiones antiguas podrían necesitar update.
+
+Next steps (tracking):
+- [ ] Crear script de diff metadata vs live DB.
+- [ ] Generar migración snapshot.
+- [ ] Ensayar restore + upgrade.
+
+Se documentará progreso en esta sección cuando inicie la rama de consolidación.

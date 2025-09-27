@@ -28,6 +28,7 @@ Este módulo solo provee validación y un generador auxiliar reutilizable.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Iterable
 
 CANONICAL_SKU_PATTERN = r"^[A-Z]{3}_[0-9]{4}_[A-Z0-9]{3}$"
@@ -52,11 +53,27 @@ def normalize_prefix(text: str) -> str:
 
     Reemplaza caracteres no alfabéticos por X y rellena/poda a longitud 3.
     """
-    import unicodedata
     if not text:
         return "XXX"
     # Normalizar acentos
     t = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    letters = [c for c in t.upper() if c.isalpha()]
+    while len(letters) < 3:
+        letters.append('X')
+    return ("".join(letters)[:3]) or "XXX"
+
+
+def normalize_code(name: str | None) -> str:
+    """Normaliza nombre de categoría/subcategoría a bloque canónico de 3 chars A-Z.
+
+    - Elimina diacríticos (NFKD)
+    - Filtra no alfabéticos
+    - Upper
+    - Rellena con 'X' hasta 3 si es corto
+    """
+    if not name:
+        return "XXX"
+    t = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
     letters = [c for c in t.upper() if c.isalpha()]
     while len(letters) < 3:
         letters.append('X')

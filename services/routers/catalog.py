@@ -50,18 +50,16 @@ from pydantic import BaseModel as _PydModel
 
 class _ProductCreate(_PydModel):
     title: str
-    # Stock inicial opcional (para flujo mínimo de pruebas). Si se informan compras, se ignora.
     initial_stock: int = 0
-    # Proveedor ahora opcional para facilitar tests unitarios rápidos.
-    # Si es None, se crea el producto sin SupplierProduct asociado.
     supplier_id: Optional[int] = None
-    # SKU del proveedor opcional; si no se informa se reutiliza sku_root
     supplier_sku: Optional[str] = None
-    # SKU interno deseado (permite diferenciar del supplier_sku). Si no se envía se toma supplier_sku o título.
     sku: Optional[str] = None
-    # Precios opcionales (si se usa desde flujo de compras se pueden omitir)
     purchase_price: Optional[float] = None
     sale_price: Optional[float] = None
+    # Nuevos campos para generación canónica automática
+    category_name: Optional[str] = None
+    subcategory_name: Optional[str] = None
+    generate_canonical: bool = False
 
 
 _PRODUCTS_HAS_CANONICAL_COL: bool | None = None
@@ -146,18 +144,34 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
             raise HTTPException(status_code=400, detail={"code": "invalid_supplier_id", "message": "supplier_id inválido"})
 
     from db.models import Variant, Inventory, SupplierProduct, SupplierPriceHistory
-    desired_sku = (payload.sku or payload.supplier_sku or payload.title)[:50].strip()
+    desired_sku = (payload.sku or payload.supplier_sku or payload.title)[:50].strip() if payload.sku or payload.supplier_sku else (payload.title or "")[:50].strip()
     if not desired_sku:
         raise HTTPException(status_code=400, detail={"code": "invalid_sku", "message": "SKU inválido"})
-    from db.sku_utils import is_canonical_sku, CANONICAL_SKU_PATTERN
-    strict_flag = os.getenv("CANONICAL_SKU_STRICT", "0") == "1"
-    sku_is_canonical = is_canonical_sku(desired_sku)
-    if strict_flag and not sku_is_canonical:
-        # Modo estricto: rechazamos
+    from db.sku_utils import is_canonical_sku, CANONICAL_SKU_PATTERN, CANONICAL_SKU_REGEX
+    strict_flag = os.getenv("CANONICAL_SKU_STRICT", "1") == "1"  # ahora estricto por defecto
+    force_gen_flag = os.getenv("FORCE_CANONICAL", "0") == "1"
+
+    # Regla pseudo-canónica: si tiene exactamente dos '_' y no cumple regex => 422
+    if desired_sku.count('_') == 2 and not is_canonical_sku(desired_sku):
         raise HTTPException(status_code=422, detail={
             "code": "invalid_canonical_sku",
-            "message": f"SKU no respeta formato canónico {CANONICAL_SKU_PATTERN}",
+            "message": f"Formato canónico inválido: esperado {CANONICAL_SKU_PATTERN}",
         })
+
+    sku_is_canonical = is_canonical_sku(desired_sku)
+
+    # Generación automática si se solicita o es requerido en modo estricto sin sku válido
+    if (payload.generate_canonical or (strict_flag and not sku_is_canonical)):
+        # Requiere category_name y subcategory_name (subcat opcional, si falta se reutiliza category)
+        if not payload.category_name:
+            raise HTTPException(status_code=400, detail={"code": "missing_category_name", "message": "category_name requerido para generación canónica"})
+        from db.sku_generator import generate_canonical_sku, CanonicalSkuGenerationError
+        try:
+            desired_sku = await generate_canonical_sku(session, payload.category_name, payload.subcategory_name or payload.category_name)
+            sku_is_canonical = True
+        except CanonicalSkuGenerationError as ge:
+            raise HTTPException(status_code=500, detail={"code": "canonical_generation_error", "message": str(ge)})
+
     # En modo no estricto, aceptamos legacy y sólo seteamos canonical_sku si coincide el patrón.
     # Búsqueda case-insensitive para evitar conflictos por mayúsculas/minúsculas
     existing = await session.scalar(select(Variant).where(func.lower(Variant.sku) == desired_sku.lower()))
