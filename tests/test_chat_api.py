@@ -136,3 +136,17 @@ def test_chat_followup_clarification_flow():
     assert confirm_data["type"] == "product_answer"
     payload = confirm_data.get("data", {})
     assert payload.get("results")
+
+def test_chat_hides_metrics_for_cliente():
+    sup_id = _create_supplier("sup-chat-client", "Proveedor Cliente")
+    _create_product("Tester Cliente", sup_id, "TC-001", 50.0, stock=2)
+
+    original_override = app.dependency_overrides[current_session]
+    app.dependency_overrides[current_session] = lambda: SessionData(None, None, "cliente")
+    try:
+        resp = client.post("/chat", json={"text": "Precio tester cliente"})
+        assert resp.status_code == 200, resp.text
+        payload = resp.json().get("data", {})
+        assert payload.get("metrics") is None
+    finally:
+        app.dependency_overrides[current_session] = original_override

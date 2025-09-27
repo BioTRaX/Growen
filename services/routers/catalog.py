@@ -89,7 +89,43 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
         raise HTTPException(status_code=400, detail={"code": "invalid_sku_format", "message": "Formato de SKU inválido"})
     existing = await session.scalar(select(Variant).where(Variant.sku == desired_sku))
     if existing:
-        raise HTTPException(status_code=409, detail={"code": "duplicate_sku", "message": "SKU ya existente"})
+    # Lógica: si existe Variant pero no existe vínculo SupplierProduct para este supplier => crear vínculo y devolver 200.
+    # Si ya existe vínculo => 409 (duplicado real).
+        prod_existing = await session.get(Product, existing.product_id)
+        supplier_item_id = None
+        if supplier is not None and prod_existing is not None:
+            from db.models import SupplierProduct
+            sp_exist = await session.scalar(
+                select(SupplierProduct).where(
+                    SupplierProduct.supplier_id == payload.supplier_id,
+                    SupplierProduct.internal_product_id == prod_existing.id,
+                )
+            )
+            if sp_exist:
+                raise HTTPException(status_code=409, detail={"code": "duplicate_sku", "message": "SKU ya existente"})
+            # Crear SupplierProduct faltante y devolver 200 simulando creación inicial
+            sp_new = SupplierProduct(
+                supplier_id=payload.supplier_id,
+                supplier_product_id=(payload.supplier_sku or prod_existing.sku_root),
+                title=prod_existing.title[:200],
+                current_purchase_price=(payload.purchase_price if payload.purchase_price is not None else None),
+                current_sale_price=(payload.sale_price if payload.sale_price is not None else None),
+                internal_product_id=prod_existing.id,
+                internal_variant_id=existing.id,
+            )
+            session.add(sp_new)
+            await session.flush()
+            supplier_item_id = sp_new.id
+            await session.commit()
+        return {
+            "id": prod_existing.id if prod_existing else None,
+            "title": (prod_existing.title if prod_existing else payload.title),
+            "sku_root": desired_sku,
+            "supplier_item_id": supplier_item_id,
+            "idempotent": False,
+            "created": False,
+            "linked": True,
+        }
 
     prod = Product(sku_root=desired_sku, title=payload.title)
     session.add(prod)
@@ -97,6 +133,12 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
     var = Variant(product_id=prod.id, sku=desired_sku)
     session.add(var)
     await session.flush()
+    # Compatibilidad: reflejar product_id/variant_id directos en Product para flujos que esperan product.stock
+    try:
+        if getattr(prod, 'stock', None) is None:
+            prod.stock = 0  # aseguramos campo
+    except Exception:
+        pass
 
     # Inventario opcional
     if payload.initial_stock and payload.initial_stock > 0:
@@ -142,7 +184,7 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
             session.add(sph)
 
     await session.commit()
-    response = {"id": prod.id, "title": prod.title, "sku_root": prod.sku_root}
+    response = {"id": prod.id, "title": prod.title, "sku_root": prod.sku_root, "idempotent": False, "created": True}
     if supplier is not None:
         # sp puede existir si creamos SupplierProduct
         try:  # defensivo en caso de refactors

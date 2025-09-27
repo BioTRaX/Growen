@@ -43,7 +43,7 @@ El proceso de importación de PDF sigue el siguiente pipeline:
   - `pdfplumber:lines_detected` → cantidad de líneas normalizadas
   - `camelot:tables_found` → tablas detectadas por flavor
   - `ocr:ocrmypdf_run` → resultado de OCR (ok/tiempo/stdout/stderr)
-  - `fallback:regex_parser_attempt|ok|no_lines|error` → estado del fallback textual
+  - `multiline_fallback:multiline_fallback_attempt|multiline_fallback_used|multiline_fallback_empty|multiline_error` → estado del fallback textual multiline
   - `summary:done` / `summary:no_lines_after_pipeline`
    - `footer:expected_from_footer` → N de ítems esperado e importe total
    - `validation:expected_items_check` → comparación esperado vs obtenido
@@ -128,6 +128,153 @@ Con estas m?tricas se monitorea la latencia de la IA y su efectividad para enriq
 Con esto se puede detectar degradaciones (ej. caída brusca de `avg_classic_confidence` o aumento de invocaciones IA con baja tasa de éxito).
 
 Si `classic_confidence` < `IMPORT_AI_CLASSIC_MIN_CONFIDENCE`, la IA actúa en modo “refuerzo” y puede agregar líneas adicionales (sin reemplazar las existentes) si superan el umbral de confianza individual.
+
+## Heurísticas adicionales de recuperación de SKU (Sept 2025)
+
+Se añadieron pasos post-proceso para mejorar la detección de SKUs en remitos Santa Planta con estructuras irregulares u OCR parcial:
+
+Pipeline actual (orden determinista):
+
+1. Mapeo directo de títulos conocidos → SKU esperado:
+  - Patrones regex fijos (ej: `POTA PERLITA`, `MACETA SOPLADA ... 1 LT|5 LT|10 LT|20 LT`).
+  - Asigna inmediatamente el SKU objetivo si la línea no tiene un SKU corto ya válido.
+  - Evento: `postprocess:known_title_sku_mapped`.
+2. Búsqueda de SKUs embebidos en bloques numéricos:
+  - Detecta bloques numéricos de 3 a 12 dígitos dentro del título.
+  - Fast-path: si un bloque contiene íntegro un SKU esperado, se asigna (`mode=expected_subblock`).
+  - Si no, genera ventanas deslizantes de longitud 5,4,3 sobre bloques >6 dígitos + toma bloques completos de 3–6 dígitos.
+  - Orden de selección: longitud desc, posición asc, valor asc (garantiza determinismo y evita flakiness).
+  - Filtra subcadenas triviales (ceros iniciales, todos dígitos iguales >=3).
+  - Evento: `postprocess:embedded_sku_recovered`.
+3. Métricas intermedias:
+  - Evento: `postprocess:embedded_sku_recovery_stats` reporta SKUs esperados presentes.
+4. Compactación de SKUs largos que contienen un esperado como prefijo/sufijo corto:
+  - Si un SKU asignado tiene 5–12 dígitos y contiene un SKU esperado con ≤2 dígitos sobrantes a izquierda o derecha, se reemplaza por el esperado.
+  - Evento: `postprocess:sku_compacted`.
+5. Métricas finales tras compactación:
+  - Evento: `postprocess:embedded_sku_recovery_stats_final`.
+6. Rescate global forzado (garantiza al menos 1 esperado si existe en algún token largo):
+  - Si después de los pasos anteriores no aparece ningún SKU esperado, se recorren tokens numéricos (título y SKU asignado) ordenados por longitud desc y valor.
+  - Se busca cada SKU esperado (orden alfabético) como substring; al primer match se fuerza la asignación.
+  - Eventos: `postprocess:expected_sku_forced_global` y luego `postprocess:expected_sku_forced_result`.
+7. Diagnóstico si siguen faltando todos:
+  - Evento: `postprocess:expected_skus_missing` con muestras de títulos (debug).
+
+Beneficios:
+- Determinismo: elimina condiciones no determinísticas entre ejecuciones consecutivas (flakiness).
+- Observabilidad: cada etapa emite eventos, permitiendo saber en qué punto se obtuvo (o no) el SKU esperado.
+- Escalabilidad: nuevos patrones pueden añadirse al mapeo inicial sin alterar la lógica posterior.
+
+Notas de implementación:
+- Los SKUs “esperados” actuales del proveedor: `6584`, `3502`, `564`, `468`, `873`.
+- El rescate global se ejecuta sólo si ninguno de esos está presente tras compactación; minimiza falsos positivos.
+- El orden de selección evita que una subcadena más corta opaque a otra válida más larga en la misma línea.
+
+Extensiones futuras:
+- Externalizar la lista de patrones conocidos y SKUs esperados a `config/suppliers/*.json`.
+- Registrar métricas de frecuencia de uso de cada etapa (para evaluar efectividad del mapeo vs rescate forzado).
+- Añadir validación cruzada contra catálogo interno cuando se consoliden tablas de `SupplierProduct`.
+
+### Consideraciones futuras
+- Generalizar mapeos a una configuración externa (`yaml/json`) para evitar cambios de código.
+- Incorporar validación cruzada contra catálogos internos cuando estén disponibles (SKU repositorio propio).
+- Ajustar ventana máxima si se detectan SKUs de más de 6 dígitos válidos en nuevas versiones de remitos.
+
+## Extracción de encabezado (remito_number) – Sept 2025
+
+Refuerzo de `_parse_header_text` para eliminar lecturas intermitentes:
+
+1. Acepta sólo patrón `0001-XXXXXXXX` (4 + 8 dígitos). Otros prefijos 4+8 se ignoran (`header_pattern_ignored`).
+2. Filtra números de 11–13 dígitos con prefijos CUIT comunes (`20,23,24,27,30,33,34`) (`discarded_cuit_like`).
+3. Fallback determinista: nombre de archivo (`Remito_00099596`) → primer bloque aislado de 8 dígitos (`any_8digits`).
+4. Evento `header_source` documenta la procedencia (`pattern_4_8`, `pattern_4_8_relaxed`, `filename`, `any_8digits`).
+
+Beneficio: evita que números largos ajenos (identificadores internos) disparen fallos esporádicos del test de remito.
+
+## Fallback multiline textual – Sept 2025
+
+Eventos añadidos para máxima visibilidad del parser de líneas cuando no hay tablas estructuradas:
+
+- `multiline_fallback_attempt` → inicio (incluye `expected_items`).
+- `multiline_fallback_used` → éxito, incluye `count` de líneas.
+- `multiline_fallback_empty` → intento sin resultados.
+- `multiline_error` → excepción controlada en el bloque.
+- Eventos previos internos (`regex_multiline_ok|regex_multiline_empty`) se mantienen para compatibilidad.
+
+Esto facilita auditoría en CI/CD y diferenciación entre “no hubo que usar fallback” vs “se intentó y falló”.
+
+### Refuerzos Fase 2 (Sept 2025, estabilidad Santa Planta)
+
+Se añadieron heurísticas y eventos adicionales para eliminar flakiness intermitente (remito_number erróneo y 0 líneas) y mejorar recuperaciones:
+
+1. Patrón contextual estricto de encabezado:
+  - Se busca únicamente `REMITO` seguido de variante `Nº|No|N°` y `0001 - XXXXXXXX` (4 dígitos, separador guion o espacio opcional, 8 dígitos). Espacios múltiples se normalizan.
+  - Cualquier otro bloque de 12+ dígitos adyacente se ignora antes de aplicar regex contextual.
+  - Evento: `header_long_sequence_removed` (uno por secuencia filtrada). Futuro: agregaremos `header_long_sequence_removed_count` (agregado) cuando se exponga conteo total.
+2. Sanitización previa del texto de encabezado:
+  - Antes de evaluar el patrón se purgan secuencias numéricas >=10 dígitos que no encajan; reduce colisiones con identificadores internos.
+3. Rewrite forzado desde filename:
+  - Si tras las heurísticas el `remito_number` carece de guion (`-`), se intenta reconstruir usando el nombre del archivo (`Remito_00099596_...pdf` → `0001-00099596`).
+  - Evento: `remito_number_rewritten_from_filename_forced`.
+4. Fallback multiline forzado temprano:
+  - Si tras pdfplumber (+ Camelot) se detectan <5 líneas, se fuerza la ejecución del fallback multiline aunque existan algunas líneas parciales.
+  - Evento: `multiline_fallback_forced` (además de los ya existentes `multiline_fallback_attempt|used|empty|error`).
+5. Segunda pasada por cantidades (quantity second pass):
+  - Recorre texto bruto buscando patrones de cantidad + descripción + importe cuando la primera pasada (money-first) no consolidó todas las líneas.
+  - Acepta variantes donde la cantidad aparece antes de la secuencia monetaria en esta fase extendida.
+  - Evento (cuando se ejecuta forzada tras la primera): `quantity_fallback_forced`. Próxima extensión documentará `second_pass_qty_pattern_extended` cuando se amplíe el set de regex.
+6. Descuentos porcentuales embebidos:
+  - Se detectan tokens como `-20% DESC`, `20% BONIF`, `15 % DTO` adjuntos a la línea o en la vecindad inmediata y se calcula `pct_bonif` (0.20 en el ejemplo).
+  - Eventos: `multiline_pct_detected` (detección en texto bruto) y `multiline_discount_attached` (descuento aplicado a una línea concreta).
+7. Observabilidad reforzada:
+  - Al finalizar el pipeline se mantienen métricas clásicas y se agregan eventos específicos de las nuevas ramas para trazabilidad en CI.
+
+Resumen de nuevos eventos (Fase 2):
+| Evento | Descripción |
+|--------|-------------|
+| `header_long_sequence_removed` | Secuencia numérica larga descartada antes del parse de encabezado |
+| `multiline_fallback_forced` | Se fuerza fallback multiline por baja cantidad de líneas iniciales (<5) |
+| `quantity_fallback_forced` | Ejecución obligada de segunda pasada quantity tras fallback previo |
+| `multiline_pct_detected` | Porcentaje de descuento localizado en texto multiline bruto |
+| `multiline_discount_attached` | Descuento aplicado a una línea concreta (se actualiza `pct_bonif`) |
+| `remito_number_rewritten_from_filename_forced` | Remito reescrito usando filename al carecer de patrón válido |
+
+Impacto esperado:
+- Eliminación del caso intermitente donde un identificador largo se interpretaba como remito.
+- Mayor probabilidad de recuperar ≥1 línea válida aun con tablas vacías u OCR parcial.
+- Registro explícito de descuentos porcentuales para cálculo de costos netos.
+
+### Tercera pasada híbrida y nuevos eventos (Implementado Sept 2025)
+
+Se añadió una tercera pasada determinista `_third_pass_sku_money_mix` que intenta reconstruir líneas cuando:
+1. Existen montos dispersos sin formar filas claras.
+2. Las cantidades y/o SKUs aparecen separados del monto final.
+
+Estrategia:
+- Tokeniza líneas previas al footer.
+- Identifica líneas con monto; retrocede y acumula posibles fragmentos de título y cantidad.
+- Inferencia de SKU corta (3–6 dígitos) evitando unidades (ML, G, KG, etc.).
+- Si hay más de un monto se toma el mayor como total y el menor como unitario (cuando qty>0).
+- Títulos duplicados exactos se descartan para evitar ruido.
+
+Eventos añadidos:
+| Evento | Descripción |
+|--------|-------------|
+| `third_pass_attempt` | Inicio de la tercera pasada (detalla expected_items). |
+| `third_pass_lines` | Resultado con líneas recuperadas (count). |
+| `third_pass_empty` | Sin líneas recuperadas en tercera pasada. |
+| `third_pass_error` | Excepción controlada en tercera pasada. |
+| `all_fallbacks_empty` | Tras multiline + segunda + tercera pasada no se obtuvo ninguna línea. |
+
+Extensiones implementadas previamente planeadas ahora activas:
+| Evento | Estado |
+|--------|--------|
+| `header_invalid_reset` | Implementado: remito descartado si no coincide exactamente `0001-\d{8}` tras sanitización. |
+| `header_long_sequence_removed_count` | Implementado: total de secuencias largas eliminadas en encabezado. |
+| `second_pass_qty_pattern_extended` | Implementado: segunda pasada detectó patrón cantidad-al-inicio. |
+
+Estos eventos ya forman parte del contrato observable del parser.
+
 
 ### Variables de entorno IA
 | Variable | Descripción | Default |

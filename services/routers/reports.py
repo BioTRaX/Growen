@@ -5,14 +5,14 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response, Query
+from fastapi import APIRouter, Depends, Response, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from datetime import datetime
+from datetime import datetime, timedelta
 import io, csv
 
 from db.session import get_session
-from db.models import Sale
+from db.models import Sale, SalePayment
 from services.auth import require_roles
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -42,6 +42,76 @@ async def sales_summary(dt_from: str | None = Query(None), dt_to: str | None = Q
         total_amount += float(amt or 0)
         breakdown.append({"status": status, "count": int(count or 0), "amount": float(amt or 0)})
     return {"total_sales": total_sales, "total_amount": round(total_amount,2), "breakdown": breakdown}
+
+
+@router.get("/sales/payments", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def sales_payments_report(
+    from_date: str | None = Query(None, description="Fecha desde (YYYY-MM-DD)"),
+    to_date: str | None = Query(None, description="Fecha hasta (YYYY-MM-DD)"),
+    method: str | None = Query(None, description="Método de pago a filtrar"),
+    limit: int = Query(500, ge=1, le=5000, description="Máximo de pagos devueltos"),
+    db: AsyncSession = Depends(get_session),
+):
+    """Reporte de cobranzas (pagos de ventas) con filtros simples.
+
+    Filtros:
+      - from_date / to_date: se aplican sobre SalePayment.created_at (UTC). Formato YYYY-MM-DD.
+      - method: filtra por método exacto.
+
+    Respuesta:
+      - count: cantidad de pagos devueltos (post-limit)
+      - total_amount: suma de amount
+      - by_method: dict método -> suma
+      - items: lista de pagos (id, sale_id, method, amount, reference, created_at)
+      - filters: eco de filtros aplicados
+    """
+    # Build query
+    stmt = select(SalePayment)
+    from_dt = None
+    to_dt = None
+    if from_date:
+        try:
+            from_dt = datetime.strptime(from_date, "%Y-%m-%d")
+        except Exception:
+            raise HTTPException(status_code=400, detail="from_date formato inválido (YYYY-MM-DD)")
+    if to_date:
+        try:
+            to_dt = datetime.strptime(to_date, "%Y-%m-%d")
+            # incluir día completo: usamos < to_dt+1
+            to_dt = to_dt + timedelta(days=1)
+        except Exception:
+            raise HTTPException(status_code=400, detail="to_date formato inválido (YYYY-MM-DD)")
+    if from_dt:
+        stmt = stmt.where(SalePayment.created_at >= from_dt)
+    if to_dt:
+        stmt = stmt.where(SalePayment.created_at < to_dt)
+    if method:
+        stmt = stmt.where(SalePayment.method == method)
+    stmt = stmt.order_by(SalePayment.created_at.asc()).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
+    total_amount = 0.0
+    by_method: dict[str, float] = {}
+    items = []
+    for r in rows:
+        amt = float(r.amount or 0)
+        total_amount += amt
+        m = r.method or "-"
+        by_method[m] = by_method.get(m, 0.0) + amt
+        items.append({
+            "id": r.id,
+            "sale_id": r.sale_id,
+            "method": r.method,
+            "amount": amt,
+            "reference": r.reference,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+    return {
+        "count": len(items),
+        "total_amount": round(total_amount, 2),
+        "by_method": by_method,
+        "items": items,
+        "filters": {"from_date": from_date, "to_date": to_date, "method": method}
+    }
 
 
 @router.get("/sales/export.csv", dependencies=[Depends(require_roles("colaborador", "admin"))])

@@ -114,3 +114,43 @@ Se incorporó un conjunto de scripts para diagnosticar y resolver estados irregu
 
 ---
 Actualización complementaria: 2025-09-13 (segunda entrada del día)
+
+## 2025-09-26 `20250926_add_purchase_line_meta`
+
+Se agrega columna `meta` (JSON nullable) a `purchase_lines` para almacenar trazabilidad de autocompletado:
+
+- Snapshot único `meta.enrichment` por ejecución (se sobreescribe).
+- Incluye: `algorithm_version`, `timestamp`, `fields` modificados (con `original`) y estadísticas agregadas (`with_outlier`, `price_enriched`).
+- No requiere backfill; en downgrade simplemente se elimina la columna.
+
+Motivación: habilitar UI para resaltar campos enriquecidos y permitir auditoría mínima sin inspeccionar logs.
+
+## 2025-09-26 `20250926_stock_ledger_and_sales_indexes`
+
+Cambios introducidos para el módulo Ventas / Clientes:
+
+- Creación de tabla `stock_ledger` (movimientos de inventario):
+  - Campos: id, product_id, source_type (sale|return|annul), source_id, delta (int, positivo=ingresa, negativo=egresa), balance_after, created_at (timezone aware ideal futuro), meta (JSON con referencias ej. sale_line_id).
+  - Uso: registrar decrementos al confirmar ventas y aumentos al anular o registrar devoluciones.
+- Índices de rendimiento agregados:
+  - `ix_sales_sale_date` para filtros por fecha en listados y reportes.
+  - `ix_sales_customer_id` para historial por cliente.
+  - `ix_sale_lines_product_id` para agregados por producto / reportes top-products.
+  - `ix_returns_created_at` y `ix_return_lines_product_id` para consultas de devoluciones y neteo futuro.
+- Índice único parcial (PostgreSQL) sobre `customers(document_number)` ignorando NULL, garantizando unicidad sólo cuando el documento se informa.
+  - En motores sin soporte (ej. SQLite) crea índice normal no único y la validación recae en capa aplicación.
+- Persistencia de campos por línea de venta `subtotal`, `tax`, `total` para acelerar reportes (desnormalización controlada).
+- Lógica de confirmación ahora:
+  - Recalcula totales.
+  - Bloquea (HTTP 409) si existen líneas con estado `SIN_VINCULAR`.
+  - Registra movimiento negativo en `stock_ledger` por cada línea.
+- Anulación de venta invalida cache de reportes (antes sólo confirmaciones / devoluciones lo hacían).
+- Rate limiting (30/min) para POST /sales introducido (no afecta schema, se documenta por impacto operativo).
+
+Notas de compatibilidad:
+- Si existían ventas previas sin `subtotal/tax/total` en líneas, se rellenarán al tocar `_recalc_totals` (confirmación, patch o línea agregada). No se fuerza backfill inmediato.
+- Para entornos multi-worker se recomienda mover ledger + cache a backend compartido (Redis / DB transaccional).
+
+Downgrade:
+- Eliminar tabla `stock_ledger` y los índices agregados.
+- NOTA: Perderá histórico de movimientos; considerar export previo si se requiere auditoría.

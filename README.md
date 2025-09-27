@@ -69,6 +69,15 @@
 - Productos / Media (ejemplos)
   - `GET /products`: catalogo
   - `GET /media/*`: estaticos del build (cuando aplica)
+  
+- Ventas / Clientes (nuevo módulo)
+  - `GET /sales` / `POST /sales` (rate limited) / flujo confirmación
+  - `POST /sales/{id}/confirm|deliver|annul`
+  - `POST /sales/{id}/payments` + `GET /sales/{id}/payments`
+  - `GET /sales/metrics/summary` métricas rápidas (cache 30s)
+  - `GET /sales/export` CSV histórico
+  - `GET /sales/catalog/search` autocomplete productos
+  - Documentación completa: [docs/SALES.md](./docs/SALES.md)
 
 Notas:
 - Rutas de Admin en frontend: `/admin/servicios`, `/admin/usuarios`, `/admin/imagenes-productos`.

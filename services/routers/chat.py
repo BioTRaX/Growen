@@ -7,8 +7,7 @@
 
 from __future__ import annotations
 
-import re
-import unicodedata
+import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Request
@@ -20,6 +19,7 @@ from ai.types import Task
 from db.session import get_session
 from services.auth import SessionData, current_session
 from services.chat.memory import (
+    MemoryState,
     build_memory_key,
     clear_memory,
     ensure_memory,
@@ -35,29 +35,21 @@ from services.chat.price_lookup import (
     resolve_product_info,
     serialize_result,
 )
+from services.chat.shared import (
+    ALLOWED_PRODUCT_INTENT_ROLES,
+    ALLOWED_PRODUCT_METRIC_ROLES,
+    CLARIFY_CONFIRM_WORDS,
+    clarify_prompt_text,
+    memory_terms_text,
+    normalize_followup_text,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
-ALLOWED_PRODUCT_INTENT_ROLES = {"admin", "colaborador", "cliente"}
-
-CLARIFY_CONFIRM_WORDS = {
-    "si",
-    "si",
-    "dale",
-    "ok",
-    "okay",
-    "vale",
-    "mostrar",
-    "mostrame",
-    "mostra",
-    "mostralo",
-    "mostrarlo",
-    "precios",
-    "precio",
-    "stock",
-    "dale si",
-}
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+from sqlalchemy.ext.asyncio import AsyncSession
+
 
 
 class ProductEntryOut(BaseModel):
@@ -88,6 +80,7 @@ class ProductLookupOut(BaseModel):
     results: List[ProductEntryOut]
     missing: List[str]
     needs_clarification: Optional[bool] = None
+    metrics: Optional[Dict[str, Any]] = None
     took_ms: Optional[int] = None
     errors: List[str] = []
 
@@ -109,46 +102,31 @@ class ChatOut(BaseModel):
     took_ms: Optional[int] = None
 
 
-def _normalize_followup_text(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value or "")
-    ascii_text = "".join(ch for ch in normalized if not unicodedata.combining(ch))
-    ascii_text = ascii_text.lower()
-    cleaned = re.sub(r"[^a-z0-9\s]", " ", ascii_text)
-    return re.sub(r"\s+", " ", cleaned).strip()
-
-
-def _clarify_text(memory_terms: str) -> str:
-    focus = memory_terms or "la consulta"
-    return f"Seguimos con {focus}. Queres que te muestre precios y stock?"
-
-
-def _memory_terms(query: ProductQuery) -> str:
-    if query.terms:
-        return " ".join(query.terms)
-    if query.normalized_text:
-        return query.normalized_text
-    return query.raw_text
-
-
 async def _handle_followup(
     *,
     message: str,
     memory_key: str,
     db: AsyncSession,
-    memory_state,
+    memory_state: MemoryState,
+    correlation_id: Optional[str],
+    include_metrics: bool,
 ) -> Optional[ChatOut]:
     if not memory_state or not memory_state.pending_clarification:
         return None
-    normalized = _normalize_followup_text(message)
+    normalized = normalize_followup_text(message)
     query = memory_state.query
     if not normalized:
         mark_prompted(memory_key)
-        terms = _memory_terms(query)
-        return ChatOut(text=_clarify_text(terms), type="clarify_prompt", intent="clarify")
+        terms = memory_terms_text(query)
+        try:
+            logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
+        except Exception:
+            pass
+        return ChatOut(text=clarify_prompt_text(terms), type="clarify_prompt", intent="clarify")
     if normalized in CLARIFY_CONFIRM_WORDS:
         result = await resolve_product_info(query, db)
         rendered = render_product_response(result)
-        serialized = serialize_result(result)
+        serialized = serialize_result(result, include_metrics=include_metrics)
         try:
             payload = ProductLookupOut.model_validate(serialized)
         except ValidationError:
@@ -156,6 +134,10 @@ async def _handle_followup(
         ensure_memory(memory_key, query, pending=result.status == "ambiguous", rendered=rendered)
         if result.status != "ambiguous":
             mark_resolved(memory_key)
+        try:
+            logger.info("chat.clarify_confirmation", extra={"correlation_id": correlation_id, "status": result.status})
+        except Exception:
+            pass
         return ChatOut(
             text=rendered,
             type="product_answer",
@@ -166,8 +148,12 @@ async def _handle_followup(
     tokens = normalized.split()
     if len(tokens) <= 3 and not memory_state.prompted:
         mark_prompted(memory_key)
-        terms = _memory_terms(query)
-        return ChatOut(text=_clarify_text(terms), type="clarify_prompt", intent="clarify")
+        terms = memory_terms_text(query)
+        try:
+            logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
+        except Exception:
+            pass
+        return ChatOut(text=clarify_prompt_text(terms), type="clarify_prompt", intent="clarify")
     return None
 
 
@@ -180,6 +166,7 @@ async def chat_endpoint(
 ) -> ChatOut:
     """Resuelve intents controlados y delega al router de IA como fallback."""
 
+    correlation_id = getattr(request.state, "correlation_id", None) or request.headers.get("x-correlation-id")
     session_id = session_data.session.id if session_data.session else None
     host = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
@@ -189,10 +176,16 @@ async def chat_endpoint(
     product_query = extract_product_query(payload.text)
     if product_query:
         if session_data.role not in ALLOWED_PRODUCT_INTENT_ROLES:
+            try:
+                logger.warning("chat.forbidden", extra={"correlation_id": correlation_id, "role": session_data.role})
+            except Exception:
+                pass
             return ChatOut(
                 text="Necesitas una cuenta autorizada para consultar precios y stock.",
                 intent="forbidden",
             )
+
+        include_metrics = session_data.role in ALLOWED_PRODUCT_METRIC_ROLES
 
         if (
             memory_state
@@ -202,12 +195,16 @@ async def chat_endpoint(
             and not memory_state.prompted
         ):
             mark_prompted(memory_key)
-            terms = _memory_terms(memory_state.query)
-            return ChatOut(text=_clarify_text(terms), type="clarify_prompt", intent="clarify")
+            terms = memory_terms_text(memory_state.query)
+            try:
+                logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
+            except Exception:
+                pass
+            return ChatOut(text=clarify_prompt_text(terms), type="clarify_prompt", intent="clarify")
 
         result = await resolve_product_info(product_query, db)
         rendered = render_product_response(result)
-        serialized = serialize_result(result)
+        serialized = serialize_result(result, include_metrics=include_metrics)
         try:
             payload_out = ProductLookupOut.model_validate(serialized)
         except ValidationError:
@@ -229,6 +226,8 @@ async def chat_endpoint(
             original_text=payload.text,
             product_query=product_query,
             result=result,
+            correlation_id=correlation_id,
+            include_metrics=include_metrics,
         )
 
         return ChatOut(
@@ -245,6 +244,7 @@ async def chat_endpoint(
             memory_key=memory_key,
             db=db,
             memory_state=memory_state,
+            correlation_id=correlation_id,
         )
         if follow is not None:
             return follow
@@ -268,4 +268,10 @@ async def chat_endpoint(
                 reply = payload.text
     except Exception:
         pass
+    try:
+        logger.info("chat.ai_fallback", extra={"correlation_id": correlation_id})
+    except Exception:
+        pass
     return ChatOut(text=reply)
+
+

@@ -5,7 +5,7 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
-import pytest
+import pytest, random, string
 from fastapi.testclient import TestClient
 from services.api import app
 
@@ -16,12 +16,13 @@ def client():
 
 
 def _create_product(client, title: str, stock: int, price: float) -> int:
+    rand = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
     r = client.post("/catalog/products", json={
         "title": title,
         "initial_stock": stock,
         "supplier_id": None,
         "supplier_sku": None,
-        "sku": f"{title[:5]}-{stock}-{int(price*100)}",
+        "sku": f"{title[:5]}-{stock}-{int(price*100)}-{rand}",
         "purchase_price": price,
         "sale_price": price,
     })

@@ -19,6 +19,7 @@ _db_path = _tmp_dir / "test_db.sqlite"
 os.environ.setdefault("DB_URL", f"sqlite+aiosqlite:///{_db_path}")
 
 from db.base import Base  # noqa: E402
+import db.models  # noqa: F401,E402  (asegura registro de todas las tablas)
 from sqlalchemy import text as _text  # noqa: E402
 
 _engine = create_async_engine(os.environ['DB_URL'])

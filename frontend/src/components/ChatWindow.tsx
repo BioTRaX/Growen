@@ -37,6 +37,14 @@ interface ProductPayload {
   sku_candidates: string[]
   results: ProductEntryPayload[]
   missing: string[]
+  needs_clarification?: boolean
+  metrics?: {
+    intent_counts: Record<string, number>
+    status_counts: Record<string, number>
+    matches_counts: Record<string, number>
+    latency_avg_ms: number
+    latency_p95_ms: number
+  }
   took_ms?: number | null
   errors?: string[]
 }
@@ -253,6 +261,9 @@ export default function ChatWindow() {
           <div style={{ fontSize: 13, color: '#b0bec5' }}>
             No encontre coincidencias directas. Proba buscar por SKU o abri el catalogo de productos.
           </div>
+        ) : null}
+        {payload.needs_clarification ? (
+          <div style={{ fontSize: 12, color: '#90a4ae' }}>Decime cual de los productos queres y te paso los detalles.</div>
         ) : null}
         {renderSuggestions(payload)}
       </div>

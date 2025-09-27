@@ -157,6 +157,114 @@ Igual estructura pero `mode: "apply"` y stock actualizado.
 
 ## Verificación de totales al confirmar y Rollback
 
+## Autocompletado de líneas (enriquecimiento) — Sept 2025
+
+El endpoint `PUT /purchases/{id}` puede ejecutar un proceso de autocompletado heurístico de las líneas para rellenar datos faltantes y detectar anomalías menores. Está deshabilitado por defecto y se activa con la variable de entorno `PURCHASE_COMPLETION_ENABLED`.
+
+### Objetivos
+- Rellenar `unit_cost` si la línea carece de costo explícito pero puede inferirse (futuro: catálogo / historial de precios).
+- Rellenar `line_discount` (porcentaje) si se dispone de pista contextual o estimación (placeholder actual: mantiene valor provisto; no inventa descuentos).
+- Normalizar / validar `supplier_sku` cuando aparece vacío y la heurística pueda sugerir uno (actualmente no sugiere, sólo conserva cuando existe).
+- Marcar indicadores estadísticos (outliers de precio, líneas enriquecidas) para futura auditoría o UI.
+
+### Flujo actual (versión inicial / stub)
+1. Después de aplicar las mutaciones de líneas del payload, si `PURCHASE_COMPLETION_ENABLED` ∈ {`1`,`true`,`True`} se construye una lista de `LineDraft`.
+2. Se invoca `complete_purchase_lines` (módulo `services/purchases/completion.py`).
+3. Por cada resultado (`LineCompletionResult`) se actualizan sólo campos vacíos o en cero (principio de no sobrescritura).
+4. Se emite un log estructurado vía `_purchase_event_log` con evento `purchase_completion_stats`.
+5. Fallos internos no abortan la operación: se loguea `purchase_completion_error` y se continúa.
+
+### Eventos
+| Evento | stage implícito | Detalle |
+|--------|-----------------|---------|
+| `purchase_completion_stats` | purchase_completion | `enriched`, `linked`, `with_outlier`, `price_enriched` |
+| `purchase_completion_error` | purchase_completion | `error` (mensaje) |
+
+### Campos que puede modificar (sólo si originalmente vacíos / 0)
+| Campo | Condición de actualización | Nota |
+|-------|----------------------------|------|
+| `unit_cost` | `unit_cost is None` o `== 0` | Valor retornado por completion (futuro: derivado de histórico) |
+| `line_discount` | `line_discount is None` o `== 0` | Se usará para representar % descuento; hoy no se genera nuevo valor |
+| `supplier_sku` | vacío y resultado provee `supplier_sku` | La versión actual no infiere nuevos SKUs (placeholder) |
+
+### Limitaciones actuales / Futuras extensiones
+- No modifica cantidades (`qty`).
+- No cambia títulos (`title`).
+- No realiza fuzzy-link a `product_id` ni `supplier_item_id`; eso permanece en validación / confirmación.
+- No persiste price history ni toca `SupplierProduct` (sólo en confirmación se actualizan precios oficialmente).
+- Fuentes de datos (`_PriceProvider`, `_CatalogProvider`) son stubs; se extenderán para consultar historial y catálogo real.
+- No genera alertas negativas: sólo enriquece silenciosamente y registra métricas.
+
+### Ejemplo (log simplificado)
+```json
+{
+  "event": "purchase_completion_stats",
+  "purchase_id": 123,
+  "enriched": 10,
+  "linked": 0,
+  "with_outlier": 0,
+  "price_enriched": 4
+}
+```
+
+### Recomendaciones
+- Activar primero en entorno de prueba y revisar logs `purchase_event` filtrando `purchase_completion`. 
+- Añadir tests que habiliten el flag y verifiquen que líneas sin costo reciben un valor (cuando las fuentes reales estén implementadas). 
+- Extender `purchase_completion_stats` para incluir tiempo de ejecución (`elapsed_ms`) si se vuelve costoso.
+
+### Próximos pasos sugeridos
+1. Implementar adaptadores reales a historial de precios (`PriceHistory`) para rellenar costo faltante usando mediana/último registro.
+2. Implementar lookup de catálogo (SKU → SupplierProduct) para inferir `supplier_item_id` y `product_id` (opcional, quizá en validación, no aquí).
+3. Marcar `flags` por línea (ej. `outlier_price_above_p95`, `suggested_discount_from_total`).
+4. Añadir endpoint de métricas `GET /admin/services/purchase_completion/metrics`.
+5. UI: resaltar en color tenue valores completados automáticamente (tooltip con “autocompletado”).
+
+### Metadatos de enriquecimiento (meta.enrichment)
+
+Desde la versión `20250926_add_purchase_line_meta` se agrega una columna `meta` (JSON nullable) en `purchase_lines` para persistir trazabilidad de campos autocompletados.
+
+Estructura actual (snapshot único por línea; se sobreescribe en cada ejecución):
+```json
+{
+  "enrichment": {
+    "algorithm_version": "20250926_1",
+    "timestamp": "2025-09-26T14:55:12Z",
+    "fields": {
+      "unit_cost": { "enriched": true, "original": null },
+      "line_discount": { "enriched": true, "original": 0.0 },
+      "supplier_sku": { "enriched": true, "original": null }
+    },
+    "stats": { "with_outlier": 0, "price_enriched": 4 }
+  }
+}
+```
+
+Claves:
+- `algorithm_version`: versión lógica del motor (incrementar cuando cambien heurísticas que afecten resultados).
+- `timestamp`: ISO UTC de la ejecución.
+- `fields`: mapa de campos modificados. Cada campo contiene:
+  - `enriched`: `true` si fue autocompletado en esta pasada (no se guarda `false` para no generar ruido).
+  - `original`: valor previo antes de completar (puede ser `null` si no existía).
+- `stats`: resumen global de la ejecución (subset de métricas internas: outliers detectados y cuántos precios se enriquecieron a nivel compra).
+
+Reglas:
+- Sólo se agrega `meta.enrichment` si al menos un campo fue autocompletado.
+- No sobrescribe valores existentes (principio de no destrucción); sólo llena vacíos / cero.
+- En futuras versiones podría añadirse `history` (array) si se requiere auditoría longitudinal; hoy se mantiene simple.
+
+Uso en UI:
+- Para resaltar un campo: si `line.meta.enrichment.fields.<campo>.enriched` existe → aplicar clase CSS (e.g. `enriched-field`).
+- Tooltip sugerido: "Autocompletado (versión: 20250926_1)".
+
+Limitaciones / Futuro:
+- Sin historial acumulado; sólo el último snapshot.
+- No incluye razones heurísticas detalladas (se pueden derivar de eventos de log si se necesita debug profundo).
+- Podría extenderse con `elapsed_ms` y `passes` cuando se integren más fases inteligentes.
+
+Migración:
+- Ver `MIGRATIONS_NOTES.md` entrada: `20250926_add_purchase_line_meta`.
+
+
 Al confirmar una compra, el backend calcula y registra:
 - purchase_total: total del remito (subtotal con descuentos de línea, descuento global e IVA)
 - applied_total: total de las líneas que efectivamente impactaron stock (sólo las resueltas con product_id)

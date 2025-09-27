@@ -22,6 +22,7 @@ import asyncio
 import os
 import uuid
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, WebSocket
 from sqlalchemy import select
@@ -40,6 +41,21 @@ from services.chat.price_lookup import (
     render_product_response,
     resolve_product_info,
     serialize_result,
+)
+from services.chat.memory import (
+    build_memory_key,
+    clear_memory,
+    ensure_memory,
+    get_memory,
+    mark_prompted,
+    mark_resolved,
+)
+from services.chat.shared import (
+    ALLOWED_PRODUCT_METRIC_ROLES,
+    CLARIFY_CONFIRM_WORDS,
+    clarify_prompt_text,
+    memory_terms_text,
+    normalize_followup_text,
 )
 
 router = APIRouter()
@@ -98,7 +114,6 @@ async def _ping(socket: WebSocket) -> None:
 async def ws_chat(socket: WebSocket) -> None:
     """Canal WebSocket principal."""
 
-    # Buscar sesión para personalizar la conversación si el usuario está autenticado.
     sess = None
     sid = socket.cookies.get("growen_session")
     if sid:
@@ -111,49 +126,89 @@ async def ws_chat(socket: WebSocket) -> None:
             sess = res.scalar_one_or_none()
 
     await socket.accept()
+    correlation_header = socket.headers.get("x-correlation-id") or socket.headers.get("x-request-id")
+    base_correlation_id = correlation_header or f"ws-{uuid.uuid4().hex[:10]}"
+    message_index = 0
+    role = getattr(sess, "role", "anon") or "anon"
+    host = getattr(socket.client, "host", None)
+    user_agent = socket.headers.get("user-agent")
+    memory_key = build_memory_key(session_id=sid, role=role, host=host, user_agent=user_agent)
     ping_task = asyncio.create_task(_ping(socket))
     try:
         while True:
             try:
-                data = await asyncio.wait_for(
-                    socket.receive_text(), timeout=READ_TIMEOUT
-                )
+                data = await asyncio.wait_for(socket.receive_text(), timeout=READ_TIMEOUT)
             except asyncio.TimeoutError:
-                logger.warning("Timeout de lectura en ws_chat")
+                try:
+                    logger.warning("Timeout de lectura en ws_chat", extra={"correlation_id": base_correlation_id})
+                except Exception:
+                    logger.warning("Timeout de lectura en ws_chat")
                 break
 
-            # Saneamiento básico y límites para evitar abuso del canal
+            message_index += 1
+            correlation_id = f"{base_correlation_id}:{message_index}"
+
             if not isinstance(data, str):
-                await socket.send_json({"role": "system", "text": "Entrada inválida."})
+                await socket.send_json({"role": "system", "text": "Entrada invalida."})
                 continue
             data = data.strip()
             if not data:
                 await socket.send_json({"role": "system", "text": "Decime algo para responder."})
                 continue
             if len(data) > 2000:
-                await socket.send_json({
-                    "role": "system",
-                    "text": "Tu mensaje es muy largo. Por favor, resumilo (máx. 2000 caracteres).",
-                })
+                await socket.send_json({"role": "system", "text": "Tu mensaje es muy largo. Por favor, resumilo (max. 2000 caracteres)."})
                 continue
+
+            memory_state = get_memory(memory_key)
+            include_metrics = role in ALLOWED_PRODUCT_METRIC_ROLES
 
             product_query = extract_product_query(data)
             if product_query:
-                # Resolver consultas de producto de forma determinista evitando delegar al streaming.
+                if (
+                    memory_state
+                    and memory_state.pending_clarification
+                    and not product_query.explicit_price
+                    and not product_query.explicit_stock
+                    and not memory_state.prompted
+                ):
+                    mark_prompted(memory_key)
+                    terms = memory_terms_text(memory_state.query)
+                    try:
+                        logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
+                    except Exception:
+                        pass
+                    await socket.send_json({
+                        "role": "assistant",
+                        "type": "clarify_prompt",
+                        "intent": "clarify",
+                        "text": clarify_prompt_text(terms),
+                    })
+                    continue
+
                 async with SessionLocal() as db:
                     result = await resolve_product_info(product_query, db)
                     await log_product_lookup(
                         db,
                         user_id=(sess.user.id if getattr(sess, "user", None) else None),
-                        ip=getattr(socket.client, "host", None),
+                        ip=host,
                         original_text=data,
                         product_query=product_query,
                         result=result,
+                        correlation_id=correlation_id,
                     )
-                payload = serialize_result(result)
+                rendered = render_product_response(result)
+                payload = serialize_result(result, include_metrics=include_metrics)
+                memory_state = ensure_memory(
+                    memory_key,
+                    product_query,
+                    pending=result.status == "ambiguous",
+                    rendered=rendered,
+                )
+                if result.status != "ambiguous":
+                    mark_resolved(memory_key)
                 await socket.send_json({
                     "role": "assistant",
-                    "text": render_product_response(result),
+                    "text": rendered,
                     "type": "product_answer",
                     "data": payload,
                     "intent": result.intent,
@@ -161,7 +216,67 @@ async def ws_chat(socket: WebSocket) -> None:
                 })
                 continue
 
-            # Personalizar el prompt con los datos del usuario/rol si hay sesión.
+            if memory_state and memory_state.pending_clarification:
+                normalized = normalize_followup_text(data)
+                if not normalized:
+                    mark_prompted(memory_key)
+                    terms = memory_terms_text(memory_state.query)
+                    try:
+                        logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
+                    except Exception:
+                        pass
+                    await socket.send_json({
+                        "role": "assistant",
+                        "type": "clarify_prompt",
+                        "intent": "clarify",
+                        "text": clarify_prompt_text(terms),
+                    })
+                    continue
+                if normalized in CLARIFY_CONFIRM_WORDS:
+                    async with SessionLocal() as db:
+                        result = await resolve_product_info(memory_state.query, db)
+                    rendered = render_product_response(result)
+                    payload = serialize_result(result, include_metrics=include_metrics)
+                    ensure_memory(
+                        memory_key,
+                        memory_state.query,
+                        pending=result.status == "ambiguous",
+                        rendered=rendered,
+                    )
+                    if result.status != "ambiguous":
+                        mark_resolved(memory_key)
+                    try:
+                        logger.info("chat.clarify_confirmation", extra={"correlation_id": correlation_id, "status": result.status})
+                    except Exception:
+                        pass
+                    await socket.send_json({
+                        "role": "assistant",
+                        "text": rendered,
+                        "type": "product_answer",
+                        "data": payload,
+                        "intent": result.intent,
+                        "took_ms": result.took_ms,
+                    })
+                    continue
+                tokens = normalized.split()
+                if len(tokens) <= 3 and not memory_state.prompted:
+                    mark_prompted(memory_key)
+                    terms = memory_terms_text(memory_state.query)
+                    try:
+                        logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
+                    except Exception:
+                        pass
+                    await socket.send_json({
+                        "role": "assistant",
+                        "type": "clarify_prompt",
+                        "intent": "clarify",
+                        "text": clarify_prompt_text(terms),
+                    })
+                    continue
+
+            if memory_state and not memory_state.pending_clarification:
+                clear_memory(memory_key)
+
             t0 = time.perf_counter()
             prompt = data
             if sess:
@@ -181,15 +296,13 @@ async def ws_chat(socket: WebSocket) -> None:
                     Task.SHORT_ANSWER.value,
                     bool(sess),
                     len(prompt),
+                    extra={"correlation_id": correlation_id},
                 )
                 acc = []
                 try:
                     for chunk in router_ai.run_stream(Task.SHORT_ANSWER.value, prompt):
-                        # chunk incluye prefijo openai:/ollama: en el primer fragmento; eliminamos al vuelo
                         if not acc and (chunk.startswith("openai:") or chunk.startswith("ollama:")):
-                            # quitar prefijo sólo primera vez
                             _, _, chunk = chunk.partition(":")
-                        # Delta puro
                         if chunk:
                             acc.append(chunk)
                             await socket.send_json({
@@ -203,6 +316,7 @@ async def ws_chat(socket: WebSocket) -> None:
                                 msg_id,
                                 len(chunk),
                                 sum(len(c) for c in acc),
+                                extra={"correlation_id": correlation_id},
                             )
                     full = "".join(acc).strip()
                     await socket.send_json({
@@ -217,6 +331,7 @@ async def ws_chat(socket: WebSocket) -> None:
                         msg_id,
                         len(full),
                         int((time.perf_counter() - t0) * 1000),
+                        extra={"correlation_id": correlation_id},
                     )
                     logger.info(
                         "ws_chat message",
@@ -226,6 +341,7 @@ async def ws_chat(socket: WebSocket) -> None:
                             "duration_ms": int((time.perf_counter() - t0) * 1000),
                             "auth": bool(sess),
                             "stream": True,
+                            "correlation_id": correlation_id,
                         },
                     )
                 except Exception as exc:  # pragma: no cover
@@ -239,7 +355,11 @@ async def ws_chat(socket: WebSocket) -> None:
             else:
                 try:
                     logger.debug(
-                        "[ai:request] task=%s auth=%s prompt_chars=%s", Task.SHORT_ANSWER.value, bool(sess), len(prompt)
+                        "[ai:request] task=%s auth=%s prompt_chars=%s",
+                        Task.SHORT_ANSWER.value,
+                        bool(sess),
+                        len(prompt),
+                        extra={"correlation_id": correlation_id},
                     )
                     raw_reply = await ai_reply(prompt)
                 except Exception as exc:  # pragma: no cover
@@ -256,11 +376,10 @@ async def ws_chat(socket: WebSocket) -> None:
                         "duration_ms": int((time.perf_counter() - t0) * 1000),
                         "auth": bool(sess),
                         "stream": False,
+                        "correlation_id": correlation_id,
                     },
                 )
     except WebSocketDisconnect:
-        # El cliente cerró la conexión; Starlette maneja el cierre y no
-        # es necesario llamar a ``close`` manualmente.
         logger.warning("Cliente desconectado")
     except Exception as exc:
         logger.error("Error inesperado en ws_chat: %s", exc)
@@ -268,10 +387,9 @@ async def ws_chat(socket: WebSocket) -> None:
             try:
                 await socket.send_json({"role": "system", "text": f"error: {exc}"})
             except Exception as send_exc:
-                logger.error(
-                    "No se pudo notificar al cliente del error: %s", send_exc
-                )
+                logger.error("No se pudo notificar al cliente del error: %s", send_exc)
     finally:
         ping_task.cancel()
         if socket.client_state == WebSocketState.CONNECTED:
             await socket.close()
+
