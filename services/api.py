@@ -220,30 +220,31 @@ async def log_requests(request: Request, call_next):
 # --- Exception Handlers EspecAficos ---
 @app.exception_handler(IntegrityError)
 async def integrity_error_handler(request: Request, exc: IntegrityError):  # type: ignore[override]
-    """Mapea errores de integridad conocidos a respuestas HTTP mAs Aotiles.
+    """Mapea errores de integridad conocidos a respuestas HTTP útiles.
 
-    - variants_sku_key -> 409 duplicate_sku
-    - supplier_products (supplier_id, supplier_product_id) unique -> 409 duplicate_supplier_product
-    Otros: 409 conflict genArico sin filtrar informaciA3n sensible.
+    - variants.sku unique -> duplicate_sku
+    - supplier_products(supplier_id, supplier_product_id) -> duplicate_supplier_sku
+    Otros: conflict genérico.
     """
     raw = str(exc.orig) if getattr(exc, "orig", None) else str(exc)
-    # Detectar constraint por nombre o patrA3n
     detail = "conflict"
     code = "conflict"
     field = None
     status = 409
-    if "variants_sku_key" in raw or re.search(r"duplicate key value.*variants", raw, re.I):
+    low = raw.lower()
+    # Heurísticas por nombre de índice/constraint y mensaje
+    if "variants" in low and "sku" in low and ("duplicate" in low or "unique" in low or "violates unique" in low):
         code = "duplicate_sku"
         detail = "SKU ya existente"
         field = "sku"
-    elif "supplier_products" in raw and ("duplicate key" in raw.lower()):
-        code = "duplicate_supplier_product"
-        detail = "Producto de proveedor ya registrado"
-        field = "supplier_product_id"
-    # Intentar rollback de la sesiA3n (si existe) para limpiar estado
-    try:  # best effort
+    elif "supplier_products" in low and ("supplier_product_id" in low or "duplicate" in low):
+        code = "duplicate_supplier_sku"
+        detail = "supplier_sku duplicado para proveedor"
+        field = "supplier_sku"
+    # Intentar rollback de la sesión
+    try:
         from sqlalchemy.ext.asyncio import AsyncSession
-        sess = request.state.session if hasattr(request.state, "session") else None
+        sess = getattr(request.state, 'session', None)
         if isinstance(sess, AsyncSession):
             await sess.rollback()
     except Exception:

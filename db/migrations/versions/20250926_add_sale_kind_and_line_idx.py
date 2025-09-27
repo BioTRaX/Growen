@@ -21,16 +21,39 @@ depends_on = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("sales") as batch:
-        batch.add_column(sa.Column("sale_kind", sa.String(16), server_default="MOSTRADOR", nullable=False))
-    # Añadir constraint opcional (soft) validando valores
-    try:
-        op.create_check_constraint("ck_sales_kind", "sales", "sale_kind IN ('MOSTRADOR','PEDIDO')")
-    except Exception:
-        pass
-    op.create_index("ix_sale_lines_product_id", "sale_lines", ["product_id"], unique=False)
-    # Índice compuesto para consultas por producto y agrupación por venta
-    op.create_index("ix_sale_lines_product_sale", "sale_lines", ["product_id","sale_id"], unique=False)
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    sales_cols = {c['name'] for c in inspector.get_columns('sales')} if 'sales' in inspector.get_table_names() else set()
+    sale_lines_exists = 'sale_lines' in inspector.get_table_names()
+
+    # Columna sale_kind sólo si falta
+    if 'sale_kind' not in sales_cols and 'sales' in inspector.get_table_names():
+        with op.batch_alter_table("sales") as batch:
+            batch.add_column(sa.Column("sale_kind", sa.String(16), server_default="MOSTRADOR", nullable=False))
+    # Constraint (best-effort) si la tabla existe
+    if 'sales' in inspector.get_table_names():
+        try:
+            op.create_check_constraint("ck_sales_kind", "sales", "sale_kind IN ('MOSTRADOR','PEDIDO')")
+        except Exception:
+            pass
+
+    def index_exists(table: str, name: str) -> bool:
+        try:
+            return any(ix.get('name') == name for ix in inspector.get_indexes(table))
+        except Exception:
+            return False
+
+    if sale_lines_exists:
+        if not index_exists('sale_lines', 'ix_sale_lines_product_id'):
+            try:
+                op.create_index("ix_sale_lines_product_id", "sale_lines", ["product_id"], unique=False)
+            except Exception:
+                pass
+        if not index_exists('sale_lines', 'ix_sale_lines_product_sale'):
+            try:
+                op.create_index("ix_sale_lines_product_sale", "sale_lines", ["product_id","sale_id"], unique=False)
+            except Exception:
+                pass
 
 
 def downgrade() -> None:

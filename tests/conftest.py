@@ -28,6 +28,24 @@ async def _init_db():
 	async with _engine.begin() as conn:
 		# Crear todas las tablas (simplificación respecto a migraciones Alembic para tests rápidos)
 		await conn.run_sync(Base.metadata.create_all)
+		# Asegurar tabla sku_sequences (si tests requieren generación canónica)
+		try:
+			await conn.execute(_text("CREATE TABLE IF NOT EXISTS sku_sequences (category_code VARCHAR(3) PRIMARY KEY, next_seq INTEGER NOT NULL)"))
+		except Exception:
+			pass
+
+	# Asegurar columna canonical_sku si falta (Legacy DB sqlite ya creada antes de cambio de modelo)
+	try:
+		res = await _engine.execute(_text("PRAGMA table_info(products)"))  # type: ignore[attr-defined]
+		cols = [r[1] for r in res.fetchall()]
+		if 'canonical_sku' not in cols:
+			async with _engine.begin() as conn2:
+				try:
+					await conn2.execute(_text("ALTER TABLE products ADD COLUMN canonical_sku VARCHAR(32)"))
+				except Exception:
+					pass
+	except Exception:
+		pass
 
 # Ejecutar inicialización una vez al importar conftest
 asyncio.get_event_loop().run_until_complete(_init_db())
