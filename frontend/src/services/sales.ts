@@ -1,18 +1,9 @@
 // NG-HEADER: Nombre de archivo: sales.ts
 // NG-HEADER: Ubicación: frontend/src/services/sales.ts
-// NG-HEADER: Descripción: Servicios HTTP para clientes y ventas
+// NG-HEADER: Descripción: Servicios HTTP para ventas (POS y reportes)
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import http from './http'
-
-export type Customer = {
-  id?: number
-  name: string
-  email?: string | null
-  phone?: string | null
-  doc_id?: string | null
-  address?: string | null
-  notes?: string | null
-}
+import type { Customer } from './customers'
 
 export type SaleItem = {
   product_id: number
@@ -25,26 +16,6 @@ export type Payment = {
   method: 'efectivo' | 'debito' | 'credito' | 'transferencia' | 'mercadopago' | 'otro'
   amount: number
   reference?: string
-}
-
-export async function listCustomers(params?: { q?: string; page?: number; page_size?: number }) {
-  const r = await http.get('/sales/customers', { params })
-  return r.data as { items: Customer[]; total: number; page: number; pages: number }
-}
-
-export async function createCustomer(payload: Customer) {
-  const r = await http.post('/sales/customers', payload)
-  return r.data as { id: number }
-}
-
-export async function updateCustomer(id: number, payload: Partial<Customer>) {
-  const r = await http.put(`/sales/customers/${id}`, payload)
-  return r.data as { status: 'ok' }
-}
-
-export async function deleteCustomer(id: number) {
-  const r = await http.delete(`/sales/customers/${id}`)
-  return r.data as { status: 'ok'; already?: boolean }
 }
 
 export async function createSale(payload: { customer: Partial<Customer>; items: SaleItem[]; payments?: Payment[]; note?: string; status?: 'BORRADOR' | 'CONFIRMADA'; sale_date?: string; }) {
@@ -84,7 +55,3 @@ export async function deliverSale(id: number) {
   return r.data as { status: string; already?: boolean }
 }
 
-export async function listCustomerSales(customerId: number, params?: { page?: number; page_size?: number }) {
-  const r = await http.get(`/sales/customers/${customerId}/sales`, { params })
-  return r.data as { items: Array<{ id: number; status: string; sale_date: string; total: number; paid_total: number }>; total: number; page: number; pages: number }
-}

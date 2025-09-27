@@ -80,9 +80,4 @@ async def generate_canonical_sku(session: AsyncSession, category_name: str, subc
     # Incrementar secuencia
     await session.execute(text("UPDATE sku_sequences SET next_seq = next_seq + 1 WHERE category_code = :c"), {"c": prefix})  # type: ignore[arg-type]
     # En SQLite liberar lock rápidamente para evitar 'database is locked' en tests.
-    if dialect == 'sqlite':  # pragma: no cover
-        try:
-            await session.commit()
-        except Exception:
-            pass
     return sku

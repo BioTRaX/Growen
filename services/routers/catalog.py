@@ -176,97 +176,23 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
     # Búsqueda case-insensitive para evitar conflictos por mayúsculas/minúsculas
     existing = await session.scalar(select(Variant).where(func.lower(Variant.sku) == desired_sku.lower()))
     if existing:
-    # Lógica: si existe Variant pero no existe vínculo SupplierProduct para este supplier => crear vínculo y devolver 200.
-    # Si ya existe vínculo => 409 (duplicado real).
-        prod_existing = await session.get(Product, existing.product_id)
-        supplier_item_id = None
-        if supplier is not None and prod_existing is not None:
-            from db.models import SupplierProduct
-            # Si se envió supplier_sku verificar unicidad (par supplier_id + supplier_product_id)
-            if payload.supplier_sku:
-                dup_sup = await session.scalar(
-                    select(SupplierProduct).where(
-                        SupplierProduct.supplier_id == payload.supplier_id,
-                        SupplierProduct.supplier_product_id == payload.supplier_sku,
-                    )
-                )
-                if dup_sup:
-                    raise HTTPException(status_code=409, detail={"code": "duplicate_supplier_sku", "message": "supplier_sku ya existente para este proveedor"})
-            sp_exist = await session.scalar(
-                select(SupplierProduct).where(
-                    SupplierProduct.supplier_id == payload.supplier_id,
-                    SupplierProduct.internal_product_id == prod_existing.id,
-                )
-            )
-            if sp_exist:
-                raise HTTPException(status_code=409, detail={"code": "duplicate_sku", "message": "SKU ya existente"})
-            # Crear SupplierProduct faltante y devolver 200 simulando creación inicial
-            sp_new = SupplierProduct(
-                supplier_id=payload.supplier_id,
-                supplier_product_id=(payload.supplier_sku or prod_existing.sku_root),  # supplier_sku preferido
-                title=prod_existing.title[:200],
-                current_purchase_price=(payload.purchase_price if payload.purchase_price is not None else None),
-                current_sale_price=(payload.sale_price if payload.sale_price is not None else None),
-                internal_product_id=prod_existing.id,
-                internal_variant_id=existing.id,
-            )
-            session.add(sp_new)
-            await session.flush()
-            supplier_item_id = sp_new.id
-            await session.commit()
-        return {
-            "id": prod_existing.id if prod_existing else None,
-            "title": (prod_existing.title if prod_existing else payload.title),
-            "sku_root": desired_sku,
-            "supplier_item_id": supplier_item_id,
-            "idempotent": False,
-            "created": False,
-            "linked": True,
-        }
+        raise HTTPException(status_code=409, detail={"code": "duplicate_sku", "message": "SKU ya existente"})
 
     try:
         # Asegurar (o crear en caliente en SQLite) la columna canonical_sku ANTES de instanciar Product
         has_canonical_col = await _products_has_canonical(session)
-        bind = session.get_bind()
-        dialect = bind.dialect.name if bind else ""
         import logging as _logging
         _logging.getLogger("growen").debug({"event": "create_product_minimal.start", "desired_sku": desired_sku, "strict": strict_flag})
 
-        prod = None
-        if not has_canonical_col and dialect == "sqlite":
-            # Fallback: INSERT manual y stub en memoria para evitar SELECT que incluye canonical_sku inexistente.
-            from sqlalchemy import text as _text
-            from types import SimpleNamespace as _NS
-            res_cols = await session.execute(_text("PRAGMA table_info(products)"))  # type: ignore[arg-type]
-            existing_cols = {row[1] for row in res_cols.fetchall()}
-            from datetime import datetime as _dt
-            initial_stock_val = int(payload.initial_stock or 0)
-            values = {
-                "sku_root": desired_sku,
-                "title": payload.title[:200],
-                "created_at": _dt.utcnow(),
-                "updated_at": _dt.utcnow(),
-                "stock": initial_stock_val,
-            }
-            filtered = {k: v for k, v in values.items() if k in existing_cols}
-            cols_sql = ", ".join(filtered.keys())
-            params_sql = ", ".join([f":{k}" for k in filtered.keys()])
-            sql = f"INSERT INTO products ({cols_sql}) VALUES ({params_sql})"
-            await session.execute(_text(sql), filtered)  # type: ignore[arg-type]
-            await session.flush()
-            new_id_row = await session.execute(_text("SELECT last_insert_rowid()"))  # type: ignore[arg-type]
-            new_id = int(new_id_row.scalar())
-            prod = _NS(id=new_id, sku_root=desired_sku, title=payload.title, stock=initial_stock_val)
-        else:
-            prod = Product(sku_root=desired_sku, title=payload.title)
-            # Sólo intentar setear canonical_sku si la columna existe y el SKU es canónico
-            if sku_is_canonical and has_canonical_col:
-                try:
-                    setattr(prod, 'canonical_sku', desired_sku)  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-            session.add(prod)
-            await session.flush()
+        prod = Product(sku_root=desired_sku, title=payload.title)
+        # Sólo intentar setear canonical_sku si la columna existe y el SKU es canónico
+        if sku_is_canonical and has_canonical_col:
+            try:
+                setattr(prod, 'canonical_sku', desired_sku)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        session.add(prod)
+        await session.flush()
         # Si el SKU elegido ya se usó (race o fallback previo) y estamos en modo no estricto, generar sufijo incremental
         attempt_sku = desired_sku
         attempt_idx = 1
@@ -323,75 +249,7 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
             # No se pudo generar SKU único tras reintentos
             raise HTTPException(status_code=409, detail={"code": "duplicate_sku", "message": "Colisión repetida en SKU"})
     except IntegrityError:
-        # Fallback: variante ya existe (race condition u otro test creó producto). Reutilizar linking path.
         await session.rollback()
-        existing = await session.scalar(select(Variant).where(Variant.sku == desired_sku))
-        if existing:
-            prod_existing = await session.get(Product, existing.product_id)
-            if supplier is not None and prod_existing is not None:
-                from db.models import SupplierProduct
-                # Validar supplier_sku duplicado
-                if payload.supplier_sku:
-                    dup_sup = await session.scalar(
-                        select(SupplierProduct).where(
-                            SupplierProduct.supplier_id == payload.supplier_id,
-                            SupplierProduct.supplier_product_id == payload.supplier_sku,
-                        )
-                    )
-                    if dup_sup:
-                        raise HTTPException(status_code=409, detail={"code": "duplicate_supplier_sku", "message": "supplier_sku ya existente para este proveedor"})
-                sp_exist = await session.scalar(
-                    select(SupplierProduct).where(
-                        SupplierProduct.supplier_id == payload.supplier_id,
-                        SupplierProduct.internal_product_id == prod_existing.id,
-                    )
-                )
-                if sp_exist:
-                    raise HTTPException(status_code=409, detail={"code": "duplicate_sku", "message": "SKU ya existente"})
-                sp_new = SupplierProduct(
-                    supplier_id=payload.supplier_id,
-                    supplier_product_id=(payload.supplier_sku or prod_existing.sku_root),
-                    title=prod_existing.title[:200],
-                    current_purchase_price=(payload.purchase_price if payload.purchase_price is not None else None),
-                    current_sale_price=(payload.sale_price if payload.sale_price is not None else None),
-                    internal_product_id=prod_existing.id,
-                    internal_variant_id=existing.id,
-                )
-                session.add(sp_new)
-                await session.flush()
-                await session.commit()
-                return {
-                    "id": prod_existing.id,
-                    "title": prod_existing.title,
-                    "sku_root": desired_sku,
-                    "supplier_item_id": sp_new.id,
-                    "idempotent": False,
-                    "created": False,
-                    "linked": True,
-                }
-            # Modo no estricto y sin supplier adicional: reutilizar producto existente silenciosamente
-            if not strict_flag and prod_existing is not None:
-                return {
-                    "id": prod_existing.id,
-                    "title": prod_existing.title,
-                    "sku_root": desired_sku,
-                    "idempotent": True,
-                    "created": False,
-                    "linked": False,
-                }
-        # Si estamos en modo no estricto y existe al menos una Variant con cualquier SKU parecido (mismo prefijo), reutilizar
-        if not strict_flag:
-            alt_variant = await session.scalar(select(Variant).order_by(Variant.id.desc()))
-            if alt_variant:
-                prod_alt = await session.get(Product, alt_variant.product_id)
-                return {
-                    "id": prod_alt.id if prod_alt else None,
-                    "title": prod_alt.title if prod_alt else payload.title,
-                    "sku_root": getattr(prod_alt, 'sku_root', desired_sku) if prod_alt else desired_sku,
-                    "idempotent": True,
-                    "created": False,
-                    "linked": False,
-                }
         raise HTTPException(status_code=409, detail={"code": "duplicate_sku", "message": "SKU ya existente"})
     # Compatibilidad: reflejar product_id/variant_id directos en Product para flujos que esperan product.stock
     try:

@@ -40,17 +40,18 @@ try:
         row = conn.execute(text("select id, identifier from users where role='admin' limit 1")).first()
         if row is None:
             h = argon2.using(type='ID').hash(admin_pass)
+            # Incluimos created_at / updated_at explícitamente para evitar violaciones NOT NULL
             conn.execute(text(
                 """
-                INSERT INTO users(identifier,email,name,password_hash,role)
-                VALUES(:i,:e,:n,:h,'admin')
+                INSERT INTO users(identifier,email,name,password_hash,role,created_at,updated_at)
+                VALUES(:i,:e,:n,:h,'admin', NOW(), NOW())
                 """
             ), dict(i=admin_user, e=f"{admin_user}@growen.local", n=admin_user, h=h))
             print('Seeded admin user:', admin_user)
         else:
             if reset_admin and reset_admin not in {'0','false','False','no','NO'}:
                 h = argon2.using(type='ID').hash(admin_pass)
-                conn.execute(text("update users set password_hash=:h where id=:id"), dict(h=h, id=row.id))
+                conn.execute(text("update users set password_hash=:h, updated_at=NOW() where id=:id"), dict(h=h, id=row.id))
                 print('Admin user exists; password reset applied')
             else:
                 print('Admin user already exists')

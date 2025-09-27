@@ -53,6 +53,7 @@ from .routers import (
     health,
     services_admin,
     backups_admin,
+    customers,
     sales,
     reports,
 )
@@ -327,6 +328,7 @@ app.include_router(canonical_products.equivalences_router)
 app.include_router(products_ex.router)
 app.include_router(products_stock.router)
 app.include_router(purchases.router)
+app.include_router(customers.router)
 app.include_router(sales.router)
 app.include_router(reports.router)
 app.include_router(media.router)

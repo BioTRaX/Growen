@@ -6,47 +6,63 @@ import os
 import sys
 import asyncio
 from pathlib import Path
-import tempfile
+import importlib
+import pytest_asyncio
 
 from sqlalchemy.ext.asyncio import create_async_engine
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+# Asegurar path del proyecto antes de importar cualquier módulo interno
+project_root = Path(__file__).resolve().parents[1]
+if str(project_root) not in sys.path:
+    sys.path.append(str(project_root))
 
-# Crear archivo SQLite temporal para permitir múltiples conexiones async y conservar schema.
-_tmp_dir = Path(tempfile.gettempdir()) / "growen_pytest"
-_tmp_dir.mkdir(exist_ok=True)
-_db_path = _tmp_dir / "test_db.sqlite"
-os.environ.setdefault("DB_URL", f"sqlite+aiosqlite:///{_db_path}")
+# Forzar URL de base de datos en memoria ANTES de importar db.session
+os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
 
-from db.base import Base  # noqa: E402
+# Recargar módulo de sesión para que lea la DB_URL recién establecida
+import db.session as _session  # type: ignore
+import db.base as _base  # noqa: E402
 import db.models  # noqa: F401,E402  (asegura registro de todas las tablas)
 from sqlalchemy import text as _text  # noqa: E402
 
-_engine = create_async_engine(os.environ['DB_URL'])
+# Reconstruir engine y SessionLocal apuntando a SQLite compartido en memoria
+from sqlalchemy.pool import StaticPool
+from sqlalchemy.ext.asyncio import create_async_engine as _create_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-async def _init_db():
-	async with _engine.begin() as conn:
-		# Crear todas las tablas (simplificación respecto a migraciones Alembic para tests rápidos)
-		await conn.run_sync(Base.metadata.create_all)
-		# Asegurar tabla sku_sequences (si tests requieren generación canónica)
-		try:
-			await conn.execute(_text("CREATE TABLE IF NOT EXISTS sku_sequences (category_code VARCHAR(3) PRIMARY KEY, next_seq INTEGER NOT NULL)"))
-		except Exception:
-			pass
+if str(_session.engine.url).startswith("postgres"):
+    # Solo si quedó creado previamente hacia Postgres, reemplazamos.
+    mem_url = "sqlite+aiosqlite:///file:memdb1?mode=memory&cache=shared"
+    engine = _create_engine(mem_url, connect_args={"uri": True}, poolclass=StaticPool)
+    _session.engine = engine  # type: ignore
+    _session.SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=_session.AsyncSession)  # type: ignore
+else:
+    engine = _session.engine
 
-	# Asegurar columna canonical_sku si falta (Legacy DB sqlite ya creada antes de cambio de modelo)
-	try:
-		res = await _engine.execute(_text("PRAGMA table_info(products)"))  # type: ignore[attr-defined]
-		cols = [r[1] for r in res.fetchall()]
-		if 'canonical_sku' not in cols:
-			async with _engine.begin() as conn2:
-				try:
-					await conn2.execute(_text("ALTER TABLE products ADD COLUMN canonical_sku VARCHAR(32)"))
-				except Exception:
-					pass
-	except Exception:
-		pass
+Base = _base.Base
 
-# Ejecutar inicialización una vez al importar conftest
-asyncio.get_event_loop().run_until_complete(_init_db())
-
+@pytest_asyncio.fixture(scope="function", autouse=True)
+async def db_session():
+    """
+    Fixture que crea una base de datos en memoria para cada test,
+    garantizando aislamiento total.
+    """
+    # Usar el engine global preparado (memoria compartida) para rapidez.
+    engine = _session.engine
+    async with engine.begin() as conn:
+        # Crear todas las tablas
+        await conn.run_sync(Base.metadata.create_all)
+        # Asegurar tablas o columnas que no están en el modelo base pero son necesarias
+        try:
+            await conn.execute(_text("CREATE TABLE IF NOT EXISTS sku_sequences (category_code VARCHAR(3) PRIMARY KEY, next_seq INTEGER NOT NULL)"))
+        except Exception:
+            pass
+    
+    # La fixture no necesita devolver nada, solo configurar el entorno.
+    # El test usará su propia sesión que apunta a esta DB en memoria.
+    yield
+    
+    # Limpieza (aunque en memoria, es buena práctica)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
