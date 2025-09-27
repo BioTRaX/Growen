@@ -22,6 +22,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     CheckConstraint,
+    Index,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -283,7 +284,7 @@ class SupplierFile(Base):
     __tablename__ = "supplier_files"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"))
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id", ondelete="CASCADE"))
     filename: Mapped[str] = mapped_column(String(200))
     sha256: Mapped[str] = mapped_column(String(64))
     rows: Mapped[int] = mapped_column(Integer)
@@ -314,8 +315,8 @@ class SupplierProduct(Base):
     current_purchase_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
     current_sale_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    internal_product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id"))
-    internal_variant_id: Mapped[Optional[int]] = mapped_column(ForeignKey("variants.id"))
+    internal_product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
+    internal_variant_id: Mapped[Optional[int]] = mapped_column(ForeignKey("variants.id", ondelete="CASCADE"))
 
     supplier: Mapped["Supplier"] = relationship(back_populates="products")
     price_history: Mapped[list["SupplierPriceHistory"]] = relationship(back_populates="supplier_product")
@@ -328,7 +329,7 @@ class SupplierPriceHistory(Base):
     __tablename__ = "supplier_price_history"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    supplier_product_fk: Mapped[int] = mapped_column(ForeignKey("supplier_products.id"))
+    supplier_product_fk: Mapped[int] = mapped_column(ForeignKey("supplier_products.id", ondelete="CASCADE"))
     # `file_fk` solía ser obligatorio; se vuelve opcional para permitir
     # registrar cambios de precio sin asociarlos a un archivo concreto.
     file_fk: Mapped[Optional[int]] = mapped_column(
@@ -377,7 +378,7 @@ class ProductEquivalence(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"))
     supplier_product_id: Mapped[int] = mapped_column(
-        ForeignKey("supplier_products.id")
+        ForeignKey("supplier_products.id", ondelete="CASCADE")
     )
     canonical_product_id: Mapped[int] = mapped_column(
         ForeignKey("canonical_products.id")
@@ -562,8 +563,8 @@ class PurchaseLine(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     purchase_id: Mapped[int] = mapped_column(ForeignKey("purchases.id", ondelete="CASCADE"))
-    supplier_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("supplier_products.id"), nullable=True)
-    product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id"), nullable=True)
+    supplier_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("supplier_products.id", ondelete="CASCADE"), nullable=True)
+    product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=True)
     supplier_sku: Mapped[Optional[str]] = mapped_column(String(120))
     title: Mapped[str] = mapped_column(String(300))
     qty: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
@@ -731,15 +732,14 @@ class SaleLine(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id", ondelete="CASCADE"))
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
     qty: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     unit_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
-    line_discount: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
+    line_discount: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)  # porcentaje lineal 0-100
     note: Mapped[Optional[str]] = mapped_column(Text)
-    # Snapshots y totales por línea
+    # Snapshots y totales por línea (subtotal/tax/total persistidos para reportes rápidos)
     title_snapshot: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     sku_snapshot: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    line_discount_percent: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
     subtotal: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
     tax: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
     total: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
@@ -754,7 +754,7 @@ class SalePayment(Base):
     __tablename__ = "sale_payments"
     __table_args__ = (
         CheckConstraint(
-            "method IN ('efectivo','debito','credito','transferencia','mercadopago','otro')",
+            "method IN ('efectivo','debito','credito','transferencia','mercadopago','tarjeta','otro')",
             name="ck_sale_payments_method",
         ),
     )
@@ -823,4 +823,25 @@ class ReturnLine(Base):
 
     return_ref: Mapped["Return"] = relationship(back_populates="lines")
     sale_line: Mapped[Optional["SaleLine"]] = relationship()
+    product: Mapped["Product"] = relationship()
+
+
+# --- Stock Ledger (Movimientos de stock unificados) ---
+
+class StockLedger(Base):
+    __tablename__ = "stock_ledger"
+    __table_args__ = (
+        Index("ix_stock_ledger_product_created", "product_id", "created_at"),
+        Index("ix_stock_ledger_source", "source_type", "source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
+    source_type: Mapped[str] = mapped_column(String(20))  # 'sale' | 'return' | futuro: 'adjust' | 'purchase'
+    source_id: Mapped[int] = mapped_column(Integer)
+    delta: Mapped[int] = mapped_column(Integer)  # negativo venta, positivo devolución
+    balance_after: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
     product: Mapped["Product"] = relationship()

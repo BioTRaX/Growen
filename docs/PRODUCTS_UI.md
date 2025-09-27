@@ -45,6 +45,15 @@
   - Subcategoría se filtra por la categoría elegida.
   - Botones "Nueva" abren modales para crear categorías en línea (padre nulo) o subcategorías (con padre).
 
+### Creación mínima de producto interno (Sept 2025)
+- El endpoint rápido de creación (catálogo interno) ahora acepta `supplier_id` como opcional.
+- Si `supplier_id` se omite:
+  - No se crea registro en `supplier_products` ni historial de precios asociado.
+  - La respuesta omite campos específicos de proveedor (`supplier_item_id`).
+- Si se provee `supplier_id`, se genera (cuando corresponde) el vínculo `SupplierProduct` básico y una entrada en historial de precios inicial.
+- Razón del cambio: facilitar scripts y pruebas que requieren productos sin tener un proveedor cargado todavía.
+- Implicación para UI: formularios de creación rápida pueden no requerir seleccionar proveedor; logic de downstream debe tolerar `supplier_id=null`.
+
 ### Comportamiento post-creación (refresco de lista)
 - Al crear un Producto Canónico desde el listado embebido de Productos, la UI fuerza un refetch de la página 1 para evitar que la tabla quede vacía si ya estaba en la primera página.
 - Esto preserva filtros y tipo de listado (Todos/Canónicos/Proveedor) y vuelve a mostrar resultados consistentes inmediatamente.

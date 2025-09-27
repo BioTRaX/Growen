@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
+from collections import Counter, deque
+
 from sqlalchemy import Select, and_, func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +33,41 @@ from db.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+_METRICS_INTENT = Counter()
+_METRICS_STATUS = Counter()
+_METRICS_MATCHES = Counter()
+_METRICS_DURATIONS = deque(maxlen=200)
+
+def _record_metrics(intent: str, status: str, match_count: int, took_ms: Optional[int]) -> None:
+    _METRICS_INTENT[intent] += 1
+    _METRICS_STATUS[status] += 1
+    _METRICS_MATCHES[match_count] += 1
+    if took_ms is not None:
+        try:
+            _METRICS_DURATIONS.append(float(took_ms))
+        except Exception:
+            pass
+
+
+def _metrics_snapshot() -> Dict[str, Union[Dict[str, int], float]]:
+    durations = list(_METRICS_DURATIONS)
+    avg = sum(durations) / len(durations) if durations else 0.0
+    if durations:
+        ordered = sorted(durations)
+        idx = int(round(0.95 * (len(ordered) - 1)))
+        p95 = ordered[idx]
+    else:
+        p95 = 0.0
+    return {
+        'intent_counts': dict(_METRICS_INTENT),
+        'status_counts': dict(_METRICS_STATUS),
+        'matches_counts': dict(_METRICS_MATCHES),
+        'latency_avg_ms': round(avg, 2),
+        'latency_p95_ms': round(p95, 2),
+    }
+
+
 
 try:  # rapidfuzz es opcional pero preferido para ranking
     from rapidfuzz import fuzz  # type: ignore
@@ -158,6 +195,52 @@ STOPWORDS = {
     "es",
     "es?",
 }
+
+SMALL_TALK_TERMS = {
+    "hola",
+    "buenos",
+    "dias",
+    "tarde",
+    "noches",
+    "buenas",
+    "como",
+    "estas",
+    "estoy",
+    "bien",
+    "gracias",
+    "saludos",
+    "hey",
+    "ola",
+    "que",
+    "tal",
+    "todo",
+    "chau",
+    "adios",
+    "buen",
+    "ok",
+    "dale",
+}
+
+RECOMMENDATION_TERMS = {
+    "recomendar",
+    "recomendarme",
+    "recomiendame",
+    "recomiendanos",
+    "recomiendas",
+    "recomienda",
+    "aconsejar",
+    "aconsejame",
+    "sugerir",
+    "sugerime",
+    "sugerencia",
+    "sugerirme",
+    "podrias",
+    "puedes",
+    "podrian",
+    "podrias",
+}
+
+
 
 SKU_COMMAND_RE = re.compile(r"^[\s/]*(?P<command>[a-zA-Z]+)\s+(?P<body>.+)$")
 SKU_TAG_RE = re.compile(r"\bsku[:#\s-]*([A-Za-z0-9._\-]{2,})\b", re.IGNORECASE)
@@ -1018,6 +1101,21 @@ def extract_product_query(text: str) -> Optional[ProductQuery]:
     terms = _tokenize(normalized)
     if not terms and not sku_candidates:
         return None
+
+    command_signal = command in {"price", "stock"}
+    all_smalltalk = bool(terms) and all(term in SMALL_TALK_TERMS for term in terms)
+    has_recommendation = any(term in RECOMMENDATION_TERMS for term in terms)
+    stripped_terms = [term for term in terms if term not in SMALL_TALK_TERMS]
+
+    has_product_signal = has_price or has_stock or bool(sku_candidates) or command_signal
+    if not has_product_signal:
+        if has_recommendation:
+            return None
+        if all_smalltalk:
+            return None
+        if not stripped_terms:
+            return None
+
     explicit_price = has_price
     explicit_stock = has_stock
     if not has_price and not has_stock:
@@ -1041,8 +1139,26 @@ def extract_price_query(text: str) -> Optional[str]:
     product_query = extract_product_query(text)
     if not product_query:
         return None
-    if product_query.terms:
-        return " ".join(product_query.terms)
+    terms = list(product_query.terms) if product_query.terms else []
+    if terms:
+        # Remover verbos/prefijos irrelevantes y marcadores conversacionales.
+        STOP_PREFIXES = {
+            "cuanto","cuánto","vale","sale","cual","cuál","es","el","la","del","de","precio","cuesta",
+            "me","decis","dices","porfa","porfavor","por","favor","podrias","podrías","decime","dime","decir"
+        }
+        # eliminar prefijos consecutivos mientras el primer término esté en set
+        while terms and terms[0] in STOP_PREFIXES:
+            terms.pop(0)
+        # También si primero es 'precio' seguido de 'del'/'de' eliminar ambos
+        while len(terms) >= 2 and terms[0] == "precio" and terms[1] in {"de","del"}:
+            terms = terms[2:]
+        # Si tras limpiar no quedan términos significativos y no hay sku_candidates, retornar None (consulta genérica)
+        if not terms and not product_query.sku_candidates:
+            return None
+        cleaned = " ".join(terms).strip()
+        if not cleaned and product_query.sku_candidates:
+            return product_query.sku_candidates[0]
+        return cleaned or None
     if product_query.sku_candidates:
         return product_query.sku_candidates[0]
     return product_query.normalized_text or None
@@ -1168,6 +1284,7 @@ async def resolve_product_info(
     if limited:
         status = "ok" if len(limited) == 1 else "ambiguous"
     took = int((time.perf_counter() - start) * 1000)
+    _record_metrics(query.intent, status, len(limited), took)
     return ProductLookupResult(
         query=query,
         status=status,
@@ -1220,8 +1337,8 @@ def serialize_entry(entry: ProductEntry) -> dict:
     }
 
 
-def serialize_result(result: ProductLookupResult) -> dict:
-    return {
+def serialize_result(result: ProductLookupResult, *, include_metrics: bool = False) -> dict:
+    payload = {
         "status": result.status,
         "query": result.query.raw_text,
         "intent": result.intent,
@@ -1230,9 +1347,13 @@ def serialize_result(result: ProductLookupResult) -> dict:
         "sku_candidates": result.query.sku_candidates,
         "results": [serialize_entry(entry) for entry in result.entries],
         "missing": result.missing,
+        "needs_clarification": result.status == "ambiguous",
         "took_ms": result.took_ms,
         "errors": result.errors,
     }
+    if include_metrics:
+        payload["metrics"] = _metrics_snapshot()
+    return payload
 
 
 def render_product_response(result: ProductLookupResult) -> str:
@@ -1296,6 +1417,8 @@ async def log_product_lookup(
     original_text: str,
     product_query: Optional[Union[ProductQuery, str]],
     result: ProductLookupResult,
+    correlation_id: Optional[str] = None,
+    include_metrics: bool | None = None,
 ) -> None:
     if isinstance(product_query, ProductQuery):
         query_data = product_query
@@ -1303,19 +1426,24 @@ async def log_product_lookup(
         query_data = extract_product_query(product_query)
     else:
         query_data = None
-    payload = serialize_result(result)
-    payload["query_raw"] = original_text
-    payload["query_intent"] = query_data.intent if query_data else None
-    payload["has_price_intent"] = query_data.has_price if query_data else None
-    payload["has_stock_intent"] = query_data.has_stock if query_data else None
-    payload["terms_extracted"] = query_data.terms if query_data else []
-    payload["sku_extracted"] = query_data.sku_candidates if query_data else []
+    # Si caller especifica include_metrics, respetar; default True para mantener historial detallado.
+    payload = serialize_result(result, include_metrics=True if include_metrics is None else include_metrics)
+    meta = dict(payload)
+    meta.pop("metrics", None)
+    meta["query_raw"] = original_text
+    meta["query_intent"] = query_data.intent if query_data else None
+    meta["has_price_intent"] = query_data.has_price if query_data else None
+    meta["has_stock_intent"] = query_data.has_stock if query_data else None
+    meta["terms_extracted"] = query_data.terms if query_data else []
+    meta["sku_extracted"] = query_data.sku_candidates if query_data else []
+    if correlation_id:
+        meta["correlation_id"] = correlation_id
     session.add(
         AuditLog(
             action="chat.product_lookup",
             table="chat",
             entity_id=None,
-            meta=payload,
+            meta=meta,
             user_id=user_id,
             ip=ip,
         )
@@ -1324,6 +1452,20 @@ async def log_product_lookup(
         await session.commit()
     except Exception:  # pragma: no cover
         logger.exception("price_lookup: failed to persist audit log")
+    try:
+        logger.info(
+            "chat.lookup",
+            extra={
+                "correlation_id": correlation_id,
+                "intent": result.intent,
+                "status": result.status,
+                "matches": len(result.entries),
+                "took_ms": result.took_ms,
+                "include_metrics": include_metrics,
+            },
+        )
+    except Exception:
+        pass
 
 
 async def log_price_lookup(

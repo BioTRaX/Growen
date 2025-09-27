@@ -1,8 +1,8 @@
 # NG-HEADER: Nombre de archivo: api.py
-# NG-HEADER: Ubicación: services/api.py
-# NG-HEADER: Descripción: Instancia principal de FastAPI y middlewares globales.
+# NG-HEADER: UbicaciA3n: services/api.py
+# NG-HEADER: DescripciA3n: Instancia principal de FastAPI y middlewares globales.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-"""Aplicación FastAPI principal del agente."""
+"""AplicaciA3n FastAPI principal del agente."""
 
 # --- Windows psycopg async fix (no-op en otros SO) ---
 import sys, asyncio
@@ -121,7 +121,7 @@ APP_IMPORT_TS = time.perf_counter()
 APP_READY_TS: float | None = None
 _STARTUP_METRIC_WRITTEN = False
 
-# Diagnóstico: loguear DB URL efectiva al importar la app
+# DiagnA3stico: loguear DB URL efectiva al importar la app
 try:
     from db.session import engine as _eng
     logger.info("DB effective URL: %s", str(_eng.url))
@@ -142,6 +142,10 @@ async def log_requests(request: Request, call_next):
     except Exception:
         corr = None
     try:
+        request.state.correlation_id = corr
+    except Exception:
+        pass
+    try:
         resp = await call_next(request)
     except (FastHTTPException, StarletteHTTPException):
         # Deja que FastAPI maneje HTTPException (403/404/400, etc.)
@@ -152,7 +156,7 @@ async def log_requests(request: Request, call_next):
             logger.exception("EXC %s %s cid=%s (%.2fms)", request.method, request.url.path, corr, dur)
         else:
             logger.exception("EXC %s %s (%.2fms)", request.method, request.url.path, dur)
-        # Notion: registrar tarjeta de error 500 si está habilitado (no bloquear respuesta)
+        # Notion: registrar tarjeta de error 500 si estA habilitado (no bloquear respuesta)
         try:
             cfg = load_notion_settings()
             if cfg.enabled and cfg.errors_db:
@@ -162,7 +166,7 @@ async def log_requests(request: Request, call_next):
                     url=str(request.url),
                     codigo="HTTP 500",
                     mensaje=f"Unhandled exception en {request.method} {request.url.path}",
-                    stacktrace=None,  # el logger.exception dejó traza en archivo
+                    stacktrace=None,  # el logger.exception dejA3 traza en archivo
                     correlation_id=corr,
                     etiquetas=["unhandled", "500"],
                     seccion=(
@@ -175,7 +179,7 @@ async def log_requests(request: Request, call_next):
                 import asyncio
                 if cfg.mode == "sections":
                     # En modo sections NO enviar reportes 500 a Notion desde middleware.
-                    # Sólo dejamos el registro en logs para evitar ruido.
+                    # SA3lo dejamos el registro en logs para evitar ruido.
                     pass
                 else:
                     asyncio.create_task(asyncio.to_thread(create_or_update_card, ev))
@@ -184,7 +188,7 @@ async def log_requests(request: Request, call_next):
         # Devolver error con tono argento, breve y claro (sin faltar el respeto)
         return JSONResponse(
             {
-                "detail": "Uy, algo se rompió de nuestro lado. Tranqui: ya lo estamos mirando. Si podés, probá de nuevo más tarde.",
+                "detail": "Uy, algo se rompiA3 de nuestro lado. Tranqui: ya lo estamos mirando. Si podAs, probA de nuevo mAs tarde.",
             },
             status_code=500,
         )
@@ -213,17 +217,17 @@ async def log_requests(request: Request, call_next):
             pass
     return resp
 
-# --- Exception Handlers Específicos ---
+# --- Exception Handlers EspecAficos ---
 @app.exception_handler(IntegrityError)
 async def integrity_error_handler(request: Request, exc: IntegrityError):  # type: ignore[override]
-    """Mapea errores de integridad conocidos a respuestas HTTP más útiles.
+    """Mapea errores de integridad conocidos a respuestas HTTP mAs Aotiles.
 
     - variants_sku_key -> 409 duplicate_sku
     - supplier_products (supplier_id, supplier_product_id) unique -> 409 duplicate_supplier_product
-    Otros: 409 conflict genérico sin filtrar información sensible.
+    Otros: 409 conflict genArico sin filtrar informaciA3n sensible.
     """
     raw = str(exc.orig) if getattr(exc, "orig", None) else str(exc)
-    # Detectar constraint por nombre o patrón
+    # Detectar constraint por nombre o patrA3n
     detail = "conflict"
     code = "conflict"
     field = None
@@ -236,7 +240,7 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):  # typ
         code = "duplicate_supplier_product"
         detail = "Producto de proveedor ya registrado"
         field = "supplier_product_id"
-    # Intentar rollback de la sesión (si existe) para limpiar estado
+    # Intentar rollback de la sesiA3n (si existe) para limpiar estado
     try:  # best effort
         from sqlalchemy.ext.asyncio import AsyncSession
         sess = request.state.session if hasattr(request.state, "session") else None
@@ -249,13 +253,13 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):  # typ
         payload["field"] = field
     return JSONResponse(payload, status_code=status)
 
-# Handler amistoso para errores de validación (422) sin cambiar el contrato
+# Handler amistoso para errores de validaciA3n (422) sin cambiar el contrato
 @app.exception_handler(RequestValidationError)
 async def request_validation_error_handler(request: Request, exc: RequestValidationError):  # type: ignore[override]
-    """Registra detalles de validación por campo y devuelve el mismo formato por defecto.
+    """Registra detalles de validaciA3n por campo y devuelve el mismo formato por defecto.
 
     - No cambia la forma de la respuesta: {"detail": [...]}, status 422.
-    - Loguea en español, con método y ruta, para diagnóstico más rápido.
+    - Loguea en espaAol, con mAtodo y ruta, para diagnA3stico mAs rApido.
     """
     try:
         # Extraer campos/loc y mensajes para el log
@@ -267,7 +271,7 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
             typ = e.get("type", "")
             flat.append({"loc": loc, "msg": msg, "type": typ})
         logger.warning(
-            "Validación fallida 422 %s %s: %s",
+            "ValidaciA3n fallida 422 %s %s: %s",
             request.method,
             request.url.path,
             flat,
@@ -338,20 +342,20 @@ except Exception:
 app.include_router(debug.router, tags=["debug"])
 app.include_router(bug_report.router)
 
-# --- Router de diagnóstico frontend ---
+# --- Router de diagnA3stico frontend ---
 from fastapi import APIRouter
 
 frontend_diag_router = APIRouter(prefix="/debug/frontend", tags=["debug-frontend"])
 
 @frontend_diag_router.get("/diag")
 async def frontend_diag():
-    """Reporte rápido del estado del build frontend.
+    """Reporte rApido del estado del build frontend.
 
     Devuelve:
       - build_present: bool si existe frontend/dist/index.html
-      - assets_count: número de ficheros en frontend/dist/assets
-      - main_bundle: nombre del bundle principal (heurística: el que incluye 'index-')
-      - api_base_url: heurística de base URL que el cliente usaría
+      - assets_count: nAomero de ficheros en frontend/dist/assets
+      - main_bundle: nombre del bundle principal (heurAstica: el que incluye 'index-')
+      - api_base_url: heurAstica de base URL que el cliente usarAa
       - notes: recomendaciones si falta algo
     """
     root = Path(__file__).resolve().parents[1]
@@ -369,11 +373,11 @@ async def frontend_diag():
     api_base = os.getenv("VITE_API_URL") or os.getenv("API_URL") or "http://127.0.0.1:8000"
     notes: list[str] = []
     if not build_present:
-        notes.append("Falta build de producción (ejecutar npm run build en frontend/).")
+        notes.append("Falta build de producciA3n (ejecutar npm run build en frontend/).")
     if not main_bundle:
-        notes.append("No se detectó bundle principal index-*.js en /dist/assets.")
+        notes.append("No se detectA3 bundle principal index-*.js en /dist/assets.")
     if not assets:
-        notes.append("Directorio assets vacío o inaccesible.")
+        notes.append("Directorio assets vacAo o inaccesible.")
     return {
         "build_present": build_present,
         "assets_count": len(assets),
@@ -384,15 +388,15 @@ async def frontend_diag():
 
 @frontend_diag_router.get("/ping-auth")
 async def frontend_ping_auth(request: Request):
-    """Combina chequeo de build + estado de autenticación actual.
+    """Combina chequeo de build + estado de autenticaciA3n actual.
 
     Devuelve:
-      - auth_request_ok: bool si /auth/me respondió
+      - auth_request_ok: bool si /auth/me respondiA3
       - is_authenticated, role
       - cookies_present: lista de cookies relevantes detectadas en la request
       - correlation_hint: recuerda revisar cabecera X-Correlation-Id
     """
-    # Re-usa lógica auth sin exponer internals
+    # Re-usa lA3gica auth sin exponer internals
     from services.routers.auth import me  # import local para evitar ciclos
     try:
         auth_data = await me()  # type: ignore
@@ -416,7 +420,7 @@ def _is_safe_env_key(k: str) -> bool:
 
 @frontend_diag_router.get("/env")
 async def frontend_env():
-    """Expone variables de entorno filtradas (no sensibles) para depuración frontend.
+    """Expone variables de entorno filtradas (no sensibles) para depuraciA3n frontend.
 
     No incluye claves que contengan prefijos potencialmente sensibles.
     """
@@ -424,7 +428,7 @@ async def frontend_env():
     for k, v in os.environ.items():
         if _is_safe_env_key(k) and len(v) < 500:
             safe[k] = v
-    # Whitelist explícita de algunas sensibles pero truncadas podría añadirse más tarde.
+    # Whitelist explAcita de algunas sensibles pero truncadas podrAa aAadirse mAs tarde.
     return {"env": safe, "count": len(safe)}
 
 class FrontError(BaseModel):  # type: ignore
@@ -438,7 +442,7 @@ class FrontError(BaseModel):  # type: ignore
     user_agent: str | None = None
     # Campos extras potenciales en el futuro (ignorados si no llegan)
 
-# --- Backup diario automático en arranque (idempotente por ventana de 24h) ---
+# --- Backup diario automAtico en arranque (idempotente por ventana de 24h) ---
 try:
     from services.routers.backups_admin import ensure_daily_backup_on_boot
     _auto_meta = ensure_daily_backup_on_boot()
@@ -472,7 +476,7 @@ async def frontend_log_error(payload: FrontError, request: Request):  # type: ig
                 "path": request.headers.get("Referer"),
             },
         )
-        # Persistimos si la DB está disponible; si falla seguimos (best-effort)
+        # Persistimos si la DB estA disponible; si falla seguimos (best-effort)
         async with SessionLocal() as s:  # type: ignore
             try:
                 s.add(sl)
@@ -589,7 +593,7 @@ try:
         @app.get("/", include_in_schema=False)
         async def spa_root():
             resp = FileResponse(str(INDEX_HTML))
-            # Evitar cache en index para que tome siempre el último bundle
+            # Evitar cache en index para que tome siempre el Aoltimo bundle
             resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             resp.headers["Pragma"] = "no-cache"
             resp.headers["Expires"] = "0"
@@ -607,7 +611,7 @@ try:
         # Catch-all for client-side routes. API/static/docs already matched above.
         @app.get("/{full_path:path}", include_in_schema=False)
         async def spa_fallback(request: Request, full_path: str):
-            # Explicitmente dejamos pasar 404 (estas rutas deberían matchear antes)
+            # Explicitmente dejamos pasar 404 (estas rutas deberAan matchear antes)
             blocked = (
                 full_path.startswith("assets")
                 or full_path.startswith("media")

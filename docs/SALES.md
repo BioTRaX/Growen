@@ -1,77 +1,126 @@
 <!-- NG-HEADER: Nombre de archivo: SALES.md -->
 <!-- NG-HEADER: Ubicación: docs/SALES.md -->
-<!-- NG-HEADER: Descripción: Módulo de Clientes y Ventas: modelos, endpoints y flujos -->
+<!-- NG-HEADER: Descripción: Documentación módulo Ventas y Clientes (API + flujos + reglas) -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
-# Clientes y Ventas
+# Módulo Ventas y Clientes
 
-Este módulo permite:
-- Gestionar clientes (alta/edición básica).
-- Registrar ventas con descuento automático de stock.
-- Adjuntar comprobantes a ventas.
+## Resumen
+Implementa un POS simple + pedidos con clientes (mini CRM), manejo de stock, devoluciones, reportes y auditoría. Las ventas se crean como `BORRADOR` y sólo afectan stock al confirmarse.
 
-## Modelos
-- customers: id, name, document_type?, document_number?, email?, phone?, address?, city?, province?, notes?, kind?, is_active, created_at, updated_at
-- sales: id, customer_id?, status (BORRADOR|CONFIRMADA|ENTREGADA|ANULADA), discount_percent, discount_amount, subtotal, tax, total_amount, paid_total?, payment_status?, sale_date, note, created_by?, correlation_id?, meta?, timestamps
-- sale_lines: id, sale_id, product_id, title_snapshot?, sku_snapshot?, qty, unit_price, line_discount_percent?, subtotal?, tax?, total?, supplier_item_id?, state?, note?
-- sale_payments: id, sale_id, method (efectivo|debito|credito|transferencia|mercadopago|otro), amount, reference?, paid_at?, meta?, created_at
-- sale_attachments: id, sale_id, filename, mime?, size?, path, created_at
- - returns: id, sale_id, status (BORRADOR|REGISTRADA|ANULADA), reason?, total_amount, created_by?, created_at, correlation_id?
- - return_lines: id, return_id, sale_line_id?, product_id, qty, unit_price, subtotal, note?
+## Estados de Venta
+- `BORRADOR`: editable (agregar/quitar líneas, notas, descuentos, pagos iniciales opcionales)
+- `CONFIRMADA`: stock descontado; puede entregarse o anularse
+- `ENTREGADA`: estado logístico final (no afecta más stock)
+- `ANULADA`: revierte stock si estaba confirmada/entregada; no admite más cambios salvo lectura
 
-Migraciones relevantes: `20250918_sales_and_customers.py` y `20250925_extend_sales_customers_fields.py` (extensiones y nuevos índices).
+## Endpoints Principales (`/sales`)
+ POST `/sales` crear venta (rate-limited 30/min usuario/IP; configurable desactivar sólo con `SALES_RATE_LIMIT_DISABLED=1`).
+- GET `/sales` listar (filtros por estado, fecha, cliente)
+ Aplicado a creación de ventas (POST /sales). Límite 30/min por usuario (o IP). Implementación in-memory simple (adecuado single-process). Respuesta exceso: 429 `{code: rate_limited, retry_in: <segundos>}`. Para despliegues multi-proceso: migrar a Redis token bucket.
 
-## Endpoints
-- GET /sales/customers: lista de clientes. Filtros: q. Paginación real.
-- POST /sales/customers: alta (valida email único opcional, CUIT/DNI si corresponde).
-- PUT /sales/customers/{id}: edición.
-- DELETE /sales/customers/{id}: soft-delete (is_active=false).
-- GET /sales/customers/{id}/sales: historial del cliente (paginado).
-- GET /sales/customers/search?q=: búsqueda rápida priorizada (document_number exacta, nombre prefix, nombre/email/phone/doc_id contains) limitada por `limit`.
-- GET /sales: listar ventas con filtros (status, customer_id, from, to) y paginación.
-- GET /sales/{id}: detalle (líneas, pagos, adjuntos).
-- POST /sales: crea una venta en BORRADOR (por defecto) sin afectar stock; opcionalmente status=CONFIRMADA valida stock y afecta inmediatamente.
-- POST /sales/{id}/lines: agrega/actualiza/elimina líneas mientras la venta está en BORRADOR.
-- PATCH /sales/{id}: actualiza encabezado (descuentos globales %, monto, notas, cliente) sólo en BORRADOR.
-- POST /sales/{id}/confirm: confirma BORRADOR (valida stock y afecta) o ignora si ya CONFIRMADA.
-- POST /sales/{id}/deliver: marca ENTREGADA (no mueve stock). [implementado]
-- POST /sales/{id}/annul: anula (revierte stock si estaba confirmada; nota obligatoria). [implementado]
-- POST /sales/{id}/payments: registrar pagos adicionales (múltiples métodos).
-- GET /sales/{id}/payments: lista los pagos (endpoint separado para UI modular y polling ligero).
-- GET /sales/{id}/receipt: comprobante simple (PDF/HTML).
-- POST /sales/{id}/returns: crea devolución parcial/total (CONFIRMADA/ENTREGADA). Valida saldo disponible por línea y repone stock.
-- GET /sales/{id}/returns: lista devoluciones de la venta.
-- GET /sales/{id}/timeline: secuencia cronológica (audit + pagos + devoluciones) para UI timeline.
-- GET /sales/reports/net: ventas netas (bruto, devoluciones, neto) con filtros fecha y sale_kind.
-- GET /sales/reports/top-products: ranking productos con qty y monto neto.
-- GET /sales/reports/top-customers: ranking clientes con bruto, devoluciones y neto.
-- GET /products/{id}/stock/history: historial de movimientos (stock_ledger) orden descendente, paginado.
-- GET /reports/sales: resumen por estado (count, amount) con filtros de fecha.
-- GET /reports/sales/export.csv: exportación CSV.
+ Variables:
+- `SALES_RATE_LIMIT_DISABLED=1` desactiva temporalmente (uso local / scripts controlados). Ya no se utiliza `TESTING` para bypass.
+- PATCH `/sales/{id}` actualizar campos (BORRADOR)
+ Pagos y Normalización
+ Métodos normalizados: `tarjeta` -> `credito`; valores desconocidos -> `otro`.
+ Estado global de pago `payment_status` en detalle de venta:
+- `PENDIENTE` (sin pagos)
+- `PARCIAL` (pagos < total)
+- `PAGADA` (pagos >= total)
 
- Notas:
-- El descuento de stock es in-place sobre `products.stock` (compatibilidad con módulo actual). Recomendado a futuro: libro de stock.
-- Validación de stock en Confirmar: si falta stock de algún item, la operación falla con 400 y no aplica cambios.
-- Devoluciones: cada Return incrementa stock y registra audit_log `return_create` con deltas. No altera totales históricos de la venta (base para reporte neto futuro).
-- Auditoría: acciones `sale_create`, `sale_confirm`, `sale_deliver`, `sale_annul`, `sale_patch`, `return_create` incluyen `elapsed_ms` y `stock_deltas` cuando corresponde.
-- Precios: base canónico (CanonicalProduct.sale_price). Si no existe, fallback a SupplierProduct.current_sale_price; último recurso `variants[0].price`. UI exige precios > 0.
-- Clamp de descuento: al confirmar, si `discount_amount` > `subtotal` se limita (clamp) al subtotal y se registra audit `sale_discount_clamped` con valores original y ajustado.
-- Cache in-memory: reportes agregados (net, top-products, top-customers) usan cache TTL (60s). Invalida automáticamente en confirmación de venta o creación de devolución.
-- stock_ledger: libro de movimientos (sale delta negativo, return delta positivo) con `balance_after` para auditoría de inventario. Endpoint público de solo lectura por producto.
+- POST `/sales/{id}/confirm` confirmar (valida stock y bloquea si hay líneas `SIN_VINCULAR`)
+ 2025-09-26: Eliminado bypass de rate limit por `TESTING`; se introduce `SALES_RATE_LIMIT_DISABLED`.
+ 2025-09-26: Normalización de método de pago (`tarjeta` -> `credito`).
+ 2025-09-26: Se agrega `payment_status` al detalle de venta.
+ 2025-09-26: Ajuste extractor métricas para soportar Postgres (dialecto JSON) y batch lines endpoint.
 
-## Frontend
-- Rutas: /clientes (listado + CRUD), /ventas (listado), /ventas/nueva (POS), /ventas/:id (detalle).
-- Páginas:
-  - Clientes: tabla con filtros, modal crear/editar, soft delete.
-  - Ventas (POS): buscador (SKU/título), tabla de líneas editable (qty, unit_price, %desc), totales con descuento global, módulo pagos múltiples, selector cliente (autocomplete), acciones Guardar/Confirmar/Anular/Entregar/Imprimir.
-  - Detalle: timeline de eventos (líneas, pagos, confirmación, stock), adjuntos y comprobante.
+ Última actualización: 2025-09-26 (refrescado para rate limit, normalización pagos y payment_status)
+- POST `/sales/{id}/annul` anular (restituye stock e invalida caches)
+- POST `/sales/{id}/payments` agregar pago
+- GET `/sales/{id}/payments` listar pagos
+- GET `/sales/{id}/receipt` recibo HTML simple
+- GET `/sales/export` exportación CSV (audit `sale_export_csv`)
+- GET `/sales/metrics/summary` métricas de resumen (cache 30s)
 
-## Próximos pasos
-- Libro de stock y depósitos múltiples.
-- Series de comprobantes y numeración.
-- Reportes adicionales (por cliente, producto, margen) y dashboard /admin/servicios.
-- Liquidación neta (ventas - devoluciones) y notas de crédito.
-- Snapshots de producto (title/sku) se rellenan automáticamente al confirmar la venta (si estaban vacíos) asegurando persistencia histórica aun si el producto cambia luego.
-- Auditoría ahora incluye correlation_id (session_id), user_id e IP cuando están disponibles en acciones: sale_create, sale_confirm, sale_deliver, sale_annul, sale_patch, sale_payment_add, return_create.
- - Auditoría extendida: 'sale_lines_ops' registra batch de operaciones (add/update/delete) con before/after por línea y 'sale_payment_add' incluye before/after de paid_total y payment_status.
- - Normalización de documento: en alta/edición de clientes se limpia `document_number` removiendo separadores y se valida formato básico (CUIT=11 dígitos, DNI 7-9 dígitos).
+## Clientes (`/sales/customers`)
+CRUD básico + soft delete. Búsqueda rápida `GET /sales/customers/search?q=` con ranking.
+
+## Catálogo
+Endpoint de autocomplete: `GET /sales/catalog/search?q=` prioriza productos con stock y coincidencias en título / sku_root.
+
+## Devoluciones
+- POST `/sales/{id}/returns` crea devolución sobre venta confirmada/entregada (restaura stock)
+- GET `/sales/{id}/returns` lista devoluciones
+
+## Reportes (`/reports`)
+- GET `/reports/sales` métricas agregadas (neto, top productos, top clientes)
+- GET `/reports/sales/export.csv` exportación histórica
+
+## Métricas Resumen (`/sales/metrics/summary`)
+Respuesta:
+```
+{
+  "today": {"count": 3, "net_total": 1520.5},
+  "avg_confirm_ms": 23.4,
+  "last7d": [ {"date":"2025-09-20","count":0,"net_total":0}, ... ],
+  "top_products_today": [ {"product_id": 10, "title": "Producto A", "qty": 4, "total": 520.0} ]
+}
+```
+Cache interno 30s. Extracción de `elapsed_ms` desde JSON via `json_extract` (SQLite). Si se usa Postgres, adaptar a `meta->>'elapsed_ms'`.
+
+## Stock y Ledger
+- Stock se descuenta recién en confirmación y se repone al anular o al registrar devoluciones.
+- Modelo ORM `StockLedger` registra cada movimiento (`source_type`: `sale`, `return`, (futuro) `annul`, `adjust`).
+- Campos: `product_id`, `source_type`, `source_id`, `delta` (negativo venta, positivo devolución), `balance_after`, `meta.sale_line_id`.
+- Índices: (`product_id`,`created_at`) para historiales rápidos y (`source_type`,`source_id`) para rastrear movimientos de una operación.
+
+## Descuentos
+- Por línea: `line_discount` (% 0-100) aplicado a (qty * unit_price)
+- Global: `discount_percent` o `discount_amount` (si ambos se envían prevalece monto). Se recalculan totales usando `Decimal` y se guardan `subtotal`, `total_amount`.
+
+## Validaciones Clave
+- Confirmación: falla con 409 si existen líneas `SIN_VINCULAR`.
+- Confirmación: falla con 400 si falta stock (detalle por producto).
+- Anulación: sólo para `CONFIRMADA` o `ENTREGADA`.
+- Pagos: evita sobrepago > total + 0.02.
+
+## Auditoría
+Acciones registradas principales: `sale_create`, `sale_lines_ops` (batch líneas), `sale_confirm`, `sale_discount_clamped`, `sale_deliver`, `sale_annul`, `sale_payment_add`, `return_create`, `sale_export_csv`. Incluye `correlation_id` (session_id) y metadatos (stock_deltas, pagos antes/después, etc.).
+
+## Rate Limiting
+Aplicado a creación de ventas (POST /sales). Límite 30/min por usuario (o IP). Implementación in-memory simple (adecuado single-process). Respuesta exceso: 429 `{code: rate_limited, retry_in: <segundos>}`. Para despliegues multi-proceso: migrar a Redis token bucket. En entorno de test se puede desactivar con `TESTING=1`.
+
+## Cache Reportes
+Cache in-memory invalidado en confirmaciones, devoluciones y anulaciones. Métricas resumen cachea separadamente (30s).
+
+## Futuras Mejoras Sugeridas
+- Persistir source_type detallado en ledger para devoluciones vs anulaciones.
+- Migrar cache a Redis en despliegues multi-proceso.
+- Endpoint PDF oficial del recibo.
+- Búsqueda de productos con trigram / full-text.
+
+## Notas de Migración
+Nueva migración `20250926_stock_ledger_and_sales_indexes.py`:
+- Crea `stock_ledger`
+- Índices adicionales en ventas, líneas, returns
+- Índice único parcial `customers(document_number)` (Postgres) / índice normal fallback.
+
+Actualizar `MIGRATIONS_NOTES.md` si se ajustan más cambios estructurales.
+
+## Testing
+Pruebas actuales:
+- `test_sales_metrics_and_limits.py`: métricas y rate limiting.
+- (Pendiente) prueba de clamp descuento, ledger (confirm + return), bloqueo por `SIN_VINCULAR`, invalidación cache (annul), export CSV.
+Pruebas planificadas (backlog): validar estructura completa de movimientos en `StockLedger` y reconstrucción de stock por replay.
+
+## Ejemplo Flujo POS Rápido
+1. POST /sales (BORRADOR)
+2. POST /sales/{id}/lines (agregar items)
+3. PATCH /sales/{id} (aplicar descuento global)
+4. POST /sales/{id}/confirm
+5. POST /sales/{id}/payments (abonar)
+6. GET /sales/{id}/receipt
+
+---
+Última actualización: 2025-09-26 (actualizado: endpoint batch líneas `/sales/{id}/lines`, auditoría `sale_lines_ops`, json_extract métricas)

@@ -5,6 +5,35 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+- Columna `purchase_lines.meta` (JSON) para trazabilidad de autocompletado de líneas.
+- Persistencia de `meta.enrichment` (algorithm_version, timestamp, fields, stats) al ejecutar `PUT /purchases/{id}` con `PURCHASE_COMPLETION_ENABLED`.
+
+### Documentation
+- `PURCHASES.md`: sección Metadatos de enriquecimiento.
+
+
+### Added
+- Heurísticas post-proceso para recuperación de SKUs en remitos Santa Planta (`embedded_sku_recovered`, `known_title_sku_mapped`).
+ - import(SantaPlanta Fase 2): eventos adicionales para estabilidad del parser (`header_long_sequence_removed`, `multiline_fallback_forced`, `quantity_fallback_forced`, `multiline_pct_detected`, `multiline_discount_attached`, `remito_number_rewritten_from_filename_forced`).
+ - import(SantaPlanta Fase 2): documentación ampliada (`docs/IMPORT_PDF.md`) describiendo patrón contextual de remito `0001-XXXXXXXX`, filtrado de secuencias largas y segunda pasada de cantidades.
+ - import(SantaPlanta Fase 2.1): tercera pasada híbrida (`third_pass_attempt|third_pass_lines|third_pass_empty|third_pass_error`) y evento global `all_fallbacks_empty`.
+ - import(SantaPlanta Fase 2.1): eventos de encabezado agregados `header_long_sequence_removed_count`, `header_invalid_reset`; extensión segunda pasada `second_pass_qty_pattern_extended`.
+ - compras: servicio de autocompletado (scaffolding interno) para enriquecer líneas (descuentos, outliers de precio, sugerencias SKU) – pendiente de integración vía flag `PURCHASE_COMPLETION_ENABLED`.
+- Endpoint de pagos de ventas permite múltiples pagos con control de sobrepago y actualización precisa de `payment_status`.
+ - Reporte de cobranzas: `GET /reports/sales/payments` con filtros (from_date,to_date,method) y agregados (`total_amount`, `by_method`).
+ - Tests: transición de estados de pago (PENDIENTE→PARCIAL→PAGADA) y validación de guard contra sobrepago.
+
+### Changed
+- Creación mínima de producto: `supplier_id` ahora es opcional; si se omite no se genera `SupplierProduct` ni historial de precios.
+
+### Fixed
+- Test de remito de ejemplo ahora reconoce SKUs cortos esperados con nuevas heurísticas (antes sólo detectaba tokens numéricos largos ambiguos).
+ - (En progreso) Refactor de enforcement SKU SantaPlanta: se añadieron pasos de trimming y compactación temprana (tokens como 56584 -> 6584) y se documentó en `IMPORT_PDF.md`; siguiente paso unificar eventos duplicados (`expected_sku_forced_global`, `expected_sku_enforced_final`) en uno canónico.
+ - import(SantaPlanta): extracción de `remito_number` estabilizada. Se filtran prefijos no `0001` y números largos tipo CUIT; se añaden eventos `header_pattern_ignored`, `discarded_cuit_like`, `header_source`.
+ - import(SantaPlanta): fallback multiline textual instrumentado con eventos `multiline_fallback_attempt|multiline_fallback_used|multiline_fallback_empty|multiline_error` para eliminar flakiness de 0 líneas silenciosas.
+ - import(SantaPlanta Fase 2): forzado de fallback multiline cuando <5 líneas iniciales y rewrite desde filename si el remito carece de guion, evitando números fantasmas intermitentes.
+ - import(SantaPlanta Fase 2): detección y aplicación de descuentos porcentuales (`-20% DESC`) normalizados a `pct_bonif`.
 ### Sprint 2 (Ventas Reporting & Stock Ledger Parcial) - 2025-09-26
 #### Added
 - sales: endpoint timeline `GET /sales/{id}/timeline` consolidando audit/pagos/devoluciones ordenado por fecha.

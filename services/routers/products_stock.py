@@ -7,27 +7,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, Table, MetaData, Column, Integer, String, DateTime, JSON as SA_JSON
+from sqlalchemy import select, desc, func
 
 from services.auth import require_roles
 from db.session import get_session
-from db.models import Product
+from db.models import Product, StockLedger
 
 router = APIRouter(prefix="/products", tags=["stock"])
 
-# Definición liviana (duplicada respecto a sales.py) para lecturas del ledger.
-_metadata = MetaData()
-stock_ledger_table = Table(
-    'stock_ledger', _metadata,
-    Column('id', Integer, primary_key=True),
-    Column('product_id', Integer),
-    Column('source_type', String(20)),
-    Column('source_id', Integer),
-    Column('delta', Integer),
-    Column('balance_after', Integer),
-    Column('created_at', DateTime),
-    Column('meta', SA_JSON),
-)
+"""Se utiliza el modelo ORM StockLedger (evitamos definición Table duplicada)."""
 
 @router.get("/{product_id}/stock/history", dependencies=[Depends(require_roles("colaborador", "admin"))])
 async def product_stock_history(
@@ -46,25 +34,23 @@ async def product_stock_history(
         raise HTTPException(status_code=404, detail="Producto no encontrado")
     # Total (conteo rápido)
     from sqlalchemy import func
-    total = await db.scalar(select(func.count()).select_from(stock_ledger_table).where(stock_ledger_table.c.product_id == product_id))
+    total = await db.scalar(select(func.count()).select_from(select(StockLedger.id).where(StockLedger.product_id == product_id).subquery()))
     q = (
-        select(stock_ledger_table)
-        .where(stock_ledger_table.c.product_id == product_id)
-        .order_by(desc(stock_ledger_table.c.created_at), desc(stock_ledger_table.c.id))
+        select(StockLedger)
+        .where(StockLedger.product_id == product_id)
+        .order_by(desc(StockLedger.created_at), desc(StockLedger.id))
         .limit(page_size)
         .offset((page - 1) * page_size)
     )
-    rows = (await db.execute(q)).all()
-    items: list[dict] = []
-    for (r,) in rows:
-        items.append({
-            "id": r.id,
-            "at": (r.created_at.isoformat() if getattr(r, 'created_at', None) else None),
-            "delta": r.delta,
-            "balance_after": r.balance_after,
-            "source_type": r.source_type,
-            "source_id": r.source_id,
-            "meta": r.meta or {},
-        })
+    rows = (await db.execute(q)).scalars().all()
+    items = [{
+        "id": r.id,
+        "at": (r.created_at.isoformat() if getattr(r, 'created_at', None) else None),
+        "delta": r.delta,
+        "balance_after": r.balance_after,
+        "source_type": r.source_type,
+        "source_id": r.source_id,
+        "meta": r.meta or {},
+    } for r in rows]
     pages = ((int(total or 0) + page_size - 1) // page_size) if total else 0
     return {"product_id": product_id, "items": items, "total": int(total or 0), "page": page, "pages": pages}

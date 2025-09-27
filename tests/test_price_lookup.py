@@ -88,3 +88,10 @@ def test_resolve_product_info_prioritizes_stock():
             stocks = [entry.stock_status for entry in result.entries]
             assert "out" in stocks
     asyncio.run(_run())
+
+def test_extract_product_query_ignores_smalltalk():
+    assert extract_product_query('Hola como estas?') is None
+
+
+def test_extract_product_query_ignores_recommendations():
+    assert extract_product_query('puedes recomendarme un sustrato?') is None
