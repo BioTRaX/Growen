@@ -107,9 +107,8 @@ class Settings:
                 )
         if self.admin_pass == ADMIN_PASS_PLACEHOLDER:
             if self.env == "dev":
-                # Contraseña por defecto solo válida para entornos de desarrollo.
-                # En producción el arranque abortará si no se define un valor seguro.
-                self.admin_pass = "dev-admin-pass"
+                # Fallback de desarrollo (NO usar en producción). Coherente con seed/migración.
+                self.admin_pass = "admin1234"
             else:
                 raise RuntimeError(
                     "ADMIN_PASS debe sobrescribirse; reemplace el placeholder 'REEMPLAZAR_ADMIN_PASS'"

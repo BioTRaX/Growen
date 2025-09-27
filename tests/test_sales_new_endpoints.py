@@ -15,18 +15,32 @@ def client():
     return TestClient(app)
 
 def _create_product(client, title: str, stock: int, price: float) -> int:
-    rand = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
-    r = client.post("/catalog/products", json={
-        "title": title,
-        "initial_stock": stock,
-        "supplier_id": None,
-        "supplier_sku": None,
-        "sku": f"{title[:5]}-{stock}-{int(price*100)}-{rand}",
-        "purchase_price": price,
-        "sale_price": price,
-    })
-    assert r.status_code == 200, r.text
-    return r.json().get("product_id") or r.json().get("id")
+    response = None
+    for _ in range(16):
+        rand = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+        prefix = (title[:3].upper() + 'XXX')[:3]
+        serial = random.randint(1000, 9999)
+        suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=3))
+        canonical_sku = f"{prefix}_{serial}_{suffix}"
+        response = client.post("/catalog/products", json={
+            "title": title,
+            "initial_stock": stock,
+            "supplier_id": None,
+            "supplier_sku": None,
+            "sku": canonical_sku,
+            "purchase_price": price,
+            "sale_price": price,
+            "slug": f"{title.lower()}-{rand.lower()}",
+            "category_name": f"General {rand}",
+        })
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("product_id") or data.get("id")
+        if response.status_code != 409:
+            break
+    assert response is not None and response.status_code == 200, response.text if response else 'no response'
+    data = response.json()
+    return data.get("product_id") or data.get("id")
 
 
 def test_timeline_and_payments_listing(client):
@@ -96,8 +110,9 @@ def test_stock_history_and_quick_search_and_clamp(client):
     assert any(it["delta"] < 0 for it in hist)
 
     # Búsqueda rápida de cliente
-    rs = client.get("/sales/customers/search", params={"q": "Clamp"})
+    rs = client.get("/customers/search", params={"q": "Clamp"})
     assert rs.status_code == 200, rs.text
     results = rs.json()["items"]
     assert any("Clamp" in (c["name"] or "") for c in results)
+
 

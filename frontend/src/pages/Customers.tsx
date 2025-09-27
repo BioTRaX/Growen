@@ -4,7 +4,7 @@
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import AppToolbar from '../components/AppToolbar'
-import { listCustomers, createCustomer, Customer } from '../services/sales'
+import { listCustomers, createCustomer, type Customer } from '../services/customers'
 
 export default function CustomersPage() {
   const [items, setItems] = useState<Customer[]>([])

@@ -2,7 +2,6 @@
 # NG-HEADER: Ubicación: tests/test_supplier_search_and_links.py
 # NG-HEADER: Descripción: Tests de endpoints suppliers/search, variants sku update y supplier-products link
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-import asyncio
 import json
 import pytest
 from httpx import AsyncClient
@@ -28,19 +27,10 @@ async def test_supplier_search_and_links_flow(monkeypatch):
     from services.auth import current_session as _current_session
     app.dependency_overrides[_current_session] = fake_current_session
 
-    # Preparar DB mínima: crear un supplier y un product/variant
-    from db.session import SessionLocal, engine
-    from db.base import Base
+    # La fixture de conftest se encarga de la DB
+    from db.session import SessionLocal
     from sqlalchemy import text
-    # Crear esquema usando el engine
-    async with engine.begin() as conn:  # type: ignore
-        await conn.run_sync(Base.metadata.create_all)
-    # Limpiar tablas básicas para evitar colisiones en re-ejecuciones
     async with SessionLocal() as s:  # type: ignore
-        await s.execute(text("DELETE FROM supplier_products"))
-        await s.execute(text("DELETE FROM variants"))
-        await s.execute(text("DELETE FROM products"))
-        await s.execute(text("DELETE FROM suppliers"))
         # Insertar datos
         from secrets import token_hex
         slug = f"santaplanta_{token_hex(3)}"

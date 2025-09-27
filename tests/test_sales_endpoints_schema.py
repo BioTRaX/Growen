@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
-from services.routers import sales, catalog, reports
+from services.routers import sales, catalog, reports, customers
 
 # Construimos una app mínima con sólo los routers necesarios para evitar
 # dependencias transversales (chat, telegram, etc.) durante la importación.
 app = FastAPI(title="Growen-min-openapi")
 app.include_router(sales.router)
+app.include_router(customers.router)
 app.include_router(catalog.router)
 app.include_router(reports.router)
 
@@ -49,8 +50,8 @@ def test_sales_endpoints_present_in_openapi():
     assert _has_path(paths, "/reports/sales/export.csv", "get")
 
     # Clientes: historial y soft delete
-    assert _has_path(paths, "/sales/customers/{cid}/sales", "get")
-    assert _has_path(paths, "/sales/customers/{cid}", "delete")
+    assert _has_path(paths, "/customers/{cid}/sales", "get")
+    assert _has_path(paths, "/customers/{cid}", "delete")
 
 
 def test_catalog_search_present_in_openapi():

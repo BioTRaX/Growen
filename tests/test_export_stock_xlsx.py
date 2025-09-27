@@ -5,7 +5,7 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import io
 import os
-import asyncio
+import pytest
 
 # Forzar entorno de pruebas aislado (SQLite en memoria)
 os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
@@ -17,17 +17,7 @@ from openpyxl import load_workbook
 
 from services.api import app
 from services.auth import current_session, require_csrf, SessionData
-from db.base import Base
-from db.session import engine, SessionLocal
 from db.models import Product, Supplier, SupplierProduct, ProductEquivalence, CanonicalProduct
-
-
-async def _init_db() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-
-asyncio.get_event_loop().run_until_complete(_init_db())
 
 client = TestClient(app)
 app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
@@ -36,6 +26,7 @@ app.dependency_overrides[require_csrf] = lambda: None
 
 def _seed_basic():
     async def _tx():
+        from db.session import SessionLocal
         async with SessionLocal() as s:  # type: ignore
             sup = Supplier(slug="acme", name="ACME")
             s.add(sup)
@@ -55,11 +46,11 @@ def _seed_basic():
             s.add(eq)
             await s.commit()
             return p.id
-    return asyncio.get_event_loop().run_until_complete(_tx())
+    return pytest.mark.asyncio(_tx)
 
-
-def test_exporter_prefers_canonical_and_styles_header():
-    pid = _seed_basic()
+@pytest.mark.asyncio
+async def test_exporter_prefers_canonical_and_styles_header():
+    await _seed_basic()
     r = client.get("/stock/export.xlsx")
     assert r.status_code == 200
     content = r.content

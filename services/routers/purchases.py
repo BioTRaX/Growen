@@ -1160,128 +1160,144 @@ async def confirm_purchase(
     if p.status == "CONFIRMADA":
         return {"status": "ok", "already_confirmed": True}
 
-    now = datetime.utcnow()
-    # Impactar stock y buy_price + price_history (deduplicado por SupplierProduct)
-    applied_deltas: list[dict[str, int | None]] = []
-    import logging
-    log = logging.getLogger("growen")
-    unresolved: list[int] = []
+    try:
+        # --- Inicio de la lógica transaccional ---
+        now = datetime.utcnow()
+        # Impactar stock y buy_price + price_history (deduplicado por SupplierProduct)
+        applied_deltas: list[dict[str, int | None]] = []
+        import logging
+        log = logging.getLogger("growen")
+        unresolved: list[int] = []
 
-    # Seguimiento de updates por SupplierProduct para evitar PriceHistory duplicado
-    sp_updates: dict[int, dict[str, Any]] = {}
+        # Seguimiento de updates por SupplierProduct para evitar PriceHistory duplicado
+        sp_updates: dict[int, dict[str, Any]] = {}
 
-    for l in p.lines:
-        # 1. Ajuste costo efectivo por descuento de línea
-        ln_disc = Decimal(str(l.line_discount or 0)) / Decimal("100")
-        unit_cost = Decimal(str(l.unit_cost or 0))
-        eff = unit_cost * (Decimal("1") - ln_disc)
+        for l in p.lines:
+            # 1. Ajuste costo efectivo por descuento de línea
+            ln_disc = Decimal(str(l.line_discount or 0)) / Decimal("100")
+            unit_cost = Decimal(str(l.unit_cost or 0))
+            eff = unit_cost * (Decimal("1") - ln_disc)
 
-        # 2. Autovínculo supplier_item_id por supplier_sku si falta
-        sp = None
-        if not l.supplier_item_id:
-            sku_txt = (l.supplier_sku or "").strip()
-            if sku_txt:
+            # 2. Autovínculo supplier_item_id por supplier_sku si falta
+            sp = None
+            if not l.supplier_item_id:
+                sku_txt = (l.supplier_sku or "").strip()
+                if sku_txt:
+                    try:
+                        sp = await db.scalar(
+                            select(SupplierProduct).where(
+                                SupplierProduct.supplier_id == p.supplier_id,
+                                SupplierProduct.supplier_product_id == sku_txt,
+                            )
+                        )
+                    except Exception:
+                        sp = None
+                    if sp:
+                        l.supplier_item_id = sp.id
+                        if not l.product_id and sp.internal_product_id:
+                            l.product_id = sp.internal_product_id
+
+            # 3. Cargar SupplierProduct si ya teníamos supplier_item_id
+            if l.supplier_item_id and not sp:
+                sp = await db.get(SupplierProduct, l.supplier_item_id)
+
+            # 4. Track de precios (primera observación old, última new)
+            if sp:
+                sp_id = sp.id
+                if sp_id not in sp_updates:
+                    try:
+                        old_val = Decimal(str(sp.current_purchase_price or 0))
+                    except Exception:
+                        old_val = Decimal("0")
+                    sp_updates[sp_id] = {"sp": sp, "old": old_val, "new": eff}
+                else:
+                    sp_updates[sp_id]["new"] = eff
+
+            # 5. Resolver product_id (directo, vía supplier_item o fallback sku)
+            prod_id: Optional[int] = l.product_id
+            if not prod_id and l.supplier_item_id:
+                sp2 = sp if sp and sp.id == l.supplier_item_id else await db.get(SupplierProduct, l.supplier_item_id)
+                if sp2 and sp2.internal_product_id:
+                    prod_id = sp2.internal_product_id
+                    if not l.product_id:
+                        l.product_id = prod_id
+            prod = None
+            if prod_id:
                 try:
-                    sp = await db.scalar(
+                    pr = await db.execute(select(Product).where(Product.id == prod_id).with_for_update())
+                    prod = pr.scalar_one_or_none()
+                except Exception:
+                    prod = await db.get(Product, prod_id)
+            if not prod and l.supplier_sku and p.supplier_id:
+                try:
+                    sp_fallback = await db.scalar(
                         select(SupplierProduct).where(
                             SupplierProduct.supplier_id == p.supplier_id,
-                            SupplierProduct.supplier_product_id == sku_txt,
+                            SupplierProduct.supplier_product_id == l.supplier_sku,
                         )
                     )
+                    if sp_fallback and sp_fallback.internal_product_id:
+                        l.supplier_item_id = l.supplier_item_id or sp_fallback.id
+                        l.product_id = sp_fallback.internal_product_id
+                        prod_id = sp_fallback.internal_product_id
+                        try:
+                            pr = await db.execute(select(Product).where(Product.id == prod_id))
+                            prod = pr.scalar_one_or_none()
+                        except Exception:
+                            prod = await db.get(Product, prod_id)
                 except Exception:
-                    sp = None
-                if sp:
-                    l.supplier_item_id = sp.id
-                    if not l.product_id and sp.internal_product_id:
-                        l.product_id = sp.internal_product_id
-
-        # 3. Cargar SupplierProduct si ya teníamos supplier_item_id
-        if l.supplier_item_id and not sp:
-            sp = await db.get(SupplierProduct, l.supplier_item_id)
-
-        # 4. Track de precios (primera observación old, última new)
-        if sp:
-            sp_id = sp.id
-            if sp_id not in sp_updates:
+                    prod = None
+            # Refuerzo: si tenemos product_id asignado y aún no cargamos objeto prod, obtenerlo
+            if not prod and prod_id:
                 try:
-                    old_val = Decimal(str(sp.current_purchase_price or 0))
+                    prod = await db.get(Product, prod_id)
                 except Exception:
-                    old_val = Decimal("0")
-                sp_updates[sp_id] = {"sp": sp, "old": old_val, "new": eff}
-            else:
-                sp_updates[sp_id]["new"] = eff
+                    prod = None
 
-        # 5. Resolver product_id (directo, vía supplier_item o fallback sku)
-        prod_id: Optional[int] = l.product_id
-        if not prod_id and l.supplier_item_id:
-            sp2 = sp if sp and sp.id == l.supplier_item_id else await db.get(SupplierProduct, l.supplier_item_id)
-            if sp2 and sp2.internal_product_id:
-                prod_id = sp2.internal_product_id
-                if not l.product_id:
-                    l.product_id = prod_id
-        prod = None
-        if prod_id:
-            try:
-                pr = await db.execute(select(Product).where(Product.id == prod_id).with_for_update())
-                prod = pr.scalar_one_or_none()
-            except Exception:
-                prod = await db.get(Product, prod_id)
-        if not prod and l.supplier_sku and p.supplier_id:
-            try:
-                sp_fallback = await db.scalar(
-                    select(SupplierProduct).where(
-                        SupplierProduct.supplier_id == p.supplier_id,
-                        SupplierProduct.supplier_product_id == l.supplier_sku,
+            # 6. Aplicar incremento de stock si hay producto
+            if prod:
+                try:
+                    qty = int(Decimal(str(l.qty or 0)))
+                except Exception:
+                    qty = int(l.qty or 0)
+                old_stock = int(prod.stock or 0)
+                inc = max(0, qty)
+                prod.stock = old_stock + inc
+                applied_deltas.append({
+                    "product_id": prod.id,
+                    "product_title": getattr(prod, "title", None),
+                    "line_title": l.title,
+                    "supplier_sku": l.supplier_sku,
+                    "old": old_stock,
+                    "delta": inc,
+                    "new": prod.stock,
+                    "line_id": l.id,
+                })
+                try:
+                    log.info(
+                        "purchase_confirm: purchase=%s line=%s product=%s old_stock=%s +%s -> new_stock=%s",
+                        p.id, l.id, prod.id, old_stock, inc, prod.stock
                     )
-                )
-                if sp_fallback and sp_fallback.internal_product_id:
-                    l.supplier_item_id = l.supplier_item_id or sp_fallback.id
-                    l.product_id = sp_fallback.internal_product_id
-                    prod_id = sp_fallback.internal_product_id
-                    try:
-                        pr = await db.execute(select(Product).where(Product.id == prod_id))
-                        prod = pr.scalar_one_or_none()
-                    except Exception:
-                        prod = await db.get(Product, prod_id)
-            except Exception:
-                prod = None
-        # Refuerzo: si tenemos product_id asignado y aún no cargamos objeto prod, obtenerlo
-        if not prod and prod_id:
-            try:
-                prod = await db.get(Product, prod_id)
-            except Exception:
-                prod = None
+                except Exception:
+                    pass
+            else:
+                # No se pudo resolver product: mantener en unresolved pero aún podemos agregar delta informativo
+                unresolved.append(l.id)
+                if l.supplier_item_id or l.supplier_sku:
+                    applied_deltas.append({
+                        "product_id": None,
+                        "product_title": None,
+                        "line_title": l.title,
+                        "supplier_sku": l.supplier_sku,
+                        "old": None,
+                        "delta": 0,
+                        "new": None,
+                        "line_id": l.id,
+                        "note": "unresolved_no_product"
+                    })
 
-        # 6. Aplicar incremento de stock si hay producto
-        if prod:
-            try:
-                qty = int(Decimal(str(l.qty or 0)))
-            except Exception:
-                qty = int(l.qty or 0)
-            old_stock = int(prod.stock or 0)
-            inc = max(0, qty)
-            prod.stock = old_stock + inc
-            applied_deltas.append({
-                "product_id": prod.id,
-                "product_title": getattr(prod, "title", None),
-                "line_title": l.title,
-                "supplier_sku": l.supplier_sku,
-                "old": old_stock,
-                "delta": inc,
-                "new": prod.stock,
-                "line_id": l.id,
-            })
-            try:
-                log.info(
-                    "purchase_confirm: purchase=%s line=%s product=%s old_stock=%s +%s -> new_stock=%s",
-                    p.id, l.id, prod.id, old_stock, inc, prod.stock
-                )
-            except Exception:
-                pass
-        else:
-            # No se pudo resolver product: mantener en unresolved pero aún podemos agregar delta informativo
-            unresolved.append(l.id)
-            if l.supplier_item_id or l.supplier_sku:
+            # 7. Delta informativo si sólo se vinculó supplier_item (sin producto interno)
+            if not any(d.get("line_id") == l.id for d in applied_deltas) and l.supplier_item_id and not l.product_id:
                 applied_deltas.append({
                     "product_id": None,
                     "product_title": None,
@@ -1291,159 +1307,144 @@ async def confirm_purchase(
                     "delta": 0,
                     "new": None,
                     "line_id": l.id,
-                    "note": "unresolved_no_product"
+                    "note": "linked_without_product"
                 })
 
-        # 7. Delta informativo si sólo se vinculó supplier_item (sin producto interno)
-        if not any(d.get("line_id") == l.id for d in applied_deltas) and l.supplier_item_id and not l.product_id:
-            applied_deltas.append({
-                "product_id": None,
-                "product_title": None,
-                "line_title": l.title,
-                "supplier_sku": l.supplier_sku,
-                "old": None,
-                "delta": 0,
-                "new": None,
-                "line_id": l.id,
-                "note": "linked_without_product"
-            })
-
-    # Si hay líneas sin resolver y la política estricta está activa, abortar antes de confirmar
-    try:
-        require_all = os.getenv("PURCHASE_CONFIRM_REQUIRE_ALL_LINES", "0") in ("1", "true", "True")
-    except Exception:
-        require_all = False
-    if unresolved and require_all:
-        # Revertir cambios no comprometidos
+        # Si hay líneas sin resolver y la política estricta está activa, abortar antes de confirmar
         try:
-            await db.rollback()
+            require_all = os.getenv("PURCHASE_CONFIRM_REQUIRE_ALL_LINES", "0") in ("1", "true", "True")
         except Exception:
-            pass
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "unresolved_lines",
-                "message": "Existen líneas sin producto vinculado; corregí antes de confirmar",
-                "unresolved_line_ids": unresolved,
-            },
-        )
+            require_all = False
+        if unresolved and require_all:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "unresolved_lines",
+                    "message": "Existen líneas sin producto vinculado; corregí antes de confirmar",
+                    "unresolved_line_ids": unresolved,
+                },
+            )
 
-    # Aplicar cambios de precio una sola vez por SupplierProduct y registrar PriceHistory
-    for sp_id, info in sp_updates.items():
-        sp_obj: SupplierProduct = info["sp"]
-        old = info["old"]
-        new = info["new"]
-        sp_obj.current_purchase_price = new
-        if getattr(sp_obj, "current_sale_price", None) is None:
-            sp_obj.current_sale_price = new
+        # Aplicar cambios de precio una sola vez por SupplierProduct y registrar PriceHistory
+        for sp_id, info in sp_updates.items():
+            sp_obj: SupplierProduct = info["sp"]
+            old = info["old"]
+            new = info["new"]
+            sp_obj.current_purchase_price = new
+            if getattr(sp_obj, "current_sale_price", None) is None:
+                sp_obj.current_sale_price = new
+                try:
+                    log.info("purchase_confirm default_sale_applied sp=%s eff=%s", sp_obj.id, str(new))
+                except Exception:
+                    pass
+            ph = PriceHistory(
+                entity_type="supplier",
+                entity_id=sp_obj.id,
+                price_old=old,
+                price_new=new,
+                note=f"Compra #{p.id} remito {p.remito_number}",
+                user_id=sess.user.id if sess.user else None,
+                ip=None,
+            )
+            db.add(ph)
+
+        # Calcular totales para auditoría y verificación
+        def _to_dec(x) -> Decimal:
             try:
-                log.info("purchase_confirm default_sale_applied sp=%s eff=%s", sp_obj.id, str(new))
+                return Decimal(str(x or 0))
             except Exception:
-                pass
-        ph = PriceHistory(
-            entity_type="supplier",
-            entity_id=sp_obj.id,
-            price_old=old,
-            price_new=new,
-            note=f"Compra #{p.id} remito {p.remito_number}",
-            user_id=sess.user.id if sess.user else None,
-            ip=None,
-        )
-        db.add(ph)
+                return Decimal("0")
 
-    # Calcular totales para auditoría y verificación
-    def _to_dec(x) -> Decimal:
-        try:
-            return Decimal(str(x or 0))
-        except Exception:
-            return Decimal("0")
-
-    subtotal_all = Decimal("0")
-    subtotal_applied = Decimal("0")
-    for l in p.lines:
-        qty = _to_dec(l.qty)
-        u = _to_dec(l.unit_cost)
-        disc = _to_dec(l.line_discount)
-        eff_unit = u * (Decimal("1") - (disc / Decimal("100")))
-        line_total = (eff_unit * qty)
-        subtotal_all += line_total
-    # applied_deltas ya tiene sólo las líneas que impactaron stock (product_id resoluble)
-    applied_line_ids = {d.get("line_id") for d in applied_deltas if d.get("line_id")}
-    for l in p.lines:
-        if l.id in applied_line_ids:
+        subtotal_all = Decimal("0")
+        subtotal_applied = Decimal("0")
+        for l in p.lines:
             qty = _to_dec(l.qty)
             u = _to_dec(l.unit_cost)
             disc = _to_dec(l.line_discount)
             eff_unit = u * (Decimal("1") - (disc / Decimal("100")))
-            subtotal_applied += (eff_unit * qty)
+            line_total = (eff_unit * qty)
+            subtotal_all += line_total
+        # applied_deltas ya tiene sólo las líneas que impactaron stock (product_id resoluble)
+        applied_line_ids = {d.get("line_id") for d in applied_deltas if d.get("line_id")}
+        for l in p.lines:
+            if l.id in applied_line_ids:
+                qty = _to_dec(l.qty)
+                u = _to_dec(l.unit_cost)
+                disc = _to_dec(l.line_discount)
+                eff_unit = u * (Decimal("1") - (disc / Decimal("100")))
+                subtotal_applied += (eff_unit * qty)
 
-    gd = _to_dec(p.global_discount)
-    vr = _to_dec(p.vat_rate)
-    discount_factor = (Decimal("1") - (gd / Decimal("100")))
-    vat_factor = (Decimal("1") + (vr / Decimal("100"))) if vr > 0 else Decimal("1")
-    try:
-        purchase_total = (subtotal_all * discount_factor * vat_factor).quantize(Decimal("0.01"))
-        applied_total = (subtotal_applied * discount_factor * vat_factor).quantize(Decimal("0.01"))
-    except Exception:
-        purchase_total = subtotal_all
-        applied_total = subtotal_applied
-    diff = (purchase_total - applied_total).copy_abs()
-    # Tolerancia configurable (porcentaje del total de compra)
-    try:
-        tol_pct = Decimal(os.getenv("PURCHASE_TOTAL_MISMATCH_TOLERANCE_PCT", "0.005"))  # 0.5%
-    except Exception:
-        tol_pct = Decimal("0.005")
-    reference = purchase_total if purchase_total > 0 else Decimal("1")
-    tol_abs = (reference * tol_pct).quantize(Decimal("0.01"))
-    mismatch = diff > tol_abs
-
-    # Marcar compra como confirmada
-    p.status = "CONFIRMADA"
-
-    # Log resumen + deltas de stock
-    stock_deltas = []
-    for l in p.lines:
+        gd = _to_dec(p.global_discount)
+        vr = _to_dec(p.vat_rate)
+        discount_factor = (Decimal("1") - (gd / Decimal("100")))
+        vat_factor = (Decimal("1") + (vr / Decimal("100"))) if vr > 0 else Decimal("1")
         try:
-            q = int(Decimal(str(l.qty or 0)))
+            purchase_total = (subtotal_all * discount_factor * vat_factor).quantize(Decimal("0.01"))
+            applied_total = (subtotal_applied * discount_factor * vat_factor).quantize(Decimal("0.01"))
         except Exception:
-            q = int(l.qty or 0)
-        target = l.product_id
-        if not target and l.supplier_item_id:
-            sp3 = await db.get(SupplierProduct, l.supplier_item_id)
-            if sp3 and sp3.internal_product_id:
-                target = sp3.internal_product_id
-        if target:
-            stock_deltas.append({"product_id": target, "delta": int(max(0, q))})
-    # Si hay líneas sin producto resoluble, las dejamos registradas en meta para diagnóstico
-    db.add(
-        AuditLog(
-            action="purchase_confirm",
-            table="purchases",
-            entity_id=p.id,
-            meta={
-                "lines": len(p.lines),
-                "stock_deltas": stock_deltas,
-                "applied_deltas": applied_deltas if debug else None,
-                "unresolved_lines": unresolved or None,
-                "totals": {
-                    "subtotal_all": str(subtotal_all),
-                    "subtotal_applied": str(subtotal_applied),
-                    "discount_factor": str(discount_factor),
-                    "vat_factor": str(vat_factor),
-                    "purchase_total": str(purchase_total),
-                    "applied_total": str(applied_total),
-                    "diff": str(diff),
-                    "tolerance_abs": str(tol_abs),
-                    "tolerance_pct": str(tol_pct),
-                    "mismatch": bool(mismatch),
+            purchase_total = subtotal_all
+            applied_total = subtotal_applied
+        diff = (purchase_total - applied_total).copy_abs()
+        # Tolerancia configurable (porcentaje del total de compra)
+        try:
+            tol_pct = Decimal(os.getenv("PURCHASE_TOTAL_MISMATCH_TOLERANCE_PCT", "0.005"))  # 0.5%
+        except Exception:
+            tol_pct = Decimal("0.005")
+        reference = purchase_total if purchase_total > 0 else Decimal("1")
+        tol_abs = (reference * tol_pct).quantize(Decimal("0.01"))
+        mismatch = diff > tol_abs
+
+        # Marcar compra como confirmada
+        p.status = "CONFIRMADA"
+
+        # Log resumen + deltas de stock
+        stock_deltas = []
+        for l in p.lines:
+            try:
+                q = int(Decimal(str(l.qty or 0)))
+            except Exception:
+                q = int(l.qty or 0)
+            target = l.product_id
+            if not target and l.supplier_item_id:
+                sp3 = await db.get(SupplierProduct, l.supplier_item_id)
+                if sp3 and sp3.internal_product_id:
+                    target = sp3.internal_product_id
+            if target:
+                stock_deltas.append({"product_id": target, "delta": int(max(0, q))})
+        # Si hay líneas sin producto resoluble, las dejamos registradas en meta para diagnóstico
+        db.add(
+            AuditLog(
+                action="purchase_confirm",
+                table="purchases",
+                entity_id=p.id,
+                meta={
+                    "lines": len(p.lines),
+                    "stock_deltas": stock_deltas,
+                    "applied_deltas": applied_deltas if debug else None,
+                    "unresolved_lines": unresolved or None,
+                    "totals": {
+                        "subtotal_all": str(subtotal_all),
+                        "subtotal_applied": str(subtotal_applied),
+                        "discount_factor": str(discount_factor),
+                        "vat_factor": str(vat_factor),
+                        "purchase_total": str(purchase_total),
+                        "applied_total": str(applied_total),
+                        "diff": str(diff),
+                        "tolerance_abs": str(tol_abs),
+                        "tolerance_pct": str(tol_pct),
+                        "mismatch": bool(mismatch),
+                    },
                 },
-            },
-            user_id=sess.user.id if sess.user else None,
-            ip=None,
+                user_id=sess.user.id if sess.user else None,
+                ip=None,
+            )
         )
-    )
-    # Confirmar transacción de cambios (stock, precios, estado y auditoría)
-    await db.commit()
+        # Confirmar transacción de cambios (stock, precios, estado y auditoría)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
     try:
         log.debug("purchase_confirm_debug applied_deltas=%s unresolved=%s", applied_deltas, unresolved)
     except Exception:
@@ -2673,5 +2674,3 @@ async def import_pop_email(
 
     await db.commit()
     return {"purchase_id": p.id, "status": p.status, "parsed": {"remito": remito_number, "fecha": remito_dt.isoformat(), "lines": created}}
-
-

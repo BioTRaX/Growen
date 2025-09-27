@@ -99,114 +99,6 @@ def _audit(db: AsyncSession, action: str, table: str, entity_id: int | None, met
         pass
 
 
-def _normalize_doc_number(raw: str | None) -> str | None:
-    if not raw:
-        return None
-    s = ''.join(ch for ch in str(raw) if ch.isalnum())  # quitar espacios, puntos, guiones
-    s = s.upper()
-    return s or None
-
-def _validate_cuit_dni(doc_type: str | None, number: str | None):
-    if not number:
-        return
-    # Reglas simples: DNI 7-9 dígitos numéricos, CUIT 11 dígitos
-    if doc_type and doc_type.upper() == 'CUIT':
-        if not (number.isdigit() and len(number) == 11):
-            raise HTTPException(status_code=400, detail="CUIT debe tener 11 dígitos")
-    elif doc_type and doc_type.upper() == 'DNI':
-        if not (number.isdigit() and 7 <= len(number) <= 9):
-            raise HTTPException(status_code=400, detail="DNI inválido (7-9 dígitos)")
-    # Otros tipos: validación mínima (longitud razonable)
-    elif doc_type:
-        if len(number) < 3:
-            raise HTTPException(status_code=400, detail="document_number demasiado corto")
-
-
-# --- Clientes ---
-@router.get("/customers", dependencies=[Depends(require_roles("colaborador", "admin"))])
-async def list_customers(q: Optional[str] = None, page: int = 1, page_size: int = 50, db: AsyncSession = Depends(get_session)):
-    page = max(1, int(page or 1))
-    page_size = min(200, max(1, int(page_size or 50)))
-    stmt = select(Customer).where(Customer.is_active == True).order_by(Customer.name.asc())
-    if q:
-        like = f"%{q}%"
-        stmt = stmt.where(
-            or_(Customer.name.ilike(like), Customer.email.ilike(like), Customer.phone.ilike(like), Customer.doc_id.ilike(like), Customer.document_number.ilike(like))
-        )
-    total = await db.scalar(select(func.count()).select_from(stmt.subquery()))
-    rows = (await db.execute(stmt.limit(page_size).offset((page-1)*page_size))).scalars().all()
-    return {
-        "items": [
-            {"id": c.id, "name": c.name, "email": c.email, "phone": c.phone, "doc_id": c.doc_id}
-            for c in rows
-        ],
-        "total": int(total or 0),
-        "page": page,
-        "pages": ((int(total or 0) + page_size - 1)//page_size) if total else 0,
-    }
-
-
-@router.post("/customers", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
-async def create_customer(payload: dict, db: AsyncSession = Depends(get_session)):
-    name = (payload.get("name") or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="name es obligatorio")
-    doc_type = (payload.get("document_type") or payload.get("doc_type") or None)
-    raw_number = (payload.get("document_number") or payload.get("doc_number") or None)
-    norm_number = _normalize_doc_number(raw_number)
-    _validate_cuit_dni(doc_type, norm_number)
-    c = Customer(
-        name=name,
-        email=(payload.get("email") or None),
-        phone=(payload.get("phone") or None),
-        doc_id=(payload.get("doc_id") or None),
-        document_type=(doc_type or None),
-        document_number=norm_number,
-        address=(payload.get("address") or None),
-        notes=(payload.get("notes") or None),
-    )
-    db.add(c)
-    await db.commit()
-    await db.refresh(c)
-    return {"id": c.id}
-
-
-@router.put("/customers/{cid}", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
-async def update_customer(cid: int, payload: dict, db: AsyncSession = Depends(get_session)):
-    c = await db.get(Customer, cid)
-    if not c:
-        raise HTTPException(status_code=404, detail="Cliente no encontrado")
-    # Campos básicos
-    for f in ("name","email","phone","doc_id","address","notes"):
-        if f in payload:
-            val = payload.get(f)
-            if f == "name" and (val or "").strip() == "":
-                raise HTTPException(status_code=400, detail="name no puede quedar vacío")
-            setattr(c, f, val)
-    # Documento
-    if any(k in payload for k in ("document_type","doc_type","document_number","doc_number")):
-        doc_type = (payload.get("document_type") or payload.get("doc_type") or c.document_type)
-        raw_number = (payload.get("document_number") or payload.get("doc_number") or c.document_number)
-        norm_number = _normalize_doc_number(raw_number)
-        _validate_cuit_dni(doc_type, norm_number)
-        c.document_type = doc_type
-        c.document_number = norm_number
-    await db.commit()
-    return {"status": "ok"}
-
-
-@router.delete("/customers/{cid}", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
-async def delete_customer(cid: int, db: AsyncSession = Depends(get_session), request: Request = None, sess: SessionData = Depends(current_session)):
-    c = await db.get(Customer, cid)
-    if not c:
-        raise HTTPException(status_code=404, detail="Cliente no encontrado")
-    if getattr(c, "is_active", True) is False:
-        return {"status": "ok", "already": True}
-    c.is_active = False
-    # Auditoría: soft delete cliente
-    _audit(db, "customer_soft_delete", "customers", c.id, {}, sess, request)
-    await db.commit()
-    return {"status": "ok"}
 
 
 # --- Ventas ---
@@ -590,19 +482,6 @@ async def patch_sale(sale_id: int, payload: dict, db: AsyncSession = Depends(get
     return {"status": "ok", "total": float(sale.total_amount or 0), "fields": changed}
 
 
-@router.get("/customers/{cid}/sales", dependencies=[Depends(require_roles("colaborador", "admin"))])
-async def list_customer_sales(cid: int, page: int = 1, page_size: int = 50, db: AsyncSession = Depends(get_session)):
-    cust = await db.get(Customer, cid)
-    if not cust:
-        raise HTTPException(status_code=404, detail="Cliente no encontrado")
-    page = max(1, int(page or 1))
-    page_size = min(200, max(1, int(page_size or 50)))
-    base = select(Sale).where(Sale.customer_id == cid).order_by(Sale.id.desc())
-    total = await db.scalar(select(func.count()).select_from(base.subquery()))
-    rows = (await db.execute(base.limit(page_size).offset((page-1)*page_size))).scalars().all()
-    def _r(s: Sale):
-        return {"id": s.id, "status": s.status, "sale_date": s.sale_date.isoformat(), "total": float(s.total_amount or 0), "paid_total": float(s.paid_total or 0)}
-    return {"items": [_r(s) for s in rows], "total": int(total or 0), "page": page, "pages": ((int(total or 0) + page_size - 1)//page_size) if total else 0}
 
 
 # --- Ventas: listado y detalle ---
@@ -904,6 +783,210 @@ async def sales_metrics_summary(db: AsyncSession = Depends(get_session)):
     _report_cache_set(cache_key, result, ttl=30)
     return result
 
+@router.get("/reports/net", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def sales_net_report(
+    dt_from: Optional[str] = Query(None, description="Fecha/hora ISO inicio (filtra sale_date y created_at de devoluciones)"),
+    dt_to: Optional[str] = Query(None, description="Fecha/hora ISO fin (inclusive)"),
+    sale_kind: Optional[str] = Query(None, description="Filtrar por tipo de venta (MOSTRADOR|PEDIDO)"),
+    db: AsyncSession = Depends(get_session),
+):
+    """Reporte agregado de ventas netas.
+
+    Definiciones:
+      - bruto: suma de Sale.total_amount de ventas CONFIRMADA/ENTREGADA en rango (sale_date)
+      - devoluciones: suma de Return.total_amount de devoluciones cuyo Return.created_at cae en el rango y cuya venta también cumple filtros
+      - neto: bruto - devoluciones (no negativo)
+
+    Nota de suposición: el rango se aplica a sale_date para ventas y a created_at para devoluciones (práctica común contable). Si se requiere
+    usar sale_date de la venta para filtrar devoluciones en cambio, ajustar lógica futura.
+    """
+    from datetime import datetime as _dt
+    # Cache lookup
+    cache_key = _report_cache_key("net", dt_from=dt_from or "", dt_to=dt_to or "", sale_kind=(sale_kind or "").upper())
+    cached = _report_cache_get(cache_key)
+    if cached:
+        return cached
+    # Parseo de fechas
+    from datetime import datetime as _dt_type
+    d_from: _dt_type | None = None
+    d_to: _dt_type | None = None
+    if dt_from:
+        try:
+            d_from = _dt.fromisoformat(dt_from.replace("Z", "+00:00"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="dt_from formato inválido")
+    if dt_to:
+        try:
+            d_to = _dt.fromisoformat(dt_to.replace("Z", "+00:00"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="dt_to formato inválido")
+
+    # Base ventas confirmadas / entregadas
+    sales_filter = [Sale.status.in_(["CONFIRMADA", "ENTREGADA"]) ]
+    if sale_kind:
+        sales_filter.append(Sale.sale_kind == sale_kind.upper())
+    if d_from:
+        sales_filter.append(Sale.sale_date >= d_from)
+    if d_to:
+        sales_filter.append(Sale.sale_date <= d_to)
+
+    sales_subq = select(Sale.id).where(and_(*sales_filter)).subquery()
+
+    gross_stmt = select(func.coalesce(func.sum(Sale.total_amount), 0), func.count(Sale.id)).where(Sale.id.in_(select(sales_subq.c.id)))
+    gross_row = await db.execute(gross_stmt)
+    gross_amount, gross_count = gross_row.first() or (0,0)
+
+    # Devoluciones ligadas a esas ventas (Return.sale_id IN sales_subq) y created_at dentro del rango
+    returns_filter = [Return.sale_id.in_(select(sales_subq.c.id))]
+    if d_from:
+        returns_filter.append(Return.created_at >= d_from)
+    if d_to:
+        returns_filter.append(Return.created_at <= d_to)
+    returns_stmt = select(func.coalesce(func.sum(Return.total_amount), 0), func.count(Return.id)).where(and_(*returns_filter))
+    ret_row = await db.execute(returns_stmt)
+    returns_amount, returns_count = ret_row.first() or (0,0)
+
+    from decimal import Decimal as _D
+    bruto = _D(str(gross_amount or 0))
+    devol = _D(str(returns_amount or 0))
+    neto = bruto - devol
+    if neto < 0:
+        neto = _D("0")
+
+    result = {
+        "filters": {"dt_from": dt_from, "dt_to": dt_to, "sale_kind": sale_kind.upper() if sale_kind else None},
+        "bruto": float(bruto),
+        "devoluciones": float(devol),
+        "neto": float(neto),
+        "ventas": int(gross_count or 0),
+        "devoluciones_count": int(returns_count or 0),
+        "cached": False,
+    }
+    _report_cache_set(cache_key, {**result, "cached": True})
+    return result
+
+
+@router.get("/reports/top-products", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def sales_top_products(
+    dt_from: Optional[str] = Query(None, description="Fecha/hora ISO inicio (sale_date)"),
+    dt_to: Optional[str] = Query(None, description="Fecha/hora ISO fin (inclusive)"),
+    sale_kind: Optional[str] = Query(None, description="Filtrar tipo venta"),
+    limit: int = Query(10, ge=1, le=100, description="Máximo de productos"),
+    db: AsyncSession = Depends(get_session),
+):
+    """Ranking de productos por cantidad vendida y monto neto (considerando descuentos de línea).
+
+    Cálculo:
+      - Se consideran ventas en estado CONFIRMADA o ENTREGADA.
+      - Monto línea: unit_price * qty * (1 - line_discount%).
+      - Se descuenta (resta) la cantidad y subtotal de devoluciones registradas dentro del rango (Return.created_at).
+      - Rango aplica sobre Sale.sale_date para ventas y Return.created_at para devoluciones.
+
+    Nota: No se prorratea descuento global de la venta a las líneas; este cálculo usa sólo descuento de línea. Refinamiento futuro podría
+    distribuir discount_amount global proporcionalmente.
+    """
+    from datetime import datetime as _dt
+    cache_key = _report_cache_key("top_products", dt_from=dt_from or "", dt_to=dt_to or "", sale_kind=(sale_kind or "").upper(), limit=limit)
+    cached = _report_cache_get(cache_key)
+    if cached:
+        return cached
+    from decimal import Decimal as _D
+    # Parse fechas
+    d_from = d_to = None
+    if dt_from:
+        try:
+            d_from = _dt.fromisoformat(dt_from.replace("Z", "+00:00"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="dt_from formato inválido")
+    if dt_to:
+        try:
+            d_to = _dt.fromisoformat(dt_to.replace("Z", "+00:00"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="dt_to formato inválido")
+
+    # Subquery ventas filtradas
+    sales_filter = [Sale.status.in_(["CONFIRMADA", "ENTREGADA"]) ]
+    if sale_kind:
+        sales_filter.append(Sale.sale_kind == sale_kind.upper())
+    if d_from:
+        sales_filter.append(Sale.sale_date >= d_from)
+    if d_to:
+        sales_filter.append(Sale.sale_date <= d_to)
+    sales_subq = select(Sale.id).where(and_(*sales_filter)).subquery()
+
+    # Agregación líneas de venta
+    line_stmt = select(
+        SaleLine.product_id.label("product_id"),
+        func.coalesce(func.sum(SaleLine.qty), 0).label("qty_total"),
+        func.coalesce(func.sum( (SaleLine.unit_price * SaleLine.qty) * (1 - (SaleLine.line_discount/100)) ), 0).label("amount_total"),
+    ).where(SaleLine.sale_id.in_(select(sales_subq.c.id))).group_by(SaleLine.product_id)
+    line_rows = (await db.execute(line_stmt)).all()
+    agg_map: dict[int, dict] = {}
+    for r in line_rows:
+        pid = int(r.product_id)
+        agg_map[pid] = {
+            "product_id": pid,
+            "qty": float(r.qty_total or 0),
+            "amount": float(r.amount_total or 0),
+            "returns_qty": 0.0,
+            "returns_amount": 0.0,
+        }
+
+    # Devoluciones dentro de rango (Return.created_at)
+    returns_filter = [Return.sale_id.in_(select(sales_subq.c.id))]
+    if d_from:
+        returns_filter.append(Return.created_at >= d_from)
+    if d_to:
+        returns_filter.append(Return.created_at <= d_to)
+    # join ReturnLine -> Return para filtrar
+    from sqlalchemy import join as _join
+    rl = ReturnLine
+    r = Return
+    ret_stmt = select(
+        rl.product_id,
+        func.coalesce(func.sum(rl.qty), 0).label("r_qty"),
+        func.coalesce(func.sum(rl.subtotal), 0).label("r_amount"),
+    ).select_from(_join(rl, r, rl.return_id == r.id)).where(and_(*returns_filter)).group_by(rl.product_id)
+    ret_rows = (await db.execute(ret_stmt)).all()
+    for rr in ret_rows:
+        pid = int(rr.product_id)
+        if pid not in agg_map:
+            # Caso: devolución de producto cuya venta está filtrada pero sin líneas (raro); se registra negativo
+            agg_map[pid] = {"product_id": pid, "qty": 0.0, "amount": 0.0, "returns_qty": 0.0, "returns_amount": 0.0}
+        agg_map[pid]["returns_qty"] = float(rr.r_qty or 0)
+        agg_map[pid]["returns_amount"] = float(rr.r_amount or 0)
+
+    # Construir ranking neto
+    rows = []
+    for pid, data in agg_map.items():
+        net_qty = data["qty"] - data["returns_qty"]
+        net_amount = data["amount"] - data["returns_amount"]
+        if net_qty < 0:
+            net_qty = 0.0
+        if net_amount < 0:
+            net_amount = 0.0
+        rows.append({
+            "product_id": pid,
+            "qty_vendida": round(data["qty"], 2),
+            "qty_devuelta": round(data["returns_qty"], 2),
+            "qty_neta": round(net_qty, 2),
+            "monto_vendido": round(data["amount"], 2),
+            "monto_devuelto": round(data["returns_amount"], 2),
+            "monto_neto": round(net_amount, 2),
+        })
+    # Orden principal por monto_neto desc luego qty_neta desc
+    rows.sort(key=lambda x: (x["monto_neto"], x["qty_neta"]), reverse=True)
+    rows = rows[:limit]
+
+    result = {
+        "filters": {"dt_from": dt_from, "dt_to": dt_to, "sale_kind": sale_kind.upper() if sale_kind else None, "limit": limit},
+        "items": rows,
+        "count": len(rows),
+        "cached": False,
+    }
+    _report_cache_set(cache_key, {**result, "cached": True})
+    return result
+
 
 
 @router.post("/{sale_id}/deliver", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
@@ -975,75 +1058,97 @@ async def add_payment(sale_id: int, payload: dict, db: AsyncSession = Depends(ge
     return {"payment_id": p.id, "paid_total": float(s.paid_total or 0), "payment_status": s.payment_status}
 
 
-# --- Clientes: búsqueda rápida ---
-@router.get("/customers/search", dependencies=[Depends(require_roles("colaborador", "admin"))])
-async def quick_search_customers(q: str, limit: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_session)):
-    """Búsqueda rápida de clientes con ranking básico por coincidencia.
+@router.get("/reports/top-customers", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def sales_top_customers(
+    dt_from: Optional[str] = Query(None, description="Fecha/hora ISO inicio (sale_date)"),
+    dt_to: Optional[str] = Query(None, description="Fecha/hora ISO fin (inclusive)"),
+    sale_kind: Optional[str] = Query(None, description="Filtrar tipo venta"),
+    limit: int = Query(10, ge=1, le=100, description="Máximo de clientes"),
+    db: AsyncSession = Depends(get_session),
+):
+    """Ranking de clientes por monto bruto y neto (descontando devoluciones), y cantidad de operaciones.
 
-    Estrategia de ranking (weight):
-      100 = document_number coincide exactamente
-       90 = nombre comienza con término
-       70 = nombre contiene término
-       60 = email contiene término
-       50 = phone contiene término
-       40 = doc_id contiene término
-    Se ordena por weight desc y luego nombre asc.
+    Definiciones:
+      - monto_bruto: suma de Sale.total_amount de ventas CONFIRMADA/ENTREGADA para el cliente.
+      - monto_devoluciones: suma de Return.total_amount asociado a esas ventas (Return.created_at en rango).
+      - monto_neto: max(monto_bruto - monto_devoluciones, 0).
+      - ventas_count: cantidad de ventas involucradas.
+      - devoluciones_count: cantidad de devoluciones.
     """
-    term = (q or "").strip()
-    if term == "":
-        raise HTTPException(status_code=400, detail="q requerido")
-    from sqlalchemy import case, literal, or_, func
-    like_any = f"%{term}%"
-    like_prefix = f"{term}%"
-    weight = case(
-        (
-            (Customer.document_number == term), literal(100)
-        ),
-        (
-            (Customer.name.ilike(like_prefix)), literal(90)
-        ),
-        (
-            (Customer.name.ilike(like_any)), literal(70)
-        ),
-        (
-            (Customer.email.ilike(like_any)), literal(60)
-        ),
-        (
-            (Customer.phone.ilike(like_any)), literal(50)
-        ),
-        (
-            (Customer.doc_id.ilike(like_any)), literal(40)
-        ),
-        else_=literal(0)
-    ).label("weight")
-    q_stmt = (
-        select(Customer, weight)
-        .where(Customer.is_active == True)
-        .where(
-            or_(
-                Customer.document_number == term,
-                Customer.name.ilike(like_any),
-                Customer.email.ilike(like_any),
-                Customer.phone.ilike(like_any),
-                Customer.doc_id.ilike(like_any),
-            )
-        )
-        .order_by(weight.desc(), Customer.name.asc())
-        .limit(limit)
-    )
-    rows = (await db.execute(q_stmt)).all()
-    items = []
-    for c, w in rows:
-        items.append({
-            "id": c.id,
-            "name": c.name,
-            "email": c.email,
-            "phone": c.phone,
-            "document_type": c.document_type,
-            "document_number": c.document_number,
-            "weight": int(w or 0),
+    from datetime import datetime as _dt
+    cache_key = _report_cache_key("top_customers", dt_from=dt_from or "", dt_to=dt_to or "", sale_kind=(sale_kind or "").upper(), limit=limit)
+    cached = _report_cache_get(cache_key)
+    if cached:
+        return cached
+    # Parse fechas
+    d_from = d_to = None
+    if dt_from:
+        try:
+            d_from = _dt.fromisoformat(dt_from.replace("Z", "+00:00"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="dt_from formato inválido")
+    if dt_to:
+        try:
+            d_to = _dt.fromisoformat(dt_to.replace("Z", "+00:00"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="dt_to formato inválido")
+
+    # Ventas filtradas
+    sales_filter = [Sale.status.in_(["CONFIRMADA", "ENTREGADA"]) ]
+    if sale_kind:
+        sales_filter.append(Sale.sale_kind == sale_kind.upper())
+    if d_from:
+        sales_filter.append(Sale.sale_date >= d_from)
+    if d_to:
+        sales_filter.append(Sale.sale_date <= d_to)
+    sales_subq = select(Sale.id, Sale.customer_id, Sale.total_amount).where(and_(*sales_filter)).subquery()
+
+    # Agregación ventas por cliente
+    sales_agg_stmt = select(
+        sales_subq.c.customer_id.label("customer_id"),
+        func.coalesce(func.sum(sales_subq.c.total_amount), 0).label("monto_bruto"),
+        func.count(sales_subq.c.id).label("ventas_count"),
+    ).group_by(sales_subq.c.customer_id)
+    sales_rows = (await db.execute(sales_agg_stmt)).all()
+    agg_map: dict[int | None, dict] = {}
+    for r in sales_rows:
+        cid = r.customer_id if r.customer_id is not None else 0  # usar 0 para clientes nulos (Consumidor Final)
+        agg_map[cid] = {
+            "customer_id": r.customer_id,
+            "monto_bruto": float(r.monto_bruto or 0),
+            "ventas_count": int(r.ventas_count or 0),
+            "monto_devoluciones": 0.0,
+            "devoluciones_count": 0,
+        }
+
+    # Construir ranking
+    rows = []
+    for cid, data in agg_map.items():
+        neto = data["monto_bruto"] - data["monto_devoluciones"]
+        if neto < 0:
+            neto = 0.0
+        rows.append({
+            "customer_id": data["customer_id"],
+            "monto_bruto": round(data["monto_bruto"], 2),
+            "monto_devoluciones": round(data["monto_devoluciones"], 2),
+            "monto_neto": round(neto, 2),
+            "ventas_count": data["ventas_count"],
+            "devoluciones_count": data["devoluciones_count"],
         })
-    return {"query": term, "items": items, "count": len(items)}
+    rows.sort(key=lambda x: (x["monto_neto"], x["monto_bruto"]), reverse=True)
+    rows = rows[:limit]
+
+    result = {
+        "filters": {"dt_from": dt_from, "dt_to": dt_to, "sale_kind": sale_kind.upper() if sale_kind else None, "limit": limit},
+        "items": rows,
+        "count": len(rows),
+        "cached": False,
+    }
+    _report_cache_set(cache_key, {**result, "cached": True})
+    return result
+
+
+# --- Clientes: búsqueda rápida ---
 
 
 @router.get("/{sale_id}/receipt", response_class=HTMLResponse, dependencies=[Depends(require_roles("colaborador", "admin"))])
@@ -1439,6 +1544,76 @@ async def sales_top_products(
     return result
 
 
+
+@router.post("/{sale_id}/deliver", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
+async def deliver_sale(sale_id: int, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session), request: Request = None):
+    s = await db.get(Sale, sale_id)
+    t0 = time.perf_counter()
+    if not s:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    if s.status == "ANULADA":
+        raise HTTPException(status_code=400, detail="Venta anulada")
+    if s.status == "ENTREGADA":
+        return {"status": s.status, "already": True}
+    # Permitir entregar si está CONFIRMADA (o entregada ya)
+    if s.status != "CONFIRMADA":
+        raise HTTPException(status_code=400, detail="Solo se puede ENTREGAR si está CONFIRMADA")
+    s.status = "ENTREGADA"
+    _audit(db, "sale_deliver", "sales", s.id, {"elapsed_ms": round((time.perf_counter()-t0)*1000,2)}, sess, request)
+    await db.commit()
+    return {"status": s.status}
+
+
+# --- Ventas: pagos adicionales y recibo ---
+
+@router.post("/{sale_id}/payments", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
+async def add_payment(sale_id: int, payload: dict, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session), request: Request = None):
+    s = await db.get(Sale, sale_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    method = _normalize_payment_method(payload.get("method"))
+    amount = Decimal(str(payload.get("amount") or 0))
+    reference = payload.get("reference") or None
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="amount debe ser > 0")
+    prev_paid = Decimal(str(s.paid_total or 0))
+    prev_status = s.payment_status
+    # Regla: permitir pagos adicionales mientras la venta no esté ANULADA
+    # y el total abonado no exceda (total_amount + margen tolerancia opcional).
+    if s.status == "ANULADA":
+        raise HTTPException(status_code=400, detail="Venta anulada")
+    # Evitar sobrepago significativo: permitir pequeño redondeo (2 centavos) por temas de Decimal
+    total_amount = Decimal(str(s.total_amount or 0))
+    if total_amount is not None and total_amount > 0:
+        if prev_paid >= total_amount and amount > 0:
+            # Ya estaba saldada
+            raise HTTPException(status_code=400, detail="Venta ya saldada")
+        if prev_paid + amount > (total_amount + Decimal("0.02")):
+            raise HTTPException(status_code=409, detail={"code": "sobrepago", "message": "El pago excede el total"})
+    p = SalePayment(sale_id=s.id, method=method, amount=amount, reference=reference)
+    db.add(p)
+    await db.flush()  # obtener p.id
+    total_paid = prev_paid + amount
+    s.paid_total = total_paid
+    if total_paid == 0:
+        s.payment_status = "PENDIENTE"
+    elif total_paid < (s.total_amount or Decimal("0")):
+        s.payment_status = "PARCIAL"
+    else:
+        s.payment_status = "PAGADA"
+    await db.flush()
+    _audit(db, "sale_payment_add", "sales", s.id, {
+        "payment_id": p.id,
+        "method": method,
+        "amount": float(amount),
+        "reference": reference,
+        "before": {"paid_total": float(prev_paid), "payment_status": prev_status},
+        "after": {"paid_total": float(s.paid_total or 0), "payment_status": s.payment_status},
+    }, sess, request)
+    await db.commit()
+    return {"payment_id": p.id, "paid_total": float(s.paid_total or 0), "payment_status": s.payment_status}
+
+
 @router.get("/reports/top-customers", dependencies=[Depends(require_roles("colaborador", "admin"))])
 async def sales_top_customers(
     dt_from: Optional[str] = Query(None, description="Fecha/hora ISO inicio (sale_date)"),
@@ -1556,6 +1731,195 @@ async def sales_top_customers(
     }
     _report_cache_set(cache_key, {**result, "cached": True})
     return result
+
+
+# --- Clientes: búsqueda rápida ---
+
+
+@router.get("/{sale_id}/receipt", response_class=HTMLResponse, dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def get_receipt(sale_id: int, db: AsyncSession = Depends(get_session)):
+    s = await db.get(Sale, sale_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == s.id))).scalars().all()
+    pays = (await db.execute(select(SalePayment).where(SalePayment.sale_id == s.id))).scalars().all()
+    total = float(s.total_amount or 0)
+    html = [
+        "<html><head><meta charset='utf-8'><title>Recibo</title>",
+        "<style>body{font-family:Arial,sans-serif;margin:20px} table{border-collapse:collapse;width:100%} td,th{border:1px solid #ccc;padding:6px}</style>",
+        "</head><body>",
+        f"<h2>Recibo de Venta #{s.id}</h2>",
+        f"<div>Fecha: {s.sale_date.strftime('%Y-%m-%d %H:%M')}</div>",
+        f"<div>Cliente: {s.customer_id or '-'} · Estado: {s.status}</div>",
+        "<h3>Ítems</h3>",
+        "<table><thead><tr><th>Producto</th><th>Cant</th><th>P.unit</th><th>Desc%</th><th>Total</th></tr></thead><tbody>",
+    ]
+    for l in lines:
+        html.append(f"<tr><td>{l.product_id}</td><td>{float(l.qty):.0f}</td><td>${float(l.unit_price):.2f}</td><td>{float(l.line_discount or 0):.2f}%</td><td>${float(l.unit_price)*float(l.qty)*(1-float(l.line_discount or 0)/100):.2f}</td></tr>")
+    html.append("</tbody></table>")
+    html.append(f"<h3>Total: ${total:.2f}</h3>")
+    if pays:
+        html.append("<h4>Pagos</h4><ul>")
+        for p in pays:
+            html.append(f"<li>{p.method}: ${float(p.amount):.2f} {p.reference or ''}</li>")
+        html.append("</ul>")
+    html.append("</body></html>")
+    return "".join(html)
+
+
+@router.post("/{sale_id}/attachments", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
+async def upload_sale_attachment(sale_id: int, file: UploadFile = File(...), db: AsyncSession = Depends(get_session)):
+    sale = await db.get(Sale, sale_id)
+    if not sale:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    path, sha256 = await save_upload("sales", file.filename, file)
+    rel = str(path.relative_to(get_media_root()))
+    att = SaleAttachment(
+        sale_id=sale_id,
+        filename=file.filename,
+        mime=file.content_type or None,
+        size=path.stat().st_size,
+        path=rel,
+    )
+    db.add(att)
+    await db.commit()
+    await db.refresh(att)
+    return {"attachment_id": att.id, "path": att.path}
+
+
+# --- Devoluciones (Returns) ---
+
+@router.post("/{sale_id}/returns", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
+async def create_return(sale_id: int, payload: dict, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session), request: Request = None):
+    """Registra una devolución parcial o total de una venta CONFIRMADA/ENTREGADA.
+
+    payload:
+      - reason (opcional)
+      - items: lista de { sale_line_id: int, qty: number }
+    Validaciones:
+      - Venta debe estar CONFIRMADA o ENTREGADA
+      - qty > 0 y no excede saldo (vendido - devuelto previo) de la línea
+    Efectos:
+      - Incrementa stock de productos devueltos
+      - Guarda Return + ReturnLines + AuditLog return_create
+    """
+    t0 = time.perf_counter()
+    sale = await db.get(Sale, sale_id)
+    if not sale:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    if sale.status not in ("CONFIRMADA", "ENTREGADA"):
+        raise HTTPException(status_code=400, detail="Sólo se permiten devoluciones de ventas CONFIRMADA/ENTREGADA")
+    if sale.status == "ANULADA":  # por si cambia flujo futuro
+        raise HTTPException(status_code=400, detail="Venta anulada")
+    items = payload.get("items") or []
+    if not items:
+        raise HTTPException(status_code=400, detail="items requerido")
+    reason = (payload.get("reason") or None)
+
+    # Pre-cargar líneas de venta involucradas
+    line_ids = [int(it.get("sale_line_id")) for it in items if it.get("sale_line_id") is not None]
+    if not line_ids:
+        raise HTTPException(status_code=400, detail="Cada item debe incluir sale_line_id")
+    q_lines = (await db.execute(select(SaleLine).where(SaleLine.id.in_(line_ids)))).scalars().all()
+    lines_map = {l.id: l for l in q_lines if l.sale_id == sale.id}
+    if len(lines_map) != len(line_ids):
+        raise HTTPException(status_code=400, detail="Alguna sale_line no pertenece a la venta")
+
+    # Calcular ya devuelto por línea
+    # SELECT sale_line_id, COALESCE(SUM(qty),0) FROM return_lines rl JOIN returns r ON rl.return_id=r.id WHERE r.sale_id=:sale_id GROUP BY sale_line_id
+    returned_map: dict[int, Decimal] = {}
+    from sqlalchemy import join
+    rl_alias = ReturnLine
+    r_alias = Return
+    rows = (await db.execute(
+        select(rl_alias.sale_line_id, func.coalesce(func.sum(rl_alias.qty), 0)).select_from(
+            join(rl_alias, r_alias, rl_alias.return_id == r_alias.id)
+        ).where(r_alias.sale_id == sale_id).group_by(rl_alias.sale_line_id)
+    )).all()
+    for sl_id, qty_sum in rows:
+        if sl_id is not None:
+            returned_map[int(sl_id)] = Decimal(str(qty_sum))
+
+    ret = Return(sale_id=sale.id, status="REGISTRADA", reason=reason, created_by=getattr(sess, "user_id", None), correlation_id=getattr(sess, "session_id", None))
+    db.add(ret)
+    await db.flush()
+
+    total_amount = Decimal("0")
+    stock_deltas: list[dict] = []
+    for it in items:
+        sl_id = int(it.get("sale_line_id"))
+        line = lines_map[sl_id]
+        qty_req = Decimal(str(it.get("qty")))
+        if qty_req <= 0:
+            raise HTTPException(status_code=400, detail=f"qty inválida en línea {sl_id}")
+        prev_ret = returned_map.get(sl_id, Decimal("0"))
+        saldo = Decimal(str(line.qty)) - prev_ret
+        if qty_req > saldo:
+            raise HTTPException(status_code=400, detail=f"qty excede saldo disponible (vendido {line.qty} ya devuelto {prev_ret}) en línea {sl_id}")
+        line_total_unit = Decimal(str(line.unit_price)) * qty_req * (Decimal("1") - Decimal(str(line.line_discount or 0))/Decimal("100"))
+        total_amount += line_total_unit
+        rl = ReturnLine(
+            return_id=ret.id,
+            sale_line_id=sl_id,
+            product_id=line.product_id,
+            qty=qty_req,
+            unit_price=line.unit_price,
+            subtotal=line_total_unit,
+        )
+        db.add(rl)
+        # Incrementar stock
+        prod = await db.get(Product, line.product_id)
+        if prod:
+            before = int(prod.stock or 0)
+            prod.stock = before + int(qty_req)
+            stock_deltas.append({"product_id": prod.id, "delta": int(qty_req), "new": int(prod.stock)})
+            # Ledger delta positivo via ORM
+            try:
+                db.add(StockLedger(
+                    product_id=prod.id,
+                    source_type='return',
+                    source_id=ret.id,
+                    delta=int(qty_req),
+                    balance_after=int(prod.stock),
+                    meta={'sale_line_id': sl_id}
+                ))
+            except Exception:
+                pass
+
+    ret.total_amount = total_amount
+    _audit(db, "return_create", "returns", ret.id, {
+        "sale_id": sale.id,
+        "lines": len(items),
+        "total": float(total_amount),
+        "stock_deltas": stock_deltas,
+        "elapsed_ms": round((time.perf_counter()-t0)*1000,2),
+    }, sess, request)
+    # Invalidate report cache (devoluciones afectan reportes)
+    _report_cache_invalidate()
+    await db.commit()
+    return {"return_id": ret.id, "total": float(total_amount), "lines": len(items)}
+
+
+@router.get("/{sale_id}/returns", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def list_returns(sale_id: int, db: AsyncSession = Depends(get_session)):
+    sale = await db.get(Sale, sale_id)
+    if not sale:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    rets = (await db.execute(select(Return).where(Return.sale_id == sale_id).order_by(Return.id.asc()))).scalars().all()
+    result = []
+    for r in rets:
+        lines = (await db.execute(select(ReturnLine).where(ReturnLine.return_id == r.id))).scalars().all()
+        result.append({
+            "id": r.id,
+            "status": r.status,
+            "reason": r.reason,
+            "total": float(r.total_amount or 0),
+            "created_at": r.created_at.isoformat(),
+            "lines": [
+                {"id": l.id, "sale_line_id": l.sale_line_id, "product_id": l.product_id, "qty": float(l.qty), "unit_price": float(l.unit_price), "subtotal": float(l.subtotal or 0)} for l in lines
+            ]
+        })
+    return {"items": result, "total": len(result)}
 
 
 # --- Export CSV ventas ---

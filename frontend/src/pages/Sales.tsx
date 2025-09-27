@@ -4,7 +4,8 @@
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
 import AppToolbar from '../components/AppToolbar'
-import { listCustomers, createSale, listSales, annulSale, confirmSale, deliverSale, type Customer, type SaleItem } from '../services/sales'
+import { createSale, listSales, annulSale, confirmSale, deliverSale, type SaleItem } from '../services/sales'
+import { listCustomers, type Customer } from '../services/customers'
 import { listProducts } from '../services/products'
 
 type ProductLite = { id: number; title: string; stock: number }

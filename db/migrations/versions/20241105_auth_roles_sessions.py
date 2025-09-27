@@ -247,16 +247,16 @@ def upgrade():
             except Exception:
                 pass
             if admin_pass == "REEMPLAZAR_ADMIN_PASS":
-                print("[WARN] ADMIN_PASS placeholder durante migración; usando fallback 'admin123'. Cambiar luego y rotar contraseña.")
-                admin_pass = "admin123"
+                print("[WARN] ADMIN_PASS placeholder durante migración; usando fallback 'admin1234' SOLO para desarrollo. Cambiar luego y rotar contraseña.")
+                admin_pass = "admin1234"
     # Hash password admin con argon2 (import local para evitar shadowing de import fallido)
     try:
       from passlib.hash import argon2 as _argon2
       pwd = _argon2.using(type="ID").hash(admin_pass)
     except Exception:
-      # Hash precomputado de 'admin123' en argon2id como fallback mínimo
-      if admin_pass == "admin123":
-        pwd = "$argon2id$v=19$m=65536,t=3,p=4$YWJjZGVmZ2hpamtsbW5vcA$2m9s0B4c5eU2N7Y6U2g0r8o0W3mJz6mXK8oHqkz9b4k"
+      # Hash precomputado de 'admin1234' en argon2id como fallback mínimo (solo dev)
+      if admin_pass == "admin1234":
+        pwd = "$argon2id$v=19$m=65536,t=3,p=4$BODcu9d6D2FMCWGMMSaE0A$E/UdQqyy2hMACtSKNFi8tug91tGHJZF8GbisJCHA/So"
       else:
         raise
         bind.execute(

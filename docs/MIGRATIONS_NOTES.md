@@ -1,3 +1,13 @@
+### 2025-09-27 Unificación fallback admin
+
+Se unificó el fallback de password del usuario `admin` a `admin1234` en:
+- Migración `20241105_auth_roles_sessions.py` (anteriormente mencionaba `admin123`).
+- Script `scripts/seed_admin.py` (ya usaba `admin1234`).
+- Configuración `agent_core.config.Settings` (antes `dev-admin-pass`).
+
+Motivo: eliminar confusión que causaba intentos de login fallidos según qué componente hubiese creado el usuario primero. El fallback solo aplica en entorno `dev` cuando `ADMIN_PASS` mantiene el placeholder `REEMPLAZAR_ADMIN_PASS`. En otros entornos el arranque falla explícitamente.
+
+Acción recomendada: definir siempre `ADMIN_PASS` explícito en `.env` para evitar dependencia de contraseñas públicas de desarrollo.
 <!-- NG-HEADER: Nombre de archivo: MIGRATIONS_NOTES.md -->
 <!-- NG-HEADER: Ubicación: docs/MIGRATIONS_NOTES.md -->
 <!-- NG-HEADER: Descripción: Notas técnicas sobre fixes recientes en migraciones Alembic -->
@@ -197,6 +207,11 @@ Objetivo: permitir que la base alcance el head sin intervención manual, preserv
 ### Relación con SKU Canónico
 Este hotfix fue habilitador para continuar con la nueva lógica de SKU canónico (tabla `sku_sequences` + generación transaccional). Sin resolver los duplicados de ledger/returns no era posible validar las pruebas de creación de productos canónicos.
 
+#### Notas adicionales (2025-09-27)
+- En entorno SQLite (tests) se incorporó creación perezosa de `sku_sequences` dentro del generador para evitar fallos en bases recién inicializadas.
+- Se añadió un `commit` explícito tras incrementar la secuencia para reducir incidencia de `database is locked` en ejecuciones rápidas y paralelas.
+- `tests/conftest.py` asegura (si falta) la columna `canonical_sku` y la tabla de secuencias, brindando paridad aproximada con PostgreSQL para el set de pruebas.
+
 ---
 Actualizado: 2025-09-27
 
@@ -228,6 +243,27 @@ Riesgos:
 
 Next steps (tracking):
 - [ ] Crear script de diff metadata vs live DB.
+
+---
+
+## 2025-09-27 Consolidación inicial (snapshot)
+
+Se agregó la migración `20250927_consolidated_base` que actúa como snapshot del estado estable posterior a la serie de hotfixes e introducción de `sku_sequences` y `canonical_sku`.
+
+Características:
+- Usa `Base.metadata.create_all` de forma idempotente (early exit si `products` ya existe) para permitir recreación limpia en una base vacía.
+- No elimina migraciones históricas: se mantienen para trazabilidad y auditoría. Esta migración se apoya en `down_revision = 20250927_merge_deprecated_stock_ledger_heads`.
+- `downgrade()` es noop para evitar pérdidas de datos (documentado explícitamente).
+
+Riesgos / Consideraciones:
+- Si el metadata incluye tablas legacy que deberían excluirse, el snapshot podría reintroducirlas; revisar antes de ampliar modelos.
+- Cambios futuros en modelos requieren nuevas migraciones incrementales; no modificar el snapshot retroactivamente.
+
+Próximos pasos tras snapshot:
+- Implementar script `scripts/compare_schema_snapshot.py` (pendiente) para validar que una base obtenida vía cadena histórica == base creada directo desde snapshot.
+- Evaluar archivado de migraciones deprecated bajo `db/migrations/_legacy/` cuando haya pasado un ciclo estable.
+
+Estado: Primera consolidación creada y aplicada en entorno local.
 - [ ] Generar migración snapshot.
 - [ ] Ensayar restore + upgrade.
 

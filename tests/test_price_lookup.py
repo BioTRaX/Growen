@@ -2,9 +2,9 @@
 # NG-HEADER: Ubicación: tests/test_price_lookup.py
 # NG-HEADER: Descripción: Pruebas unitarias para extractor y ranking del lookup de productos
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-import asyncio
 import os
 import uuid
+import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("DB_URL", "sqlite+aiosqlite:///:memory:")
@@ -12,7 +12,6 @@ os.environ.setdefault("DB_URL", "sqlite+aiosqlite:///:memory:")
 from services.api import app  # noqa: E402
 from services.auth import SessionData, current_session, require_csrf  # noqa: E402
 from services.chat.price_lookup import extract_product_query, resolve_product_info  # noqa: E402
-from db.session import SessionLocal  # noqa: E402
 
 client = TestClient(app)
 app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
@@ -70,7 +69,9 @@ def test_extract_product_query_mixed_intent():
     assert "maceta" in query.terms
 
 
-def test_resolve_product_info_prioritizes_stock():
+@pytest.mark.asyncio
+async def test_resolve_product_info_prioritizes_stock():
+    from db.session import SessionLocal
     sup_id = _create_supplier("sup-rank", "Proveedor Ranking")
     _create_product("Kit Ranking Plus", sup_id, "KIT-R-1", 120.0, stock=5)
     _create_product("Kit Ranking Basic", sup_id, "KIT-R-2", 95.0, stock=0)
@@ -78,16 +79,14 @@ def test_resolve_product_info_prioritizes_stock():
     query = extract_product_query("precio kit ranking")
     assert query is not None
 
-    async def _run():
-        async with SessionLocal() as session:
-            result = await resolve_product_info(query, session)
-            assert result.entries, result
-            first = result.entries[0]
-            assert first.stock_status != "out"
-            assert first.name.lower().startswith("kit ranking")
-            stocks = [entry.stock_status for entry in result.entries]
-            assert "out" in stocks
-    asyncio.run(_run())
+    async with SessionLocal() as session:
+        result = await resolve_product_info(query, session)
+        assert result.entries, result
+        first = result.entries[0]
+        assert first.stock_status != "out"
+        assert first.name.lower().startswith("kit ranking")
+        stocks = [entry.stock_status for entry in result.entries]
+        assert "out" in stocks
 
 def test_extract_product_query_ignores_smalltalk():
     assert extract_product_query('Hola como estas?') is None
