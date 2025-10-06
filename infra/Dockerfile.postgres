@@ -1,0 +1,13 @@
+# NG-HEADER: Nombre de archivo: Dockerfile.postgres
+# NG-HEADER: Ubicación: infra/Dockerfile.postgres
+# NG-HEADER: Descripción: Imagen de Postgres para entornos locales con parches de seguridad aplicados.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+FROM postgres:15.10-bookworm
+
+# Actualizamos paquetes del sistema para aplicar parches de seguridad reportados por Docker Scout.
+RUN set -eux \
+    && apt-get update \
+    && apt-get dist-upgrade -y \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*

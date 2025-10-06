@@ -1,9 +1,16 @@
 
 # NG-HEADER: Nombre de archivo: price_lookup.py
 # NG-HEADER: Ubicacion: services/chat/price_lookup.py
-# NG-HEADER: Descripcion: Utilidades para resolver precio y stock desde el chatbot
+# NG-HEADER: Descripcion: Utilidades para resolver precio y stock desde el chatbot (DEPRECATED)
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-"""Resolucion de precios y stock para el chatbot."""
+# DEPRECATED: Este módulo ha sido reemplazado por el flujo OpenAI Tool Calling + MCP Servers.
+#             Mantener solo por compatibilidad temporal (WS/Telegram) hasta completar migración.
+"""Resolucion de precios y stock para el chatbot.
+
+DEPRECATED: Este módulo será reemplazado por el flujo de tool-calling (OpenAI + MCP Servers).
+Se mantiene temporalmente para compatibilidad parcial mientras se migran todas
+las rutas (ws/telegram) y pruebas. Evitar añadir nueva lógica aquí.
+"""
 
 from __future__ import annotations
 

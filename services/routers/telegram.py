@@ -15,10 +15,7 @@ from ai.router import AIRouter
 from ai.types import Task
 from services.notifications.telegram import send_message as tg_send
 from services.chat.price_lookup import (
-    extract_product_query,
-    log_product_lookup,
-    render_product_response,
-    resolve_product_info,
+    extract_product_query,  # Solo extractor, lógica detallada DEPRECATED
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from db.session import get_session
@@ -61,20 +58,18 @@ async def telegram_webhook(token: str, request: Request, db: AsyncSession = Depe
     # 1) Intento controlado: consulta de precio
     product_query = extract_product_query(text)
     if product_query:
-        result = await resolve_product_info(product_query, db)
-        reply = render_product_response(result)
-        await tg_send(reply, chat_id=str(chat_id))
-        try:
-            await log_product_lookup(
-                db,
-                user_id=None,
-                ip=None,
-                original_text=text,
-                product_query=product_query,
-                result=result,
-            )
-        except Exception:
-            pass
+        ai_router = AIRouter(core_settings)
+        provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
+        chat_with_tools = getattr(provider, "chat_with_tools", None)
+        if callable(chat_with_tools):
+            try:
+                answer = await chat_with_tools(prompt=text, user_role="anon")
+                await tg_send(answer, chat_id=str(chat_id))
+                return {"ok": True}
+            except Exception:
+                await tg_send("Error consultando el producto.", chat_id=str(chat_id))
+                return {"ok": True}
+        await tg_send("Tool-calling no disponible actualmente.", chat_id=str(chat_id))
         return {"ok": True}
 
     # 2) Fallback al router de IA con el mismo prompt/persona del chat HTTP

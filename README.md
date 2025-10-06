@@ -14,7 +14,8 @@
 - Growen responde en espanol rioplatense con tono malhumorado, humor negro y sarcasmo directo.
 - Solo cubre temas de Nice Grow: catalogo, promociones, servicios y consejos de cultivo; desvia con ironia cualquier consulta ajena al rubro.
 - Mantiene limites de seguridad: nada de insultos personales, discursos de odio ni llamados a la violencia.
-- Cuando una consulta de precio coincide con varios productos, pide al usuario que aclare la opcion antes de informar montos.
+- Cuando una consulta de precio coincide con varios productos, pide al usuario que aclare la opcion antes de informar montos (flujo legacy en deprecación).
+- Migración en curso: consultas de producto en `/chat` ahora usan tool-calling (OpenAI → `mcp_products`) para obtener datos consistentes y cacheados; módulo `price_lookup.py` marcado DEPRECATED.
 - Evolución próxima: chatbot corporativo diferenciado por roles con auditoría y acceso al repositorio controlado (ver documentación de arquitectura y roles).
 
 ## Endpoints clave (checklist rapido)
@@ -112,6 +113,7 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - **Frontend**: React + Vite con listas virtualizadas mediante `react-window`.
 - **Adapters**: stubs de Tiendanube.
 - **MCP Servers (nuevo)**: microservicios auxiliares (ej. `mcp_products`) que exponen herramientas (`tools`) vía un endpoint uniforme `POST /invoke_tool` para consumo de agentes LLM, actuando como fachada HTTP hacia la API principal (sin acceso directo a DB). Primer MVP: tools `get_product_info` y `get_product_full_info`.
+  - Nota puerto: docker-compose expone `8100:8100`; el código usa default `http://mcp_products:8001/invoke_tool` configurable con `MCP_PRODUCTS_URL` (alinear en despliegues).
 
 ## Requisitos
 
@@ -324,6 +326,7 @@ Orden de ejecución recomendado:
 
 ### Base de datos (PostgreSQL) en Windows
 
+- Imagen base: `postgres:15.10-bookworm`, reforzada con `apt-get dist-upgrade` en `infra/Dockerfile.postgres` (ejecutá `docker compose build db && docker compose up -d db` tras cambios).
 - En Windows suele estar ocupado el puerto 5432 por otra instalación. El docker-compose mapea Postgres del contenedor al puerto 5433 del host para evitar conflictos.
   - Verificá que `.env` tenga `DB_URL=postgresql+psycopg://growen:GrowenBot01@127.0.0.1:5433/growen` (ya viene así por defecto).
 - Si se reutiliza un volumen previo del contenedor y la contraseña del usuario `growen` no coincide, podés ajustarla sin borrar datos:

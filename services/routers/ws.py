@@ -36,11 +36,7 @@ from agent_core.config import settings as core_settings
 from ai.router import AIRouter
 from ai.types import Task
 from services.chat.price_lookup import (
-    extract_product_query,
-    log_product_lookup,
-    render_product_response,
-    resolve_product_info,
-    serialize_result,
+    extract_product_query,  # Solo parsing; lógica de resolución DEPRECATED
 )
 from services.chat.memory import (
     build_memory_key,
@@ -164,55 +160,36 @@ async def ws_chat(socket: WebSocket) -> None:
 
             product_query = extract_product_query(data)
             if product_query:
-                if (
-                    memory_state
-                    and memory_state.pending_clarification
-                    and not product_query.explicit_price
-                    and not product_query.explicit_stock
-                    and not memory_state.prompted
-                ):
-                    mark_prompted(memory_key)
-                    terms = memory_terms_text(memory_state.query)
+                # Nuevo flujo: delegar directamente a OpenAI tool-calling (MCP Products)
+                ai_router = AIRouter(core_settings)
+                provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
+                chat_with_tools = getattr(provider, "chat_with_tools", None)
+                if callable(chat_with_tools):
                     try:
-                        logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
+                        answer = await chat_with_tools(prompt=data, user_role=role)
+                        # Para mantener compatibilidad de clientes, emitimos type=product_answer simplificado
+                        await socket.send_json({
+                            "role": "assistant",
+                            "text": answer,
+                            "type": "product_answer",
+                            "intent": "product_tool",
+                        })
+                        # No utilizamos memoria de ambigüedad en el nuevo flujo (MVP)
+                        clear_memory(memory_key)
+                        continue
                     except Exception:
-                        pass
-                    await socket.send_json({
-                        "role": "assistant",
-                        "type": "clarify_prompt",
-                        "intent": "clarify",
-                        "text": clarify_prompt_text(terms),
-                    })
-                    continue
-
-                async with SessionLocal() as db:
-                    result = await resolve_product_info(product_query, db)
-                    await log_product_lookup(
-                        db,
-                        user_id=(sess.user.id if getattr(sess, "user", None) else None),
-                        ip=host,
-                        original_text=data,
-                        product_query=product_query,
-                        result=result,
-                        correlation_id=correlation_id,
-                    )
-                rendered = render_product_response(result)
-                payload = serialize_result(result, include_metrics=include_metrics)
-                memory_state = ensure_memory(
-                    memory_key,
-                    product_query,
-                    pending=result.status == "ambiguous",
-                    rendered=rendered,
-                )
-                if result.status != "ambiguous":
-                    mark_resolved(memory_key)
+                        logger.exception("ws.tool_call_error")
+                        await socket.send_json({
+                            "role": "assistant",
+                            "text": "Error consultando información de producto.",
+                            "type": "error",
+                        })
+                        continue
+                # Fallback si provider no soporta tools
                 await socket.send_json({
                     "role": "assistant",
-                    "text": rendered,
-                    "type": "product_answer",
-                    "data": payload,
-                    "intent": result.intent,
-                    "took_ms": result.took_ms,
+                    "text": "No puedo resolver productos ahora (tool-calling no disponible).",
+                    "type": "error",
                 })
                 continue
 
@@ -233,30 +210,14 @@ async def ws_chat(socket: WebSocket) -> None:
                     })
                     continue
                 if normalized in CLARIFY_CONFIRM_WORDS:
-                    async with SessionLocal() as db:
-                        result = await resolve_product_info(memory_state.query, db)
-                    rendered = render_product_response(result)
-                    payload = serialize_result(result, include_metrics=include_metrics)
-                    ensure_memory(
-                        memory_key,
-                        memory_state.query,
-                        pending=result.status == "ambiguous",
-                        rendered=rendered,
-                    )
-                    if result.status != "ambiguous":
-                        mark_resolved(memory_key)
-                    try:
-                        logger.info("chat.clarify_confirmation", extra={"correlation_id": correlation_id, "status": result.status})
-                    except Exception:
-                        pass
+                    # Nuevo flujo: pedimos al usuario reformular con SKU exacto en lugar de relanzar ranking local
                     await socket.send_json({
                         "role": "assistant",
-                        "text": rendered,
-                        "type": "product_answer",
-                        "data": payload,
-                        "intent": result.intent,
-                        "took_ms": result.took_ms,
+                        "text": "Por favor pedime nuevamente el producto indicando el SKU exacto para darte precio y stock actualizado.",
+                        "type": "clarify_ack",
+                        "intent": "clarify",
                     })
+                    clear_memory(memory_key)
                     continue
                 tokens = normalized.split()
                 if len(tokens) <= 3 and not memory_state.prompted:

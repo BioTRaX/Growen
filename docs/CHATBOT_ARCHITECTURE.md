@@ -76,3 +76,39 @@ El chatbot administrativo brindará asistencia en tiempo real para desarrollo y 
 - Tests de integración para `/chatbot/*` (admin vs colaborador).
 - Pruebas de regresión del pipeline RAG tras reindexado.
 - Smoke test que valide escritura confinada a `PR/` y auditoría obligatoria.
+
+## Migración a Tool-Calling para Productos
+
+La obtención de información de productos (precio, stock básico) está en proceso de migración desde el módulo monolítico `services/chat/price_lookup.py` hacia un enfoque desacoplado basado en:
+
+1. Tool calling con OpenAI (funciones `get_product_info` y `get_product_full_info`).
+2. Microservicio MCP `mcp_servers/products_server` que encapsula lógica de fetch, permisos y cache.
+3. Router `chat` que detecta consultas de producto y delega la resolución mediante `chat_with_tools` del provider OpenAI.
+
+Ventajas:
+- Menor complejidad en el backend principal.
+- Permite escalar y versionar tools sin tocar núcleo del chatbot.
+- Cache y control de acceso localizados en el servidor MCP.
+
+Estado actual (2025-10-06):
+- Endpoint `/chat` ya usa tool-calling para intents de producto.
+- `price_lookup.py` marcado como DEPRECATED (solo parsing y compatibilidad temporal para otros canales).
+- Pendiente migrar WebSocket (`ws.py`) y Telegram (`telegram.py`).
+
+Próximos pasos sugeridos:
+- Extraer parsing residual a módulo liviano independiente de legacy.
+- Eliminar funciones no usadas en `price_lookup.py` tras migrar canales restantes.
+- Añadir nuevas tools (métricas de ventas, proveedores relacionados, equivalencias SKU) siguiendo el contrato MCP.
+
+Configuración:
+- Variable `MCP_PRODUCTS_URL` (default `http://mcp_products:8001/invoke_tool`); alinear con `docker-compose.yml` si el puerto expuesto difiere.
+- `OPENAI_API_KEY` requerida para habilitar tool-calling cuando `ai_allow_external=true`.
+
+Seguridad y permisos:
+- `get_product_full_info` restringido a roles `admin|colaborador` (validado tanto en schema dinámico como en el MCP).
+- Próxima iteración: token firmado y auditoría de invocaciones de tools.
+
+Deprecación:
+- Evitar agregar nueva lógica a `price_lookup.py`.
+- Documentar en cada PR la eliminación progresiva de funciones legacy.
+

@@ -5,7 +5,7 @@
 
 # Roadmap del Proyecto
 
-Última actualización: 2025-09-26
+Última actualización: 2025-10-06
 
 Este documento resume el estado actual del proyecto, las funcionalidades ya implementadas y los trabajos pendientes. Debe mantenerse actualizado por cada contribución (humana o de un agente) que cambie comportamiento, endpoints, modelos o UI relevante.
 
@@ -16,19 +16,27 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 - Frontend: SPA React/TypeScript (Vite) con páginas de compras y servicios HTTP.
 - Almacenamiento de archivos: `data/purchases/{id}/...` para PDFs y artefactos relacionados.
 
-### Nueva capa (MVP) — MCP Servers
+### Capa MCP Servers (estado)
 
-Se introduce arquitectura inicial de **MCP Servers** (Model Context Protocol simplificado) para exponer capacidades del dominio a agentes de IA mediante una interfaz estandarizada de "tools". Primer servicio:
+Arquitectura **MCP Servers** (Model Context Protocol simplificado) establecida para exponer herramientas de dominio a LLMs.
 
-- `mcp_products` (FastAPI independiente) — Tools iniciales:
-  - `get_product_info` (cualquier rol) → retorna `sku, name, sale_price, stock`.
-  - `get_product_full_info` (roles: admin|colaborador) → mismo payload en MVP; se ampliará con categorías, suppliers, históricos.
-  - Endpoint único `POST /invoke_tool` con contrato `{ tool_name, parameters }`.
-  - No accede a PostgreSQL: consume API principal vía HTTP (`http://api:8000`).
-  - Dockerizado y agregado a `docker-compose.yml` (puerto 8100).
-  - Pruebas: unit test de permisos y esqueleto de integración (mock pendiente con respx).
+Servicio actual:
+- `mcp_products` (FastAPI independiente)
+  - Tools: `get_product_info`, `get_product_full_info`.
+  - Cache en memoria con TTL dinámico, token compartido opcional, logging y mapeo de errores (400/401/403/404/502/504).
+  - Endpoint estándar `POST /invoke_tool`.
+  - Consume API principal vía HTTP (no DB directa).
+  - Dockerizado (`docker-compose.yml`, puerto 8100) — el código de integración usa por defecto `http://mcp_products:8001`; ajustar `MCP_PRODUCTS_URL` o alinear puertos.
+  - Tests: permisos, cache, token auth, invocación tool (respx).
 
-Próximos pasos MCP (futuros hitos): autenticación tokenizada, cache TTL, herramientas de búsqueda y acceso extendido a métricas.
+Integración chatbot:
+- Endpoint `/chat` ahora usa tool-calling (OpenAI → MCP) para consultas de producto. `price_lookup.py` marcado DEPRECATED.
+
+Próximos pasos MCP:
+- Firmar token (HMAC/JWT) con expiración y rol.
+- Auditoría estructurada de invocaciones (latencia, tool_name, rol, éxito/error).
+- Extender tools: métricas de ventas, equivalencias SKU, historial de precios.
+- Rate limiting por rol y circuito de retry/backoff.
 
 ## Estado actual (hecho)
 

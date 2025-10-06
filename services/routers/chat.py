@@ -27,13 +27,15 @@ from services.chat.memory import (
     mark_prompted,
     mark_resolved,
 )
+# DEPRECATED: La lógica de price_lookup se reemplaza gradualmente por tool-calling vía OpenAI + MCP.
+# Mantengo import mínimo solo para tipos y parsing mientras se completa migración.
 from services.chat.price_lookup import (
     ProductQuery,
     extract_product_query,
-    log_product_lookup,
-    render_product_response,
-    resolve_product_info,
-    serialize_result,
+    # log_product_lookup,
+    # render_product_response,
+    # resolve_product_info,
+    # serialize_result,
 )
 from services.chat.shared import (
     ALLOWED_PRODUCT_INTENT_ROLES,
@@ -109,7 +111,7 @@ async def _handle_followup(
     db: AsyncSession,
     memory_state: MemoryState,
     correlation_id: Optional[str],
-    include_metrics: bool,
+    include_metrics: bool = False,
 ) -> Optional[ChatOut]:
     if not memory_state or not memory_state.pending_clarification:
         return None
@@ -124,26 +126,12 @@ async def _handle_followup(
             pass
         return ChatOut(text=clarify_prompt_text(terms), type="clarify_prompt", intent="clarify")
     if normalized in CLARIFY_CONFIRM_WORDS:
-        result = await resolve_product_info(query, db)
-        rendered = render_product_response(result)
-        serialized = serialize_result(result, include_metrics=include_metrics)
-        try:
-            payload = ProductLookupOut.model_validate(serialized)
-        except ValidationError:
-            payload = ProductLookupOut(**serialized)  # type: ignore[arg-type]
-        ensure_memory(memory_key, query, pending=result.status == "ambiguous", rendered=rendered)
-        if result.status != "ambiguous":
-            mark_resolved(memory_key)
-        try:
-            logger.info("chat.clarify_confirmation", extra={"correlation_id": correlation_id, "status": result.status})
-        except Exception:
-            pass
+        # Nuevo flujo simplificado: pedimos al usuario que formule nuevamente la consulta con el SKU o nombre completo.
+        mark_resolved(memory_key)
         return ChatOut(
-            text=rendered,
-            type="product_answer",
-            data=payload,
-            intent=result.intent,
-            took_ms=result.took_ms,
+            text="Entendido. Por favor vuelve a pedir el producto indicando el SKU exacto para obtener datos actualizados.",
+            type="clarify_ack",
+            intent="clarify",
         )
     tokens = normalized.split()
     if len(tokens) <= 3 and not memory_state.prompted:
@@ -174,69 +162,19 @@ async def chat_endpoint(
     memory_state = get_memory(memory_key)
 
     product_query = extract_product_query(payload.text)
-    if product_query:
-        if session_data.role not in ALLOWED_PRODUCT_INTENT_ROLES:
+    if product_query and session_data.role in ALLOWED_PRODUCT_INTENT_ROLES:
+        # Nuevo flujo: delegar a tool-calling (OpenAI -> MCP) sin price_lookup detallado local.
+        ai_router = AIRouter(core_settings)
+        provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
+        chat_with_tools = getattr(provider, "chat_with_tools", None)
+        if chat_with_tools:
             try:
-                logger.warning("chat.forbidden", extra={"correlation_id": correlation_id, "role": session_data.role})
+                answer = await chat_with_tools(prompt=payload.text, user_role=session_data.role)
+                return ChatOut(text=answer, intent="product_tool")
             except Exception:
-                pass
-            return ChatOut(
-                text="Necesitas una cuenta autorizada para consultar precios y stock.",
-                intent="forbidden",
-            )
-
-        include_metrics = session_data.role in ALLOWED_PRODUCT_METRIC_ROLES
-
-        if (
-            memory_state
-            and memory_state.pending_clarification
-            and not product_query.explicit_price
-            and not product_query.explicit_stock
-            and not memory_state.prompted
-        ):
-            mark_prompted(memory_key)
-            terms = memory_terms_text(memory_state.query)
-            try:
-                logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
-            except Exception:
-                pass
-            return ChatOut(text=clarify_prompt_text(terms), type="clarify_prompt", intent="clarify")
-
-        result = await resolve_product_info(product_query, db)
-        rendered = render_product_response(result)
-        serialized = serialize_result(result, include_metrics=include_metrics)
-        try:
-            payload_out = ProductLookupOut.model_validate(serialized)
-        except ValidationError:
-            payload_out = ProductLookupOut(**serialized)  # type: ignore[arg-type]
-
-        ensure_memory(
-            memory_key,
-            product_query,
-            pending=result.status == "ambiguous",
-            rendered=rendered,
-        )
-        if result.status != "ambiguous":
-            mark_resolved(memory_key)
-
-        await log_product_lookup(
-            db,
-            user_id=session_data.user.id if session_data.user else None,
-            ip=request.client.host if request.client else None,
-            original_text=payload.text,
-            product_query=product_query,
-            result=result,
-            correlation_id=correlation_id,
-            include_metrics=include_metrics,
-        )
-
-        return ChatOut(
-            text=rendered,
-            type="product_answer",
-            data=payload_out,
-            intent=result.intent,
-            took_ms=result.took_ms,
-        )
+                logger.exception("chat.tool_call_error")
+                return ChatOut(text="Error temporal consultando información de producto.")
+        return ChatOut(text="Necesitas una cuenta autorizada para consultar precios y stock.", intent="forbidden")
 
     if memory_state:
         follow = await _handle_followup(

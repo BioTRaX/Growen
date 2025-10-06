@@ -5,7 +5,10 @@
 services:
   db:
     container_name: growen-postgres
-    image: postgres:15
+    image: growen/postgres:local
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.postgres
     environment:
       POSTGRES_USER: growen
       # IMPORTANT: Unified password (was previously GrowenBot=01 causing mismatch)

@@ -23,6 +23,7 @@ class AIRouter:
         self._providers = {"openai": OpenAIProvider()}
         if not disable_ollama:
             self._providers["ollama"] = OllamaProvider()
+        self._last_provider_name: str | None = None
 
     def available_providers(self) -> list[str]:
         out: list[str] = []
@@ -35,37 +36,28 @@ class AIRouter:
             out.append("openai")
         return out
 
-    def run(self, task: str, prompt: str) -> str:
+    def get_provider(self, task: str):
+        """Devuelve el provider seleccionado (aplica mismas reglas que run)."""
         name = choose(task, self.settings)
         if name == "openai" and not self.settings.ai_allow_external and "ollama" in self._providers:
             name = "ollama"
         if name == "ollama" and "ollama" not in self._providers:
-            name = "openai"  # deshabilitado, usar openai
+            name = "openai"  # deshabilitado
         provider = self._providers[name]
-        # Fallback: si se eligió OpenAI pero no hay API key disponible, usar Ollama si está habilitado
         try:
             if name == "openai" and getattr(provider, "api_key", "") in (None, "") and "ollama" in self._providers:
                 provider = self._providers["ollama"]
                 name = "ollama"
-        except Exception:
-            # Si no podemos inspeccionar, continuamos con provider actual
+        except Exception:  # pragma: no cover
             pass
-        if not provider.supports(task):
-            # Si el proveedor elegido no soporta la tarea intentamos fallback a ollama.
-            # Cuando ollama está deshabilitado (AI_DISABLE_OLLAMA=true) evitamos KeyError
-            # y reutilizamos el provider actual (OpenAI), registrando advertencia.
-            if "ollama" in self._providers:
-                logging.warning(
-                    "Proveedor %s no soporta la tarea %s, usando ollama", name, task
-                )
-                provider = self._providers["ollama"]
-            else:
-                logging.warning(
-                    "Proveedor %s no soporta la tarea %s y ollama deshabilitado; continuando con %s",
-                    name,
-                    task,
-                    name,
-                )
+        if not provider.supports(task) and "ollama" in self._providers:
+            provider = self._providers["ollama"]
+            name = "ollama"
+        self._last_provider_name = name
+        return provider
+
+    def run(self, task: str, prompt: str) -> str:
+        provider = self.get_provider(task)
         full_prompt = f"{SYSTEM_PROMPT}\n\n{prompt}"
         out = "".join(provider.generate(full_prompt))
         # Compatibilidad de tests: cuando se usa proveedor local sin daemon,

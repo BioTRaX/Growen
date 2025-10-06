@@ -5,6 +5,32 @@
 
 # Chatbot Growen
 
+## Actualización (Tool Calling + MCP Products)
+
+Desde octubre 2025 el intent de consulta de productos (precio/stock) migra del motor interno `price_lookup.py` a un flujo de Tool Calling con OpenAI y un servidor MCP (`mcp_products`).
+
+- El proveedor OpenAI decide cuándo invocar las tools `get_product_info` o `get_product_full_info`.
+- El servidor MCP se consume vía `POST http://mcp_products:8001/invoke_tool` y retorna un payload JSON con los datos del producto.
+- Roles `admin` y `colaborador` ven la tool avanzada; otros roles solo `get_product_info`.
+- El archivo `services/chat/price_lookup.py` queda marcado como `DEPRECATED` y se mantendrá temporalmente hasta retirar dependencias residuales (tests históricos y memoria de clarificación antigua en WS/Telegram).
+- Endpoints afectados:
+	- `POST /chat`: ya usa `chat_with_tools` para preguntas que disparan intención de producto.
+	- `WS /ws`: migrado a tool-calling (retirado ranking local; se simplifica la clarificación).
+	- `POST /telegram/webhook/*`: migrado a tool-calling.
+
+### Consideraciones de diseño
+1. Robustez: si falla OpenAI o falta API key se degrada a eco (`openai:` prefix) para no romper interacción.
+2. Latencia: segunda llamada al modelo ocurre solo si el primer response incluye `tool_calls`.
+3. Seguridad: control de tools por rol antes de cada request a OpenAI.
+4. Evolución: cuando se añadan nuevas tools, actualizar `_build_tools_schema` en `openai_provider.py` y documentarlas aquí.
+
+### Próximos pasos sugeridos
+- Eliminar dependencias residuales a `resolve_product_info` en memoria de clarificación avanzada.
+- Añadir métricas de tool usage (latencia y código de estado MCP) en logs estructurados.
+- Incorporar autenticación fuerte (token firmado) entre chatbot y MCP antes de exponer externamente.
+
+---
+
 ## Intents soportados
 
 ### Consulta de productos (`product_answer`)

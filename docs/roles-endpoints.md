@@ -111,3 +111,18 @@ Estos endpoints se agregarán en próximos hitos y pueden no estar disponibles a
 | POST | /chatbot/pr-suggestion | admin | Permite subir sugerencias bajo `PR/` con validación de ruta y auditoría.
 | GET | /chatbot/audit/logs | admin | Consulta de auditoría con filtros por usuario, fechas y recursos.
 
+## Tools MCP (estado actual)
+
+Las tools expuestas a modelos (OpenAI) vía tool-calling se documentan para trazabilidad de roles:
+
+| Tool | Descripción | Roles permitidos |
+|------|-------------|------------------|
+| get_product_info | Retorna info básica de producto (sku, name, sale_price, stock). | guest, cliente, proveedor, colaborador, admin |
+| get_product_full_info | Retorna info extendida (MVP: igual a básica; se ampliará). | colaborador, admin |
+
+Invocación estándar desde el modelo: `POST /invoke_tool` en `mcp_products` con cuerpo `{ "tool_name": ..., "parameters": {"sku": "...", "user_role": "..." } }`.
+
+Notas:
+- `user_role` validado en el microservicio además de la selección dinámica de tools.
+- Se añadirá auditoría y token firmado en próximos hitos (ver Roadmap).
+
