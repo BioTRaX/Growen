@@ -142,3 +142,80 @@ Esto permite reproducir pasos en caso de que se descubra una inconsistencia post
 - Integrar auditoría de enums antes de aplicar migraciones.
 - Añadir modo `--dry-run` que ejecute migraciones dentro de un snapshot (cuando se use en entornos con soporte a `CREATE DATABASE ... TEMPLATE`).
 
+## Incidente de Restauración y Consolidación (Octubre 2025)
+
+### Resumen ejecutivo
+Se detectó pérdida/aparente ausencia de productos en la UI tras incidente. Existían dos bases:
+
+- `growen` con datos completos de negocio (≈92 products + equivalences completas).
+- `growen_old` con esquema más avanzado (migraciones posteriores) pero datos truncados (14 products) y tablas adicionales (`variants`, `images`).
+
+Se decidió conservar `growen` como fuente de verdad y aplicar migraciones pendientes hasta `20250927_consolidated_base`, rescatando únicamente la fila/filas útiles de `images` (opcional) y evaluando `variants` (ya presentes en la base principal). No se hizo swap: se migró in-place.
+
+### Timeline resumido
+| Paso | Acción |
+|------|--------|
+| 1 | Identificación de backups y conteos iniciales (products 92 en `growen`). |
+| 2 | Creación/uso de script `diagnose_products_visibility.py` (counts, nulls, orphans). |
+| 3 | Desarrollo de `compare_products_between_dbs.py` para contrastar `growen_old` vs `growen`. |
+| 4 | Detección: `growen_old` más nuevo en Alembic pero con datos incompletos. |
+| 5 | Backup previo: `pg_dump -Fc growen` (`growen_pre_migrate_YYYYMMDD_HHMMSS.dump`). |
+| 6 | Ejecución `alembic upgrade head` sobre `growen`. |
+| 7 | Export selectiva de `variants` / `images` desde `growen_old` (evaluación). |
+| 8 | Re‐diagnóstico y validación UI. |
+| 9 | Cierre y documentación. |
+
+### Scripts involucrados
+- `scripts/restore_adapt_dump.py` (previo, no usado en este flujo directo pero parte de base de procedimientos).
+- `scripts/diagnose_products_visibility.py` (diagnóstico consolidado).
+- `scripts/compare_products_between_dbs.py` (comparación de datasets y esquema). 
+
+### Decisiones clave
+1. No se promueve `growen_old` por escasez de datos críticos.
+2. Migración in-place de `growen` hasta HEAD para alinear esquema.
+3. Datos sensibles: `products`, `supplier_products`, `product_equivalences` preservados íntegros.
+4. Contenido de `variants` ya existente en la base principal (sin reimport masiva) — import selectivo descartado o no necesario.
+5. `images`: import puntual condicionada a necesidades reales (estructura validada antes de COPY con columnas explícitas).
+6. Registro final en este documento para trazabilidad.
+
+### Fingerprint y verificaciones
+- Fingerprint productos (old) usado sólo como indicador: `4a77b64c744f96b1edee7be967edf87f` (no aplicado para canonizar en productivo por diferencias de columnas).
+- Post-migración: `diagnose_products_visibility.py` confirmó counts esperados y ausencia de huérfanos críticos.
+- UI validó presencia de los ~92 productos y navegación correcta sin errores 500.
+
+### Checklist final (completado)
+- [x] Backup pre-migración creado (`growen_pre_migrate_*.dump`).
+- [x] Migraciones aplicadas: `alembic current` = `20250927_consolidated_base`.
+- [x] Counts núcleo preservados (products 92, supplier_products 92, product_equivalences 92).
+- [x] Huérfanos críticos = 0 según diagnóstico.
+- [x] Diagnóstico JSON guardado (`diag_after_import.json`).
+- [x] Comparación inter-bases archivada (`compare_post_migrate.json`, `compare_final.json`).
+- [x] Import puntual de imágenes/variants evaluado (sin duplicar PK; se evitó sobrescritura).
+- [x] Secuencias ajustadas tras intentos de import (`setval`).
+- [x] UI verificada: datos visibles, sin tracebacks en `backend.log`.
+- [ ] Renombrar/archivar `growen_old` (pendiente opcional):
+   - `ALTER DATABASE growen_old RENAME TO growen_archive_20251005;`
+
+### Comandos clave (referencia)
+```
+# Comparación
+python scripts/compare_products_between_dbs.py --source-url <old> --target-url <main> --json > compare_post_migrate.json
+
+# Migración a HEAD
+alembic upgrade head
+
+# Diagnóstico final
+python scripts/diagnose_products_visibility.py --json > diag_after_import.json
+
+# Ajuste secuencias ejemplo
+docker exec growen-postgres psql -U growen -d growen -c "SELECT setval(pg_get_serial_sequence('variants','id'), COALESCE((SELECT MAX(id) FROM variants),0)+1, false);"
+```
+
+### Recomendaciones post-incidente
+- Automatizar iluminación temprana de divergencia (task diaria con fingerprint + counts archivados en log rotado).
+- Añadir test de smoke de endpoint `/products` comparando count vs DB antes de deploy.
+- Evaluar cifrado/retención de dumps antiguos y limpieza automatizada (TTL configurable).
+
+---
+Actualizado: 2025-10-05
+

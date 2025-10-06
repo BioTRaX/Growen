@@ -6,6 +6,7 @@
 
 ## [Unreleased]
 ### Added
+- mcp_servers: primer MCP Server `mcp_products` (MVP) con tools `get_product_info` (abierto) y `get_product_full_info` (roles admin|colaborador). Endpoint unificado `POST /invoke_tool`, Dockerfile propio y dependencia HTTP hacia API principal (sin acceso directo a DB). README y Roadmap actualizados.
 - Columna `purchase_lines.meta` (JSON) para trazabilidad de autocompletado de líneas.
 - Persistencia de `meta.enrichment` (algorithm_version, timestamp, fields, stats) al ejecutar `PUT /purchases/{id}` con `PURCHASE_COMPLETION_ENABLED`.
 

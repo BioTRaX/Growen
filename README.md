@@ -111,6 +111,7 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - **IA**: ruteo automático entre Ollama (local) y OpenAI.
 - **Frontend**: React + Vite con listas virtualizadas mediante `react-window`.
 - **Adapters**: stubs de Tiendanube.
+- **MCP Servers (nuevo)**: microservicios auxiliares (ej. `mcp_products`) que exponen herramientas (`tools`) vía un endpoint uniforme `POST /invoke_tool` para consumo de agentes LLM, actuando como fachada HTTP hacia la API principal (sin acceso directo a DB). Primer MVP: tools `get_product_info` y `get_product_full_info`.
 
 ## Requisitos
 

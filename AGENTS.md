@@ -168,3 +168,67 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 ---
 Actualizado inventario scripts: 2025-09-13.
 
+## MCP Servers (Nueva capa de herramientas para IA)
+
+Esta sección documenta lineamientos para crear y mantener microservicios bajo `mcp_servers/` orientados a exponer "tools" consumibles por agentes LLM mediante un contrato uniforme.
+
+### Objetivos
+- Separar preocupaciones: cada MCP Server actúa como fachada de dominio (productos, compras, ventas, etc.).
+- Evitar acceso directo a la base: siempre consumir la API principal (`api`) vía HTTP.
+- Control de acceso basado en roles (parámetro `user_role` en MVP; evolucionará a autenticación/verificación tokenizada).
+
+### Estructura mínima de un MCP Server
+```
+mcp_servers/
+	<domain>_server/
+		__init__.py
+		main.py          # FastAPI/Flask app con endpoint POST /invoke_tool
+		tools.py         # Implementación de funciones async registradas
+		requirements.txt # Dependencias aisladas (no mezclar con raíz salvo necesidad)
+		Dockerfile       # Imagen autocontenida (usa red compartida con api)
+		README.md        # Propósito, tools, ejemplos de uso
+		tests/           # Pruebas (unit + integración con mocks httpx/respx)
+```
+
+### Convenciones de Tools
+- Firma recomendada: `async def <name>(... , user_role: str) -> dict`.
+- Validar inputs y roles temprano; lanzar `PermissionError` (subclase de `ValueError`) para mapear a 403.
+- Retornar dict plano serializable (sin objetos ORM ni tipos complejos).
+- Mantener TOOLS_REGISTRY en `tools.py` para despacho dinámico.
+
+### Endpoint estándar
+- `POST /invoke_tool` recibe `{ "tool_name": str, "parameters": { ... } }`.
+- Respuesta `{ "tool_name": str, "result": { ... } }` o error HTTP:
+	- 400 validación parámetros
+	- 403 permiso insuficiente
+	- 404 tool desconocida
+	- 502 error upstream (API principal) / red
+
+### Roles y Seguridad
+- MVP: confianza en parámetro `user_role` (solo para prototipo interno).
+- Próximos pasos obligatorios antes de exponer externamente:
+	- Token firmado (HMAC o JWT) con claims de rol y expiración.
+	- Lista blanca de tools por rol y rate limiting por IP/rol.
+	- Auditoría de cada invocación (`tool_name`, latencia, rol, éxito/error).
+
+### Tests
+- Unit: validación de roles y shape de respuesta (mock de red cuando sea necesario).
+- Integración: uso de `respx` para mockear endpoints de la API principal y simular latencias y códigos de error.
+- Futuros: contract tests para garantizar estabilidad de payload al añadir campos nuevos (estrategia additive-only v1).
+
+### Documentación
+- Actualizar `Roadmap.md` al introducir nuevo MCP Server.
+- Añadir sección en README raíz cuando la capa crezca (diagrama arquitectura actualizado).
+- Anotar herramientas disponibles y roles requeridos en `docs/roles-endpoints.md` cuando salgan del estado MVP.
+
+### Observabilidad (futuro)
+- Métricas: invocaciones por tool, latencia p50/p95, tasa de error, top SKUs consultados, cache hit ratio.
+- Logs estructurados JSON con `tool_name`, `role`, `elapsed_ms`, `status`.
+- Circuit breakers / retry con backoff para HTTP hacia API principal.
+
+### Ejemplo implementado (MVP)
+- `mcp_servers/products_server`: tools `get_product_info` y `get_product_full_info` (roles admin|colaborador para la segunda) exponiendo datos de primer nivel de productos.
+
+---
+Actualizado MCP Servers: 2025-10-06.
+

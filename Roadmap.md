@@ -16,6 +16,20 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 - Frontend: SPA React/TypeScript (Vite) con páginas de compras y servicios HTTP.
 - Almacenamiento de archivos: `data/purchases/{id}/...` para PDFs y artefactos relacionados.
 
+### Nueva capa (MVP) — MCP Servers
+
+Se introduce arquitectura inicial de **MCP Servers** (Model Context Protocol simplificado) para exponer capacidades del dominio a agentes de IA mediante una interfaz estandarizada de "tools". Primer servicio:
+
+- `mcp_products` (FastAPI independiente) — Tools iniciales:
+  - `get_product_info` (cualquier rol) → retorna `sku, name, sale_price, stock`.
+  - `get_product_full_info` (roles: admin|colaborador) → mismo payload en MVP; se ampliará con categorías, suppliers, históricos.
+  - Endpoint único `POST /invoke_tool` con contrato `{ tool_name, parameters }`.
+  - No accede a PostgreSQL: consume API principal vía HTTP (`http://api:8000`).
+  - Dockerizado y agregado a `docker-compose.yml` (puerto 8100).
+  - Pruebas: unit test de permisos y esqueleto de integración (mock pendiente con respx).
+
+Próximos pasos MCP (futuros hitos): autenticación tokenizada, cache TTL, herramientas de búsqueda y acceso extendido a métricas.
+
 ## Estado actual (hecho)
 
 - Se actualizo la persona del chatbot para reflejar un tono mas malhumorado, sarcastico y centrado en Nice Grow.
