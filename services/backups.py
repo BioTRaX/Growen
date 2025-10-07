@@ -107,7 +107,9 @@ def latest_backup_age_hours() -> Optional[float]:
 def _run_host_pg_dump(db: DBConn, out_file: Path) -> subprocess.CompletedProcess:
     pg_dump = shutil.which("pg_dump")
     if not pg_dump:
-        raise FileNotFoundError("pg_dump no encontrado en PATH")
+        # Retornamos un objeto simulado con returncode != 0 para flujos que toleran ausencia
+        cp = subprocess.CompletedProcess(args=["pg_dump"], returncode=127, stdout="", stderr="pg_dump no encontrado")
+        return cp
     env = os.environ.copy()
     if db.password:
         env["PGPASSWORD"] = db.password
@@ -165,6 +167,10 @@ def make_backup(db_url: str, container_name: str = "growen-postgres", prefix: st
     db = parse_db_url(db_url)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     outfile = BACKUPS_DIR / f"{prefix}_{ts}.dump"
+    # Permitir desactivar auto-backup explícitamente (ej. entornos dev sin pg_dump)
+    if os.getenv("DISABLE_AUTO_BACKUP", "0") in {"1", "true", "TRUE"}:
+        return {"ok": False, "disabled": True, "reason": "DISABLE_AUTO_BACKUP activo"}
+
     if _has_docker() and _container_exists(container_name):
         proc = _run_docker_pg_dump(container_name, db, outfile)
     else:
@@ -174,8 +180,8 @@ def make_backup(db_url: str, container_name: str = "growen-postgres", prefix: st
         "ok": ok,
         "file": outfile.name,
         "path": str(outfile),
-        "stdout": proc.stdout,
-        "stderr": proc.stderr,
+        "stdout": getattr(proc, "stdout", ""),
+        "stderr": getattr(proc, "stderr", ""),
     }
     # Si falló, borrar archivo vacío/dañado
     if not ok:

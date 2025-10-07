@@ -33,6 +33,18 @@ if (-not $dict.ContainsKey("OLLAMA_MODEL") -or [string]::IsNullOrWhiteSpace($dic
 }
 
 # Lanzar backend en nueva ventana
+function Test-DockerReady {
+  if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return $false }
+  try { docker info --format '{{.ServerVersion}}' 1>$null 2>$null; return $LASTEXITCODE -eq 0 } catch { return $false }
+}
+
+if (-not (Test-DockerReady)) {
+  Write-Warning "Docker no disponible. Redis no se levantará en contenedor; se usará RUN_INLINE_JOBS=1. Inicia Docker Desktop si deseas colas reales."
+  $env:RUN_INLINE_JOBS = '1'
+} else {
+  if (-not $env:RUN_INLINE_JOBS) { $env:RUN_INLINE_JOBS = '0' }
+}
+
 Start-Process -WindowStyle Normal -FilePath "cmd.exe" -ArgumentList "/k","uvicorn services.api:app --reload"
 
 # Frontend

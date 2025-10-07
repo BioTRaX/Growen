@@ -49,6 +49,23 @@ Notas Windows/Docker:
 - Para `pg_dump` en host, tener instalado PostgreSQL client y `pg_dump` en el PATH.
 - Para `docker exec`, debe existir el contenedor `growen-postgres`.
 
+### Nuevo (Oct 2025): Desactivar backup automático en desarrollo
+
+Si en tu entorno de desarrollo no tienes instaladas las utilidades cliente de PostgreSQL (por ejemplo `pg_dump`) o simplemente quieres evitar el backup automático al arrancar la API, puedes definir:
+
+```
+DISABLE_AUTO_BACKUP=1
+```
+
+Efectos:
+- El arranque no intentará generar backup diario.
+- Se evitarán tracebacks de `pg_dump no encontrado` en `backend.log`.
+- La respuesta enviada por la función interna de auto-backup incluirá `{ "disabled": true }`.
+
+Cuando reinstales las herramientas de PostgreSQL o habilites nuevamente el mecanismo, elimina la variable o ponla en `0`.
+
+Nota: Si `DISABLE_AUTO_BACKUP` no está activo y no existe `pg_dump`, ahora el sistema registra el fallo sin interrumpir el arranque (return code 127) y limpia archivos incompletos.
+
 ## Operación segura
 
 - Evitar `docker compose down -v` en entornos con datos; borra volúmenes.
