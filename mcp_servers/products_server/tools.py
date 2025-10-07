@@ -16,7 +16,7 @@ Todas las funciones reciben `user_role` para aplicar control de acceso.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, List
 import os
 import time
 import httpx
@@ -165,9 +165,51 @@ async def get_product_full_info(sku: str, user_role: str) -> Dict[str, Any]:
     return await get_product_info(sku=sku, user_role=user_role)
 
 
+async def find_products_by_name(query: str, user_role: str) -> Dict[str, Any]:
+    """Busca productos por nombre (búsqueda parcial) y retorna coincidencias básicas.
+
+    Args:
+        query: Texto ingresado por el usuario (nombre parcial o completo).
+        user_role: Rol declarado (no se restringe en MVP).
+
+    Returns:
+        Dict con clave `items` que es una lista de productos (name, sku) y `count`.
+
+    Notas:
+        - Endpoint asumido: /products/search?q= (debe existir en la API principal).
+        - En caso de error de red o status >=400 se propaga la excepción httpx.* para manejo superior.
+        - Se normalizan claves mínimas para el agente.
+    """
+    if not query or not isinstance(query, str):
+        raise ValueError("Parámetro 'query' requerido (string no vacío).")
+    base_url = _get_api_base_url()
+    url = f"{base_url}/products/search?q={httpx.QueryParams({'q': query})['q']}"  # asegura encoding
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+        # Se asume una lista de productos. Adaptar si la API devuelve otro shape.
+        items: List[Dict[str, Any]] = []
+        if isinstance(data, list):
+            source_iter = data
+        else:
+            # Fallback si la API responde {"items": [...]} o similar
+            source_iter = data.get("items", []) if isinstance(data, dict) else []
+        for prod in source_iter:
+            if not isinstance(prod, dict):
+                continue
+            name = prod.get("name") or prod.get("title") or "(sin nombre)"
+            sku = prod.get("sku") or prod.get("variant_sku") or prod.get("id")
+            if not sku:
+                continue  # ignorar entradas sin SKU interno
+            items.append({"name": name, "sku": sku})
+        return {"items": items, "count": len(items), "query": query}
+
+
 TOOLS_REGISTRY = {
     "get_product_info": get_product_info,
     "get_product_full_info": get_product_full_info,
+    "find_products_by_name": find_products_by_name,
 }
 
 
@@ -187,14 +229,22 @@ async def invoke_tool(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, A
     """
     if tool_name not in TOOLS_REGISTRY:
         raise KeyError(f"Tool desconocida: {tool_name}")
-    if not isinstance(parameters, dict):  # defensa básica
+    if not isinstance(parameters, dict):
         raise ValueError("parameters debe ser un objeto JSON (dict).")
-    sku = parameters.get("sku")
     user_role = parameters.get("user_role")
-    if not sku or not isinstance(sku, str):
-        raise ValueError("Parámetro 'sku' requerido (string).")
     if not user_role or not isinstance(user_role, str):
         raise ValueError("Parámetro 'user_role' requerido (string).")
+
     func = TOOLS_REGISTRY[tool_name]
-    logger.info("Invocando tool=%s sku=%s role=%s", tool_name, sku, user_role)
-    return await func(sku=sku, user_role=user_role)
+    if tool_name == "find_products_by_name":
+        query = parameters.get("query")
+        if not query or not isinstance(query, str):
+            raise ValueError("Parámetro 'query' requerido (string).")
+        logger.info("Invocando tool=%s query=%s role=%s", tool_name, query, user_role)
+        return await func(query=query, user_role=user_role)  # type: ignore[arg-type]
+    else:
+        sku = parameters.get("sku")
+        if not sku or not isinstance(sku, str):
+            raise ValueError("Parámetro 'sku' requerido (string).")
+        logger.info("Invocando tool=%s sku=%s role=%s", tool_name, sku, user_role)
+        return await func(sku=sku, user_role=user_role)  # type: ignore[arg-type]

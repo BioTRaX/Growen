@@ -103,6 +103,20 @@ class OpenAIProvider(ILLMProvider):
             {
                 "type": "function",
                 "function": {
+                    "name": "find_products_by_name",
+                    "description": "Busca productos por nombre parcial y devuelve lista de coincidencias (name, sku). Usar antes de pedir info si el usuario no provee SKU.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Fragmento o nombre de producto a buscar"},
+                        },
+                        "required": ["query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "get_product_info",
                     "description": "Obtiene información básica de un producto por SKU interno (name, sale_price, stock, sku).",
                     "parameters": {
@@ -133,6 +147,29 @@ class OpenAIProvider(ILLMProvider):
                 }
             )
         return base_tools
+
+    async def call_mcp_tool(self, *, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any] | str:
+        """Invoca el servidor MCP de productos de forma resiliente.
+
+        Lee URL desde `MCP_PRODUCTS_URL`. Maneja errores de red devolviendo un
+        JSON serializado que el modelo pueda interpretar para responder al usuario
+        sin exponer detalles técnicos.
+        """
+        mcp_url = os.getenv("MCP_PRODUCTS_URL", "http://mcp_products:8001/invoke_tool")
+        payload = {"tool_name": tool_name, "parameters": parameters}
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.post(mcp_url, json=payload)
+                if resp.status_code != 200:
+                    logging.warning("MCP respondió status=%s detail=%s", resp.status_code, resp.text[:200])
+                    return {"error": "tool_call_failed", "status": resp.status_code}
+                return resp.json().get("result", {})
+        except httpx.RequestError as e:  # problemas de red, DNS, timeout
+            logging.error("Fallo de red MCP tool=%s: %s", tool_name, e)
+            return {"error": "tool_network_failure"}
+        except Exception as e:  # noqa: BLE001
+            logging.exception("Excepción inesperada invocando MCP tool=%s", tool_name)
+            return {"error": "tool_internal_failure"}
 
     async def chat_with_tools(self, *, prompt: str, user_role: str) -> str:
         """Ejecuta un ciclo de tool-calling con OpenAI y el servidor MCP.
@@ -173,54 +210,72 @@ class OpenAIProvider(ILLMProvider):
             content = choice.message.content if choice and choice.message.content else ""
             return f"openai:{content.strip()}"
 
-        # Solo procesamos la primera tool call para este MVP.
-        call = tool_calls[0]
-        fn_name = call.function.name
-        try:
-            fn_args = json.loads(call.function.arguments or "{}")
-        except Exception:
-            fn_args = {}
-        # Aseguramos sku presente
-        if "sku" not in fn_args or not isinstance(fn_args["sku"], str):
-            return f"openai:No pude determinar el SKU solicitado."
-
-        # Invocar MCP
-        mcp_payload = {"tool_name": fn_name, "parameters": {"sku": fn_args["sku"], "user_role": user_role}}
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as http_client:
-                mcp_resp = await http_client.post(
-                    os.getenv("MCP_PRODUCTS_URL", "http://mcp_products:8001/invoke_tool"), json=mcp_payload
-                )
-                if mcp_resp.status_code != 200:
-                    tool_result = {"error": f"MCP status {mcp_resp.status_code}", "detail": mcp_resp.text[:200]}
+        # Procesar secuencialmente cada tool_call (hasta 2 pasos búsqueda→info)
+        tool_results_for_model: List[Dict[str, Any]] = []
+        used_search_sku: str | None = None
+        for idx, call in enumerate(tool_calls[:3]):  # límite prudente MVP
+            fn_name = call.function.name
+            try:
+                fn_args = json.loads(call.function.arguments or "{}")
+            except Exception:
+                fn_args = {}
+            params: Dict[str, Any] = {"user_role": user_role}
+            if fn_name == "find_products_by_name":
+                query = fn_args.get("query") or fn_args.get("name") or fn_args.get("product_name")
+                if not query or not isinstance(query, str):
+                    tool_result = {"error": "missing_query"}
                 else:
-                    tool_result = mcp_resp.json().get("result", {})
-        except Exception as e:  # noqa: BLE001
-            logging.exception("Error invocando MCP tool=%s", fn_name)
-            tool_result = {"error": f"fallo_red_mcp: {e}"}
-
-        # Añadir respuesta de la tool como mensaje role=tool
-        messages.append(
-            {
-                "role": "tool",
-                "tool_call_id": getattr(call, "id", "call_0"),
-                "name": fn_name,
-                "content": json.dumps(tool_result, ensure_ascii=False),
-            }
-        )
+                    tool_result = await self.call_mcp_tool(tool_name=fn_name, parameters={"query": query, "user_role": user_role})
+                    # Si hay un único resultado podemos preparar un segundo paso auto
+                    if isinstance(tool_result, dict) and not tool_result.get("error"):
+                        items = tool_result.get("items", [])
+                        if isinstance(items, list) and len(items) == 1 and items[0].get("sku"):
+                            used_search_sku = items[0]["sku"]
+            else:
+                # Tools basadas en sku
+                sku = fn_args.get("sku") or used_search_sku
+                if not sku or not isinstance(sku, str):
+                    tool_result = {"error": "missing_sku"}
+                else:
+                    tool_result = await self.call_mcp_tool(tool_name=fn_name, parameters={"sku": sku, "user_role": user_role})
+            tool_results_for_model.append({"name": fn_name, "result": tool_result})
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": getattr(call, "id", f"call_{idx}"),
+                    "name": fn_name,
+                    "content": json.dumps(tool_result, ensure_ascii=False),
+                }
+            )
+            # Si acabamos de hacer búsqueda y obtuvimos 1 SKU, forzamos siguiente llamada get_product_info
+            if fn_name == "find_products_by_name" and used_search_sku and all(c.function.name != "get_product_info" for c in tool_calls):
+                # Inyectar manualmente una tool call sintética para obtener info
+                synthetic_result = await self.call_mcp_tool(tool_name="get_product_info", parameters={"sku": used_search_sku, "user_role": user_role})
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": f"call_auto_sku",
+                        "name": "get_product_info",
+                        "content": json.dumps(synthetic_result, ensure_ascii=False),
+                    }
+                )
+                tool_results_for_model.append({"name": "get_product_info", "result": synthetic_result})
+                break  # cerramos ciclo temprano
 
         try:
-            second = client.chat.completions.create(
+            followup = client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
                 max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")),
             )
-            final_choice = second.choices[0] if second.choices else None
+            final_choice = followup.choices[0] if followup.choices else None
             answer = final_choice.message.content if final_choice and final_choice.message.content else ""
             return f"openai:{answer.strip()}"
         except Exception:
-            return f"openai:{json.dumps(tool_result, ensure_ascii=False)}"
+            # fallback: devolver resumen amigable
+            # No exponemos trazas técnicas al usuario final.
+            return "openai:No pude completar la operación con las herramientas disponibles. Probá nuevamente más tarde."
 
     def generate_stream(self, prompt: str) -> Iterable[str]:  # pragma: no cover - dependiente de red
         """Versión streaming: emite deltas (solo texto nuevo).

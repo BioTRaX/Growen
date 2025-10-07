@@ -42,11 +42,15 @@ curl -X POST http://localhost:8100/invoke_tool \
 ## Tools implementadas
 
 1. `get_product_info`
-   - Accesible para cualquier rol.
-   - Retorna: `sku, name, sale_price, stock`.
+  - Accesible para cualquier rol.
+  - Retorna: `sku, name, sale_price, stock`.
 2. `get_product_full_info`
-   - Requiere rol en {`admin`, `colaborador`}.
-   - En este MVP retorna lo mismo que la anterior. Se ampliará con detalles adicionales.
+  - Requiere rol en {`admin`, `colaborador`}.
+  - En este MVP retorna lo mismo que la anterior. Se ampliará con detalles adicionales.
+3. `find_products_by_name` (nuevo)
+  - Búsqueda parcial por nombre. Parámetros: `query` (string), `user_role`.
+  - Retorna: `{ "items": [ {"name": str, "sku": str}, ...], "count": int, "query": str }`.
+  - Uso típico por agentes LLM para resolver primero el SKU y luego invocar `get_product_info`.
 
 ## Roles y permisos (MVP)
 | Rol | get_product_info | get_product_full_info |
@@ -91,6 +95,7 @@ Listado en `mcp_servers/products_server/requirements.txt` (fastapi, uvicorn, htt
 | Variable | Descripción | Default |
 |----------|-------------|---------|
 | `API_BASE_URL` | URL base de la API principal consumida vía HTTP | `http://api:8000` |
+| `MCP_PRODUCTS_URL` | (Consumidores) URL completa para invocar este servidor MCP (se documenta aquí para centralizar) | `http://mcp_products:8001/invoke_tool` |
 | `LOG_LEVEL` | Nivel de logging (`DEBUG`, `INFO`, `WARNING`, etc.) | `info` |
 | `MCP_CACHE_TTL_SECONDS` | TTL (segundos) para cache in-memory de respuestas `get_product_info` | `0` (deshabilitado) |
 | `MCP_REQUIRE_TOKEN` | Si `1`, exige token HMAC simple en header `X-MCP-Token` | `0` |
