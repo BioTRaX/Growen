@@ -131,6 +131,9 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 - `stop_ports.ps1`: Intenta liberar puertos ocupados (útil tras cierres abruptos).
 - `cleanup-docker-images.ps1`: Identifica y elimina interactívamente imágenes Docker dangling o no usadas (requiere confirmación explícita, soporta -DryRun y -PerImageConfirm). Uso: mantenimiento de espacio en disco evitando eliminar imágenes en uso.
 
+### Auditoría / Compose
+- `docker-compose-audit.ps1`: Audita `docker-compose.yml`, detecta imágenes públicas con tags desactualizados, permite actualizar versiones (con backup) y reconstruir/levantar el stack (`docker compose up --build -d`). Parámetros: `-OnlyReport`, `-SkipBuild`.
+
 ### Backend / Arranque / Entorno
 - `run_api.cmd` / `run_frontend.cmd` / `start_stack.ps1` / `start_worker_images.cmd`: Scripts de conveniencia para iniciar servicios locales.
 - `launch_backend.cmd`: Variante de arranque rápido backend (revisar duplicidad con `run_api.cmd`).
