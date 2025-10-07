@@ -72,7 +72,7 @@ $lines = Get-Content $composePath -Raw -Encoding UTF8 -ErrorAction Stop | Select
 # Implementación simple: detectar bloques service (nivel 2 bajo 'services:')
 $services = @()
 $current = $null
-$indentService = 2  # suposición: '  nombreServicio:'
+# Nota: Se asume indent de 2 espacios para nombres de servicio; variable auxiliar eliminada.
 for ($i=0; $i -lt $lines.Count; $i++) {
   $line = $lines[$i]
   if ($line -match '^[ ]{2}([a-zA-Z0-9_-]+):\s*$' -and $line -notmatch 'services:') {

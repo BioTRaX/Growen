@@ -24,7 +24,32 @@ Proveer pasos rápidos para detectar por qué la pantalla de login no aparece y 
    - `GET /debug/frontend/diag` → estado del build de producción.
    - `GET /debug/frontend/ping-auth` → prueba directa de autenticación + cookies presentes.
 7. Alias `/app`:
-   - `GET /app` ahora sirve el mismo `index.html` (alias legacy).
+   - `GET /app` sirve el build de producción (alias legacy). En desarrollo normal usa directamente el servidor Vite.
+
+## Modo desarrollo vs Ruta /app (Build producción)
+
+| Aspecto | Dev Server (Vite) | Backend `/app` |
+|---------|-------------------|----------------|
+| Comando | `cd frontend && npm run dev` | `cd frontend && npm run build` luego iniciar backend |
+| Puerto  | 5175 (fijo, configurable con `VITE_PORT` antes de arrancar) | 8000 (mismo que API) |
+| Hot Reload | Sí (HMR) | No |
+| Source Maps | Completos | Normalmente minificados |
+| Uso recomendado | Desarrollo iterativo | Verificación pre-deploy / compartir snapshot |
+| Requiere `dist` | No | Sí (carpeta `frontend/dist`) |
+
+Notas:
+- El error `EACCES: permission denied %VITE_PORT%` provenía de usar `%VITE_PORT%` (sintaxis CMD) en PowerShell. Se fijó un puerto explícito en los scripts `dev` y `preview`.
+- Para cambiar puerto temporalmente: `set VITE_PORT=5180` (CMD) / `$env:VITE_PORT=5180` (PowerShell) antes de `npm run dev`; Vite leerá el valor en `vite.config.ts`.
+- Si `Test-NetConnection 127.0.0.1 -Port 5175` falla, el dev server no está corriendo (o el puerto cambió). Reinicia `npm run dev` y verifica.
+
+## Errores típicos recientes
+
+| Síntoma | Causa | Resolución |
+|---------|-------|------------|
+| `EACCES: permission denied %VITE_PORT%` | Placeholder CMD no expandido en PowerShell | Ajustar scripts a puerto fijo o usar `cross-env` |
+| 404 en `/app` tras limpiar `dist` | Build ausente | Ejecutar `npm run build` dentro de `frontend/` |
+| Frontend no responde en 5175 | Servidor no iniciado | Correr `npm run dev` |
+| UI carga pero API falla | Backend aún iniciando | Esperar a que logs muestren `Application startup complete` |
 
 ## Interpretación de `/debug/frontend/diag`
 Campos:
@@ -62,4 +87,4 @@ Campos:
  - Persistir un contador de errores recientes para detectar loops.
 
 ---
-Actualizado: 2025-09-19
+Actualizado: 2025-10-07
