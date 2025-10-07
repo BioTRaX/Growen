@@ -129,6 +129,7 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 - `clear_backend_log.py`: Vacía/rota `backend.log`.
 - `clear_logs.py`: Limpieza más amplia (ver código antes de usar para evitar pérdida accidental).
 - `stop_ports.ps1`: Intenta liberar puertos ocupados (útil tras cierres abruptos).
+- `cleanup-docker-images.ps1`: Identifica y elimina interactívamente imágenes Docker dangling o no usadas (requiere confirmación explícita, soporta -DryRun y -PerImageConfirm). Uso: mantenimiento de espacio en disco evitando eliminar imágenes en uso.
 
 ### Backend / Arranque / Entorno
 - `run_api.cmd` / `run_frontend.cmd` / `start_stack.ps1` / `start_worker_images.cmd`: Scripts de conveniencia para iniciar servicios locales.
@@ -166,7 +167,7 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 - Agregar test automatizado (pytest) para validar integridad mínima de scripts críticos (ej. parseo de `alembic history`).
 
 ---
-Actualizado inventario scripts: 2025-09-13.
+Actualizado inventario scripts: 2025-10-07.
 
 ## MCP Servers (Nueva capa de herramientas para IA)
 
