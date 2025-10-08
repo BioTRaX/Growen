@@ -41,6 +41,7 @@ Notas:
 - El error `EACCES: permission denied %VITE_PORT%` provenía de usar `%VITE_PORT%` (sintaxis CMD) en PowerShell. Se fijó un puerto explícito en los scripts `dev` y `preview`.
 - Para cambiar puerto temporalmente: `set VITE_PORT=5180` (CMD) / `$env:VITE_PORT=5180` (PowerShell) antes de `npm run dev`; Vite leerá el valor en `vite.config.ts`.
 - Si `Test-NetConnection 127.0.0.1 -Port 5175` falla, el dev server no está corriendo (o el puerto cambió). Reinicia `npm run dev` y verifica.
+- El dev server ahora incluye proxy automático para `/auth`, `/products-ex`, `/products`, `/suppliers`, `/purchases`, `/stock`, `/media`, `/ws`, `/chat`, `/actions`. Si agregas un nuevo prefijo API añade la regla correspondiente en `vite.config.ts`.
 
 ## Errores típicos recientes
 
