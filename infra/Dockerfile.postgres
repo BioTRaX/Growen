@@ -2,7 +2,7 @@
 # NG-HEADER: Ubicación: infra/Dockerfile.postgres
 # NG-HEADER: Descripción: Imagen de Postgres para entornos locales con parches de seguridad aplicados.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-FROM postgres:15.10-bookworm
+FROM postgres:16.3-bookworm
 
 # Actualizamos paquetes del sistema para aplicar parches de seguridad reportados por Docker Scout.
 RUN set -eux \
