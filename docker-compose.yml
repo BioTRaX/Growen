@@ -10,10 +10,10 @@ services:
       context: .
       dockerfile: infra/Dockerfile.postgres
     environment:
-      POSTGRES_USER: growen
-      # IMPORTANT: Unified password (was previously GrowenBot=01 causing mismatch)
-      POSTGRES_PASSWORD: "GrowenBot01"
-      POSTGRES_DB: growen
+      # Usar variables desde .env (no commitear credenciales)
+      POSTGRES_USER: ${POSTGRES_USER:-growen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-growen}
     ports:
       # Nota: en Windows a veces hay un Postgres local en 5432. Mapeamos a 5433 para evitar colisiones.
       - "5433:5432"
@@ -24,19 +24,25 @@ services:
       context: .
       dockerfile: infra/Dockerfile.api
     env_file: .env
+    # environment:
+    #   # Si tu .env usa 127.0.0.1, dentro del contenedor debe usarse 'db:5432'.
+    #   # Sugerido: define DB_URL en .env con host=DB_HOST y vars separadas para mayor seguridad.
+    #   DB_URL: "postgresql+psycopg://<user>:<pass>@db:5432/<db>"
     ports:
       - "8000:8000"
     depends_on:
       - db
     command: ["/app/infra/wait-for.sh", "db:5432", "uvicorn", "services.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
   frontend:
     build:
       context: frontend
       dockerfile: ../infra/Dockerfile.frontend
     ports:
-      - "5173:5173"
+      - "5173:80"
     depends_on:
       - api
+    restart: unless-stopped
   pdf_import:
     image: alpine:3.19
     command: ["sh","-c","sleep infinity"]

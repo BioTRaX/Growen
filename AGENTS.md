@@ -25,6 +25,14 @@ Este documento orienta a herramientas de asistencia de código (Copilot, Codex, 
 - No introducir dependencias sin documentarlas y agregarlas a los requirements/README.
  - Mantener documentación viva: actualizar `Roadmap.md`, `README.md` y docs bajo `docs/` cuando cambien comportamientos, endpoints, modelos, flujos o requisitos de entorno. Toda interacción de agentes debe verificar y actualizar estos documentos (incluyendo este Roadmap) como parte de la entrega.
 
+### Seguridad de secretos (OBLIGATORIO)
+- Nunca commits con credenciales, tokens o URLs con usuario:contraseña. Usar variables de entorno (`.env`, `env_file`) o placeholders en docs.
+- Revisar `.gitignore` antes de crear scripts con parámetros sensibles; si el script requiere credenciales locales, proveer `*.example.ps1` y agregar el real al `.gitignore`.
+- Si se detecta exposición accidental, remover inmediatamente el archivo del repo, reemplazar por versión sin secretos y comunicar para rotar las credenciales expuestas.
+
+### Operativa de Git para agentes
+- Evitar `git add`, `commit` y `push` salvo que el usuario lo solicite explícitamente. Priorizar PRs y revisiones.
+
 ## Encabezado obligatorio (NG-HEADER)
 Agregar al inicio de cada archivo de código y documentación `.md` (excepto `README.md`). Excepciones: `*.json`, `destinatarios.json`, binarios, imágenes, PDFs y otros archivos de datos.
 

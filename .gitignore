@@ -92,6 +92,10 @@ backups/
 *.old
 *.orig
 
+# Scripts locales con credenciales o parámetros sensibles (usar *.example.ps1)
+scripts/pg_migrate_15_to_17.ps1
+scripts/*.local.ps1
+
 # Media (archivos subidos y derivados)
 Imagenes/
 

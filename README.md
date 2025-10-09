@@ -328,7 +328,7 @@ Orden de ejecución recomendado:
 
 - Imagen base: `postgres:15.10-bookworm`, reforzada con `apt-get dist-upgrade` en `infra/Dockerfile.postgres` (ejecutá `docker compose build db && docker compose up -d db` tras cambios).
 - En Windows suele estar ocupado el puerto 5432 por otra instalación. El docker-compose mapea Postgres del contenedor al puerto 5433 del host para evitar conflictos.
-  - Verificá que `.env` tenga `DB_URL=postgresql+psycopg://growen:GrowenBot01@127.0.0.1:5433/growen` (ya viene así por defecto).
+  - Verificá que `.env` tenga una URL válida, por ejemplo: `DB_URL=postgresql+psycopg://<user>:<pass>@127.0.0.1:5433/growen` (no publiques credenciales reales).
 - Si se reutiliza un volumen previo del contenedor y la contraseña del usuario `growen` no coincide, podés ajustarla sin borrar datos:
   1. `docker exec -it growen-postgres sh`
   2. `psql -U growen -d growen -c "ALTER USER growen WITH PASSWORD 'NuevaPass';"`
