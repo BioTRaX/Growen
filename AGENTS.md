@@ -236,3 +236,25 @@ mcp_servers/
 ---
 Actualizado MCP Servers: 2025-10-06.
 
+## Convenciones Docker (Imágenes de Servicios)
+
+Esta sección establece pautas para la construcción de imágenes Docker en el repositorio:
+
+1. Multi-stage obligatorio para servicios Python y frontend: separar `builder` (toolchain, wheel builds) de `runtime` (mínimo). Evita arrastrar compiladores a producción.
+2. Base Python: usar `python:3.13-slim-bookworm` salvo requerimiento puntual distinto. Justificar cambios de versión / distro en la PR.
+3. Usuario no root: crear usuario del sistema (`app`) y ejecutar procesos con privilegios mínimos.
+4. Virtualenv aislado en `/opt/venv` y añadir a `PATH`. No instalar dependencias globales en system site-packages.
+5. Limpieza de capas: remover listas de APT (`rm -rf /var/lib/apt/lists/*`) y usar `--no-install-recommends`.
+6. Dependencias de build vs runtime: instalar toolchain (gcc, build-essential, headers) sólo en la etapa builder; en runtime incluir únicamente librerías compartidas requeridas (ej. cairo, pango, gdk-pixbuf para weasyprint, opencv runtime si aplica).
+7. Healthcheck: incluir `HEALTHCHECK` HTTP (ej. `curl -fsS http://127.0.0.1:PORT/health || exit 1`). Si no existe endpoint `/health`, fallback documentado (`/docs` ver ejemplo en Dockerfile.api) hasta que se implemente.
+8. Determinismo: preferir `pip install -r requirements.txt` con versiones mínimas declaradas; opcional futuro: generar `requirements-lock.txt` (hashes) usando `pip-compile`.
+9. Seguridad: no copiar `.env` ni archivos con secretos dentro de la imagen. Consumir variables sólo en runtime (`docker-compose.yml` / orquestador).
+10. Tamaño: evaluar uso de `--strip` en compilaciones personalizadas y limpiar caches temporales (ej. modelos descargados) si no son requeridos en runtime.
+
+Próximos pasos sugeridos:
+- Introducir endpoint uniforme `/health` en todos los servicios.
+- Implementar stage opcional de tests (`FROM builder as tester`) que ejecute `pytest` antes de pasar a runtime en CI.
+- Generar métricas de tamaño comparativo antes/después de optimizaciones (documentar en `docs/PERFORMANCE.md`).
+
+Actualizado Convenciones Docker: 2025-10-09.
+

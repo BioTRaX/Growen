@@ -1,7 +1,82 @@
-FROM python:3.11-slim
+﻿# NG-HEADER: Nombre de archivo: Dockerfile.api
+# NG-HEADER: Ubicación: infra/Dockerfile.api
+# NG-HEADER: Descripción: Imagen multi-stage para API FastAPI / Uvicorn con Python 3.13-slim, usuario no root y healthcheck.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+###############################################
+# Etapa 1: Builder (compila dependencias)
+###############################################
+FROM python:3.13-slim-bookworm AS builder
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    VENV_PATH=/opt/venv
+
+# Paquetes necesarios para compilar dependencias (weasyprint, opencv, etc.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    libffi-dev \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    shared-mime-info \
+    curl \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv "$VENV_PATH" && \
+    "$VENV_PATH/bin/pip" install --upgrade pip setuptools wheel
+
 WORKDIR /app
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
+COPY requirements.txt ./
+
+# Instalamos TODAS las dependencias (incluye dev/test). Futuro: separar requirements-prod.txt.
+RUN "$VENV_PATH/bin/pip" install -r requirements.txt
+
+# Copiamos código fuente (para posibles compilaciones post-install si hiciera falta)
 COPY . .
+
+###############################################
+# Etapa 2: Runtime (mínima superficie)
+###############################################
+FROM python:3.13-slim-bookworm AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    VENV_PATH=/opt/venv \
+    PATH=/opt/venv/bin:$PATH
+
+# Solo librerías de runtime necesarias para ejecutar (sin toolchain de compilación)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    shared-mime-info \
+    curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Creamos usuario no root
+RUN addgroup --system app && adduser --system --ingroup app --home /app app
+WORKDIR /app
+
+# Copiamos virtualenv ya construido
+COPY --from=builder ${VENV_PATH} ${VENV_PATH}
+
+# Copiamos solo el código (evitando capas innecesarias)
+COPY . .
+
+# Aseguramos permisos correctos y ejecutable del wait-for.
+RUN chown -R app:app /app && chmod +x /app/infra/wait-for.sh
+USER app
+
 EXPOSE 8000
-CMD ["uvicorn", "services.api:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Healthcheck: intenta /health, fallback /docs (evita fallo si /health aún no existe)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+ CMD curl -fsS http://127.0.0.1:8000/health || curl -fsS http://127.0.0.1:8000/docs || exit 1
+
+# Comando de inicio
+CMD ["/app/infra/wait-for.sh", "db:5432", "uvicorn", "services.api:app", "--host", "0.0.0.0", "--port", "8000"]
