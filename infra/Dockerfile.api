@@ -68,15 +68,17 @@ COPY --from=builder ${VENV_PATH} ${VENV_PATH}
 # Copiamos solo el código (evitando capas innecesarias)
 COPY . .
 
-# Aseguramos permisos correctos y ejecutable del wait-for.
-RUN chown -R app:app /app && chmod +x /app/infra/wait-for.sh
+# Aseguramos permisos correctos y ejecutable del wait-for, y normalizamos EOL (CRLF -> LF)
+RUN chown -R app:app /app \
+ && chmod +x /app/infra/wait-for.sh \
+ && sed -i 's/\r$//' /app/infra/wait-for.sh
 USER app
 
 EXPOSE 8000
 
-# Healthcheck: intenta /health, fallback /docs (evita fallo si /health aún no existe)
+# Healthcheck: endpoint /health (liveness)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
- CMD curl -fsS http://127.0.0.1:8000/health || curl -fsS http://127.0.0.1:8000/docs || exit 1
+ CMD curl -fsS http://127.0.0.1:8000/health || exit 1
 
 # Comando de inicio
 CMD ["/app/infra/wait-for.sh", "db:5432", "uvicorn", "services.api:app", "--host", "0.0.0.0", "--port", "8000"]
