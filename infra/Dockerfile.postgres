@@ -1,13 +1,12 @@
 # NG-HEADER: Nombre de archivo: Dockerfile.postgres
 # NG-HEADER: Ubicación: infra/Dockerfile.postgres
-# NG-HEADER: Descripción: Imagen de Postgres para entornos locales con parches de seguridad aplicados.
+# NG-HEADER: Descripción: Imagen de Postgres 17-alpine para entornos locales con parches de seguridad.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-FROM postgres:16.3-bookworm
+FROM postgres:17.6-alpine
 
-# Actualizamos paquetes del sistema para aplicar parches de seguridad reportados por Docker Scout.
-RUN set -eux \
-    && apt-get update \
-    && apt-get dist-upgrade -y \
-    && apt-get autoremove -y \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+# Actualizamos los paquetes del sistema base (Alpine) para aplicar parches de seguridad.
+# Se usa 'apk' en lugar de 'apt-get'.
+RUN apk update && apk upgrade
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+	CMD pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" || exit 1
