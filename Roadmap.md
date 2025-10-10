@@ -276,6 +276,32 @@ Hito 7 - Chatbot: Consulta de precios en lenguaje natural
   - El chatbot debe responder con el precio vigente para al menos SKU exacto y nombre parcial.
   - Debe manejar ausencia de datos sin errores 500.
   - Respuestas alineadas con políticas de idioma (español) y tono definido.
+
+Hito 8 — Módulo MCP de Ventas Conversacionales
+- Objetivo
+  - Permitir a usuarios con roles `Colaborador` o `Admin` registrar ventas utilizando lenguaje natural, interactuando con un nuevo servicio MCP.
+- Arquitectura
+  - Crear un nuevo servicio MCP en `mcp_servers/sales_server/`, similar al existente `mcp_products`.
+  - El servicio consumirá exclusivamente los endpoints de la API de ventas (`/sales`) y no tendrá acceso directo a la base de datos.
+  - Las ventas creadas por este medio se registrarán en estado `BORRADOR`.
+- Backend / MCP Service
+  - [Nuevo] Crear el archivo `mcp_servers/sales_server/tools.py`.
+  - [Nuevo] Implementar la herramienta principal `registrar_venta_conversacional(orden_usuario: str)`.
+  - [Nuevo] Desarrollar un manejador de estado para el flujo conversacional (ej. `esperando_productos`, `esperando_cliente`, `esperando_confirmacion`).
+  - [Nuevo] Implementar funciones auxiliares para interactuar con la API:
+    - `_buscar_producto(nombre: str)` que llama a `GET /sales/catalog/search` y maneja desambiguación.
+    - `_gestionar_cliente(nombre: str)` que llama a `GET /sales/customers/search` y ofrece crear el cliente si no existe.
+    - Una función para construir el payload y enviarlo a `POST /sales`.
+- Flujo Conversacional
+  - El sistema solicitará interactivamente la información faltante (productos, cliente).
+  - Antes de crear la venta, se mostrará un resumen completo para la confirmación explícita del usuario.
+- Criterios de aceptación
+  - El módulo es completamente conversacional y guía al usuario para completar la información.
+  - La búsqueda de productos y clientes es flexible y maneja ambigüedades.
+  - La creación de la venta solo ocurre tras la confirmación del usuario.
+  - El módulo se integra únicamente a través de la API RESTful existente.
+  - La venta se crea correctamente en estado `BORRADOR`.
+
 ## Detalles técnicos por área
 
 - Backend (compras):
