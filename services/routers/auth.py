@@ -10,7 +10,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import User, ServiceLog
@@ -29,6 +29,11 @@ from services.auth import (
     reset_login_attempts,
     SessionData,
 )
+from sqlalchemy.exc import OperationalError
+try:  # tipo específico de psycopg para timeouts de conexión
+    from psycopg.errors import ConnectionTimeout as _PsyConnTimeout  # type: ignore
+except Exception:  # pragma: no cover
+    _PsyConnTimeout = None  # fallback si cambia import path
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -55,7 +60,35 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
             func.lower(User.email) == ident.lower(),
         )
     )
-    res = await db.execute(stmt)
+
+    # Preflight: ping rápido a la DB para fallar rápido con 503 si no está disponible
+    try:
+        await db.execute(text("SELECT 1"))
+    except OperationalError:
+        # DB no disponible (timeout/refused/etc.) → responder 503 consistente
+        raise HTTPException(status_code=503, detail="Base de datos no disponible. Intente nuevamente en unos segundos.")
+
+    # Retry suave para errores transitorios de conexión (p. ej., backup en progreso)
+    attempts = 2
+    last_exc = None
+    for i in range(attempts):
+        try:
+            res = await db.execute(stmt)
+            break
+        except OperationalError as e:
+            last_exc = e
+            # psycopg ConnectionTimeout / refused en primer intento → breve espera y reintento
+            import asyncio as _a
+            await _a.sleep(0.5)
+        except Exception:
+            raise
+    else:
+        # Si agotamos reintentos por OperationalError, devolver 503 explícito
+        if isinstance(last_exc, OperationalError):
+            raise HTTPException(status_code=503, detail="Base de datos no disponible. Intente nuevamente en unos segundos.")
+        # Caso genérico: propagar el error original
+        raise last_exc  # type: ignore
+
     user = res.scalar_one_or_none()
     if not user:
         logger.debug("[login:not_found] tag=%s identifier=%s", t0, ident)
@@ -116,7 +149,7 @@ async def me(sess: SessionData = Depends(current_session)):
     # elevado (admin/colaborador), reflejamos autenticado para no bloquear el FE.
     if not sess.session:
         from agent_core.config import settings as _settings
-        if _settings.env == "dev" and sess.role in ("admin", "colaborador"):
+        if _settings.env == "dev" and _settings.dev_assume_admin and sess.role in ("admin", "colaborador"):
             return {"is_authenticated": True, "role": sess.role}
         return {"is_authenticated": False, "role": "guest"}
     data = {"is_authenticated": True, "role": sess.role}

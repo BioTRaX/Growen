@@ -43,6 +43,35 @@ if db_url.startswith("sqlite+") and ":memory:" in db_url:
     db_url = "sqlite+aiosqlite:///file:memdb1?mode=memory&cache=shared"
     kwargs.update({"connect_args": {"uri": True}, "poolclass": StaticPool})
 
+# Ajustes específicos para PostgreSQL (psycopg): timeout y application_name
+if db_url.startswith("postgresql+psycopg"):
+    # Timeout de conexión (segundos). Compatible con env PGCONNECT_TIMEOUT; default 5
+    try:
+        _ct = int(os.getenv("PGCONNECT_TIMEOUT", "5") or "5")
+    except Exception:
+        _ct = 5
+    _connect_args = kwargs.get("connect_args", {}) or {}
+    # psycopg3 acepta connect_timeout y application_name como kwargs
+    _connect_args.update({
+        "connect_timeout": _ct,
+        "application_name": os.getenv("PGAPPNAME", "growen-api"),
+    })
+    kwargs["connect_args"] = _connect_args
+    # Permitir tunear el pool vía variables (opcionales, no cambian defaults si faltan)
+    try:
+        _pool_size = os.getenv("DB_POOL_SIZE")
+        _max_overflow = os.getenv("DB_MAX_OVERFLOW")
+        _pool_timeout = os.getenv("DB_POOL_TIMEOUT")
+        if _pool_size:
+            kwargs["pool_size"] = int(_pool_size)
+        if _max_overflow:
+            kwargs["max_overflow"] = int(_max_overflow)
+        if _pool_timeout:
+            kwargs["pool_timeout"] = int(_pool_timeout)
+    except Exception:
+        # Ignorar valores inválidos sin afectar arranque
+        pass
+
 engine = create_async_engine(db_url, **kwargs)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 

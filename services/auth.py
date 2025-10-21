@@ -128,18 +128,16 @@ async def current_session(
 
     sid = request.cookies.get("growen_session")
     if not sid:
-        # En desarrollo se asume rol admin cuando no hay sesión para facilitar
-        # pruebas y evitar configurar cookies en cada request. En otros entornos
-        # se mantiene el rol invitado.
-        role = "admin" if settings.env == "dev" else "guest"
+        # En desarrollo, opcionalmente se puede asumir admin sin sesión si DEV_ASSUME_ADMIN=true.
+        # Por defecto, invitado.
+        role = "admin" if (settings.env == "dev" and settings.dev_assume_admin) else "guest"
         return SessionData(None, None, role)
 
     res = await db.execute(select(DBSess).where(DBSess.id == sid))
     sess: DBSess | None = res.scalar_one_or_none()
     if not sess or sess.expires_at < datetime.utcnow():
-        # En desarrollo, si hay cookie pero la sesión no existe o expiró,
-        # asumimos rol admin para no frenar el flujo local/E2E.
-        if settings.env == "dev":
+        # En desarrollo, solo asumimos admin si DEV_ASSUME_ADMIN=true.
+        if settings.env == "dev" and settings.dev_assume_admin:
             return SessionData(None, None, "admin")
         return SessionData(None, None, "guest")
 
@@ -160,7 +158,7 @@ def require_roles(*roles: str) -> Callable[[SessionData], SessionData]:
     async def dep(
         request: Request, sess: SessionData = Depends(current_session)
     ) -> SessionData:
-        if settings.env == "dev":
+        if settings.env == "dev" and settings.dev_assume_admin:
             request.app.dependency_overrides[current_session] = (
                 lambda: SessionData(None, None, "admin")
             )

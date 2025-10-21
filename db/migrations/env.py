@@ -51,14 +51,20 @@ script = ScriptDirectory.from_config(config)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 dotenv_path = REPO_ROOT / ".env"
 pre_env_db_url = os.environ.get("DB_URL")
-load_dotenv(dotenv_path, override=True)  # override=True para forzar lo definido en .env
+# Respetar DB_URL del entorno si ya está definida (p. ej. start.bat activando fallback a SQLite).
+# Sólo cargar .env con override si DB_URL no está presente en el entorno actual.
+override_env = False if pre_env_db_url else True
+load_dotenv(dotenv_path, override=override_env)
 post_env_db_url = os.environ.get("DB_URL")
-logger.info("Archivo .env: %s (exists=%s, override=True)", dotenv_path, dotenv_path.exists())
+logger.info(
+    "Archivo .env: %s (exists=%s, override=%s)",
+    dotenv_path,
+    dotenv_path.exists(),
+    override_env,
+)
 if pre_env_db_url and pre_env_db_url != post_env_db_url:
     logger.info(
-        "DB_URL en proceso fue sobreescrita por .env (antes vs después): %s -> %s",
-        "(oculta)" if pre_env_db_url else None,
-        "(oculta)" if post_env_db_url else None,
+        "DB_URL definida en entorno tiene prioridad y NO fue sobreescrita por .env",
     )
 
 # === Cargar DB_URL desde entorno ===

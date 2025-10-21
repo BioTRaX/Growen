@@ -268,3 +268,51 @@ Estado: Primera consolidación creada y aplicada en entorno local.
 - [ ] Ensayar restore + upgrade.
 
 Se documentará progreso en esta sección cuando inicie la rama de consolidación.
+
+---
+
+## 2025-10-10 Migración Postgres 15 → 17.6 (Windows/Docker) — Ejecución real
+
+Contexto: se detectó que el contenedor de Postgres 17.6 no podía iniciar con el volumen inicializado en Postgres 15. Se ejecutó la Opción A (conservar datos) con backup crudo + dump lógico y restauración en 17.6.
+
+Pasos ejecutados (Windows PowerShell + Docker):
+
+- Backup crudo del volumen `growen_pgdata` a `backups/pg/raw-YYYYMMDD-HHMMSS/pgdata.tar` (uso de `alpine:3.19` con `tar`).
+- Dump lógico con contenedor temporal `postgres:15.10-bookworm` usando `pg_dump -Fc`:
+  - Artefacto resultante verificado en: `backups/pg/raw-20251010-113335/growen_15.dump` (≈190 KB).
+- Limpieza de referencias y recreación del volumen:
+  - Se eliminaron contenedores que referenciaban el volumen y luego `docker volume rm growen_pgdata`.
+  - `docker compose up -d db` (imagen 17.6) para crear volumen limpio y validar health.
+- Restauración en PG17.6:
+  - Copia del dump al contenedor: `/tmp/growen_15.dump`.
+  - `createdb` y `pg_restore -c --no-owner --no-privileges -d growen /tmp/growen_15.dump`.
+  - Nota: `pg_restore` imprimió múltiples mensajes "relation ... does not exist" al limpiar (esperable con `-c` en DB recién creada). La restauración completó y el listado `\dt` mostró 45 tablas en `public`.
+- Migraciones Alembic:
+  - `alembic current` → `20250927_consolidated_base`.
+  - `alembic upgrade head` → ya en HEAD, sin cambios pendientes.
+
+Verificaciones clave:
+
+- Postgres dentro del contenedor: `SELECT version()` → `PostgreSQL 17.6`.
+- Tabla `alembic_version.version_num` = `20250927_consolidated_base` (coincide con HEAD).
+- API: `/health` respondió `{"status":"ok"}` en `http://127.0.0.1:8000/health`.
+- Frontend: HTTP 200 en `http://127.0.0.1:5173`.
+
+Notas y consideraciones:
+
+- Los artefactos del backup (crudo y lógico) se conservan bajo `backups/pg/raw-YYYYMMDD-HHMMSS/` para auditoría y eventual rollback.
+- Los mensajes "does not exist" de `pg_restore` ocurren al pasar `-c` (clean); se podrían atenuar con `--if-exists`, pero no impidieron la restauración completa.
+- Se validó que la variable `alembic_version` tenga `VARCHAR(255)` y que el `env.py` cargue `.env` con `override=True`, mitigando issues históricos documentados en esta página.
+
+Checklist de cierre:
+
+- [x] DB en 17.6, volumen recreado limpio.
+- [x] `pg_restore` aplicado, 45 tablas presentes.
+- [x] Alembic en HEAD.
+- [x] API healthy y Frontend accesible.
+
+Acciones sugeridas post‐migración:
+
+- Ejecutar `scripts/check_admin_user.py` para confirmar usuario admin.
+- Opcional: `DISABLE_AUTO_BACKUP=1` en `.env` si no se desea backup automático en dev (ver `docs/BACKUPS.md`).
+- Conservar los archivos en `backups/pg/` fuera del repo (almacenamiento seguro) según política.

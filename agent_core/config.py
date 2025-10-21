@@ -57,6 +57,8 @@ class Settings:
     cookie_secure: bool = os.getenv("COOKIE_SECURE", "false").lower() == "true"
     cookie_domain: str | None = os.getenv("COOKIE_DOMAIN") or None
     allowed_origins: list[str] = field(default_factory=list)
+    # Modo desarrollo: si true, asume rol admin sin sesión (facilita pruebas). Default: false
+    dev_assume_admin: bool = os.getenv("DEV_ASSUME_ADMIN", "false").lower() == "true"
 
     # Configuracion de importacion de PDFs
     import_ocr_lang: str = os.getenv("IMPORT_OCR_LANG", "spa+eng")

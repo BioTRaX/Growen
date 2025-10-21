@@ -335,7 +335,44 @@ Orden de ejecución recomendado:
   3. Actualizá `.env` con la contraseña nueva y reiniciá la API.
 - Aplicá migraciones con `python -m alembic upgrade head` para crear/actualizar el esquema.
 
+### Fallback automático a SQLite (desarrollo)
+
+Si al ejecutar `start.bat` Postgres no está disponible en `127.0.0.1:5433` y no es posible iniciarlo con Docker (por ejemplo, Docker Desktop apagado), el script activa un modo de desarrollo con SQLite usando `dev.db`:
+
+- Se establece `DB_URL=sqlite+aiosqlite:///./dev.db` solo para esa sesión.
+- Las migraciones se ejecutan contra SQLite para crear el esquema mínimo.
+- Se ejecuta un seed idempotente del usuario administrador (usuario `admin`, password por defecto `admin1234` si no se define `ADMIN_PASS`).
+- La API se inicia normalmente y podés validar pantallas y flujos básicos sin depender de Postgres.
+
+Notas importantes:
+- Este fallback es solo para desarrollo local. Algunas funciones que dependen de características específicas de PostgreSQL o de jobs de fondo pueden estar limitadas.
+- Cuando Postgres vuelva a estar disponible, volvés al modo normal simplemente arrancando Docker y re-ejecutando `start.bat`.
+
 ## Troubleshooting
+- Chequeo rápido de stack (Windows):
+  - Usa `scripts/status_stack.ps1` para verificar DB, API y frontend.
+  - Ejemplo (PowerShell):
+    - `powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/status_stack.ps1"`
+  - Salida esperada:
+    - `DB (127.0.0.1:5433): OK`
+    - `/health: OK`
+    - `/app: OK`
+  - Código de salida:
+    - `0`: DB y `/health` OK (frontend opcional).
+    - `1`: DB o `/health` fallan.
+  - Parámetros opcionales:
+    - `-ApiUrl` (default `http://127.0.0.1:8000`), `-DbHostName` (default `127.0.0.1`), `-DbPort` (default `5433`).
+  - Si DB marca FAIL:
+    - Asegurá Docker Desktop corriendo.
+    - Levantá la DB: `docker compose up -d db` (mapea 5433→5432).
+  - Si `/health` marca FAIL:
+    - Relanzá el backend y confirmá que `DB_URL` apunta a Postgres.
+    - Reintenta cuando `/health` devuelva 200.
+
+- Login devuelve 503: Base de datos no disponible.
+  - La API devuelve 503 si la DB está temporalmente indisponible (timeout, reinicio, backup).
+  - Esperá unos segundos y reintentá; revisá `scripts/status_stack.ps1`.
+
 
 Al iniciar la API con `scripts\run_api.cmd`, el script registra cada paso en `logs\run_api.log` y Uvicorn redirige su salida a `logs\backend.log`. Estos archivos permiten diagnosticar fallas de arranque y pueden inspeccionarse con `type` o cualquier editor de texto:
 

@@ -445,13 +445,32 @@ class FrontError(BaseModel):  # type: ignore
     user_agent: str | None = None
     # Campos extras potenciales en el futuro (ignorados si no llegan)
 
-# --- Backup diario automAtico en arranque (idempotente por ventana de 24h) ---
+# --- Backup diario automático (diferido y no bloqueante) ---
+_AUTO_BACKUP_SCHEDULED = False
 try:
-    from services.routers.backups_admin import ensure_daily_backup_on_boot
-    _auto_meta = ensure_daily_backup_on_boot()
-    logger.info("Backup auto on boot: %s", _auto_meta)
+    from services.routers.backups_admin import ensure_daily_backup_on_boot as _ensure_auto_backup
+    import asyncio as _asyncio
+    async def _schedule_auto_backup():
+        global _AUTO_BACKUP_SCHEDULED
+        if _AUTO_BACKUP_SCHEDULED:
+            return
+        _AUTO_BACKUP_SCHEDULED = True
+        try:
+            # Pequeño margen para evitar competir con el primer login / migraciones
+            grace = float(os.getenv("AUTO_BACKUP_GRACE_SEC", "8") or "8")
+        except Exception:
+            grace = 8.0
+        try:
+            await _asyncio.sleep(max(0.0, grace))
+            # Ejecutar el chequeo/backup en hilo para no bloquear el loop
+            meta = await _asyncio.to_thread(_ensure_auto_backup)
+            logger.info("Backup auto on boot: %s", meta)
+        except Exception:
+            logger.exception("Auto-backup check failed (deferred)")
+    # Se programa en startup para asegurar que app ya está lista
 except Exception:
-    logger.exception("Auto-backup check failed on boot")
+    def _schedule_auto_backup():  # type: ignore
+        return None
 
 @frontend_diag_router.post("/log-error")
 async def frontend_log_error(payload: FrontError, request: Request):  # type: ignore
@@ -525,6 +544,22 @@ async def _init_inmemory_db():
     except Exception:
         pass
 
+    # Warmup DB (evitar timeouts en primera request): SELECT 1 con reintentos cortos
+    try:
+        from sqlalchemy import text as _text
+        attempts = int(os.getenv("DB_WARMUP_ATTEMPTS", "4") or "4")
+        delay = float(os.getenv("DB_WARMUP_DELAY", "0.6") or "0.6")
+        for _ in range(max(1, attempts)):
+            try:
+                async with SessionLocal() as _s:  # type: ignore
+                    await _s.execute(_text("SELECT 1"))
+                break
+            except Exception:
+                import asyncio as __a
+                await __a.sleep(max(0.1, delay))
+    except Exception:
+        pass
+
     # Mark app ready timestamp
     global APP_READY_TS
     try:
@@ -558,6 +593,15 @@ async def _init_inmemory_db():
                         pass
                     await _asyncio.sleep(max(10, interval))
             _asyncio.create_task(_health_loop())
+    except Exception:
+        pass
+
+    # Programar autobackup diferido y no bloqueante
+    try:
+        _t = _schedule_auto_backup()  # may be coroutine
+        if hasattr(_t, "__await__"):
+            import asyncio as _a
+            _a.create_task(_t)  # type: ignore
     except Exception:
         pass
 

@@ -10,11 +10,10 @@ set "LOGDIR=%ROOT%\logs\migrations"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 
 REM Timestamp seguro (yyyymmdd_HHMMSS) usando WMIC si está disponible
-for /f %%i in ('wmic os get localdatetime ^| find "."') do set "TS=%%i"
+for /f %%i in ('wmic os get localdatetime ^| find "." 2^>NUL') do set "TS=%%i"
 if not defined TS (
-  REM Fallback simple si WMIC no está
-  set "TS=%DATE:~-4%%DATE:~3,2%%DATE:~0,2%_%TIME:~0,2%%TIME:~3,2%%TIME:~6,2%"
-  set "TS=%TS: =0%"
+  REM Fallback seguro usando PowerShell (Windows 10+)
+  for /f %%t in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"') do set "TS=%%t"
 )
 set "MIGLOG=%LOGDIR%\alembic_%TS%.log"
 

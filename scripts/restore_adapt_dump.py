@@ -89,6 +89,27 @@ def create_db(dbname: str):
         run(["docker", "exec", DOCKER_DB_CONTAINER, "psql", "-U", os.getenv("PGUSER", "postgres"), "-d", "postgres", "-c", f"CREATE DATABASE {dbname};"])
 
 
+def grant_permissions(dbname: str, user: str):
+    """Otorga permisos básicos al usuario de la app en la nueva DB."""
+    print(f"Otorgando permisos a '{user}' en '{dbname}'...")
+    if which("psql"):
+        run(["psql", "-d", dbname, "-c", f"ALTER DATABASE {dbname} OWNER TO {user};"])
+        run(["psql", "-d", dbname, "-c", f"GRANT USAGE, CREATE ON SCHEMA public TO {user};"])
+    else:
+        print("psql no encontrado localmente, usando docker exec")
+        run([
+            "docker", "exec", DOCKER_DB_CONTAINER, "psql",
+            "-U", os.getenv("PGUSER", "postgres"),
+            "-d", dbname,
+            "-c", f"ALTER DATABASE {dbname} OWNER TO {user};",
+        ])
+        run([
+            "docker", "exec", DOCKER_DB_CONTAINER, "psql",
+            "-U", os.getenv("PGUSER", "postgres"),
+            "-d", dbname,
+            "-c", f"GRANT USAGE, CREATE ON SCHEMA public TO {user};",
+        ])
+
 def restore_dump(dump: Path, db: str, fmt: str, jobs: int):
     if fmt == 'custom':
         if which("pg_restore"):
@@ -201,6 +222,7 @@ def main():
     if not args.reuse_temp:
         ensure_db_absent(args.temp_db)
         create_db(args.temp_db)
+        grant_permissions(args.temp_db, os.getenv("PGUSER", "postgres"))
     else:
         print("Reutilizando DB temporal existente (no drop)")
 
@@ -239,4 +261,4 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
