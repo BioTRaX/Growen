@@ -32,6 +32,10 @@ REM Redis opcional por defecto (evitar tocar Docker si no hace falta)
 set "REQUIRE_REDIS=%REQUIRE_REDIS%"
 if not defined REQUIRE_REDIS set "REQUIRE_REDIS=0"
 
+REM Backoff si DB flappea tras PRE-FLIGHT (segundos de espera antes de tocar Docker)
+set "DB_FLAP_BACKOFF_SEC=%DB_FLAP_BACKOFF_SEC%"
+if not defined DB_FLAP_BACKOFF_SEC set "DB_FLAP_BACKOFF_SEC=10"
+
 REM === PRE-FLIGHT: diagnóstico antes de iniciar ===
 call :log "[INFO] ===== PRE-FLIGHT: diagnóstico inicial ====="
 call :preflight_ports

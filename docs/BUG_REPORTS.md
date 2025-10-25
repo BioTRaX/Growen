@@ -180,6 +180,11 @@ Recomendaciones
 - El script registra también el caso de named pipe roto en Docker Desktop (mensaje en `start.log`).
 - Para reabrir solo la GUI de Docker Desktop sin tocar contenedores/engine: `:restart_docker_gui` (se relanza `Docker Desktop.exe`).
 
+Flags y mitigaciones recientes (Windows + WSL2):
+- `REQUIRE_REDIS` (default `0`): si Redis no responde en 6379, no se intenta `docker run` y se activa `RUN_INLINE_JOBS=1` (sin colas). Si se establece a `1`, se intentará crear/arrancar el contenedor (con revalidación del engine justo después).
+- `DB_FLAP_BACKOFF_SEC` (default `10`): cuando en el PRE‑FLIGHT la DB estaba OK y luego falla, se espera esta cantidad de segundos reintentando TCP 5433 antes de tocar Docker. Evita operar el engine si es solo un flap transitorio.
+- En errores fatales, `start.bat` captura automáticamente: `docker info`, `docker ps`, `wsl --status`, `wsl -l -v` y el estado de la named pipe `\\.\pipe\dockerDesktopLinuxEngine` (OK/MISSING).
+
 Preflight de arranque (registro en logs):
 - `start.bat` documenta en `logs/start.log` un PRE‑FLIGHT con:
   - Estado de puertos objetivo (8000, 5175, 5433, 6379).
