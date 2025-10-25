@@ -1,4 +1,8 @@
 @echo off
+REM NG-HEADER: Nombre de archivo: run_migrations.cmd
+REM NG-HEADER: Ubicación: scripts/run_migrations.cmd
+REM NG-HEADER: Descripción: Ejecuta alembic upgrade head con logging con timestamp seguro para Windows.
+REM NG-HEADER: Lineamientos: Ver AGENTS.md
 setlocal enabledelayedexpansion
 
 REM Raíz del repo (carpeta padre de /scripts)
@@ -9,12 +13,8 @@ REM Carpeta de logs
 set "LOGDIR=%ROOT%\logs\migrations"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 
-REM Timestamp seguro (yyyymmdd_HHMMSS) usando WMIC si está disponible
-for /f %%i in ('wmic os get localdatetime ^| find "." 2^>NUL') do set "TS=%%i"
-if not defined TS (
-  REM Fallback seguro usando PowerShell (Windows 10+)
-  for /f %%t in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"') do set "TS=%%t"
-)
+REM Timestamp seguro (yyyymmdd_HHMMSS) usando PowerShell (WMIC deprecado)
+for /f %%t in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"') do set "TS=%%t"
 set "MIGLOG=%LOGDIR%\alembic_%TS%.log"
 
 REM Python del venv

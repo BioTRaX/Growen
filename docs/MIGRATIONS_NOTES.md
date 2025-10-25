@@ -75,6 +75,13 @@ SELECT id, identifier, role FROM users WHERE role='admin';
 - Exponer health check que confirme estado migracional (`current_rev == head`).
 - Implementar util CLI `ng migrations status` para mostrar delta entre `current` y `head`.
 
+## Oct 2025 — Nueva columna products.is_enriching
+
+- Se agregó la migración `20251025_add_products_is_enriching` que introduce la columna `products.is_enriching BOOLEAN NOT NULL DEFAULT false`.
+- Motivo: el modelo `db.models.Product` ya exponía el campo, y endpoints de catálogo lo seleccionaban en queries. Sin la columna, `/products` devolvía 500 (`UndefinedColumn`).
+- Acción: ejecutar `alembic upgrade head` contra la base del stack Docker (ver `.env` → `DB_URL=postgresql+psycopg://...@127.0.0.1:5433/growen`).
+- Nota: la migración incluye guardas `information_schema` para evitar error si la columna ya existiera.
+
 ## Sept 2025 — Índices de rendimiento
 
 - Se añadió la migración `20250922_supplier_products_internal_variant_idx` que crea `ix_supplier_products_internal_variant_id`.
@@ -238,6 +245,23 @@ Consideraciones técnicas:
 - Se añadirá script `scripts/compare_schema_snapshot.py` (pendiente) para asegurar que `Base.metadata` == estado DB después del upgrade consolidado.
 
 Riesgos:
+
+---
+
+## 2025-10-21 — Enriquecimiento IA (fuentes, campos técnicos y trazabilidad)
+
+Se incorporaron tres migraciones nuevas para soportar el flujo de enriquecimiento de productos:
+
+- `20251021_add_product_enrichment_sources.py`: agrega `products.enrichment_sources_url` (String(600), nullable) para exponer la URL pública de un `.txt` con fuentes consultadas por la IA.
+- `20251021_add_product_technical_fields.py`: agrega campos técnicos editables en `products` (`weight_kg Numeric(10,3)`, `height_cm/width_cm/depth_cm Numeric(10,2)`, `market_price_reference Numeric(12,2)`).
+- `20251021_add_product_enrichment_trace.py`: agrega metadatos de trazabilidad `last_enriched_at DateTime` y `enriched_by Integer (FK users.id ondelete=SET NULL)`.
+
+Consideraciones:
+- En entornos de pruebas con SQLite en memoria compartida, se añadió un hotfix en `db/session.py` que verifica columnas y las crea en caliente si la tabla `products` ya existía sin ellas (evita fallos intermitentes al reutilizar el mismo `:memory:` compartido entre tests).
+- Los endpoints de enriquecimiento (single, bulk y delete) se apoyan en estas columnas; si la DB no está migrada, las rutas pueden fallar. Asegurar `alembic upgrade head` en despliegues.
+
+Downgrade:
+- Cada migración elimina sus columnas respectivas en `downgrade()`. Eliminar `enriched_by` primero remueve el FK (`fk_products_enriched_by_users`).
 - Inconsistencias silenciosas si el snapshot omite constraints específicos agregados en parches intermedios (mitigar con auditoría previa y diff db reflection vs metadata).
 - Pipelines que referencian revisiones antiguas podrían necesitar update.
 

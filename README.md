@@ -3,6 +3,7 @@
 ## Documentacion
 
 - Hoja de ruta: [Roadmap.md](./Roadmap.md)
+- Capa MCP (servers/tools): [docs/MCP.md](./docs/MCP.md)
 - Arquitectura chatbot admin: [docs/CHATBOT_ARCHITECTURE.md](./docs/CHATBOT_ARCHITECTURE.md)
 - Roles del chatbot admin: [docs/CHATBOT_ROLES.md](./docs/CHATBOT_ROLES.md)
 - Compras (incluye iAVaL - Validador de IA del remito): [docs/PURCHASES.md](./docs/PURCHASES.md)
@@ -112,8 +113,26 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - **IA**: ruteo automático entre Ollama (local) y OpenAI.
 - **Frontend**: React + Vite con listas virtualizadas mediante `react-window`.
 - **Adapters**: stubs de Tiendanube.
-- **MCP Servers (nuevo)**: microservicios auxiliares (ej. `mcp_products`) que exponen herramientas (`tools`) vía un endpoint uniforme `POST /invoke_tool` para consumo de agentes LLM, actuando como fachada HTTP hacia la API principal (sin acceso directo a DB). Primer MVP: tools `get_product_info` y `get_product_full_info`.
-  - Nota puerto: docker-compose expone `8100:8100`; el código usa default `http://mcp_products:8001/invoke_tool` configurable con `MCP_PRODUCTS_URL` (alinear en despliegues).
+- **MCP Servers (nuevo)**: microservicios auxiliares (ej. `mcp_products`, `mcp_web_search`) que exponen herramientas (`tools`) vía un endpoint uniforme `POST /invoke_tool` para consumo de agentes LLM, actuando como fachada HTTP hacia la API principal (sin acceso directo a DB).
+  - Products: tools `get_product_info` y `get_product_full_info` (URL default `http://mcp_products:8001/invoke_tool`, configurable con `MCP_PRODUCTS_URL`).
+  - Web Search (MVP): tool `search_web(query)` que retorna títulos/URLs/snippets desde un buscador HTML (URL default `http://mcp_web_search:8002/invoke_tool`, configurable con `MCP_WEB_SEARCH_URL`).
+  - Enriquecimiento IA puede anexar contexto de `search_web` al prompt si `AI_USE_WEB_SEARCH=1` y `ai_allow_external=true`.
+
+## Enriquecimiento de productos con IA
+
+- UI (detalle de producto): botón “Enriquecer con IA” (visibilidad: admin/colaborador) y menú de acciones:
+  - Reenriquecer (force): `POST /products/{id}/enrich?force=true`.
+  - Borrar enriquecimiento: `DELETE /products/{id}/enrichment`.
+- Backend:
+  - `POST /products/{id}/enrich` genera descripción y puede mapear campos técnicos (`weight_kg`, `height_cm`, `width_cm`, `depth_cm`, `market_price_reference`).
+  - Si la respuesta incluye “Fuentes”, se escribe un `.txt` bajo `/media/enrichment_logs/` y se expone `enrichment_sources_url`.
+  - Metadatos de trazabilidad: `last_enriched_at` y `enriched_by` se setean al enriquecer y se limpian al borrar.
+  - Auditoría: acción `enrich`/`reenrich` con `prompt_hash`, `fields_generated`, `source_file` y, si `AI_USE_WEB_SEARCH=1`, `web_search_query` y `web_search_hits`.
+- Acciones masivas: `POST /products/enrich-multiple` (máximo 20 IDs por solicitud) con validaciones de título y omitidos si ya enriquecidos (a menos que `force`).
+- Flags relevantes:
+  - `AI_USE_WEB_SEARCH` (0/1): activa búsqueda web MCP para anexar contexto al prompt.
+  - `AI_WEB_SEARCH_MAX_RESULTS` (default 3): máxima cantidad de resultados anexados.
+  - `ai_allow_external` (settings): debe estar en `true` para permitir llamadas externas.
 
 ## Requisitos
 
@@ -122,6 +141,16 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - PostgreSQL 15
 - Opcional (dev/pruebas): SQLite 3 con `aiosqlite` (ya incluido en dependencias)
 - Opcional: Docker y Docker Compose
+# Modo “Docker Stack” (dev en Windows)
+
+Para entornos Windows con Docker Desktop/WSL2, el arranque por defecto usa un modo seguro que evita tocar el engine cuando ya hay contenedores activos:
+
+- `USE_DOCKER_STACK=1` (por defecto): el script de inicio se acopla al stack Docker ya levantado, valida puertos (API 8000, DB 5433, FE 5173) y omite levantar uvicorn local o compilar el frontend.
+- `DB_NO_TOUCH_IF_PRE_OK=1`: si el PRE‑FLIGHT detectó la DB OK, no intenta `compose up db` ante flaps momentáneos.
+- `DB_FLAP_BACKOFF_SEC=10`: backoff entre reintentos si la DB flapea (ajustable a 30–60 en entornos más lentos).
+
+Consejo: si el engine WSL/Docker Desktop está inestable, reiniciar Docker Desktop y reintentar. Los snapshots forenses del arranque quedan en `logs/start.log` (incluyen `docker info/ps`, probes de puertos y `pg_isready`).
+
 - El backend usa httpx para llamadas a proveedores (Ollama / APIs); ya viene incluido.
 
 ### Requisitos para importación de PDFs (OCR)

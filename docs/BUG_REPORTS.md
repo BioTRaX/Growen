@@ -49,6 +49,22 @@ Notas
 
 - 2025-09-22 · br-1758572908: Se corrigió la codificación de textos en la vista de detalle de compras para eliminar caracteres extra (frontend/src/pages/PurchaseDetail.tsx).
 
+### 2025-10-25 · Login 503 en stack Docker (RESUELTO)
+
+Contexto
+- Al ejecutar la API dentro de Docker, el endpoint `POST /auth/login` devolvía 503 intermitente. En los logs del contenedor aparecía `psycopg OperationalError` intentando conectarse a `127.0.0.1:5433` (loopback del host), lo cual no es accesible desde la red interna de Docker.
+
+Resolución aplicada
+- Se ajustó la configuración para que la API construya el DSN a partir de variables `DB_HOST=db`, `DB_PORT=5432`, `DB_USER`, `DB_PASS`, `DB_NAME`, dejando `DB_URL` vacío en el servicio de API (docker-compose). De esta forma, la app resuelve la base como `db:5432` (host del servicio en la red de Docker).
+- Validación: en logs se observa `DB effective URL: postgresql+psycopg://…@db:5432/growen` y `/health` responde 200. `POST /auth/login` dejó de devolver 503.
+
+Seguimiento (pendiente y mejoras)
+- Manejo 422 de validación: se observó un `TypeError: Object of type bytes is not JSON serializable` al serializar errores de validación cuando el cuerpo no es JSON válido. Se sanitizó el handler para convertir `bytes`→`str` y evitar 500 inesperados (manteniendo contrato `{"detail": [...]}`, 422).
+- Migraciones: se detectó `ProgrammingError: column products.is_enriching does not exist` en `/products`, indicando migraciones pendientes. Ejecutar `alembic upgrade head` contra la base del stack Docker para alinear el esquema. 
+
+Notas
+- Esta corrección no afecta entornos locales fuera de Docker; aplica sólo al servicio API dentro del compose.
+
 ## Métricas (admin)
 
 - Endpoint: `GET /admin/services/metrics/bug-reports` (rol requerido: admin)
@@ -131,6 +147,89 @@ Notas
 - No aparecen subpáginas en Notion:
   - Si `NOTION_DRY_RUN=1`, es esperable: no se escriben cambios. Cambiar a 0 para producir escrituras.
   - Revisar permisos de la integración y el ID de base.
+
+## Errores conocidos del entorno (Windows + Docker Desktop + WSL2)
+
+Contexto
+- En algunas máquinas Windows, al ejecutar `start.bat` mientras Docker Desktop todavía está inicializando el backend WSL2, Docker puede mostrar el mensaje: “Failed to find installed WSL 2 distros”.
+- Síntoma asociado en la app: `POST /auth/login` devuelve 503 y `GET /auth/me` 500 con `psycopg.errors.ConnectionTimeout` porque el puerto 5433 de Postgres no queda disponible.
+
+Posibles causas
+- Llamadas tempranas a `docker` (p. ej. para levantar Redis) mientras el engine aún no está listo o WSL2 no terminó de registrar las distros (`Ubuntu`, `docker-desktop`).
+- Estado intermedio de Docker Desktop tras una actualización o tras reconfigurar la integración WSL.
+
+Cómo diagnosticar
+- Ejecutar en PowerShell:
+  - `wsl --status` y `wsl -l -v` → deberían listar al menos `Ubuntu` (o distro por defecto) y `docker-desktop` en estado Running/Stopped.
+  - `Test-NetConnection 127.0.0.1 -Port 5433` → debe ser `TcpTestSucceeded=True` cuando la DB esté arriba.
+  - Revisar logs de Docker:
+    - `%LOCALAPPDATA%\Docker\log\vm\init.log` (actividad de `dockerd`/`apiproxy`).
+    - `%APPDATA%\Docker\log\host` (si existe) para eventos del host.
+  - Eventos de Windows (opcional):
+    - `Get-EventLog -LogName System -Source "LxssManager" -Newest 50`
+    - `Get-EventLog -LogName Application -Source "Docker Desktop" -Newest 50`
+
+Mitigación implementada en `start.bat` (dev)
+- El script ahora:
+  - Verifica Redis y, si requiere usar `docker run`, primero hace un `ensure_docker` (espera a que el engine esté listo). Si no, activa `RUN_INLINE_JOBS=1` y no fuerza Docker.
+  - Antes de levantar la DB, intenta iniciar Docker Desktop y hacer `docker compose up -d db`. Si no logra exponer 5433, activa un fallback de desarrollo con `DB_URL=sqlite+aiosqlite:///dev.db` y omite migraciones.
+  - Esto evita que el arranque local quede bloqueado cuando Docker/WSL2 están en transición.
+
+Pruebas para aislar el paso problemático
+- Ejecutar manualmente las secciones del batch:
+  1) Saltar Redis y DB para validar frontend y API en modo SQLite:
+     - Establecer `RUN_INLINE_JOBS=1` y `DB_URL=sqlite+aiosqlite:///dev.db` antes de ejecutar `start.bat`.
+  2) Probar solo Redis:
+     - `docker run --name growen-redis -p 6379:6379 -d redis:7-alpine` (ver si esto, por sí solo, dispara el error de WSL).
+  3) Probar solo DB:
+     - `docker compose up -d db` y luego `Test-NetConnection 127.0.0.1 -Port 5433`.
+
+Recomendaciones
+- Mantener Docker Desktop actualizado y confirmar en Settings → Resources → WSL integration que la distro por defecto esté habilitada.
+- Si la integración WSL se pierde, reiniciar Docker Desktop (y, de ser necesario, el servicio `LxssManager`) suele restaurar las distros sin reiniciar la PC.
+- Si el problema persiste, limpiar caché de Docker Desktop o reinstalar la integración WSL siguiendo la guía oficial.
+
+### Política de arranque con Docker (dev)
+
+- Requisito: el contenedor de base de datos `db` debe estar saludable para trabajar. Por defecto `start.bat` exige DB en Docker saludable (`REQUIRE_DOCKER_DB=1`).
+- Fallback a SQLite solo es posible si se habilita conscientemente `ALLOW_SQLITE_FALLBACK=1` (debug puntual). Si no está habilitado, el script aborta con `[FATAL]` ante un problema de Docker/DB.
+- El script registra también el caso de named pipe roto en Docker Desktop (mensaje en `start.log`).
+- Para reabrir solo la GUI de Docker Desktop sin tocar contenedores/engine: `:restart_docker_gui` (se relanza `Docker Desktop.exe`).
+
+Flags y mitigaciones recientes (Windows + WSL2):
+- `REQUIRE_REDIS` (default `0`): si Redis no responde en 6379, no se intenta `docker run` y se activa `RUN_INLINE_JOBS=1` (sin colas). Si se establece a `1`, se intentará crear/arrancar el contenedor (con revalidación del engine justo después).
+- `DB_FLAP_BACKOFF_SEC` (default `10`): cuando en el PRE‑FLIGHT la DB estaba OK y luego falla, se espera esta cantidad de segundos reintentando TCP 5433 antes de tocar Docker. Evita operar el engine si es solo un flap transitorio.
+- `DB_NO_TOUCH_IF_PRE_OK` (default `1`): si en el PRE‑FLIGHT la DB estaba OK y tras el backoff sigue sin responder, no se ejecuta `docker compose up -d db`. Se aborta con FATAL para evitar romper el engine cuando la named pipe está frágil. Sugerencia: subir `DB_FLAP_BACKOFF_SEC` o reiniciar Docker Desktop manualmente.
+- En errores fatales, `start.bat` captura automáticamente: `docker info`, `docker ps`, `wsl --status`, `wsl -l -v` y el estado de la named pipe `\\.\pipe\dockerDesktopLinuxEngine` (OK/MISSING).
+
+Detalles de `ensure_docker`
+- Propósito: evitar operar sobre Docker Desktop mientras el engine aún no está listo o la named pipe no existe.
+- Comportamiento: requiere una cantidad de éxitos consecutivos de `docker info` antes de considerarlo estable.
+- Firma: `call :ensure_docker [timeout_sec] [stable_checks]`
+  - `timeout_sec`: tiempo máximo total de espera (default 90s).
+  - `stable_checks`: cantidad de lecturas consecutivas exitosas de `docker info` requeridas (default 2).
+- Diagnóstico: si detecta mensajes de named pipe faltante (por ejemplo, “open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.”), registra un `[WARN]` y marca `DOCKER_NPIPE_BROKEN=1`.
+- Uso interno: se invoca antes de cualquier `docker run`/`docker compose` (p. ej., en la ruta de Redis si `REQUIRE_REDIS=1`, y en DB cuando se necesita levantar el contenedor).
+
+Modo “Stack Docker” (attach)
+- Flag: `USE_DOCKER_STACK` (default `1`).
+- Efecto: el script no inicia `uvicorn` local ni hace build del frontend. Toma el stack Docker como fuente de verdad.
+- Requisitos: Docker Desktop activo y estable (`ensure_docker`); se toleran puertos ocupados (`ALLOW_PORT_BUSY=1`).
+- Validaciones: chequea TCP de 5433 (DB), 8000 (API) y 5173 (frontend opcional) y registra avisos si no responden.
+- Comportamiento ante ausencia de Docker: registra `[FATAL] Docker Desktop no está activo o estable` y aborta sin intentar reparar.
+- Para usar modo “dev local” (uvicorn con reload), deshabilitarlo con `USE_DOCKER_STACK=0` y asegurarse de que 8000/5175 estén libres.
+
+Preflight de arranque (registro en logs):
+- `start.bat` documenta en `logs/start.log` un PRE‑FLIGHT con:
+  - Estado de puertos objetivo (8000, 5175, 5433, 6379).
+  - `docker info` y `docker ps` (si Docker está disponible).
+  - Estado de WSL (`wsl --status`, `wsl -l -v`).
+  - Pre‑chequeo de DB: TCP 5433 y `pg_isready` en `db` (si Docker está disponible).
+  - Al finalizar el arranque, registra un snapshot “post” de `docker info`/`docker ps`.
+
+Notas
+- Este fallback a SQLite es exclusivamente para desarrollo local: algunas funciones dependientes de PostgreSQL/Jobs pueden verse limitadas hasta que la DB vuelva a estar disponible.
+
 
 ## Catálogo de errores conocidos (modo `cards`)
 
