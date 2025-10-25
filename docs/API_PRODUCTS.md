@@ -23,15 +23,24 @@ Ejemplo:
 ---
 
 ## GET /products/{id}
-Detalle de un producto interno. Además de los campos básicos (`id`, `title`, `slug`, `stock`, `sku_root`, `description_html`, `category_path`, `images`), ahora incluye campos canónicos cuando existe una equivalencia:
+Detalle de un producto interno. Además de los campos básicos (`id`, `title`, `slug`, `stock`, `sku_root`, `description_html`, `category_path`, `images`), ahora incluye campos canónicos cuando existe una equivalencia y metadatos de enriquecimiento:
 
 - `canonical_product_id`: id del canónico vinculado (o null)
 - `canonical_sale_price`: precio de venta del canónico (si existe)
 - `canonical_sku`: SKU canónico propio (formato XXX_####_YYY), si existe
 - `canonical_ng_sku`: SKU NG-######
 - `canonical_name`: nombre del canónico
+Metadatos de enriquecimiento IA:
+- `enrichment_sources_url`: URL pública al archivo .txt con fuentes (si existe)
+- `last_enriched_at`: fecha/hora UTC ISO cuando se realizó el último enriquecimiento (o null)
+- `enriched_by`: id del usuario que ejecutó el enriquecimiento (o null)
 
 UI: en la ficha de producto se muestra el `SKU` priorizando `canonical_sku` cuando está disponible; de lo contrario, se muestra el `sku_root` interno.
+
+Campos técnicos expuestos (editables vía PATCH):
+- `weight_kg`: número (kg) o null
+- `height_cm`, `width_cm`, `depth_cm`: números (cm) o null
+- `market_price_reference`: número (moneda, referencia de mercado) o null
 
 ---
 
@@ -55,6 +64,97 @@ Exporta un CSV con las mismas columnas y reglas que el XLS: `NOMBRE DE PRODUCTO`
 
 Notas:
 - Misma lógica de selección (canónico primero; fallback a proveedor/interno).
+---
+
+## POST /products/{id}/enrich
+Enriquece un producto interno usando IA (OpenAI/Ollama vía AIRouter). Requiere CSRF y rol `admin` o `colaborador`.
+
+Uso típico (desde la UI): botón “Enriquecer con IA” en la ficha del producto. Condiciones de visibilidad:
+- El usuario debe tener permisos de edición (admin o colaborador).
+- El producto debe tener `title`.
+
+Validaciones y comportamiento:
+- 404 si el producto no existe.
+- 400 si el producto no tiene `title` definido.
+- Invoca IA con un prompt que solicita un JSON con la clave “Descripción para Nice Grow” (y otros campos informativos como peso y dimensiones si se conocen).
+- Actualiza `products.description_html` con “Descripción para Nice Grow”.
+- Registra `AuditLog` con acción `enrich_ai` y campos afectados.
+
+Parámetros:
+- `force` (query, opcional): si es `true`, fuerza reescritura aunque ya exista contenido enriquecido y reemplaza el archivo `.txt` de fuentes (si lo hay). Se audita como `reenrich`.
+
+Respuesta:
+```
+{ "status": "ok", "updated": true, "fields": ["description_html", ...], "sources_url": "/media/enrichment_logs/product_123_enrichment_20250101T120000Z.txt" }
+```
+
+Notas:
+- Si la IA provee valores técnicos (peso, dimensiones, precio de mercado), el backend intentará mapearlos a los campos técnicos y persistirlos.
+- Cuando la respuesta incluye “Fuentes”, se genera un `.txt` bajo `/media/enrichment_logs/` y se expone en `enrichment_sources_url`.
+- Si `AI_USE_WEB_SEARCH=1` y `ai_allow_external=true`, el backend invoca opcionalmente el MCP `web_search` para anexar contexto de resultados (top N) al prompt. En la auditoría se incluyen `web_search_query` y `web_search_hits`.
+
+---
+
+## DELETE /products/{id}/enrichment
+Elimina los datos enriquecidos por IA del producto. Requiere CSRF y rol `admin` o `colaborador`.
+
+Acciones:
+- Limpia `description_html`, `weight_kg`, `height_cm`, `width_cm`, `depth_cm`, `market_price_reference` y `enrichment_sources_url`.
+- Limpia además metadatos `last_enriched_at` y `enriched_by`.
+- Si existe archivo de fuentes (`enrichment_sources_url`), intenta borrarlo del storage.
+- Registra `AuditLog` con acción `delete_enrichment` e incluye si el archivo fue eliminado.
+
+Respuesta:
+```
+{ "status": "ok", "deleted": true }
+```
+
+---
+
+## POST /products/enrich-multiple
+Enriquece en lote (hasta 20) productos por sus IDs. Requiere CSRF y rol `admin` o `colaborador`.
+
+Cuerpo:
+```
+{ "ids": [1,2,3], "force": false }
+```
+
+Reglas:
+- Se ignoran productos sin `title`.
+- Si `force=false` (por defecto), se omiten productos que ya tienen enriquecimiento (descripción o fuentes).
+- Límite: 20 por lote para evitar bloqueos.
+
+Respuesta:
+```
+{ "enriched": 6, "skipped": 2, "errors": [/* ids que fallaron */] }
+```
+
+Auditoría:
+- Registra `bulk_enrich` con meta `{ requested, enriched, skipped, errors, ids }`.
+
+---
+
+## PATCH /products/{id}
+Actualiza campos del producto. Requiere CSRF y rol `admin` o `colaborador`.
+
+Campos soportados (todos opcionales):
+- `description_html`: string o null
+- `category_id`: int o null (se valida existencia si no es null)
+- `weight_kg`: number >= 0 o null
+- `height_cm`: number >= 0 o null
+- `width_cm`: number >= 0 o null
+- `depth_cm`: number >= 0 o null
+- `market_price_reference`: number >= 0 o null
+
+Validaciones:
+- Valores numéricos deben ser >= 0.
+- `category_id` debe existir si se especifica.
+
+Respuesta:
+```
+{ "status": "ok" }
+```
+
 - Mismos filtros que `/products` y `/stock/export.xlsx`.
 
 ---

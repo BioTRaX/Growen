@@ -24,10 +24,16 @@ services:
       context: .
       dockerfile: infra/Dockerfile.api
     env_file: .env
-    # environment:
-    #   # Si tu .env usa 127.0.0.1, dentro del contenedor debe usarse 'db:5432'.
-    #   # Sugerido: define DB_URL en .env con host=DB_HOST y vars separadas para mayor seguridad.
-    #   DB_URL: "postgresql+psycopg://<user>:<pass>@db:5432/<db>"
+    environment:
+      # Importante: dentro del contenedor NO usar 127.0.0.1:5433; usar el servicio 'db:5432'.
+      # Forzamos DB_URL vacío para que settings construya la URL desde host/puerto/credenciales.
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      PGCONNECT_TIMEOUT: ${PGCONNECT_TIMEOUT:-5}
     ports:
       - "8000:8000"
     depends_on:
@@ -83,6 +89,18 @@ services:
       LOG_LEVEL: info
     ports:
       - "8100:8100"
+    restart: unless-stopped
+  mcp_web_search:
+    build:
+      context: .
+      dockerfile: mcp_servers/web_search_server/Dockerfile
+    container_name: growen-mcp-web-search
+    depends_on:
+      - api
+    environment:
+      LOG_LEVEL: info
+    ports:
+      - "8102:8002"
     restart: unless-stopped
 volumes:
   pgdata:

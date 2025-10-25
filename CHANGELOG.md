@@ -6,12 +6,25 @@
 
 ## [Unreleased]
 ### Added
+- Enriquecimiento de productos con IA:
+	- Backend: `POST /products/{id}/enrich` (force=true), `DELETE /products/{id}/enrichment`, `POST /products/enrich-multiple` (máx 20). Guardas, validaciones y auditoría (`enrich|reenrich|delete_enrichment`).
+	- Modelo `products`: `enrichment_sources_url`, campos técnicos (`weight_kg`, `height_cm`, `width_cm`, `depth_cm`, `market_price_reference`) y metadatos `last_enriched_at`, `enriched_by`.
+	- Migraciones: `20251021_add_product_enrichment_sources.py`, `20251021_add_product_technical_fields.py`, `20251021_add_product_enrichment_trace.py`.
+	- UI: botón “Enriquecer con IA”, menú IA (Reenriquecer, Borrar), edición inline de datos técnicos, modal “Fuentes consultadas”, acción masiva en Stock.
+- MCP Web Search Server (MVP): `mcp_servers/web_search_server` con tool `search_web(query)`; integración opcional en enrich vía flag `AI_USE_WEB_SEARCH`.
+- Flags: `AI_USE_WEB_SEARCH` (0/1) y `AI_WEB_SEARCH_MAX_RESULTS` (default 3); `MCP_WEB_SEARCH_URL` para endpoint del servidor MCP.
 - mcp_servers: primer MCP Server `mcp_products` (MVP) con tools `get_product_info` (abierto) y `get_product_full_info` (roles admin|colaborador). Endpoint unificado `POST /invoke_tool`, Dockerfile propio y dependencia HTTP hacia API principal (sin acceso directo a DB). README y Roadmap actualizados.
 - Columna `purchase_lines.meta` (JSON) para trazabilidad de autocompletado de líneas.
 - Persistencia de `meta.enrichment` (algorithm_version, timestamp, fields, stats) al ejecutar `PUT /purchases/{id}` con `PURCHASE_COMPLETION_ENABLED`.
 
 ### Documentation
 - `PURCHASES.md`: sección Metadatos de enriquecimiento.
+- `API_PRODUCTS.md`: documentados endpoints de enrich (single/bulk/delete), campos técnicos, `enrichment_sources_url`, metadatos `last_enriched_at`/`enriched_by` y flags de Web Search.
+- `PRODUCTS_UI.md`: actualizado con botón/menú IA, edición técnica, fuentes y acción masiva.
+- `roles-endpoints.md`: añadidos endpoints de enriquecimiento y roles requeridos.
+- `MIGRATIONS_NOTES.md`: añadidas las migraciones de 2025-10-21 y hotfix SQLite en memoria.
+- `SECURITY.md`: sección de salida a Internet (flags IA/MCP) y auditoría relacionada.
+- `README.md`: sección de Enriquecimiento IA y MCP Web Search.
 
 
 ### Added

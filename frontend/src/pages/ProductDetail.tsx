@@ -29,6 +29,13 @@ type Prod = {
   canonical_sku?: string | null
   canonical_ng_sku?: string | null
   canonical_name?: string | null
+  // Campos enriquecidos opcionales (si backend los provee en el futuro)
+  weight_kg?: number | null
+  height_cm?: number | null
+  width_cm?: number | null
+  depth_cm?: number | null
+  market_price_reference?: number | null
+  enrichment_sources_url?: string | null
 }
 
 export default function ProductDetail() {
@@ -67,6 +74,11 @@ export default function ProductDetail() {
   const [savingCat, setSavingCat] = useState(false)
   const [skuEditing, setSkuEditing] = useState<{ id: number; val: string } | null>(null)
   const [selectedCatId, setSelectedCatId] = useState<string>('')
+  const [techEditing, setTechEditing] = useState<null | { field: 'weight_kg'|'height_cm'|'width_cm'|'depth_cm'|'market_price_reference'; val: string }>(null)
+  const [srcOpen, setSrcOpen] = useState(false)
+  const [srcLoading, setSrcLoading] = useState(false)
+  const [srcText, setSrcText] = useState<string>('')
+  const [iaMenuOpen, setIaMenuOpen] = useState(false)
 
   const theme = useMemo(() => ({
     bg: styleVariant === 'minimalDark' ? '#0b0f14' : '#0d1117',
@@ -199,6 +211,65 @@ export default function ProductDetail() {
     }
   }
 
+  const isDescDirty = useMemo(() => {
+    if (!prod) return false
+    // Normalizar null/undefined/empty string para comparación
+    const currentDesc = desc || ''
+    const originalDesc = prod.description_html || ''
+    return currentDesc !== originalDesc
+  }, [desc, prod])
+
+  // Enriquecer con IA: dispara POST al backend y refresca datos
+  const handleEnrich = async () => {
+    if (isDescDirty && !window.confirm('La descripción tiene cambios manuales que se perderán. ¿Deseas sobrescribirlos con el enriquecimiento de IA?')) {
+      return
+    }
+    try {
+      setLoading(true)
+      // Nota: el cliente http ya incluye el prefijo base (ej.: /api)
+      await http.post(`/products/${pid}/enrich`)
+      showToast('success', 'Producto enriquecido con IA')
+      await refresh()
+    } catch (e: any) {
+      showToast('error', e?.response?.data?.detail || 'Error al enriquecer producto')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Reenriquecer con IA (force=true)
+  const handleReenrich = async () => {
+    if (isDescDirty && !window.confirm('La descripción tiene cambios manuales que se perderán. ¿Deseas sobrescribirlos con el enriquecimiento de IA?')) {
+      return
+    }
+    try {
+      setLoading(true)
+      await http.post(`/products/${pid}/enrich?force=true`)
+      showToast('success', 'Reenriquecimiento ejecutado')
+      await refresh()
+    } catch (e: any) {
+      showToast('error', e?.response?.data?.detail || 'Error al reenriquecer')
+    } finally {
+      setLoading(false)
+      setIaMenuOpen(false)
+    }
+  }
+
+  // Limpiar enriquecimiento IA
+  const handleLimpiarIA = async () => {
+    try {
+      setLoading(true)
+      await http.delete(`/products/${pid}/enrichment`)
+      showToast('success', 'Enriquecimiento borrado')
+      await refresh()
+    } catch (e: any) {
+      showToast('error', e?.response?.data?.detail || 'No se pudo borrar el enriquecimiento')
+    } finally {
+      setLoading(false)
+      setIaMenuOpen(false)
+    }
+  }
+
   function parseDecimalInput(s: string): number | null {
     if (!s) return null
     const x = s.replace(/\s+/g, '').replace(',', '.')
@@ -276,6 +347,50 @@ export default function ProductDetail() {
           <button className="btn" onClick={async () => { await pushTN(pid); alert('Push Tiendanube encolado/ejecutado'); }}>Enviar a Tiendanube</button>
           <button className="btn" onClick={async () => { try { const a = await http.get(`/products/${pid}/images/audit-logs`, { params: { limit: 50 } }); setImgDiag(a.data.items || []); const b = await http.get(`/catalog/products/${pid}/audit-logs`, { params: { limit: 50 } }); setProdDiag(b.data.items || []) } catch (e: any) { showToast('error', e?.response?.data?.detail || 'No se pudieron obtener diagnósticos') } }}>Ver diagnósticos</button>
           <button className="btn" onClick={() => { setSupplierSel(null); setSupplierSku(''); setSupplierTitle(''); setLinkOpen(true) }}>Agregar SKU de proveedor</button>
+          {canEdit && prod?.title && (
+            <button
+              className="btn"
+              onClick={handleEnrich}
+              disabled={loading}
+              style={{ borderColor: theme.accentPink, color: '#f5d0fe' }}
+            >
+              {loading ? 'Enriqueciendo...' : 'Enriquecer con IA'}
+            </button>
+          )}
+          {canEdit && prod?.title && prod?.enrichment_sources_url && (
+            <div style={{ position: 'relative' }}>
+              <button
+                className="btn"
+                onClick={() => setIaMenuOpen(v => !v)}
+                disabled={loading}
+                style={{ borderColor: theme.accentPink, color: '#f5d0fe' }}
+              >
+                Acciones IA ▾
+              </button>
+              {iaMenuOpen && (
+                <div className="panel" style={{ position: 'absolute', top: '110%', right: 0, zIndex: 50, minWidth: 220, padding: 6 }}>
+                  <button className="btn w-full" onClick={handleReenrich} disabled={loading}>Reenriquecer</button>
+                  <button className="btn w-full" onClick={handleLimpiarIA} disabled={loading} style={{ color: '#ef4444', borderColor: '#ef4444', marginTop: 6 }}>Borrar enriquecimiento</button>
+                </div>
+              )}
+            </div>
+          )}
+          {canEdit && prod?.enrichment_sources_url && (
+            <button className="btn" onClick={async () => {
+              setSrcOpen(true)
+              setSrcLoading(true)
+              setSrcText('')
+              try {
+                const r = await fetch(prod.enrichment_sources_url!)
+                const txt = await r.text()
+                setSrcText(txt)
+              } catch (e: any) {
+                setSrcText(e?.message || 'No se pudieron cargar las fuentes')
+              } finally {
+                setSrcLoading(false)
+              }
+            }}>📄 Fuentes consultadas</button>
+          )}
         </div>
       )}
 
@@ -312,6 +427,38 @@ export default function ProductDetail() {
       </div>
 
       {loading && <div style={{ marginTop: 8 }}>Procesando...</div>}
+
+      {/* Descripción enriquecida */}
+      <div className="card" style={{ background: theme.card, padding: 12, borderRadius: theme.radius, border: `1px solid ${theme.border}`, marginTop: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div style={{ fontWeight: 600 }}>Descripción enriquecida</div>
+          {canEdit && (
+            <button
+              className="btn-primary"
+              style={{ marginLeft: 'auto' }}
+              disabled={savingDesc}
+              onClick={async () => {
+                try {
+                  setSavingDesc(true)
+                  await http.patch(`/products/${pid}`, { description_html: desc })
+                  showToast('success', 'Descripción guardada')
+                } catch (e: any) {
+                  showToast('error', e?.response?.data?.detail || 'No se pudo guardar la descripción')
+                } finally {
+                  setSavingDesc(false)
+                }
+              }}
+            >{savingDesc ? 'Guardando...' : 'Guardar'}</button>
+          )}
+        </div>
+        <div style={{ marginTop: 8 }}>
+          {canEdit ? (
+            <textarea className="input" rows={8} value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Descripción (HTML o texto)" />
+          ) : (
+            <div style={{ whiteSpace: 'pre-wrap' }}>{desc || 'Sin descripción'}</div>
+          )}
+        </div>
+      </div>
 
       {/* Datos básicos */}
       <div className="card" style={{ background: theme.card, padding: 12, borderRadius: theme.radius, border: `1px solid ${theme.border}`, marginTop: 16 }}>
@@ -380,37 +527,82 @@ export default function ProductDetail() {
         </div>
       </div>
 
-      {/* Descripción */}
-      <div className="card" style={{ background: theme.card, padding: 12, borderRadius: theme.radius, border: `1px solid ${theme.border}`, marginTop: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <div style={{ fontWeight: 600 }}>Descripción</div>
-          {canEdit && (
-            <button
-              className="btn-primary"
-              style={{ marginLeft: 'auto' }}
-              disabled={savingDesc}
-              onClick={async () => {
-                try {
-                  setSavingDesc(true)
-                  await http.patch(`/products/${pid}`, { description_html: desc })
-                  showToast('success', 'Descripción guardada')
-                } catch (e: any) {
-                  showToast('error', e?.response?.data?.detail || 'No se pudo guardar la descripción')
-                } finally {
-                  setSavingDesc(false)
-                }
-              }}
-            >{savingDesc ? 'Guardando...' : 'Guardar'}</button>
-          )}
+      {/* Datos técnicos (sólo Admin/Colab). Edit-in-place: intenta PATCH y si backend no soporta, informa. */}
+      {canEdit && (
+        <div className="card" style={{ background: theme.card, padding: 12, borderRadius: theme.radius, border: `1px solid ${theme.border}`, marginTop: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Datos técnicos</div>
+          <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+            {([
+              { key: 'weight_kg', label: 'Peso KG', isNumber: true },
+              { key: 'height_cm', label: 'Alto CM', isNumber: true },
+              { key: 'width_cm', label: 'Ancho CM', isNumber: true },
+              { key: 'depth_cm', label: 'Profundidad CM', isNumber: true },
+              { key: 'market_price_reference', label: 'Valor de mercado estimado', isNumber: false },
+            ] as const).map((f) => (
+              <div key={f.key} style={{ minWidth: 220 }}>
+                <span style={{ opacity: .8, fontSize: 12 }}>{f.label}</span>
+                <div>
+                  {techEditing?.field === f.key ? (
+                    <input
+                      className="input"
+                      autoFocus
+                      value={techEditing.val}
+                      onChange={(e) => setTechEditing({ field: f.key, val: e.target.value })}
+                      onKeyDown={async (e) => {
+                        if (e.key === 'Enter') {
+                          let payload: any = {}
+                          if (f.isNumber) {
+                            const v = parseDecimalInput(techEditing.val)
+                            if (v == null) { showToast('error', 'Valor inválido'); return }
+                            payload[f.key] = v
+                          } else {
+                            payload[f.key] = (techEditing.val || '').trim()
+                          }
+                          try {
+                            await http.patch(`/products/${pid}`, payload)
+                            showToast('success', 'Campo guardado')
+                            await refresh()
+                          } catch (err: any) {
+                            showToast('error', err?.response?.data?.detail || 'Campo no soportado aún en backend')
+                          } finally {
+                            setTechEditing(null)
+                          }
+                        }
+                        if (e.key === 'Escape') setTechEditing(null)
+                      }}
+                      onBlur={async () => {
+                        // Guardar en blur con misma lógica que Enter
+                        let payload: any = {}
+                        if (f.isNumber) {
+                          const v = parseDecimalInput(techEditing?.val || '')
+                          if (v == null) { setTechEditing(null); return }
+                          payload[f.key] = v
+                        } else {
+                          payload[f.key] = (techEditing?.val || '').trim()
+                        }
+                        try {
+                          await http.patch(`/products/${pid}`, payload)
+                          showToast('success', 'Campo guardado')
+                          await refresh()
+                        } catch (err: any) {
+                          showToast('error', err?.response?.data?.detail || 'Campo no soportado aún en backend')
+                        } finally {
+                          setTechEditing(null)
+                        }
+                      }}
+                    />
+                  ) : (
+                    <>
+                      <span style={{ marginRight: 6 }}>{(prod as any)?.[f.key] ?? '-'}</span>
+                      <button className="btn-secondary" onClick={() => setTechEditing({ field: f.key, val: String((prod as any)?.[f.key] ?? '') })}>✎</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-        <div style={{ marginTop: 8 }}>
-          {canEdit ? (
-            <textarea className="input" rows={8} value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Descripción (HTML o texto)" />
-          ) : (
-            <div style={{ whiteSpace: 'pre-wrap' }}>{desc || 'Sin descripción'}</div>
-          )}
-        </div>
-      </div>
+      )}
 
       {/* Proveedores y precios */}
   <SupplierOfferings key={`offer-${offeringsTick}`} productId={pid} theme={theme} />
@@ -535,6 +727,24 @@ export default function ProductDetail() {
             <div className="row" style={{ gap: 8, marginTop: 10 }}>
               <button className="btn-secondary" onClick={() => { if (!loading) { setUploadOpen(false); setUploadFile(null); setUploadPct(0) } }} disabled={loading}>Cancelar</button>
               <button className="btn-primary" onClick={doUpload} disabled={!uploadFile || loading}>{loading ? 'Subiendo...' : 'Subir'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Fuentes consultadas (txt) */}
+      {srcOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 75 }}>
+          <div className="panel" style={{ padding: 16, minWidth: 520, maxWidth: 900 }}>
+            <h4 style={{ marginTop: 0 }}>Fuentes consultadas</h4>
+            <div style={{ maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 13 }}>
+              {srcLoading ? 'Cargando...' : (srcText || 'Sin contenido')}
+            </div>
+            <div className="row" style={{ gap: 8, marginTop: 10 }}>
+              <button className="btn-primary" onClick={() => setSrcOpen(false)}>Cerrar</button>
+              {prod?.enrichment_sources_url && (
+                <a className="btn" href={prod.enrichment_sources_url} target="_blank" rel="noreferrer">Descargar .txt</a>
+              )}
             </div>
           </div>
         </div>

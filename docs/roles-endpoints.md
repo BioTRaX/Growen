@@ -33,6 +33,9 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /products/{product_id} | cliente, proveedor, colaborador, admin |
 | GET | /products/{product_id}/variants | cliente, proveedor, colaborador, admin |
 | PATCH | /products/{product_id} | colaborador, admin (requiere CSRF) |
+| POST | /products/{product_id}/enrich | colaborador, admin (requiere CSRF) |
+| DELETE | /products/{product_id}/enrichment | colaborador, admin (requiere CSRF) |
+| POST | /products/enrich-multiple | colaborador, admin (requiere CSRF) |
 | PATCH | /products/{product_id}/stock | colaborador, admin (requiere CSRF) |
 | GET | /products/{product_id}/audit-logs | colaborador, admin |
 | GET | /price-history | cliente, proveedor, colaborador, admin |

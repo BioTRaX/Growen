@@ -90,6 +90,17 @@ async def _ensure_schema_if_memory() -> None:
             async with engine.begin() as conn:
                 # Crear el esquema si no existe; no borrar datos ya cargados por tests
                 await conn.run_sync(Base.metadata.create_all)
+                # Compatibilidad: si la tabla products ya existía sin columnas nuevas, agregarlas en caliente
+                try:
+                    res = await conn.execute("PRAGMA table_info(products)")  # type: ignore[arg-type]
+                    cols = [row[1] for row in res.fetchall()]
+                    if "last_enriched_at" not in cols:
+                        await conn.execute("ALTER TABLE products ADD COLUMN last_enriched_at DATETIME")  # type: ignore[arg-type]
+                    if "enriched_by" not in cols:
+                        await conn.execute("ALTER TABLE products ADD COLUMN enriched_by INTEGER")  # type: ignore[arg-type]
+                except Exception:
+                    # Best-effort: si falla, no bloquear
+                    pass
         _schema_initialized = True
     except Exception:
         _schema_initialized = True
