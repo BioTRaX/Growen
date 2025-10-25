@@ -115,32 +115,10 @@ if errorlevel 1 (
       ) else (
         call :log "[INFO] Postgres respondió en %DB_HOST%:%DB_PORT%."
       )
-    set "__NPIPE_WARNED=0"
-    :_wait_docker
-    for /f "tokens=*" %%L in ('docker info 2^>^&1') do set "__DINFO=%%L"
-    if "%ERRORLEVEL%"=="0" (
-      endlocal & exit /b 0
-    ) else (
-      echo !__DINFO! | findstr /I /C:"dockerDesktopLinuxEngine" /C:"The system cannot find the file specified" >NUL
-      if !ERRORLEVEL! EQU 0 (
-        if "!__NPIPE_WARNED!"=="0" (
-          call :log "[WARN] Docker Desktop named pipe no disponible (posible GUI/WSL en transición). Mensaje: !__DINFO!"
-          set "__NPIPE_WARNED=1"
-        )
-        set "DOCKER_NPIPE_BROKEN=1"
-      ) else (
-        if !__NPIPE_WARNED! EQU 0 (
-          call :log "[DEBUG] Esperando a Docker Desktop (el engine aún no responde)."
-          set "__NPIPE_WARNED=1"
-        )
-      )
-      if %_ELAP% GEQ %_TO% (
-        endlocal & exit /b 1
-      )
-      timeout /t 2 /nobreak >NUL
-      set /a _ELAP+=2
-      goto _wait_docker
     )
+  )
+) else (
+  call :log "[INFO] Postgres está listo en %DB_HOST%:%DB_PORT%."
 )
 
 call :log "[INFO] Verificando instalación de Playwright..."
@@ -332,11 +310,25 @@ if /I "!__DSTATE!"=="STOP" (
   powershell -NoProfile -ExecutionPolicy Bypass -Command "$exe=Join-Path $env:ProgramFiles 'Docker\\Docker\\Docker Desktop.exe'; if(Test-Path $exe){ Start-Process -FilePath $exe } else { exit 2 }" >NUL 2>&1
 )
 set /a _ELAP=0
+set "__NPIPE_WARNED=0"
 :_wait_docker
-docker info >NUL 2>&1
+for /f "tokens=*" %%L in ('docker info 2^>^&1') do set "__DINFO=%%L"
 if "%ERRORLEVEL%"=="0" (
   endlocal & exit /b 0
 ) else (
+  echo !__DINFO! | findstr /I /C:"dockerDesktopLinuxEngine" /C:"The system cannot find the file specified" >NUL
+  if !ERRORLEVEL! EQU 0 (
+    if "!__NPIPE_WARNED!"=="0" (
+      call :log "[WARN] Docker Desktop named pipe no disponible (posible GUI/WSL en transición). Mensaje: !__DINFO!"
+      set "__NPIPE_WARNED=1"
+    )
+    set "DOCKER_NPIPE_BROKEN=1"
+  ) else (
+    if !__NPIPE_WARNED! EQU 0 (
+      call :log "[DEBUG] Esperando a Docker Desktop (el engine aún no responde)."
+      set "__NPIPE_WARNED=1"
+    )
+  )
   if %_ELAP% GEQ %_TO% (
     endlocal & exit /b 1
   )
