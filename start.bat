@@ -25,6 +25,12 @@ if "%SKIP_DOCKER%"=="1" (
   call :log "[WARN] SKIP_DOCKER=1: se omitirá cualquier llamada a docker/docker compose. Se forzará RUN_INLINE_JOBS=1 y DB SQLite."
 )
 
+REM Política por defecto: requerir DB en Docker saludable; fallback sólo si ALLOW_SQLITE_FALLBACK=1
+set "REQUIRE_DOCKER_DB=%REQUIRE_DOCKER_DB%"
+if not defined REQUIRE_DOCKER_DB set "REQUIRE_DOCKER_DB=1"
+set "ALLOW_SQLITE_FALLBACK=%ALLOW_SQLITE_FALLBACK%"
+if not defined ALLOW_SQLITE_FALLBACK set "ALLOW_SQLITE_FALLBACK=0"
+
 call :log "[INFO] Cerrando procesos previos..."
 if exist "%~dp0stop.bat" call "%~dp0stop.bat"
 REM Intento proactivo de matar procesos que ya escuchan en 8000/5175 antes de las comprobaciones
@@ -102,18 +108,38 @@ if errorlevel 1 (
     call :log "[WARN] Postgres no responde en %DB_HOST%:%DB_PORT%. Intentando iniciar Docker Desktop y contenedor 'db'..."
     call :ensure_docker 120
     if errorlevel 1 (
-      call :log "[ERROR] Docker no está disponible. Se activará modo local con SQLite: %DB_FALLBACK_SQLITE%"
-      set "DB_URL=%DB_FALLBACK_SQLITE%"
-      set "_USE_SQLITE=1"
+      if "%REQUIRE_DOCKER_DB%"=="1" (
+        call :log "[FATAL] Docker no está disponible y REQUIRE_DOCKER_DB=1. Abortando sin fallback a SQLite."
+        goto :fatal
+      ) else (
+        if "%ALLOW_SQLITE_FALLBACK%"=="1" (
+          call :log "[ERROR] Docker no está disponible. Se activará modo local con SQLite: %DB_FALLBACK_SQLITE% (ALLOW_SQLITE_FALLBACK=1)"
+          set "DB_URL=%DB_FALLBACK_SQLITE%"
+          set "_USE_SQLITE=1"
+        ) else (
+          call :log "[FATAL] Docker no disponible, y ALLOW_SQLITE_FALLBACK=0. Abortando."
+          goto :fatal
+        )
+      )
     ) else (
       call :docker_up_db
-      call :check_tcp %DB_HOST% %DB_PORT% 60
+      call :pg_ready_via_compose 60
       if errorlevel 1 (
-        call :log "[ERROR] No fue posible establecer Postgres en %DB_HOST%:%DB_PORT% tras reintentos. Activando fallback SQLite."
-        set "DB_URL=%DB_FALLBACK_SQLITE%"
-        set "_USE_SQLITE=1"
+        if "%REQUIRE_DOCKER_DB%"=="1" (
+          call :log "[FATAL] Contenedor 'db' no saludable tras timeout y REQUIRE_DOCKER_DB=1. Abortando."
+          goto :fatal
+        ) else (
+          if "%ALLOW_SQLITE_FALLBACK%"=="1" (
+            call :log "[ERROR] Postgres en Docker no quedó saludable. Activando fallback SQLite (ALLOW_SQLITE_FALLBACK=1)."
+            set "DB_URL=%DB_FALLBACK_SQLITE%"
+            set "_USE_SQLITE=1"
+          ) else (
+            call :log "[FATAL] Postgres en Docker no quedó saludable y ALLOW_SQLITE_FALLBACK=0. Abortando."
+            goto :fatal
+          )
+        )
       ) else (
-        call :log "[INFO] Postgres respondió en %DB_HOST%:%DB_PORT%."
+        call :log "[INFO] Postgres respondió en %DB_HOST%:%DB_PORT% y el contenedor reporta saludable."
       )
     )
   )
@@ -238,6 +264,10 @@ set "ts=!DATE! !TIME!"
 echo [!ts!] %~1
 exit /b 0
 
+:fatal
+call :log "[FATAL] Arranque abortado por política de entorno. Revisa mensajes previos en este log para la causa (Docker/DB)."
+exit /b 1
+
 :check_redis
 REM Uso: call :check_redis <host> <port> <retries>
 setlocal EnableDelayedExpansion
@@ -257,6 +287,30 @@ if !_I! GEQ %_T% (
 )
 timeout /t 0 /nobreak >NUL
 goto _cr_loop
+
+:pg_ready_via_compose
+REM Uso: call :pg_ready_via_compose [retries]
+setlocal EnableDelayedExpansion
+set "_TR=%~1"
+if not defined _TR set "_TR=60"
+set /a _I=0
+:_pg_loop
+set /a _I+=1
+REM 1) pg_isready dentro del servicio 'db' vía docker compose (sin TTY)
+docker compose exec -T db pg_isready -U postgres >> "%LOG_FILE%" 2>&1
+if "%ERRORLEVEL%"=="0" (
+  endlocal & exit /b 0
+)
+REM 2) Sonda TCP local como respaldo
+call :check_tcp %DB_HOST% %DB_PORT% 1
+if "%ERRORLEVEL%"=="0" (
+  endlocal & exit /b 0
+)
+if !_I! GEQ %_TR% (
+  endlocal & exit /b 1
+)
+timeout /t 1 /nobreak >NUL
+goto _pg_loop
 
 :docker_start_redis
 setlocal EnableDelayedExpansion
