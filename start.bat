@@ -18,18 +18,19 @@ if exist "%ROOT%tools\clean_crawl_logs.py" (
 )
 call :log "[INFO] Logs previos limpiados."
 
-REM Flag opcional para depuración: omitir toda interacción con Docker
-set "SKIP_DOCKER=%SKIP_DOCKER%"
-if not defined SKIP_DOCKER set "SKIP_DOCKER=0"
-if "%SKIP_DOCKER%"=="1" (
-  call :log "[WARN] SKIP_DOCKER=1: se omitirá cualquier llamada a docker/docker compose. Se forzará RUN_INLINE_JOBS=1 y DB SQLite."
-)
-
 REM Política por defecto: requerir DB en Docker saludable; fallback sólo si ALLOW_SQLITE_FALLBACK=1
 set "REQUIRE_DOCKER_DB=%REQUIRE_DOCKER_DB%"
 if not defined REQUIRE_DOCKER_DB set "REQUIRE_DOCKER_DB=1"
 set "ALLOW_SQLITE_FALLBACK=%ALLOW_SQLITE_FALLBACK%"
 if not defined ALLOW_SQLITE_FALLBACK set "ALLOW_SQLITE_FALLBACK=0"
+
+REM === PRE-FLIGHT: diagnóstico antes de iniciar ===
+call :log "[INFO] ===== PRE-FLIGHT: diagnóstico inicial ====="
+call :preflight_ports
+call :docker_snapshot "pre"
+call :wsl_snapshot
+call :db_precheck
+call :log "[INFO] ===== FIN PRE-FLIGHT ====="
 
 call :log "[INFO] Cerrando procesos previos..."
 if exist "%~dp0stop.bat" call "%~dp0stop.bat"
@@ -67,19 +68,14 @@ rem Asegurar Redis en 6379 (necesario para Dramatiq)
 call :log "[INFO] Verificando Redis en 127.0.0.1:6379..."
 call :check_redis 127.0.0.1 6379 8
 if errorlevel 1 (
-  if "%SKIP_DOCKER%"=="1" (
-    call :log "[WARN] Redis no responde y SKIP_DOCKER=1. Activando RUN_INLINE_JOBS=1 (sin colas)."
+  call :log "[WARN] Redis no responde. Intentando iniciar contenedor 'growen-redis'..."
+  rem Asegurar que Docker esté listo antes de usar 'docker run'
+  call :ensure_docker 60
+  if errorlevel 1 (
+    call :log "[ERROR] Docker no está listo para iniciar Redis. Activando RUN_INLINE_JOBS=1 (sin colas)."
     set "RUN_INLINE_JOBS=1"
   ) else (
-    call :log "[WARN] Redis no responde. Intentando iniciar contenedor 'growen-redis'..."
-    rem Asegurar que Docker esté listo antes de usar 'docker run'
-    call :ensure_docker 60
-    if errorlevel 1 (
-      call :log "[ERROR] Docker no está listo para iniciar Redis. Activando RUN_INLINE_JOBS=1 (sin colas)."
-      set "RUN_INLINE_JOBS=1"
-    ) else (
-      call :docker_start_redis
-    )
+    call :docker_start_redis
   )
   call :check_redis 127.0.0.1 6379 15
   if errorlevel 1 (
@@ -100,47 +96,41 @@ set "_USE_SQLITE=0"
 call :log "[INFO] Verificando Postgres en %DB_HOST%:%DB_PORT%..."
 call :check_tcp %DB_HOST% %DB_PORT% 25
 if errorlevel 1 (
-  if "%SKIP_DOCKER%"=="1" (
-    call :log "[WARN] Postgres no responde y SKIP_DOCKER=1. Forzando modo local SQLite: %DB_FALLBACK_SQLITE%"
-    set "DB_URL=%DB_FALLBACK_SQLITE%"
-    set "_USE_SQLITE=1"
+  call :log "[WARN] Postgres no responde en %DB_HOST%:%DB_PORT%. Intentando iniciar Docker Desktop y contenedor 'db'..."
+  call :ensure_docker 120
+  if errorlevel 1 (
+    if "%REQUIRE_DOCKER_DB%"=="1" (
+      call :log "[FATAL] Docker no está disponible y REQUIRE_DOCKER_DB=1. Abortando sin fallback a SQLite."
+      goto :fatal
+    ) else (
+      if "%ALLOW_SQLITE_FALLBACK%"=="1" (
+        call :log "[ERROR] Docker no está disponible. Se activará modo local con SQLite: %DB_FALLBACK_SQLITE% (ALLOW_SQLITE_FALLBACK=1)"
+        set "DB_URL=%DB_FALLBACK_SQLITE%"
+        set "_USE_SQLITE=1"
+      ) else (
+        call :log "[FATAL] Docker no disponible, y ALLOW_SQLITE_FALLBACK=0. Abortando."
+        goto :fatal
+      )
+    )
   ) else (
-    call :log "[WARN] Postgres no responde en %DB_HOST%:%DB_PORT%. Intentando iniciar Docker Desktop y contenedor 'db'..."
-    call :ensure_docker 120
+    call :docker_up_db
+    call :pg_ready_via_compose 60
     if errorlevel 1 (
       if "%REQUIRE_DOCKER_DB%"=="1" (
-        call :log "[FATAL] Docker no está disponible y REQUIRE_DOCKER_DB=1. Abortando sin fallback a SQLite."
+        call :log "[FATAL] Contenedor 'db' no saludable tras timeout y REQUIRE_DOCKER_DB=1. Abortando."
         goto :fatal
       ) else (
         if "%ALLOW_SQLITE_FALLBACK%"=="1" (
-          call :log "[ERROR] Docker no está disponible. Se activará modo local con SQLite: %DB_FALLBACK_SQLITE% (ALLOW_SQLITE_FALLBACK=1)"
+          call :log "[ERROR] Postgres en Docker no quedó saludable. Activando fallback SQLite (ALLOW_SQLITE_FALLBACK=1)."
           set "DB_URL=%DB_FALLBACK_SQLITE%"
           set "_USE_SQLITE=1"
         ) else (
-          call :log "[FATAL] Docker no disponible, y ALLOW_SQLITE_FALLBACK=0. Abortando."
+          call :log "[FATAL] Postgres en Docker no quedó saludable y ALLOW_SQLITE_FALLBACK=0. Abortando."
           goto :fatal
         )
       )
     ) else (
-      call :docker_up_db
-      call :pg_ready_via_compose 60
-      if errorlevel 1 (
-        if "%REQUIRE_DOCKER_DB%"=="1" (
-          call :log "[FATAL] Contenedor 'db' no saludable tras timeout y REQUIRE_DOCKER_DB=1. Abortando."
-          goto :fatal
-        ) else (
-          if "%ALLOW_SQLITE_FALLBACK%"=="1" (
-            call :log "[ERROR] Postgres en Docker no quedó saludable. Activando fallback SQLite (ALLOW_SQLITE_FALLBACK=1)."
-            set "DB_URL=%DB_FALLBACK_SQLITE%"
-            set "_USE_SQLITE=1"
-          ) else (
-            call :log "[FATAL] Postgres en Docker no quedó saludable y ALLOW_SQLITE_FALLBACK=0. Abortando."
-            goto :fatal
-          )
-        )
-      ) else (
-        call :log "[INFO] Postgres respondió en %DB_HOST%:%DB_PORT% y el contenedor reporta saludable."
-      )
+      call :log "[INFO] Postgres respondió en %DB_HOST%:%DB_PORT% y el contenedor reporta saludable."
     )
   )
 ) else (
@@ -214,6 +204,9 @@ if "%RUN_INLINE_JOBS%"=="1" (
   call :log "[INFO] Iniciando worker de imagenes (broker: %REDIS_URL%)..."
   start "Growen Images Worker" cmd /k call "%ROOT%scripts\start_worker_images.cmd"
 )
+
+REM Snapshot post-arranque de contenedores/engine
+call :docker_snapshot "post"
 
 endlocal
 exit /b 0
@@ -327,6 +320,63 @@ if not defined __REDIS_NAME (
 ) else (
   call :log "[INFO] Iniciando contenedor existente 'growen-redis'..."
   docker start growen-redis >> "%LOG_FILE%" 2>&1
+)
+endlocal & exit /b 0
+
+:preflight_ports
+setlocal EnableDelayedExpansion
+call :log "[INFO] Preflight Puertos: objetivo API 8000, Frontend 5175, DB 5433, Redis 6379"
+for %%P in (8000 5175) do (
+  set "__BUSY=0"
+  for /f "delims=" %%L in ('netstat -ano -p TCP ^| findstr /R /C:":%%P " ^| findstr /I "LISTENING ESCUCHA"') do set "__BUSY=1"
+  if "!__BUSY!"=="1" (
+    call :log "[WARN] Puerto %%P actualmente en uso (LISTENING)."
+  ) else (
+    call :log "[INFO] Puerto %%P libre."
+  )
+)
+call :check_tcp 127.0.0.1 5433 1
+if "%ERRORLEVEL%"=="0" ( call :log "[INFO] DB 5433 responde (TCP)." ) else ( call :log "[INFO] DB 5433 no responde (TCP)." )
+call :check_tcp 127.0.0.1 6379 1
+if "%ERRORLEVEL%"=="0" ( call :log "[INFO] Redis 6379 responde (TCP)." ) else ( call :log "[INFO] Redis 6379 no responde (TCP)." )
+endlocal & exit /b 0
+
+:docker_snapshot
+setlocal EnableDelayedExpansion
+set "_TAG=%~1"
+where docker >NUL 2>&1
+if errorlevel 1 (
+  call :log "[WARN] Docker CLI no disponible. Snapshot '%_TAG%' omitido."
+  endlocal & exit /b 0
+)
+call :log "[INFO] Docker snapshot (%_TAG%): docker info"
+docker info >> "%LOG_FILE%" 2>&1
+call :log "[INFO] Docker snapshot (%_TAG%): docker ps"
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" >> "%LOG_FILE%" 2>&1
+endlocal & exit /b 0
+
+:wsl_snapshot
+setlocal EnableDelayedExpansion
+call :log "[INFO] WSL snapshot: wsl --status"
+wsl --status >> "%LOG_FILE%" 2>&1
+call :log "[INFO] WSL snapshot: wsl -l -v"
+wsl -l -v >> "%LOG_FILE%" 2>&1
+endlocal & exit /b 0
+
+:db_precheck
+setlocal EnableDelayedExpansion
+call :log "[INFO] Preflight DB: probando 127.0.0.1:5433 y (si aplica) pg_isready en 'db'"
+call :check_tcp 127.0.0.1 5433 1
+if "%ERRORLEVEL%"=="0" (
+  call :log "[INFO] Preflight DB: puerto 5433 responde (TCP)."
+) else (
+  call :log "[INFO] Preflight DB: puerto 5433 no responde (TCP)."
+)
+where docker >NUL 2>&1
+if "%ERRORLEVEL%"=="0" (
+  docker compose exec -T db pg_isready -U postgres >> "%LOG_FILE%" 2>&1
+) else (
+  call :log "[INFO] Preflight DB: docker CLI no disponible; omitido pg_isready."
 )
 endlocal & exit /b 0
 

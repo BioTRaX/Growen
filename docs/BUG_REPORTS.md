@@ -173,15 +173,20 @@ Recomendaciones
 - Si la integración WSL se pierde, reiniciar Docker Desktop (y, de ser necesario, el servicio `LxssManager`) suele restaurar las distros sin reiniciar la PC.
 - Si el problema persiste, limpiar caché de Docker Desktop o reinstalar la integración WSL siguiendo la guía oficial.
 
-### Modo SKIP_DOCKER y relanzar solo la GUI (dev)
+### Política de arranque con Docker (dev)
 
-- Si necesitás aislar la app de Docker/WSL para depurar o seguir trabajando mientras el engine está inestable, podés activar:
-  - `SKIP_DOCKER=1` → el `start.bat` no hará ninguna llamada a `docker*` ni `docker compose*`; se fuerza `RUN_INLINE_JOBS=1` y `DB_URL=sqlite+aiosqlite:///dev.db`.
-  - El script detecta y registra en `logs/start.log` el caso de named pipe roto: “Docker Desktop named pipe no disponible…”.
-  - Para reabrir solo la GUI de Docker Desktop sin tocar contenedores/engine: usar la función interna del script `:restart_docker_gui` (se relanza `Docker Desktop.exe`).
-  
-Notas:
-- Estas opciones son solo para desarrollo. Algunas funciones dependientes de Postgres/Redis pueden verse limitadas hasta que el entorno Docker esté estable.
+- Requisito: el contenedor de base de datos `db` debe estar saludable para trabajar. Por defecto `start.bat` exige DB en Docker saludable (`REQUIRE_DOCKER_DB=1`).
+- Fallback a SQLite solo es posible si se habilita conscientemente `ALLOW_SQLITE_FALLBACK=1` (debug puntual). Si no está habilitado, el script aborta con `[FATAL]` ante un problema de Docker/DB.
+- El script registra también el caso de named pipe roto en Docker Desktop (mensaje en `start.log`).
+- Para reabrir solo la GUI de Docker Desktop sin tocar contenedores/engine: `:restart_docker_gui` (se relanza `Docker Desktop.exe`).
+
+Preflight de arranque (registro en logs):
+- `start.bat` documenta en `logs/start.log` un PRE‑FLIGHT con:
+  - Estado de puertos objetivo (8000, 5175, 5433, 6379).
+  - `docker info` y `docker ps` (si Docker está disponible).
+  - Estado de WSL (`wsl --status`, `wsl -l -v`).
+  - Pre‑chequeo de DB: TCP 5433 y `pg_isready` en `db` (si Docker está disponible).
+  - Al finalizar el arranque, registra un snapshot “post” de `docker info`/`docker ps`.
 
 Notas
 - Este fallback a SQLite es exclusivamente para desarrollo local: algunas funciones dependientes de PostgreSQL/Jobs pueden verse limitadas hasta que la DB vuelva a estar disponible.
