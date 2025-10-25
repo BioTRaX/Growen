@@ -155,15 +155,12 @@ if not exist "%ROOT%frontend\node_modules" (
   pushd "%ROOT%frontend"
   npm install >> "%LOG_FILE%" 2>&1
   if errorlevel 1 (
-  call :log "[ERROR] Falló 'npm install' en el frontend. Revisa %LOG_FILE%."
-    pause
-    :ensure_docker
-    REM Uso: call :ensure_docker [timeout_sec] [stable_checks]
+    call :log "[ERROR] Falló 'npm install' en el frontend. Revisa %LOG_FILE%."
+    popd
+    goto :fatal
+  )
   popd
 )
-
-    set "_STABLE=%~2"
-    if not defined _STABLE set "_STABLE=2"
 if "%_USE_SQLITE%"=="1" (
   call :log "[INFO] Modo SQLite DEV activado: se omiten migraciones Alembic (solo desarrollo)."
 ) else (
@@ -175,19 +172,11 @@ if "%_USE_SQLITE%"=="1" (
   )
 )
 
-    set /a __OKS=0
 call :log "[INFO] Iniciando backend..."
 rem Activar modo DEBUG para backend y devolver info de debug en import
 set "LOG_LEVEL=DEBUG"
-      set /a __OKS+=1
-      if !__OKS! GEQ %_STABLE% (
-        endlocal & exit /b 0
-      ) else (
-        timeout /t 2 /nobreak >NUL
-        set /a _ELAP+=2
-        goto _wait_docker
-      )
-start "Growen API" cmd /k "set LOG_LEVEL=%LOG_LEVEL% && set IMPORT_RETURN_DEBUG=%IMPORT_RETURN_DEBUG% && set PATH=%VENV%;%PATH% && echo [BOOT] Lanzando uvicorn en puerto 8000 & "%VENV%\python.exe" -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000 --loop asyncio --http h11 --log-level debug >> "%LOG_DIR%\backend.log" 2>&1"
+
+start "Growen API" cmd /k set LOG_LEVEL=%LOG_LEVEL% ^&^& set IMPORT_RETURN_DEBUG=%IMPORT_RETURN_DEBUG% ^&^& set PATH=%VENV%;%PATH% ^&^& echo [BOOT] Lanzando uvicorn en puerto 8000 ^&^& "%VENV%\python.exe" -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000 --loop asyncio --http h11 --log-level debug ^>> "%LOG_DIR%\backend.log" 2^>^&1
 
 call :log "[INFO] Preparando frontend..."
 REM Si existe carpeta dist vacía o VITE_BUILD=1, ejecutamos build para servir desde FastAPI.
@@ -208,46 +197,59 @@ if exist "%ROOT%frontend\package.json" (
     )
   )
   popd
-)
+  REM Uso: call :ensure_docker [timeout_sec] [stable_checks]
+  setlocal EnableDelayedExpansion
+  set "_TO=%~1"
+  if not defined _TO set "_TO=90"
+  set "_STABLE=%~2"
+  if not defined _STABLE set "_STABLE=2"
 
-REM Opcional: si el dev server es preferido, descomentar este bloque.
-REM call :log "[INFO] Iniciando frontend en modo dev (5175)..."
-REM start "Growen Frontend" cmd /k "pushd ""%ROOT%frontend"" && set VITE_PORT=5175 && npm run dev >> "%LOG_DIR%\frontend.log" 2>&1"
+  where docker >NUL 2>&1
+  if errorlevel 1 (
+    call :log "[WARN] Docker CLI no encontrado en PATH. Intentando iniciar Docker Desktop..."
+  )
+  for /f "delims=" %%E in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue; if($p){'RUNNING'} else {'STOP'}"') do set "__DSTATE=%%E"
+  if /I "!__DSTATE!"=="STOP" (
+    call :log "[INFO] Iniciando Docker Desktop..."
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$exe=Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'; if(Test-Path $exe){ Start-Process -FilePath $exe } else { exit 2 }" >NUL 2>&1
+  )
 
-rem Iniciar worker de imágenes (Dramatiq)
-if not defined REDIS_URL set "REDIS_URL=redis://localhost:6379/0"
-if "%RUN_INLINE_JOBS%"=="1" (
-  call :log "[INFO] RUN_INLINE_JOBS=1: no se inicia worker Dramatiq (los triggers correrán inline)."
-) else (
-  call :log "[INFO] Iniciando worker de imagenes (broker: %REDIS_URL%)..."
-  start "Growen Images Worker" cmd /k call "%ROOT%scripts\start_worker_images.cmd"
-)
-
-REM Snapshot post-arranque de contenedores/engine
-call :docker_snapshot "post"
-
-endlocal
-exit /b 0
-
-:wait_port_free
-REM Uso: call :wait_port_free <port> [retries]
-setlocal EnableDelayedExpansion
-set "_PORT=%~1"
-set "_TRIES=%~2"
-if not defined _TRIES set "_TRIES=5"
-set "_I=0"
-:_lp
-set /a _I+=1
-REM 1) Intentar con PowerShell (exact TCP LISTEN)
-set "__COUNT="
-for /f %%E in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "@(Get-NetTCPConnection -State Listen -LocalPort %_PORT% -ErrorAction SilentlyContinue).Count"') do set "__COUNT=%%E"
-if not defined __COUNT set "__COUNT=0"
-if "!__COUNT!"=="0" (
-  endlocal & exit /b 0
-) else (
-  REM Intentar matar propietarios del puerto (PS)
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-NetTCPConnection -State Listen -LocalPort %_PORT% -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction Stop } catch {} }" >NUL 2>&1
-  if %_I% GEQ %_TRIES% (
+  set /a _ELAP=0
+  set /a __OKS=0
+  set "__NPIPE_WARNED=0"
+  :_wait_docker
+  for /f "tokens=*" %%L in ('docker info 2^>^&1') do set "__DINFO=%%L"
+  if "%ERRORLEVEL%"=="0" (
+    set /a __OKS+=1
+    if !__OKS! GEQ %_STABLE% (
+      endlocal & exit /b 0
+    ) else (
+      timeout /t 1 /nobreak >NUL
+      set /a _ELAP+=1
+      goto _wait_docker
+    )
+  ) else (
+    set /a __OKS=0
+    echo !__DINFO! | findstr /I /C:"dockerDesktopLinuxEngine" /C:"The system cannot find the file specified" >NUL
+    if !ERRORLEVEL! EQU 0 (
+      if "!__NPIPE_WARNED!"=="0" (
+        call :log "[WARN] Docker Desktop named pipe no disponible (posible GUI/WSL en transición). Mensaje: !__DINFO!"
+        set "__NPIPE_WARNED=1"
+      )
+      set "DOCKER_NPIPE_BROKEN=1"
+    ) else (
+      if !__NPIPE_WARNED! EQU 0 (
+        call :log "[DEBUG] Esperando a Docker Desktop (el engine aún no responde)."
+        set "__NPIPE_WARNED=1"
+      )
+    )
+    if %_ELAP% GEQ %_TO% (
+      endlocal & exit /b 1
+    )
+    timeout /t 2 /nobreak >NUL
+    set /a _ELAP+=2
+    goto _wait_docker
+  )
     endlocal & exit /b 1
   )
 )
