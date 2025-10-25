@@ -132,6 +132,61 @@ Notas
   - Si `NOTION_DRY_RUN=1`, es esperable: no se escriben cambios. Cambiar a 0 para producir escrituras.
   - Revisar permisos de la integración y el ID de base.
 
+## Errores conocidos del entorno (Windows + Docker Desktop + WSL2)
+
+Contexto
+- En algunas máquinas Windows, al ejecutar `start.bat` mientras Docker Desktop todavía está inicializando el backend WSL2, Docker puede mostrar el mensaje: “Failed to find installed WSL 2 distros”.
+- Síntoma asociado en la app: `POST /auth/login` devuelve 503 y `GET /auth/me` 500 con `psycopg.errors.ConnectionTimeout` porque el puerto 5433 de Postgres no queda disponible.
+
+Posibles causas
+- Llamadas tempranas a `docker` (p. ej. para levantar Redis) mientras el engine aún no está listo o WSL2 no terminó de registrar las distros (`Ubuntu`, `docker-desktop`).
+- Estado intermedio de Docker Desktop tras una actualización o tras reconfigurar la integración WSL.
+
+Cómo diagnosticar
+- Ejecutar en PowerShell:
+  - `wsl --status` y `wsl -l -v` → deberían listar al menos `Ubuntu` (o distro por defecto) y `docker-desktop` en estado Running/Stopped.
+  - `Test-NetConnection 127.0.0.1 -Port 5433` → debe ser `TcpTestSucceeded=True` cuando la DB esté arriba.
+  - Revisar logs de Docker:
+    - `%LOCALAPPDATA%\Docker\log\vm\init.log` (actividad de `dockerd`/`apiproxy`).
+    - `%APPDATA%\Docker\log\host` (si existe) para eventos del host.
+  - Eventos de Windows (opcional):
+    - `Get-EventLog -LogName System -Source "LxssManager" -Newest 50`
+    - `Get-EventLog -LogName Application -Source "Docker Desktop" -Newest 50`
+
+Mitigación implementada en `start.bat` (dev)
+- El script ahora:
+  - Verifica Redis y, si requiere usar `docker run`, primero hace un `ensure_docker` (espera a que el engine esté listo). Si no, activa `RUN_INLINE_JOBS=1` y no fuerza Docker.
+  - Antes de levantar la DB, intenta iniciar Docker Desktop y hacer `docker compose up -d db`. Si no logra exponer 5433, activa un fallback de desarrollo con `DB_URL=sqlite+aiosqlite:///dev.db` y omite migraciones.
+  - Esto evita que el arranque local quede bloqueado cuando Docker/WSL2 están en transición.
+
+Pruebas para aislar el paso problemático
+- Ejecutar manualmente las secciones del batch:
+  1) Saltar Redis y DB para validar frontend y API en modo SQLite:
+     - Establecer `RUN_INLINE_JOBS=1` y `DB_URL=sqlite+aiosqlite:///dev.db` antes de ejecutar `start.bat`.
+  2) Probar solo Redis:
+     - `docker run --name growen-redis -p 6379:6379 -d redis:7-alpine` (ver si esto, por sí solo, dispara el error de WSL).
+  3) Probar solo DB:
+     - `docker compose up -d db` y luego `Test-NetConnection 127.0.0.1 -Port 5433`.
+
+Recomendaciones
+- Mantener Docker Desktop actualizado y confirmar en Settings → Resources → WSL integration que la distro por defecto esté habilitada.
+- Si la integración WSL se pierde, reiniciar Docker Desktop (y, de ser necesario, el servicio `LxssManager`) suele restaurar las distros sin reiniciar la PC.
+- Si el problema persiste, limpiar caché de Docker Desktop o reinstalar la integración WSL siguiendo la guía oficial.
+
+### Modo SKIP_DOCKER y relanzar solo la GUI (dev)
+
+- Si necesitás aislar la app de Docker/WSL para depurar o seguir trabajando mientras el engine está inestable, podés activar:
+  - `SKIP_DOCKER=1` → el `start.bat` no hará ninguna llamada a `docker*` ni `docker compose*`; se fuerza `RUN_INLINE_JOBS=1` y `DB_URL=sqlite+aiosqlite:///dev.db`.
+  - El script detecta y registra en `logs/start.log` el caso de named pipe roto: “Docker Desktop named pipe no disponible…”.
+  - Para reabrir solo la GUI de Docker Desktop sin tocar contenedores/engine: usar la función interna del script `:restart_docker_gui` (se relanza `Docker Desktop.exe`).
+  
+Notas:
+- Estas opciones son solo para desarrollo. Algunas funciones dependientes de Postgres/Redis pueden verse limitadas hasta que el entorno Docker esté estable.
+
+Notas
+- Este fallback a SQLite es exclusivamente para desarrollo local: algunas funciones dependientes de PostgreSQL/Jobs pueden verse limitadas hasta que la DB vuelva a estar disponible.
+
+
 ## Catálogo de errores conocidos (modo `cards`)
 
 Esta funcionalidad es opcional y aplica sólo cuando `NOTION_MODE=cards`. Permite sincronizar un catálogo local de patrones de errores hacia Notion como tarjetas base para seguimiento.

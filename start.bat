@@ -18,6 +18,13 @@ if exist "%ROOT%tools\clean_crawl_logs.py" (
 )
 call :log "[INFO] Logs previos limpiados."
 
+REM Flag opcional para depuración: omitir toda interacción con Docker
+set "SKIP_DOCKER=%SKIP_DOCKER%"
+if not defined SKIP_DOCKER set "SKIP_DOCKER=0"
+if "%SKIP_DOCKER%"=="1" (
+  call :log "[WARN] SKIP_DOCKER=1: se omitirá cualquier llamada a docker/docker compose. Se forzará RUN_INLINE_JOBS=1 y DB SQLite."
+)
+
 call :log "[INFO] Cerrando procesos previos..."
 if exist "%~dp0stop.bat" call "%~dp0stop.bat"
 REM Intento proactivo de matar procesos que ya escuchan en 8000/5175 antes de las comprobaciones
@@ -54,8 +61,20 @@ rem Asegurar Redis en 6379 (necesario para Dramatiq)
 call :log "[INFO] Verificando Redis en 127.0.0.1:6379..."
 call :check_redis 127.0.0.1 6379 8
 if errorlevel 1 (
-  call :log "[WARN] Redis no responde. Intentando iniciar contenedor 'growen-redis'..."
-  call :docker_start_redis
+  if "%SKIP_DOCKER%"=="1" (
+    call :log "[WARN] Redis no responde y SKIP_DOCKER=1. Activando RUN_INLINE_JOBS=1 (sin colas)."
+    set "RUN_INLINE_JOBS=1"
+  ) else (
+    call :log "[WARN] Redis no responde. Intentando iniciar contenedor 'growen-redis'..."
+    rem Asegurar que Docker esté listo antes de usar 'docker run'
+    call :ensure_docker 60
+    if errorlevel 1 (
+      call :log "[ERROR] Docker no está listo para iniciar Redis. Activando RUN_INLINE_JOBS=1 (sin colas)."
+      set "RUN_INLINE_JOBS=1"
+    ) else (
+      call :docker_start_redis
+    )
+  )
   call :check_redis 127.0.0.1 6379 15
   if errorlevel 1 (
   call :log "[ERROR] No se pudo establecer Redis. Activando modo RUN_INLINE_JOBS=1 para desarrollo (sin colas)."
@@ -67,12 +86,61 @@ if errorlevel 1 (
   call :log "[INFO] Redis está listo en 6379."
 )
 
-call :log "[INFO] Instalando/verificando dependencias de Python desde requirements.txt..."
-"%ROOT%.venv\Scripts\python.exe" -m pip install -r "%ROOT%requirements.txt" >> "%LOG_FILE%" 2>&1
+rem Preflight DB: asegurarse que Postgres esté disponible (o activar fallback SQLite)
+set "DB_HOST=127.0.0.1"
+set "DB_PORT=5433"
+set "DB_FALLBACK_SQLITE=sqlite+aiosqlite:///dev.db"
+set "_USE_SQLITE=0"
+call :log "[INFO] Verificando Postgres en %DB_HOST%:%DB_PORT%..."
+call :check_tcp %DB_HOST% %DB_PORT% 25
 if errorlevel 1 (
-  call :log "[ERROR] Falló la instalación de dependencias de Python. Revisa %LOG_FILE%."
-  pause
-  exit /b 1
+  if "%SKIP_DOCKER%"=="1" (
+    call :log "[WARN] Postgres no responde y SKIP_DOCKER=1. Forzando modo local SQLite: %DB_FALLBACK_SQLITE%"
+    set "DB_URL=%DB_FALLBACK_SQLITE%"
+    set "_USE_SQLITE=1"
+  ) else (
+    call :log "[WARN] Postgres no responde en %DB_HOST%:%DB_PORT%. Intentando iniciar Docker Desktop y contenedor 'db'..."
+    call :ensure_docker 120
+    if errorlevel 1 (
+      call :log "[ERROR] Docker no está disponible. Se activará modo local con SQLite: %DB_FALLBACK_SQLITE%"
+      set "DB_URL=%DB_FALLBACK_SQLITE%"
+      set "_USE_SQLITE=1"
+    ) else (
+      call :docker_up_db
+      call :check_tcp %DB_HOST% %DB_PORT% 60
+      if errorlevel 1 (
+        call :log "[ERROR] No fue posible establecer Postgres en %DB_HOST%:%DB_PORT% tras reintentos. Activando fallback SQLite."
+        set "DB_URL=%DB_FALLBACK_SQLITE%"
+        set "_USE_SQLITE=1"
+      ) else (
+        call :log "[INFO] Postgres respondió en %DB_HOST%:%DB_PORT%."
+      )
+    set "__NPIPE_WARNED=0"
+    :_wait_docker
+    for /f "tokens=*" %%L in ('docker info 2^>^&1') do set "__DINFO=%%L"
+    if "%ERRORLEVEL%"=="0" (
+      endlocal & exit /b 0
+    ) else (
+      echo !__DINFO! | findstr /I /C:"dockerDesktopLinuxEngine" /C:"The system cannot find the file specified" >NUL
+      if !ERRORLEVEL! EQU 0 (
+        if "!__NPIPE_WARNED!"=="0" (
+          call :log "[WARN] Docker Desktop named pipe no disponible (posible GUI/WSL en transición). Mensaje: !__DINFO!"
+          set "__NPIPE_WARNED=1"
+        )
+        set "DOCKER_NPIPE_BROKEN=1"
+      ) else (
+        if !__NPIPE_WARNED! EQU 0 (
+          call :log "[DEBUG] Esperando a Docker Desktop (el engine aún no responde)."
+          set "__NPIPE_WARNED=1"
+        )
+      )
+      if %_ELAP% GEQ %_TO% (
+        endlocal & exit /b 1
+      )
+      timeout /t 2 /nobreak >NUL
+      set /a _ELAP+=2
+      goto _wait_docker
+    )
 )
 
 call :log "[INFO] Verificando instalación de Playwright..."
@@ -94,11 +162,15 @@ if not exist "%ROOT%frontend\node_modules" (
   popd
 )
 
-call :log "[INFO] Ejecutando migraciones..."
-call "%~dp0scripts\run_migrations.cmd"
-if errorlevel 1 (
-  call :log "[ERROR] No se iniciará el servidor debido a errores de migración."
-  goto :eof
+if "%_USE_SQLITE%"=="1" (
+  call :log "[INFO] Modo SQLite DEV activado: se omiten migraciones Alembic (solo desarrollo)."
+) else (
+  call :log "[INFO] Ejecutando migraciones..."
+  call "%~dp0scripts\run_migrations.cmd"
+  if errorlevel 1 (
+    call :log "[ERROR] No se iniciará el servidor debido a errores de migración."
+    goto :eof
+  )
 )
 
 call :log "[INFO] Iniciando backend..."
@@ -214,6 +286,8 @@ where docker >NUL 2>&1
 if errorlevel 1 (
   endlocal & exit /b 1
 )
+call :log "[DEBUG] Ejecutando: docker ps -a --filter name=/growen-redis"
+docker ps -a --filter "name=^/growen-redis$" --format "{{.Names}}" >> "%LOG_FILE%" 2>&1
 for /f %%N in ('docker ps -a --filter "name=^/growen-redis$" --format "{{.Names}}" 2^>NUL') do set "__REDIS_NAME=%%N"
 if not defined __REDIS_NAME (
   call :log "[INFO] Creando contenedor redis:7-alpine..."
@@ -222,5 +296,73 @@ if not defined __REDIS_NAME (
   call :log "[INFO] Iniciando contenedor existente 'growen-redis'..."
   docker start growen-redis >> "%LOG_FILE%" 2>&1
 )
+endlocal & exit /b 0
+
+:check_tcp
+REM Uso: call :check_tcp <host> <port> [retries]
+setlocal EnableDelayedExpansion
+set "_H=%~1"
+set "_P=%~2"
+set "_T=%~3"
+if not defined _T set "_T=20"
+set /a _I=0
+:_ct_loop
+set /a _I+=1
+set "__OK="
+for /f %%R in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "$h='%_H%';$p=%_P%;$c=New-Object System.Net.Sockets.TcpClient;$iar=$c.BeginConnect($h,$p,$null,$null);$ok=$iar.AsyncWaitHandle.WaitOne(500); if($ok -and $c.Connected){$c.Close(); 'OK'} else{$c.Close(); 'FAIL'}"') do set "__OK=%%R"
+if /I "!__OK!"=="OK" ( endlocal & exit /b 0 )
+if !_I! GEQ %_T% (
+  endlocal & exit /b 1
+)
+timeout /t 1 /nobreak >NUL
+goto _ct_loop
+
+:ensure_docker
+REM Uso: call :ensure_docker [timeout_sec]
+setlocal EnableDelayedExpansion
+set "_TO=%~1"
+if not defined _TO set "_TO=90"
+where docker >NUL 2>&1
+if errorlevel 1 (
+  call :log "[WARN] Docker CLI no encontrado en PATH. Intentando iniciar Docker Desktop..."
+)
+for /f "delims=" %%E in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue; if($p){'RUNNING'} else {'STOP'}"') do set "__DSTATE=%%E"
+if /I "!__DSTATE!"=="STOP" (
+  call :log "[INFO] Iniciando Docker Desktop..."
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$exe=Join-Path $env:ProgramFiles 'Docker\\Docker\\Docker Desktop.exe'; if(Test-Path $exe){ Start-Process -FilePath $exe } else { exit 2 }" >NUL 2>&1
+)
+set /a _ELAP=0
+:_wait_docker
+docker info >NUL 2>&1
+if "%ERRORLEVEL%"=="0" (
+  endlocal & exit /b 0
+) else (
+  if %_ELAP% GEQ %_TO% (
+    endlocal & exit /b 1
+  )
+  timeout /t 2 /nobreak >NUL
+  set /a _ELAP+=2
+  goto _wait_docker
+)
+
+:docker_up_db
+setlocal EnableDelayedExpansion
+where docker >NUL 2>&1
+if errorlevel 1 ( endlocal & exit /b 1 )
+call :log "[INFO] Levantando contenedor de base de datos (docker compose up -d db)..."
+docker compose up -d db >> "%LOG_FILE%" 2>&1
+endlocal & exit /b 0
+
+:restart_docker_gui
+REM Reinicia solo la GUI de Docker Desktop (no toca el servicio/engine)
+setlocal EnableDelayedExpansion
+for /f "delims=" %%E in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue; if($p){'RUNNING'} else {'STOP'}"') do set "__DSTATE=%%E"
+if /I "!__DSTATE!"=="RUNNING" (
+  call :log "[INFO] Reiniciando GUI de Docker Desktop (sin tocar contenedores)..."
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue" >NUL 2>&1
+  timeout /t 1 /nobreak >NUL
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$exe=Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'; if(Test-Path $exe){ Start-Process -FilePath $exe }" >NUL 2>&1
+call :log "[INFO] GUI de Docker Desktop lanzada."
 endlocal & exit /b 0
 
