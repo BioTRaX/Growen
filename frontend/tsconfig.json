@@ -10,10 +10,13 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "strict": true
+    "strict": true,
+    "types": ["vitest/globals", "@testing-library/jest-dom"]
   },
-  "include": ["src"],
-  "exclude": [
+  "include": [
+    "src",
+    "vitest.setup.ts",
+    "vitest.config.ts",
     "src/**/*.spec.ts",
     "src/**/*.spec.tsx",
     "src/**/*.test.ts",
