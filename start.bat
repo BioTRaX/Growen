@@ -69,8 +69,8 @@ call :log "[INFO] Verificando Redis en 127.0.0.1:6379..."
 call :check_redis 127.0.0.1 6379 8
 if errorlevel 1 (
   call :log "[WARN] Redis no responde. Intentando iniciar contenedor 'growen-redis'..."
-  rem Asegurar que Docker esté listo antes de usar 'docker run'
-  call :ensure_docker 60
+  rem Asegurar que Docker esté estable antes de usar 'docker run'
+  call :ensure_docker 60 3
   if errorlevel 1 (
     call :log "[ERROR] Docker no está listo para iniciar Redis. Activando RUN_INLINE_JOBS=1 (sin colas)."
     set "RUN_INLINE_JOBS=1"
@@ -83,6 +83,12 @@ if errorlevel 1 (
   set "RUN_INLINE_JOBS=1"
   ) else (
   call :log "[INFO] Redis está listo en 6379."
+  )
+  rem Revalidar engine tras operación de Redis (algunos hosts pierden el pipe en este punto)
+  call :ensure_docker 20 2
+  if errorlevel 1 (
+    call :log "[FATAL] Docker Desktop perdió estabilidad tras operar Redis (named pipe/engine). Abortando para evitar corrupción de estado."
+    goto :fatal
   )
 ) else (
   call :log "[INFO] Redis está listo en 6379."
@@ -97,7 +103,7 @@ call :log "[INFO] Verificando Postgres en %DB_HOST%:%DB_PORT%..."
 call :check_tcp %DB_HOST% %DB_PORT% 25
 if errorlevel 1 (
   call :log "[WARN] Postgres no responde en %DB_HOST%:%DB_PORT%. Intentando iniciar Docker Desktop y contenedor 'db'..."
-  call :ensure_docker 120
+  call :ensure_docker 120 3
   if errorlevel 1 (
     if "%REQUIRE_DOCKER_DB%"=="1" (
       call :log "[FATAL] Docker no está disponible y REQUIRE_DOCKER_DB=1. Abortando sin fallback a SQLite."
@@ -151,11 +157,13 @@ if not exist "%ROOT%frontend\node_modules" (
   if errorlevel 1 (
   call :log "[ERROR] Falló 'npm install' en el frontend. Revisa %LOG_FILE%."
     pause
-    exit /b 1
-  )
+    :ensure_docker
+    REM Uso: call :ensure_docker [timeout_sec] [stable_checks]
   popd
 )
 
+    set "_STABLE=%~2"
+    if not defined _STABLE set "_STABLE=2"
 if "%_USE_SQLITE%"=="1" (
   call :log "[INFO] Modo SQLite DEV activado: se omiten migraciones Alembic (solo desarrollo)."
 ) else (
@@ -167,10 +175,18 @@ if "%_USE_SQLITE%"=="1" (
   )
 )
 
+    set /a __OKS=0
 call :log "[INFO] Iniciando backend..."
 rem Activar modo DEBUG para backend y devolver info de debug en import
 set "LOG_LEVEL=DEBUG"
-set "IMPORT_RETURN_DEBUG=1"
+      set /a __OKS+=1
+      if !__OKS! GEQ %_STABLE% (
+        endlocal & exit /b 0
+      ) else (
+        timeout /t 2 /nobreak >NUL
+        set /a _ELAP+=2
+        goto _wait_docker
+      )
 start "Growen API" cmd /k "set LOG_LEVEL=%LOG_LEVEL% && set IMPORT_RETURN_DEBUG=%IMPORT_RETURN_DEBUG% && set PATH=%VENV%;%PATH% && echo [BOOT] Lanzando uvicorn en puerto 8000 & "%VENV%\python.exe" -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000 --loop asyncio --http h11 --log-level debug >> "%LOG_DIR%\backend.log" 2>&1"
 
 call :log "[INFO] Preparando frontend..."
@@ -179,11 +195,13 @@ if exist "%ROOT%frontend\package.json" (
   pushd "%ROOT%frontend"
   if "!VITE_BUILD!"=="1" (
     call :log "[INFO] Ejecutando build del frontend (VITE_BUILD=1)..."
+        set /a __OKS=0
     npm run build >> "%LOG_DIR%\frontend.log" 2>&1
   ) else (
   REM Si no hay assets, también build
     if not exist "%ROOT%frontend\dist\assets" (
       call :log "[INFO] Assets no encontrados; ejecutando build del frontend..."
+        set /a __OKS=0
       npm run build >> "%LOG_DIR%\frontend.log" 2>&1
     ) else (
       call :log "[INFO] Frontend ya compilado (dist/assets presente)."
