@@ -17,6 +17,14 @@
 - Asignar el mínimo de permisos necesarios a cada rol.
 - Consultar documentación funcional para detalles específicos.
 
+## Salida a Internet (IA y MCP Web Search)
+- Las llamadas externas de IA están controladas por flags de entorno:
+	- `ai_allow_external` (configuración global): si es `false`, se bloquean integraciones externas.
+	- `AI_USE_WEB_SEARCH`: habilita la búsqueda web MCP durante el enriquecimiento de productos.
+- La búsqueda web MCP (MVP) consulta un motor público (DuckDuckGo HTML por defecto) y retorna títulos/URLs/snippets. Recomendación para producción: usar un proveedor con SLA y caching.
+- Solo roles `admin` y `colaborador` pueden invocar el enriquecimiento IA y, por ende, la búsqueda web cuando la flag está activa.
+- Auditoría: se registran `web_search_query` y `web_search_hits` por cada enriquecimiento, además del `prompt_hash` y archivos de fuentes.
+
 ## Cifrado y PDFs (Plan ARC4)
 Durante la importación de remitos PDF (ej. proveedor Santa Planta) se observó un `CryptographyDeprecationWarning` relacionado con ARC4. Aunque la aplicación no solicita explícitamente RC4/ARC4, algunas librerías pueden intentar compatibilidad retro.
 

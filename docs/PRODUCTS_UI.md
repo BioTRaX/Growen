@@ -35,6 +35,25 @@
 
 ## Detalle de Producto
 - Visualización del SKU: si el producto está vinculado a un canónico y éste posee `sku_custom` (o `ng_sku`), se muestra ese SKU preferentemente; si no, se muestra `sku_root` del producto interno.
+ - Acción “Enriquecer con IA”: botón visible sólo si el usuario tiene permisos de edición (admin/colaborador) y el producto tiene título. Al hacer clic ejecuta `POST /products/{id}/enrich`, muestra un toast de éxito/error y refresca los datos de la ficha. Estilo dark con borde fucsia (accentPink) y texto `#f5d0fe`.
+ - Menú de acciones IA: junto al botón principal, la UI muestra un menú con:
+   - “Reenriquecer (forzar)”: `POST /products/{id}/enrich?force=true` (reemplaza fuentes y reescribe descripción/campos técnicos si vienen en la respuesta).
+   - “Borrar enriquecimiento”: `DELETE /products/{id}/enrichment` (limpia descripción, campos técnicos y fuentes asociadas).
+ - Descripción enriquecida: se muestra en una card dedicada y puede editarse por Admin/Colab (persistencia vía `PATCH /products/{id}` con `description_html`).
+ - Datos técnicos (Admin/Colab): `weight_kg`, `height_cm`, `width_cm`, `depth_cm`, `market_price_reference` con edición inline. La persistencia se realiza vía `PATCH /products/{id}` y se validan valores numéricos no negativos.
+ - Fuentes consultadas: si `enrichment_sources_url` está presente en el producto, aparece el botón “Fuentes consultadas” que abre un modal con el contenido del `.txt` y enlace de descarga.
+ - Metadatos de enriquecimiento: el backend expone `last_enriched_at` (ISO UTC) y `enriched_by` (id de usuario) para trazabilidad; la UI puede mostrarlos en una sección de “Actividad reciente” (opcional).
+
+## Acciones masivas
+- En el listado de Stock (`/stock`), al seleccionar múltiples productos aparece el botón “Enriquecer N producto(s) con IA)”.
+  - Llama `POST /products/enrich-multiple` con `{ ids: [...], force?: boolean }` (límite de 20 IDs por solicitud).
+  - La UI limpia la selección y refresca el listado al finalizar.
+
+## Flags y comportamiento IA
+- El enriquecimiento IA puede adjuntar resultados de búsqueda web (MCP) al prompt cuando:
+  - `AI_USE_WEB_SEARCH=1` y `ai_allow_external=true` (ver configuración), y
+  - Existe rol con permisos (admin/colaborador).
+- Auditoría: se registran `web_search_query` y `web_search_hits` cuando la búsqueda web está activa.
 
 ## Alta/Edición de Producto Canónico
 - Campos: `name`, `brand`, `sku_custom` (opcional), `category_id`, `subcategory_id`.

@@ -13,6 +13,7 @@ import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form
+from datetime import datetime as _dt
 from fastapi.responses import JSONResponse, StreamingResponse
 from io import BytesIO
 from openpyxl import Workbook
@@ -38,6 +39,10 @@ from db.models import (
     PurchaseLine,
 )
 from db.session import get_session
+from agent_core.config import settings
+from ai.router import AIRouter
+from ai.providers.openai_provider import OpenAIProvider
+from ai.types import Task
 from services.auth import require_csrf, require_roles, current_session, SessionData
 
 router = APIRouter(tags=["catalog"])
@@ -2102,6 +2107,14 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
     except Exception:
         pass
     cat_path = await _category_path(session, prod.category_id)
+    # Convertir numéricos Decimal -> float para JSON
+    weight_kg = float(prod.weight_kg) if getattr(prod, "weight_kg", None) is not None else None
+    height_cm = float(prod.height_cm) if getattr(prod, "height_cm", None) is not None else None
+    width_cm = float(prod.width_cm) if getattr(prod, "width_cm", None) is not None else None
+    depth_cm = float(prod.depth_cm) if getattr(prod, "depth_cm", None) is not None else None
+    market_price_reference = (
+        float(prod.market_price_reference) if getattr(prod, "market_price_reference", None) is not None else None
+    )
     return {
         "id": prod.id,
         "title": prod.title,
@@ -2110,6 +2123,14 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
         "sku_root": prod.sku_root,
         "category_path": cat_path,
         "description_html": prod.description_html,
+        "enrichment_sources_url": getattr(prod, "enrichment_sources_url", None),
+        "last_enriched_at": (getattr(prod, "last_enriched_at", None).isoformat() if getattr(prod, "last_enriched_at", None) else None),
+        "enriched_by": getattr(prod, "enriched_by", None),
+        "weight_kg": weight_kg,
+        "height_cm": height_cm,
+        "width_cm": width_cm,
+        "depth_cm": depth_cm,
+        "market_price_reference": market_price_reference,
         "canonical_product_id": canonical_id,
         "canonical_sale_price": canonical_sale,
     "canonical_sku": canonical_sku,
@@ -2165,11 +2186,21 @@ async def list_product_variants(product_id: int, session: AsyncSession = Depends
 class ProductUpdate(BaseModel):
     description_html: str | None = None
     category_id: int | None = None
+    weight_kg: float | None = None
+    height_cm: float | None = None
+    width_cm: float | None = None
+    depth_cm: float | None = None
+    market_price_reference: float | None = None
 
 
 class ProductsDeleteRequest(BaseModel):
     ids: List[int]
     hard: bool = False  # futuro: permitir soft-delete si se agrega flag
+
+
+class EnrichMultipleRequest(BaseModel):
+    ids: List[int]
+    force: bool | None = False
 
 
 @router.patch(
@@ -2192,6 +2223,33 @@ async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncS
             if not cat:
                 raise HTTPException(status_code=400, detail="category_id inválido")
         prod.category_id = int(data["category_id"]) if data["category_id"] is not None else None
+    # Validaciones y asignaciones de campos técnicos
+    def _nonneg_or_none(val, name: str):
+        if val is None:
+            return None
+        try:
+            f = float(val)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"{name} debe ser numérico")
+        if f < 0:
+            raise HTTPException(status_code=400, detail=f"{name} no puede ser negativo")
+        return f
+
+    if "weight_kg" in data:
+        v = _nonneg_or_none(data["weight_kg"], "weight_kg")
+        prod.weight_kg = v
+    if "height_cm" in data:
+        v = _nonneg_or_none(data["height_cm"], "height_cm")
+        prod.height_cm = v
+    if "width_cm" in data:
+        v = _nonneg_or_none(data["width_cm"], "width_cm")
+        prod.width_cm = v
+    if "depth_cm" in data:
+        v = _nonneg_or_none(data["depth_cm"], "depth_cm")
+        prod.depth_cm = v
+    if "market_price_reference" in data:
+        v = _nonneg_or_none(data["market_price_reference"], "market_price_reference")
+        prod.market_price_reference = v
     await session.commit()
     # audit description change
     try:
@@ -2214,6 +2272,456 @@ async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncS
     except Exception:
         pass
     return {"status": "ok"}
+
+
+@router.post(
+    "/products/enrich-multiple",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin", "colaborador"))],
+)
+async def enrich_multiple_products(
+    payload: EnrichMultipleRequest,
+    session: AsyncSession = Depends(get_session),
+    request: Request = None,
+    sess: SessionData = Depends(current_session),
+) -> dict:
+    """Encola/ejecuta enriquecimiento para múltiples productos.
+
+    Reglas:
+    - Máximo 20 IDs por solicitud.
+    - Se ignoran productos sin título.
+    - Si `force` es False, se omiten productos ya enriquecidos (description o fuentes).
+    - Reutiliza el flujo de `enrich_product` (ejecución inline para MVP).
+    """
+    ids = list(dict.fromkeys(payload.ids or []))
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids requerido")
+    if len(ids) > 20:
+        raise HTTPException(status_code=400, detail="Máximo 20 productos por lote")
+
+    enriched = 0
+    skipped = 0
+    errors: list[int] = []
+    for pid in ids:
+        prod = await session.get(Product, pid)
+        if not prod:
+            skipped += 1
+            continue
+
+        # Chequear si ya está en proceso de enriquecimiento
+        if getattr(prod, 'is_enriching', False):
+            errors.append(pid)
+            continue
+
+        title_ok = bool((prod.title or '').strip())
+        if not title_ok:
+            skipped += 1
+            continue
+        already = bool((prod.enrichment_sources_url or '').strip()) or bool((prod.description_html or '').strip())
+        if already and not payload.force:
+            skipped += 1
+            continue
+        try:
+            # reusar la lógica existente
+            await enrich_product(pid, session=session, request=request, sess=sess, force=bool(payload.force))
+            enriched += 1
+        except HTTPException as e:
+            # Si el error es 409 (conflicto), significa que el bloqueo se activó entre el chequeo y la ejecución
+            if e.status_code == 409:
+                skipped += 1
+            errors.append(pid)
+            continue
+        except Exception:
+            errors.append(pid)
+            # continuar con el siguiente sin abortar lote
+            continue
+
+    # Audit resumen de lote
+    try:
+        session.add(
+            AuditLog(
+                action="bulk_enrich",
+                table="products",
+                entity_id=None,
+                meta={
+                    "requested": len(ids),
+                    "enriched": enriched,
+                    "skipped": skipped,
+                    "errors": errors,
+                    "ids": ids,
+                },
+                user_id=sess.user.id if sess and sess.user else None,
+                ip=(request.client.host if request and request.client else None),
+            )
+        )
+        await session.commit()
+    except Exception:
+        pass
+
+    return {"enriched": enriched, "skipped": skipped, "errors": errors}
+
+
+@router.post(
+    "/products/{product_id}/enrich",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin", "colaborador"))],
+)
+async def enrich_product(
+    product_id: int,
+    session: AsyncSession = Depends(get_session),
+    request: Request = None,
+    sess: SessionData = Depends(current_session),
+    force: bool = Query(False),
+) -> dict:
+    """Enriquece un producto usando IA (OpenAI/Ollama vía AIRouter).
+
+    - Requiere rol admin o colaborador.
+    - Valida existencia del producto y título.
+    - Construye un prompt que solicita JSON con claves conocidas.
+    - Actualiza ``description_html`` si viene en la respuesta.
+    - Registra ``AuditLog`` con acción ``enrich_ai``.
+    """
+    prod = await session.get(Product, product_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    print(f"ENTERING ENRICH: {product_id}, is_enriching: {getattr(prod, 'is_enriching', 'NOT_FOUND')}") # DEBUG
+
+    if getattr(prod, 'is_enriching', False):
+        print(f"CONFLICT DETECTED: {product_id}") # DEBUG
+        raise HTTPException(status_code=409, detail="El producto ya está siendo enriquecido. Intente de nuevo en unos momentos.")
+
+    title = (prod.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="El producto no tiene título definido")
+
+    # Adquirir el bloqueo
+    prod.is_enriching = True
+    await session.commit()
+
+    generated_fields = []
+    txt_url = None
+
+    try:
+        # Intento opcional de obtener datos internos vía MCP (SKU de la primera variante)
+        extra_context = None
+        web_search_results = None
+        web_hits = 0
+        web_query = None
+        try:
+            fv = (await session.execute(select(Variant.sku).where(Variant.product_id == product_id).order_by(Variant.id.asc()).limit(1))).scalar_one_or_none()
+            if fv:
+                role = getattr(getattr(sess, 'user', None), 'role', 'colaborador') or 'colaborador'
+                provider = OpenAIProvider()
+                # No depende de API key; es llamada HTTP a MCP server
+                res = await provider.call_mcp_tool(tool_name="get_product_info", parameters={"sku": str(fv), "user_role": role})
+                if isinstance(res, dict) and res:
+                    extra_context = res
+                # Integración opcional de búsqueda web MCP bajo feature flag
+                import os as _os, json as _json
+                use_web = (_os.getenv("AI_USE_WEB_SEARCH", "0").lower() in {"1", "true", "yes"}) and settings.ai_allow_external
+                if use_web:
+                    web_query = title
+                    try:
+                        wres = await provider.call_mcp_web_tool(tool_name="search_web", parameters={"query": web_query, "user_role": role, "max_results": int(_os.getenv("AI_WEB_SEARCH_MAX_RESULTS", "3"))})
+                        if isinstance(wres, dict) and wres:
+                            items = wres.get("items") or []
+                            if isinstance(items, list):
+                                web_hits = len(items)
+                            web_search_results = wres
+                    except Exception:
+                        web_search_results = {"error": "web_search_failed"}
+        except Exception:
+            extra_context = None
+
+        # Prompt de enriquecimiento orientado a JSON estricto
+        schema_hint = (
+            "{"
+            "\"Título del Producto\": string, "
+            "\"Descripción para Nice Grow\": string, "
+            "\"Peso KG\": number|null, "
+            "\"Alto CM\": number|null, "
+            "\"Ancho CM\": number|null, "
+            "\"Profundidad CM\": number|null, "
+            "\"Valor de mercado estimado\": string|null, "
+            "\"Fuentes\": object|null  "
+            "}"
+        )
+        prompt = (
+            "Eres GrowMaster, un asistente de marketing de productos para jardinería y growshops. "
+            "Responde ÚNICAMENTE en JSON válido (sin texto extra, sin markdown, sin ```). "
+            "Completa el siguiente esquema con la mejor información posible, usando tono claro y útil, español latino neutro.\n\n"
+            f"Producto: {title}\n\n"
+            f"Esquema: {schema_hint}\n\n"
+            "Reglas: \n"
+            "- Si no estás seguro de un valor numérico, usa null.\n"
+            "- No inventes datos técnicos; prioriza precisión.\n"
+            "- La 'Descripción para Nice Grow' debe ser breve (2-4 oraciones), clara y orientada a clientes.\n"
+            "- Si dispones de fuentes o referencias, incluye un objeto 'Fuentes' con claves descriptivas y valores URL (http/https)."
+        )
+        if extra_context:
+            try:
+                import json as _json
+                prompt += "\n\nContexto interno (MCP):\n" + _json.dumps(extra_context, ensure_ascii=False)
+            except Exception:
+                pass
+        if web_search_results:
+            try:
+                import json as _json
+                prompt += "\n\nBúsqueda web (MCP) - top resultados:\n" + _json.dumps(web_search_results, ensure_ascii=False)
+            except Exception:
+                pass
+
+        router_ai = AIRouter(settings)
+        raw = router_ai.run(Task.REASONING.value, prompt)
+        # Normalizar respuesta posible con prefijo y/o fences
+        text = raw.strip()
+        if text.startswith("openai:") or text.startswith("ollama:"):
+            text = text.split(":", 1)[1].strip()
+        if text.startswith("```"):
+            text = text.strip("`\n ")
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+
+        import json
+        try:
+            data = json.loads(text)
+        except Exception:
+            raise HTTPException(status_code=502, detail="Respuesta de IA inválida (no JSON)")
+
+        desc_key = "Descripción para Nice Grow"
+        if desc_key not in data or not isinstance(data.get(desc_key), str) or not data.get(desc_key).strip():
+            raise HTTPException(status_code=502, detail="Respuesta de IA inválida (falta descripción)")
+
+        old_desc = getattr(prod, "description_html", None) or ""
+        had_enrichment = bool((prod.enrichment_sources_url or '').strip()) or bool((old_desc or '').strip())
+        prod.description_html = data.get(desc_key).strip()
+
+        # Mapear campos técnicos si vienen en la respuesta
+        def _to_float_or_none(x):
+            if x is None:
+                return None
+            if isinstance(x, (int, float)):
+                return float(x)
+            if isinstance(x, str):
+                # extraer primer número en el string (e.g., "$ 12.345,67" o "12.3 cm")
+                import re
+                s = x.replace(".", "").replace(",", ".") if "," in x and x.count(",") == 1 and x.count(".") > 1 else x
+                m = re.search(r"-?\d+(?:[\.,]\d+)?", s)
+                if m:
+                    try:
+                        return float(m.group(0).replace(",", "."))
+                    except Exception:
+                        return None
+            return None
+
+        generated_fields = ["description_html"]
+        # Claves del JSON de IA
+        kg = _to_float_or_none(data.get("Peso KG"))
+        alto = _to_float_or_none(data.get("Alto CM"))
+        ancho = _to_float_or_none(data.get("Ancho CM"))
+        prof = _to_float_or_none(data.get("Profundidad CM"))
+        mref = _to_float_or_none(data.get("Valor de mercado estimado"))
+        try:
+            if kg is not None and kg >= 0:
+                prod.weight_kg = kg
+                generated_fields.append("weight_kg")
+            if alto is not None and alto >= 0:
+                prod.height_cm = alto
+                generated_fields.append("height_cm")
+            if ancho is not None and ancho >= 0:
+                prod.width_cm = ancho
+                generated_fields.append("width_cm")
+            if prof is not None and prof >= 0:
+                prod.depth_cm = prof
+                generated_fields.append("depth_cm")
+            if mref is not None and mref >= 0:
+                prod.market_price_reference = mref
+                generated_fields.append("market_price_reference")
+        except Exception:
+            pass
+
+        # Manejar fuentes -> generar .txt en MEDIA_ROOT/enrichment_logs y asociar URL pública /media/...
+        sources = None
+        try:
+            # aceptar 'Fuentes' como dict o list de strings
+            if isinstance(data.get("Fuentes"), dict):
+                sources = data.get("Fuentes")
+            elif isinstance(data.get("Fuentes"), list):
+                # convertir a dict numerado
+                lst = [str(x) for x in data.get("Fuentes")]
+                sources = {f"item_{i+1}": url for i, url in enumerate(lst)}
+        except Exception:
+            sources = None
+
+        # Construcción de archivo si hay fuentes
+        txt_url = None
+        try:
+            if sources:
+                ROOT = Path(__file__).resolve().parents[2]  # services/routers -> services -> ROOT
+                media_root = Path(os.getenv("MEDIA_ROOT", str(ROOT / "Devs" / "Imagenes")))
+                # Si viene force y existe un archivo previo, eliminarlo
+                if force and getattr(prod, "enrichment_sources_url", None):
+                    prev_url = str(prod.enrichment_sources_url)
+                    if prev_url.startswith("/media/"):
+                        rel = prev_url[len("/media/"):]
+                        prev_path = media_root / rel
+                        try:
+                            if prev_path.exists():
+                                prev_path.unlink()
+                        except Exception:
+                            pass
+                target_dir = media_root / "enrichment_logs"
+                target_dir.mkdir(parents=True, exist_ok=True)
+                from datetime import datetime as _dt
+                ts = _dt.utcnow().strftime("%Y%m%dT%H%M%SZ")
+                fname = f"product_{product_id}_enrichment_{ts}.txt"
+                fpath = target_dir / fname
+                lines = [
+                    "FUENTES CONSULTADAS - Enriquecimiento IA",
+                    "",
+                    f"Producto: {title}",
+                    f"Fecha: {ts}",
+                    f"Responsable: {sess.user.id if (sess and sess.user) else 'automático'}",
+                    "",
+                ]
+                for k, v in (sources or {}).items():
+                    lines.append(f"--- {k}:")
+                    lines.append(str(v))
+                    lines.append("")
+                fpath.write_text("\n".join(lines), encoding="utf-8")
+                # URL pública
+                txt_url = f"/media/enrichment_logs/{fname}"
+                # Persistir en producto
+                if hasattr(prod, "enrichment_sources_url"):
+                    prod.enrichment_sources_url = txt_url
+            # setear metadatos de trazabilidad de enriquecimiento
+            try:
+                if hasattr(prod, "last_enriched_at"):
+                    prod.last_enriched_at = _dt.utcnow()
+                if hasattr(prod, "enriched_by"):
+                    prod.enriched_by = (sess.user.id if sess and getattr(sess, 'user', None) else None)
+            except Exception:
+                pass
+        except Exception:
+            # No bloquear si falla escritura
+            pass
+
+        # Audit (antes del commit final)
+        prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        session.add(
+            AuditLog(
+                action=("reenrich" if (force or had_enrichment) else "enrich"),
+                table="products",
+                entity_id=product_id,
+                meta={
+                    "fields_generated": generated_fields,
+                    "desc_len_old": len(old_desc or ""),
+                    "desc_len_new": len(prod.description_html or ""),
+                    "num_sources": (len(sources) if sources else 0),
+                    "source_file": txt_url,
+                    "prompt_hash": prompt_hash,
+                    "web_search_query": web_query,
+                    "web_search_hits": web_hits,
+                },
+                user_id=sess.user.id if sess and sess.user else None,
+                ip=(request.client.host if request and request.client else None),
+            )
+        )
+        
+        # Commit principal con todos los datos y el log de auditoría
+        await session.commit()
+
+    finally:
+        # Liberar el bloqueo
+        prod_to_unlock = await session.get(Product, product_id)
+        if prod_to_unlock:
+            prod_to_unlock.is_enriching = False
+            await session.commit()
+
+    return {"status": "ok", "updated": True, "fields": generated_fields, "sources_url": txt_url}
+
+
+@router.delete(
+    "/products/{product_id}/enrichment",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin", "colaborador"))],
+)
+async def delete_product_enrichment(
+    product_id: int,
+    session: AsyncSession = Depends(get_session),
+    request: Request = None,
+    sess: SessionData = Depends(current_session),
+) -> dict:
+    """Elimina los datos enriquecidos por IA para el producto.
+
+    - Limpia description_html, campos técnicos y enrichment_sources_url.
+    - Si existe el archivo .txt de fuentes en MEDIA_ROOT, lo borra.
+    - Registra AuditLog con action "delete_enrichment".
+    """
+    prod = await session.get(Product, product_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    # Borrar archivo de fuentes si existe
+    file_deleted = False
+    prev_url = getattr(prod, "enrichment_sources_url", None)
+    try:
+        if prev_url and isinstance(prev_url, str) and prev_url.startswith("/media/"):
+            ROOT = Path(__file__).resolve().parents[2]
+            media_root = Path(os.getenv("MEDIA_ROOT", str(ROOT / "Devs" / "Imagenes")))
+            rel = prev_url[len("/media/"):]
+            fpath = media_root / rel
+            if fpath.exists():
+                fpath.unlink()
+                file_deleted = True
+    except Exception:
+        file_deleted = False
+
+    # Limpiar campos enriquecidos
+    cleared_fields = []
+    if hasattr(prod, "description_html") and prod.description_html:
+        prod.description_html = None
+        cleared_fields.append("description_html")
+    for fld in ["weight_kg", "height_cm", "width_cm", "depth_cm", "market_price_reference"]:
+        if hasattr(prod, fld) and getattr(prod, fld) is not None:
+            setattr(prod, fld, None)
+            cleared_fields.append(fld)
+    if hasattr(prod, "enrichment_sources_url") and prod.enrichment_sources_url:
+        prod.enrichment_sources_url = None
+        cleared_fields.append("enrichment_sources_url")
+    # limpiar metadatos de enriquecimiento
+    try:
+        if hasattr(prod, "last_enriched_at") and getattr(prod, "last_enriched_at", None) is not None:
+            prod.last_enriched_at = None
+            cleared_fields.append("last_enriched_at")
+        if hasattr(prod, "enriched_by") and getattr(prod, "enriched_by", None) is not None:
+            prod.enriched_by = None
+            cleared_fields.append("enriched_by")
+    except Exception:
+        pass
+
+    await session.commit()
+
+    # Audit
+    try:
+        session.add(
+            AuditLog(
+                action="delete_enrichment",
+                table="products",
+                entity_id=product_id,
+                meta={
+                    "product_title": getattr(prod, "title", None),
+                    "file_deleted": file_deleted,
+                    "prev_sources_url": prev_url,
+                    "cleared_fields": cleared_fields,
+                },
+                user_id=sess.user.id if sess and sess.user else None,
+                ip=(request.client.host if request and request.client else None),
+            )
+        )
+        await session.commit()
+    except Exception:
+        pass
+
+    return {"status": "ok", "deleted": True}
 
 
 @router.get(

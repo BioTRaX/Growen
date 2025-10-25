@@ -36,6 +36,46 @@ REM Backoff si DB flappea tras PRE-FLIGHT (segundos de espera antes de tocar Doc
 set "DB_FLAP_BACKOFF_SEC=%DB_FLAP_BACKOFF_SEC%"
 if not defined DB_FLAP_BACKOFF_SEC set "DB_FLAP_BACKOFF_SEC=10"
 
+REM Política: si en PRE-FLIGHT la DB estaba OK, evitar tocar Docker aunque luego falle (flap persistente)
+set "DB_NO_TOUCH_IF_PRE_OK=%DB_NO_TOUCH_IF_PRE_OK%"
+if not defined DB_NO_TOUCH_IF_PRE_OK set "DB_NO_TOUCH_IF_PRE_OK=1"
+
+REM Modo adjunto al stack Docker (no iniciar uvicorn local ni build frontend)
+set "USE_DOCKER_STACK=%USE_DOCKER_STACK%"
+if not defined USE_DOCKER_STACK set "USE_DOCKER_STACK=1"
+
+if "%USE_DOCKER_STACK%"=="1" (
+  call :log "[INFO] Modo Docker Stack habilitado (USE_DOCKER_STACK=1). Verificando Docker Desktop..."
+  call :ensure_docker 45 2
+  if errorlevel 1 (
+    call :log "[FATAL] Docker Desktop no está activo o estable. Inícialo y reintenta."
+    goto :fatal
+  )
+  set "ALLOW_PORT_BUSY=1"
+  call :docker_snapshot "pre"
+  call :log "[INFO] Validando puertos del stack (API 8000, DB 5433, Frontend 5173 opcional)..."
+  call :check_tcp 127.0.0.1 5433 3
+  if errorlevel 1 (
+    call :log "[WARN] DB 5433 no responde. Inicia/recupera el contenedor de Postgres desde Docker Desktop."
+  ) else (
+    call :log "[INFO] DB 5433 responde (Docker)."
+  )
+  call :check_tcp 127.0.0.1 8000 3
+  if errorlevel 1 (
+    call :log "[WARN] API 8000 no responde. Inicia el contenedor 'api' (growen-api-1)."
+  ) else (
+    call :log "[INFO] API 8000 responde (Docker)."
+  )
+  call :check_tcp 127.0.0.1 5173 1
+  if errorlevel 1 (
+    call :log "[INFO] Frontend en 5173 no detectado; si usas frontend en Docker, encendelo desde Docker Desktop."
+  ) else (
+    call :log "[INFO] Frontend 5173 responde (Docker)."
+  )
+  call :log "[INFO] Modo Docker activo: no se iniciará uvicorn local ni build del frontend. Usa los contenedores ya levantados."
+  goto :eof
+)
+
 REM === PRE-FLIGHT: diagnóstico antes de iniciar ===
 call :log "[INFO] ===== PRE-FLIGHT: diagnóstico inicial ====="
 call :preflight_ports
@@ -124,41 +164,47 @@ if errorlevel 1 (
     if "%ERRORLEVEL%"=="0" (
       call :log "[INFO] Postgres volvió a responder en %DB_HOST%:%DB_PORT% tras backoff. No se tocará Docker."
     ) else (
-      call :log "[WARN] Postgres sigue sin responder tras backoff. Intentando iniciar Docker Desktop y contenedor 'db'..."
-      call :ensure_docker 120 3
-      if errorlevel 1 (
-        if "%REQUIRE_DOCKER_DB%"=="1" (
-          call :log "[FATAL] Docker no está disponible y REQUIRE_DOCKER_DB=1. Abortando sin fallback a SQLite."
-          goto :fatal
-        ) else (
-          if "%ALLOW_SQLITE_FALLBACK%"=="1" (
-            call :log "[ERROR] Docker no está disponible. Se activará modo local con SQLite: %DB_FALLBACK_SQLITE% (ALLOW_SQLITE_FALLBACK=1)"
-            set "DB_URL=%DB_FALLBACK_SQLITE%"
-            set "_USE_SQLITE=1"
-          ) else (
-            call :log "[FATAL] Docker no disponible, y ALLOW_SQLITE_FALLBACK=0. Abortando."
-            goto :fatal
-          )
-        )
+      if "%DB_NO_TOUCH_IF_PRE_OK%"=="1" (
+        call :log "[FATAL] Postgres sigue sin responder tras backoff, pero DB_NO_TOUCH_IF_PRE_OK=1. No se tocará Docker para evitar romper el engine."
+        call :log "[INFO] Sugerencias: aumentar DB_FLAP_BACKOFF_SEC (p.ej. 30-60), o reiniciar Docker Desktop manualmente y reintentar."
+        goto :fatal
       ) else (
-        call :docker_up_db
-        call :pg_ready_via_compose 60
+        call :log "[WARN] Postgres sigue sin responder tras backoff. Intentando iniciar Docker Desktop y contenedor 'db'..."
+        call :ensure_docker 120 3
         if errorlevel 1 (
           if "%REQUIRE_DOCKER_DB%"=="1" (
-            call :log "[FATAL] Contenedor 'db' no saludable tras timeout y REQUIRE_DOCKER_DB=1. Abortando."
+            call :log "[FATAL] Docker no está disponible y REQUIRE_DOCKER_DB=1. Abortando sin fallback a SQLite."
             goto :fatal
           ) else (
             if "%ALLOW_SQLITE_FALLBACK%"=="1" (
-              call :log "[ERROR] Postgres en Docker no quedó saludable. Activando fallback SQLite (ALLOW_SQLITE_FALLBACK=1)."
+              call :log "[ERROR] Docker no está disponible. Se activará modo local con SQLite: %DB_FALLBACK_SQLITE% (ALLOW_SQLITE_FALLBACK=1)"
               set "DB_URL=%DB_FALLBACK_SQLITE%"
               set "_USE_SQLITE=1"
             ) else (
-              call :log "[FATAL] Postgres en Docker no quedó saludable y ALLOW_SQLITE_FALLBACK=0. Abortando."
+              call :log "[FATAL] Docker no disponible, y ALLOW_SQLITE_FALLBACK=0. Abortando."
               goto :fatal
             )
           )
         ) else (
-          call :log "[INFO] Postgres respondió en %DB_HOST%:%DB_PORT% y el contenedor reporta saludable."
+          call :docker_up_db
+          call :pg_ready_via_compose 60
+          if errorlevel 1 (
+            if "%REQUIRE_DOCKER_DB%"=="1" (
+              call :log "[FATAL] Contenedor 'db' no saludable tras timeout y REQUIRE_DOCKER_DB=1. Abortando."
+              goto :fatal
+            ) else (
+              if "%ALLOW_SQLITE_FALLBACK%"=="1" (
+                call :log "[ERROR] Postgres en Docker no quedó saludable. Activando fallback SQLite (ALLOW_SQLITE_FALLBACK=1)."
+                set "DB_URL=%DB_FALLBACK_SQLITE%"
+                set "_USE_SQLITE=1"
+              ) else (
+                call :log "[FATAL] Postgres en Docker no quedó saludable y ALLOW_SQLITE_FALLBACK=0. Abortando."
+                goto :fatal
+              )
+            )
+          ) else (
+            call :log "[INFO] Postgres respondió en %DB_HOST%:%DB_PORT% y el contenedor reporta saludable."
+          )
         )
       )
     )
@@ -332,7 +378,9 @@ if !_I! GEQ %_T% (
   endlocal & exit /b 1
 )
 timeout /t 0 /nobreak >NUL
-:ensure_docker
+goto _cr_loop
+:ensure_docker_old
+REM [DEPRECADO] bloque antiguo no utilizado; mantenido solo como referencia
 REM Uso: call :ensure_docker [timeout_sec] [stable_checks]
 setlocal EnableDelayedExpansion
 set "_TO=%~1"
@@ -467,10 +515,13 @@ timeout /t 1 /nobreak >NUL
 goto _ct_loop
 
 :ensure_docker
-REM Uso: call :ensure_docker [timeout_sec]
+REM Uso: call :ensure_docker [timeout_sec] [stable_checks]
 setlocal EnableDelayedExpansion
 set "_TO=%~1"
 if not defined _TO set "_TO=90"
+set "_STABLE=%~2"
+if not defined _STABLE set "_STABLE=2"
+
 where docker >NUL 2>&1
 if errorlevel 1 (
   call :log "[WARN] Docker CLI no encontrado en PATH. Intentando iniciar Docker Desktop..."
@@ -478,15 +529,24 @@ if errorlevel 1 (
 for /f "delims=" %%E in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue; if($p){'RUNNING'} else {'STOP'}"') do set "__DSTATE=%%E"
 if /I "!__DSTATE!"=="STOP" (
   call :log "[INFO] Iniciando Docker Desktop..."
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$exe=Join-Path $env:ProgramFiles 'Docker\\Docker\\Docker Desktop.exe'; if(Test-Path $exe){ Start-Process -FilePath $exe } else { exit 2 }" >NUL 2>&1
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$exe=Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'; if(Test-Path $exe){ Start-Process -FilePath $exe } else { exit 2 }" >NUL 2>&1
 )
 set /a _ELAP=0
+set /a __OKS=0
 set "__NPIPE_WARNED=0"
 :_wait_docker
 for /f "tokens=*" %%L in ('docker info 2^>^&1') do set "__DINFO=%%L"
 if "%ERRORLEVEL%"=="0" (
-  endlocal & exit /b 0
+  set /a __OKS+=1
+  if !__OKS! GEQ %_STABLE% (
+    endlocal & exit /b 0
+  ) else (
+    timeout /t 1 /nobreak >NUL
+    set /a _ELAP+=1
+    goto _wait_docker
+  )
 ) else (
+  set /a __OKS=0
   echo !__DINFO! | findstr /I /C:"dockerDesktopLinuxEngine" /C:"The system cannot find the file specified" >NUL
   if !ERRORLEVEL! EQU 0 (
     if "!__NPIPE_WARNED!"=="0" (

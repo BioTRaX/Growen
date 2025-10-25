@@ -65,6 +65,34 @@ Seguimiento (pendiente y mejoras)
 Notas
 - Esta corrección no afecta entornos locales fuera de Docker; aplica sólo al servicio API dentro del compose.
 
+### 2025-10-25 · Inestabilidad Docker Desktop/WSL al iniciar (RESUELTO)
+
+Contexto
+- En Windows 11 con Docker Desktop (WSL2), el arranque inicial podía “romper” el engine: desaparecía el named pipe y `docker info`/`docker ps` fallaban intermitentemente.
+- El patrón observado: durante estados transicionales del engine (WSL levantando/recuperando), invocar `docker compose up` o tocar servicios forzaba el flap del engine.
+
+Causa raíz
+- Condición de carrera al “tocar” Docker en medio de la recuperación del engine WSL: la primera operación (`compose up`/`run`) disparaba un cambio de estado del engine que invalidaba la conexión (named pipe) y dejaba la CLI a medio camino.
+- Efecto cascada: start.bat detectaba la DB caída, intentaba levantarla vía compose, y ese toque temprano agravaba la inestabilidad del engine.
+
+Solución aplicada (hardening de arranque)
+- `ensure_docker` con verificación estricta: requiere varios éxitos consecutivos de `docker info` y presencias del named pipe antes de continuar.
+- “No tocar Docker” si el PRE-FLIGHT vio la DB OK: `DB_NO_TOUCH_IF_PRE_OK=1` (por defecto). Evita hacer `compose up db` tras un flap puntual cuando la DB ya estaba sana al inicio.
+- Backoff ante flap de DB: `DB_FLAP_BACKOFF_SEC` (10 por defecto, configurable a 30–60 en entornos con latencias mayores).
+- Nuevo modo por defecto “Docker Stack”: `USE_DOCKER_STACK=1`
+  - Adjunta a los contenedores ya levantados.
+  - No inicia uvicorn local ni compila el frontend.
+  - Valida puertos 8000 (API), 5433 (DB), 5173 (FE opcional) y aborta con mensaje claro si algo está caído.
+- Forense mejorado: snapshots de estado en PRE/POST (salvados en `logs/start.log`): `docker info/ps`, estado WSL, presencia de named pipe, probes de puertos, `pg_isready`.
+
+Resultados
+- El arranque dejó de “romper” Docker Desktop cuando el engine estaba inestable.
+- Flujo estable para acoplarse al stack ya corriendo sin efectos colaterales.
+
+Notas operativas
+- Si el engine está realmente inestable, preferir reiniciar Docker Desktop/WSL y reintentar. El script aborta con mensajes explícitos en esos casos.
+- Flags relevantes: `USE_DOCKER_STACK`, `DB_NO_TOUCH_IF_PRE_OK`, `DB_FLAP_BACKOFF_SEC`, `REQUIRE_DOCKER_DB`.
+
 ## Métricas (admin)
 
 - Endpoint: `GET /admin/services/metrics/bug-reports` (rol requerido: admin)

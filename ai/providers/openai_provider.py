@@ -171,6 +171,28 @@ class OpenAIProvider(ILLMProvider):
             logging.exception("Excepción inesperada invocando MCP tool=%s", tool_name)
             return {"error": "tool_internal_failure"}
 
+    async def call_mcp_web_tool(self, *, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any] | str:
+        """Invoca el servidor MCP de búsqueda web (MVP) de forma resiliente.
+
+        URL por defecto: `MCP_WEB_SEARCH_URL` o `http://mcp_web_search:8002/invoke_tool`.
+        Maneja errores de red devolviendo estructura con `error`.
+        """
+        mcp_url = os.getenv("MCP_WEB_SEARCH_URL", "http://mcp_web_search:8002/invoke_tool")
+        payload = {"tool_name": tool_name, "parameters": parameters}
+        try:
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                resp = await client.post(mcp_url, json=payload)
+                if resp.status_code != 200:
+                    logging.warning("MCP(web) respondió status=%s detail=%s", resp.status_code, resp.text[:200])
+                    return {"error": "tool_call_failed", "status": resp.status_code}
+                return resp.json().get("result", {})
+        except httpx.RequestError as e:
+            logging.error("Fallo de red MCP(web) tool=%s: %s", tool_name, e)
+            return {"error": "tool_network_failure"}
+        except Exception:
+            logging.exception("Excepción inesperada invocando MCP(web) tool=%s", tool_name)
+            return {"error": "tool_internal_failure"}
+
     async def chat_with_tools(self, *, prompt: str, user_role: str) -> str:
         """Ejecuta un ciclo de tool-calling con OpenAI y el servidor MCP.
 

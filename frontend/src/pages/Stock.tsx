@@ -16,6 +16,7 @@ import { generateCatalog, headLatestCatalog } from '../services/catalogs'
 import { baseURL as base } from '../services/http'
 import CatalogHistoryModal from '../components/CatalogHistoryModal'
 import { useToast } from '../components/ToastProvider'
+import http from '../services/http'
 
 export default function Stock() {
   const { push } = useToast()
@@ -47,6 +48,7 @@ export default function Stock() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [filling, setFilling] = useState(false)
+  const [bulkEnriching, setBulkEnriching] = useState(false)
   const toggleSelect = (id: number) => {
     setSelected(prev => {
       const next = new Set(prev)
@@ -166,6 +168,24 @@ export default function Stock() {
   <button className="btn" disabled={!items.length} onClick={toggleSelectAllOnPage}>{selected.size === items.length && items.length > 0 ? 'Deseleccionar página' : 'Seleccionar página'}</button>
   <button className="btn-secondary" disabled={!selected.size} onClick={clearSelection}>Limpiar selección</button>
   <button className="btn" disabled={!selected.size} onClick={() => setShowDeleteConfirm(true)}>Borrar seleccionados</button>
+  {canEdit && selected.size > 0 && (
+    <button className="btn" disabled={bulkEnriching} onClick={async () => {
+      try {
+        setBulkEnriching(true)
+        const ids = Array.from(selected)
+        await http.post('/products/enrich-multiple', { ids })
+        push({ kind: 'success', message: 'Productos enviados a enriquecimiento' })
+        clearSelection()
+        // refrescar página 1
+        setPage(1)
+        setItems([])
+      } catch (e: any) {
+        push({ kind: 'error', message: e?.response?.data?.detail || 'Error al enriquecer productos' })
+      } finally {
+        setBulkEnriching(false)
+      }
+    }}>Enriquecer {selected.size} producto(s) con IA</button>
+  )}
   <button className="btn" onClick={() => setShowHistory(true)}>Histórico catálogos</button>
     <button className="btn-dark" onClick={() => {
       const params = new URLSearchParams()
