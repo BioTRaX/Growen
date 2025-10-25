@@ -28,6 +28,10 @@ if not defined REQUIRE_DOCKER_DB set "REQUIRE_DOCKER_DB=1"
 set "ALLOW_SQLITE_FALLBACK=%ALLOW_SQLITE_FALLBACK%"
 if not defined ALLOW_SQLITE_FALLBACK set "ALLOW_SQLITE_FALLBACK=0"
 
+REM Redis opcional por defecto (evitar tocar Docker si no hace falta)
+set "REQUIRE_REDIS=%REQUIRE_REDIS%"
+if not defined REQUIRE_REDIS set "REQUIRE_REDIS=0"
+
 REM === PRE-FLIGHT: diagnóstico antes de iniciar ===
 call :log "[INFO] ===== PRE-FLIGHT: diagnóstico inicial ====="
 call :preflight_ports
@@ -71,27 +75,32 @@ rem Asegurar Redis en 6379 (necesario para Dramatiq)
 call :log "[INFO] Verificando Redis en 127.0.0.1:6379..."
 call :check_redis 127.0.0.1 6379 8
 if errorlevel 1 (
-  call :log "[WARN] Redis no responde. Intentando iniciar contenedor 'growen-redis'..."
-  rem Asegurar que Docker esté estable antes de usar 'docker run'
-  call :ensure_docker 60 3
-  if errorlevel 1 (
-    call :log "[ERROR] Docker no está listo para iniciar Redis. Activando RUN_INLINE_JOBS=1 (sin colas)."
+  if "%REQUIRE_REDIS%"=="1" (
+    call :log "[WARN] Redis no responde y REQUIRE_REDIS=1. Intentando iniciar contenedor 'growen-redis'..."
+    rem Asegurar que Docker esté estable antes de usar 'docker run'
+    call :ensure_docker 60 3
+    if errorlevel 1 (
+      call :log "[ERROR] Docker no está listo para iniciar Redis. Activando RUN_INLINE_JOBS=1 (sin colas)."
+      set "RUN_INLINE_JOBS=1"
+    ) else (
+      call :docker_start_redis
+    )
+    call :check_redis 127.0.0.1 6379 15
+    if errorlevel 1 (
+      call :log "[ERROR] No se pudo establecer Redis. Activando modo RUN_INLINE_JOBS=1 para desarrollo (sin colas)."
+      set "RUN_INLINE_JOBS=1"
+    ) else (
+      call :log "[INFO] Redis está listo en 6379."
+    )
+    rem Revalidar engine tras operación de Redis (algunos hosts pierden el pipe en este punto)
+    call :ensure_docker 20 2
+    if errorlevel 1 (
+      call :log "[FATAL] Docker Desktop perdió estabilidad tras operar Redis (named pipe/engine). Abortando para evitar corrupción de estado."
+      goto :fatal
+    )
+  ) else (
+    call :log "[INFO] REQUIRE_REDIS=0: se usará RUN_INLINE_JOBS=1 si Redis no está disponible; no se iniciará contenedor."
     set "RUN_INLINE_JOBS=1"
-  ) else (
-    call :docker_start_redis
-  )
-  call :check_redis 127.0.0.1 6379 15
-  if errorlevel 1 (
-  call :log "[ERROR] No se pudo establecer Redis. Activando modo RUN_INLINE_JOBS=1 para desarrollo (sin colas)."
-  set "RUN_INLINE_JOBS=1"
-  ) else (
-  call :log "[INFO] Redis está listo en 6379."
-  )
-  rem Revalidar engine tras operación de Redis (algunos hosts pierden el pipe en este punto)
-  call :ensure_docker 20 2
-  if errorlevel 1 (
-    call :log "[FATAL] Docker Desktop perdió estabilidad tras operar Redis (named pipe/engine). Abortando para evitar corrupción de estado."
-    goto :fatal
   )
 ) else (
   call :log "[INFO] Redis está listo en 6379."
@@ -248,8 +257,10 @@ echo [!ts!] %~1
 exit /b 0
 
 :fatal
-REM Snapshot de estado de Docker al fallar
+REM Snapshot de estado de Docker y WSL al fallar
 call :docker_snapshot "fatal"
+call :wsl_snapshot
+call :npipe_diag
 call :log "[FATAL] Arranque abortado por política de entorno. Revisa mensajes previos en este log para la causa (Docker/DB)."
 exit /b 1
 
@@ -464,5 +475,15 @@ if /I "!__DSTATE!"=="RUNNING" (
 )
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$exe=Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'; if(Test-Path $exe){ Start-Process -FilePath $exe }" >NUL 2>&1
 call :log "[INFO] GUI de Docker Desktop lanzada."
+endlocal & exit /b 0
+
+:npipe_diag
+setlocal EnableDelayedExpansion
+for /f %%S in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='\\\\.\\pipe\\dockerDesktopLinuxEngine'; if(Test-Path $p){'OK'} else {'MISSING'}"') do set "__NPIPE=%%S"
+if /I "!__NPIPE!"=="OK" (
+  call :log "[INFO] NPIPE dockerDesktopLinuxEngine: OK"
+) else (
+  call :log "[INFO] NPIPE dockerDesktopLinuxEngine: MISSING"
+)
 endlocal & exit /b 0
 
