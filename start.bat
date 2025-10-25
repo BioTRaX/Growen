@@ -1,4 +1,8 @@
 @echo off
+REM NG-HEADER: Nombre de archivo: start.bat
+REM NG-HEADER: Ubicación: start.bat
+REM NG-HEADER: Descripción: Orquestador de arranque local con pre/post flight y validaciones Docker/WSL.
+REM NG-HEADER: Lineamientos: Ver AGENTS.md
 setlocal ENABLEDELAYEDEXPANSION
 
 rem Rutas base del repositorio
@@ -58,8 +62,7 @@ for %%P in (8000 5175) do (
       call :log "[WARN] Puerto %%P sigue ocupado pero ALLOW_PORT_BUSY=1 (continuando)."
     ) else (
       call :log "[ERROR] El puerto %%P esta en uso tras reintentos. Abortando. (Sugerencia: set AGGRESSIVE_PORT_FREE=1)"
-      pause
-      exit /b 1
+      goto :fatal
     )
   )
 )
@@ -197,59 +200,26 @@ if exist "%ROOT%frontend\package.json" (
     )
   )
   popd
-  REM Uso: call :ensure_docker [timeout_sec] [stable_checks]
-  setlocal EnableDelayedExpansion
-  set "_TO=%~1"
-  if not defined _TO set "_TO=90"
-  set "_STABLE=%~2"
-  if not defined _STABLE set "_STABLE=2"
+)
 
-  where docker >NUL 2>&1
-  if errorlevel 1 (
-    call :log "[WARN] Docker CLI no encontrado en PATH. Intentando iniciar Docker Desktop..."
-  )
-  for /f "delims=" %%E in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue; if($p){'RUNNING'} else {'STOP'}"') do set "__DSTATE=%%E"
-  if /I "!__DSTATE!"=="STOP" (
-    call :log "[INFO] Iniciando Docker Desktop..."
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$exe=Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'; if(Test-Path $exe){ Start-Process -FilePath $exe } else { exit 2 }" >NUL 2>&1
-  )
-
-  set /a _ELAP=0
-  set /a __OKS=0
-  set "__NPIPE_WARNED=0"
-  :_wait_docker
-  for /f "tokens=*" %%L in ('docker info 2^>^&1') do set "__DINFO=%%L"
-  if "%ERRORLEVEL%"=="0" (
-    set /a __OKS+=1
-    if !__OKS! GEQ %_STABLE% (
-      endlocal & exit /b 0
-    ) else (
-      timeout /t 1 /nobreak >NUL
-      set /a _ELAP+=1
-      goto _wait_docker
-    )
-  ) else (
-    set /a __OKS=0
-    echo !__DINFO! | findstr /I /C:"dockerDesktopLinuxEngine" /C:"The system cannot find the file specified" >NUL
-    if !ERRORLEVEL! EQU 0 (
-      if "!__NPIPE_WARNED!"=="0" (
-        call :log "[WARN] Docker Desktop named pipe no disponible (posible GUI/WSL en transición). Mensaje: !__DINFO!"
-        set "__NPIPE_WARNED=1"
-      )
-      set "DOCKER_NPIPE_BROKEN=1"
-    ) else (
-      if !__NPIPE_WARNED! EQU 0 (
-        call :log "[DEBUG] Esperando a Docker Desktop (el engine aún no responde)."
-        set "__NPIPE_WARNED=1"
-      )
-    )
-    if %_ELAP% GEQ %_TO% (
-      endlocal & exit /b 1
-    )
-    timeout /t 2 /nobreak >NUL
-    set /a _ELAP+=2
-    goto _wait_docker
-  )
+:wait_port_free
+REM Uso: call :wait_port_free <port> [retries]
+setlocal EnableDelayedExpansion
+set "_PORT=%~1"
+set "_TRIES=%~2"
+if not defined _TRIES set "_TRIES=5"
+set "_I=0"
+:_lp
+set /a _I+=1
+REM 1) Intento con PowerShell (exact TCP LISTEN)
+set "__COUNT="
+for /f %%E in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "@(Get-NetTCPConnection -State Listen -LocalPort %_PORT% -ErrorAction SilentlyContinue).Count"') do set "__COUNT=%%E"
+if not defined __COUNT set "__COUNT=0"
+if "!__COUNT!"=="0" (
+  endlocal & exit /b 0
+) else (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-NetTCPConnection -State Listen -LocalPort %_PORT% -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction Stop } catch {} }" >NUL 2>&1
+  if %_I% GEQ %_TRIES% (
     endlocal & exit /b 1
   )
 )
@@ -278,6 +248,8 @@ echo [!ts!] %~1
 exit /b 0
 
 :fatal
+REM Snapshot de estado de Docker al fallar
+call :docker_snapshot "fatal"
 call :log "[FATAL] Arranque abortado por política de entorno. Revisa mensajes previos en este log para la causa (Docker/DB)."
 exit /b 1
 
@@ -299,47 +271,59 @@ if !_I! GEQ %_T% (
   endlocal & exit /b 1
 )
 timeout /t 0 /nobreak >NUL
-goto _cr_loop
-
-:pg_ready_via_compose
-REM Uso: call :pg_ready_via_compose [retries]
+:ensure_docker
+REM Uso: call :ensure_docker [timeout_sec] [stable_checks]
 setlocal EnableDelayedExpansion
-set "_TR=%~1"
-if not defined _TR set "_TR=60"
-set /a _I=0
-:_pg_loop
-set /a _I+=1
-REM 1) pg_isready dentro del servicio 'db' vía docker compose (sin TTY)
-docker compose exec -T db pg_isready -U postgres >> "%LOG_FILE%" 2>&1
-if "%ERRORLEVEL%"=="0" (
-  endlocal & exit /b 0
-)
-REM 2) Sonda TCP local como respaldo
-call :check_tcp %DB_HOST% %DB_PORT% 1
-if "%ERRORLEVEL%"=="0" (
-  endlocal & exit /b 0
-)
-if !_I! GEQ %_TR% (
-  endlocal & exit /b 1
-)
-timeout /t 1 /nobreak >NUL
-goto _pg_loop
+set "_TO=%~1"
+if not defined _TO set "_TO=90"
+set "_STABLE=%~2"
+if not defined _STABLE set "_STABLE=2"
 
-:docker_start_redis
-setlocal EnableDelayedExpansion
 where docker >NUL 2>&1
 if errorlevel 1 (
-  endlocal & exit /b 1
+  call :log "[WARN] Docker CLI no encontrado en PATH. Intentando iniciar Docker Desktop..."
 )
-call :log "[DEBUG] Ejecutando: docker ps -a --filter name=/growen-redis"
-docker ps -a --filter "name=^/growen-redis$" --format "{{.Names}}" >> "%LOG_FILE%" 2>&1
-for /f %%N in ('docker ps -a --filter "name=^/growen-redis$" --format "{{.Names}}" 2^>NUL') do set "__REDIS_NAME=%%N"
-if not defined __REDIS_NAME (
-  call :log "[INFO] Creando contenedor redis:7-alpine..."
-  docker run -d --name growen-redis -p 6379:6379 redis:7-alpine >> "%LOG_FILE%" 2>&1
+for /f "delims=" %%E in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue; if($p){'RUNNING'} else {'STOP'}"') do set "__DSTATE=%%E"
+if /I "!__DSTATE!"=="STOP" (
+  call :log "[INFO] Iniciando Docker Desktop..."
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$exe=Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'; if(Test-Path $exe){ Start-Process -FilePath $exe } else { exit 2 }" >NUL 2>&1
+)
+set /a _ELAP=0
+set /a __OKS=0
+set "__NPIPE_WARNED=0"
+:_wait_docker
+for /f "tokens=*" %%L in ('docker info 2^>^&1') do set "__DINFO=%%L"
+if "%ERRORLEVEL%"=="0" (
+  set /a __OKS+=1
+  if !__OKS! GEQ %_STABLE% (
+    endlocal & exit /b 0
+  ) else (
+    timeout /t 1 /nobreak >NUL
+    set /a _ELAP+=1
+    goto _wait_docker
+  )
 ) else (
-  call :log "[INFO] Iniciando contenedor existente 'growen-redis'..."
-  docker start growen-redis >> "%LOG_FILE%" 2>&1
+  set /a __OKS=0
+  echo !__DINFO! | findstr /I /C:"dockerDesktopLinuxEngine" /C:"The system cannot find the file specified" >NUL
+  if !ERRORLEVEL! EQU 0 (
+    if "!__NPIPE_WARNED!"=="0" (
+      call :log "[WARN] Docker Desktop named pipe no disponible (posible GUI/WSL en transición). Mensaje: !__DINFO!"
+      set "__NPIPE_WARNED=1"
+    )
+    set "DOCKER_NPIPE_BROKEN=1"
+  ) else (
+    if !__NPIPE_WARNED! EQU 0 (
+      call :log "[DEBUG] Esperando a Docker Desktop (el engine aún no responde)."
+      set "__NPIPE_WARNED=1"
+    )
+  )
+  if %_ELAP% GEQ %_TO% (
+    endlocal & exit /b 1
+  )
+  timeout /t 2 /nobreak >NUL
+  set /a _ELAP+=2
+  goto _wait_docker
+)
 )
 endlocal & exit /b 0
 

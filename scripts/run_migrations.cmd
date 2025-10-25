@@ -1,4 +1,8 @@
 @echo off
+REM NG-HEADER: Nombre de archivo: run_migrations.cmd
+REM NG-HEADER: Ubicación: scripts/run_migrations.cmd
+REM NG-HEADER: Descripción: Ejecuta alembic upgrade head con logging con timestamp seguro para Windows.
+REM NG-HEADER: Lineamientos: Ver AGENTS.md
 setlocal enabledelayedexpansion
 
 REM Raíz del repo (carpeta padre de /scripts)
