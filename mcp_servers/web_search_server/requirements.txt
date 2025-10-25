@@ -1,0 +1,8 @@
+# NG-HEADER: Nombre de archivo: requirements.txt
+# NG-HEADER: Ubicación: mcp_servers/web_search_server/requirements.txt
+# NG-HEADER: Descripción: Dependencias del servidor MCP de búsqueda web.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+fastapi>=0.109
+uvicorn>=0.29
+httpx>=0.27
+beautifulsoup4>=4.12
