@@ -281,8 +281,31 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     except Exception:
         # Falla silenciosa del logger no debe afectar la respuesta
         pass
+    # Sanitizar payload de errores para evitar objetos no serializables (ej. bytes)
+    def _sanitize_json_for_response(obj):
+        try:
+            from collections.abc import Mapping, Sequence
+        except Exception:
+            Mapping = dict  # type: ignore
+            Sequence = list  # type: ignore
+
+        if isinstance(obj, (bytes, bytearray)):
+            try:
+                return obj.decode("utf-8", "replace")
+            except Exception:
+                return f"<bytes len={len(obj)}>"
+        if isinstance(obj, Mapping):
+            return {k: _sanitize_json_for_response(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple, set)):
+            return [
+                _sanitize_json_for_response(v)
+                for v in (list(obj) if not isinstance(obj, list) else obj)
+            ]
+        return obj
+
+    safe_detail = _sanitize_json_for_response(exc.errors())
     # Mantener contrato por defecto de FastAPI
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    return JSONResponse(status_code=422, content={"detail": safe_detail})
 
 origins = [
     "http://localhost:5173",
