@@ -114,41 +114,87 @@ set "_USE_SQLITE=0"
 call :log "[INFO] Verificando Postgres en %DB_HOST%:%DB_PORT%..."
 call :check_tcp %DB_HOST% %DB_PORT% 25
 if errorlevel 1 (
-  call :log "[WARN] Postgres no responde en %DB_HOST%:%DB_PORT%. Intentando iniciar Docker Desktop y contenedor 'db'..."
-  call :ensure_docker 120 3
-  if errorlevel 1 (
-    if "%REQUIRE_DOCKER_DB%"=="1" (
-      call :log "[FATAL] Docker no está disponible y REQUIRE_DOCKER_DB=1. Abortando sin fallback a SQLite."
-      goto :fatal
+  if "%PRE_DB_OK%"=="1" (
+    call :log "[WARN] Postgres estaba OK en PRE-FLIGHT y ahora no responde. Backoff de %DB_FLAP_BACKOFF_SEC%s antes de tocar Docker..."
+    call :check_tcp %DB_HOST% %DB_PORT% %DB_FLAP_BACKOFF_SEC%
+    if "%ERRORLEVEL%"=="0" (
+      call :log "[INFO] Postgres volvió a responder en %DB_HOST%:%DB_PORT% tras backoff. No se tocará Docker."
     ) else (
-      if "%ALLOW_SQLITE_FALLBACK%"=="1" (
-        call :log "[ERROR] Docker no está disponible. Se activará modo local con SQLite: %DB_FALLBACK_SQLITE% (ALLOW_SQLITE_FALLBACK=1)"
-        set "DB_URL=%DB_FALLBACK_SQLITE%"
-        set "_USE_SQLITE=1"
+      call :log "[WARN] Postgres sigue sin responder tras backoff. Intentando iniciar Docker Desktop y contenedor 'db'..."
+      call :ensure_docker 120 3
+      if errorlevel 1 (
+        if "%REQUIRE_DOCKER_DB%"=="1" (
+          call :log "[FATAL] Docker no está disponible y REQUIRE_DOCKER_DB=1. Abortando sin fallback a SQLite."
+          goto :fatal
+        ) else (
+          if "%ALLOW_SQLITE_FALLBACK%"=="1" (
+            call :log "[ERROR] Docker no está disponible. Se activará modo local con SQLite: %DB_FALLBACK_SQLITE% (ALLOW_SQLITE_FALLBACK=1)"
+            set "DB_URL=%DB_FALLBACK_SQLITE%"
+            set "_USE_SQLITE=1"
+          ) else (
+            call :log "[FATAL] Docker no disponible, y ALLOW_SQLITE_FALLBACK=0. Abortando."
+            goto :fatal
+          )
+        )
       ) else (
-        call :log "[FATAL] Docker no disponible, y ALLOW_SQLITE_FALLBACK=0. Abortando."
-        goto :fatal
+        call :docker_up_db
+        call :pg_ready_via_compose 60
+        if errorlevel 1 (
+          if "%REQUIRE_DOCKER_DB%"=="1" (
+            call :log "[FATAL] Contenedor 'db' no saludable tras timeout y REQUIRE_DOCKER_DB=1. Abortando."
+            goto :fatal
+          ) else (
+            if "%ALLOW_SQLITE_FALLBACK%"=="1" (
+              call :log "[ERROR] Postgres en Docker no quedó saludable. Activando fallback SQLite (ALLOW_SQLITE_FALLBACK=1)."
+              set "DB_URL=%DB_FALLBACK_SQLITE%"
+              set "_USE_SQLITE=1"
+            ) else (
+              call :log "[FATAL] Postgres en Docker no quedó saludable y ALLOW_SQLITE_FALLBACK=0. Abortando."
+              goto :fatal
+            )
+          )
+        ) else (
+          call :log "[INFO] Postgres respondió en %DB_HOST%:%DB_PORT% y el contenedor reporta saludable."
+        )
       )
     )
   ) else (
-    call :docker_up_db
-    call :pg_ready_via_compose 60
+    call :log "[WARN] Postgres no responde en %DB_HOST%:%DB_PORT%. Intentando iniciar Docker Desktop y contenedor 'db'..."
+    call :ensure_docker 120 3
     if errorlevel 1 (
       if "%REQUIRE_DOCKER_DB%"=="1" (
-        call :log "[FATAL] Contenedor 'db' no saludable tras timeout y REQUIRE_DOCKER_DB=1. Abortando."
+        call :log "[FATAL] Docker no está disponible y REQUIRE_DOCKER_DB=1. Abortando sin fallback a SQLite."
         goto :fatal
       ) else (
         if "%ALLOW_SQLITE_FALLBACK%"=="1" (
-          call :log "[ERROR] Postgres en Docker no quedó saludable. Activando fallback SQLite (ALLOW_SQLITE_FALLBACK=1)."
+          call :log "[ERROR] Docker no está disponible. Se activará modo local con SQLite: %DB_FALLBACK_SQLITE% (ALLOW_SQLITE_FALLBACK=1)"
           set "DB_URL=%DB_FALLBACK_SQLITE%"
           set "_USE_SQLITE=1"
         ) else (
-          call :log "[FATAL] Postgres en Docker no quedó saludable y ALLOW_SQLITE_FALLBACK=0. Abortando."
+          call :log "[FATAL] Docker no disponible, y ALLOW_SQLITE_FALLBACK=0. Abortando."
           goto :fatal
         )
       )
     ) else (
-      call :log "[INFO] Postgres respondió en %DB_HOST%:%DB_PORT% y el contenedor reporta saludable."
+      call :docker_up_db
+      call :pg_ready_via_compose 60
+      if errorlevel 1 (
+        if "%REQUIRE_DOCKER_DB%"=="1" (
+          call :log "[FATAL] Contenedor 'db' no saludable tras timeout y REQUIRE_DOCKER_DB=1. Abortando."
+          goto :fatal
+        ) else (
+          if "%ALLOW_SQLITE_FALLBACK%"=="1" (
+            call :log "[ERROR] Postgres en Docker no quedó saludable. Activando fallback SQLite (ALLOW_SQLITE_FALLBACK=1)."
+            set "DB_URL=%DB_FALLBACK_SQLITE%"
+            set "_USE_SQLITE=1"
+          ) else (
+            call :log "[FATAL] Postgres en Docker no quedó saludable y ALLOW_SQLITE_FALLBACK=0. Abortando."
+            goto :fatal
+          )
+        )
+      ) else (
+        call :log "[INFO] Postgres respondió en %DB_HOST%:%DB_PORT% y el contenedor reporta saludable."
+      )
     )
   )
 ) else (
@@ -380,9 +426,11 @@ endlocal & exit /b 0
 
 :db_precheck
 setlocal EnableDelayedExpansion
+set "_PRE_DB_OK=0"
 call :log "[INFO] Preflight DB: probando 127.0.0.1:5433 y (si aplica) pg_isready en 'db'"
 call :check_tcp 127.0.0.1 5433 1
 if "%ERRORLEVEL%"=="0" (
+  set "_PRE_DB_OK=1"
   call :log "[INFO] Preflight DB: puerto 5433 responde (TCP)."
 ) else (
   call :log "[INFO] Preflight DB: puerto 5433 no responde (TCP)."
@@ -393,7 +441,7 @@ if "%ERRORLEVEL%"=="0" (
 ) else (
   call :log "[INFO] Preflight DB: docker CLI no disponible; omitido pg_isready."
 )
-endlocal & exit /b 0
+endlocal & set "PRE_DB_OK=%_PRE_DB_OK%" & exit /b 0
 
 :check_tcp
 REM Uso: call :check_tcp <host> <port> [retries]
