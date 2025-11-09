@@ -13,9 +13,10 @@ Parámetros útiles:
 - type: `all` (default) | `canonical` | `supplier`.
 
 Comportamiento:
-- `name` y `precio_venta` retornan ya con fallback: si el item tiene canónico, se prioriza el nombre y precio del canónico; si no, se usan los del proveedor.
-- Campos auxiliares: `canonical_product_id`, `canonical_sale_price`, `supplier_title`, `canonical_name`.
-- Nuevos campos: `canonical_sku` (si hay canónico) y `first_variant_sku` (primer SKU de variante interna, como fallback). La UI muestra debajo del nombre el SKU preferido: primero `canonical_sku`, si no existe `first_variant_sku`.
+- Búsqueda (`q`) ahora coincide por: título interno (`products.title`), título del proveedor (`supplier_products.title`) y también por título canónico (`canonical_products.name`).
+- El payload incluye campos auxiliares: `canonical_product_id`, `canonical_sale_price`, `canonical_name`, `canonical_sku` y `first_variant_sku`.
+- Nota: el campo `name` corresponde al título interno del producto.
+- Nuevo: `preferred_name` (canónico primero) para centralizar la preferencia canónica en el backend. La UI puede usar este campo directamente.
 
 Ejemplo:
 `GET /products?type=canonical&stock=gt:0&page=1&page_size=50`
@@ -30,6 +31,7 @@ Detalle de un producto interno. Además de los campos básicos (`id`, `title`, `
 - `canonical_sku`: SKU canónico propio (formato XXX_####_YYY), si existe
 - `canonical_ng_sku`: SKU NG-######
 - `canonical_name`: nombre del canónico
+- `preferred_title`: título preferido para mostrar en UI (si existe `product.title_canonical`, se usa; si no, `canonical_name`; como último recurso `title`)
 Metadatos de enriquecimiento IA:
 - `enrichment_sources_url`: URL pública al archivo .txt con fuentes (si existe)
 - `last_enriched_at`: fecha/hora UTC ISO cuando se realizó el último enriquecimiento (o null)
@@ -50,7 +52,25 @@ Exporta un XLS con columnas: `NOMBRE DE PRODUCTO`, `PRECIO DE VENTA`, `CATEGORIA
 Reglas de datos:
 - Nombre y precio: si el item tiene canónico, se usa el nombre y precio del canónico. Si no, se usa la información del proveedor/interno.
 - Categoría: preferir taxonomía del canónico. Si hay categoría y subcategoría, mostrar `Categoria > Subcategoria`. Si sólo hay categoría, `Categoria > Categoria`. Si no hay canónico, se usa el path del producto interno.
-- SKU: preferir `canonical_sku` (si existe), sino usar el primer SKU de variante del producto interno.
+## GET /debug/enrich/{id}
+Solo administradores. Endpoint de diagnóstico para el flujo de enriquecimiento IA. No persiste cambios.
+
+Devuelve JSON con:
+- `title`: título elegido (prioriza canónico si existe)
+- `title_used`: alias de `title` para consumo de UI/diagnóstico
+- `ai_provider_selected`: proveedor IA que se usaría según la política actual
+- `web_search`: estado (habilitado/health/query/hits) del MCP de búsqueda web
+- `prompt`: prompt generado (incluye contexto MCP cuando está disponible)
+- `raw_ai_preview`: primera parte de la respuesta cruda de IA (con prefijo `openai:`/`ollama:` si aplica)
+- `raw_ai_looks_json`: booleano indicando si la vista previa parsea como JSON
+
+Uso típico: abrir la ficha del producto, y en otra pestaña consultar `/debug/enrich/{id}` para confirmar que el flujo está operativo (providers, flags, web-search) cuando el botón “Enriquecer con IA” no produce cambios.
+
+Notas:
+- Si no hay `OPENAI_API_KEY` y no corre un daemon de Ollama accesible (`OLLAMA_HOST`), la respuesta será un eco del prompt y `raw_ai_looks_json=false`. En ese caso el endpoint de enrich devolverá 502 porque la IA no entregó JSON válido.
+- Si `AI_USE_WEB_SEARCH=1` pero el MCP web-search no está healthy, el enriquecimiento continúa sin resultados web (fallback, logs `mcp.web.*`).
+- El prompt de enriquecimiento alienta a incluir un "Análisis de Mercado (AR$)" dentro de "Valor de mercado estimado" y a adjuntar "Fuentes" (URLs) para trazabilidad.
+
 
 Estilos aplicados:
 - Encabezado con fondo oscuro y texto claro, negrita.

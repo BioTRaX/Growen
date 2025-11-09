@@ -43,7 +43,6 @@ KNOWN_SERVICES = [
     "image_processing",
     "dramatiq",
     "scheduler",
-    "tiendanube",
     "notifier",
 ]
 

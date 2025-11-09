@@ -92,3 +92,8 @@ Notas:
 - `502 tool failure` o `{ error: 'tool_network_failure' }`: validar `MCP_*_URL`, conectividad y timeouts.
 - El enrich no adjunta resultados web: verificar `AI_USE_WEB_SEARCH` y `ai_allow_external=true` (Settings). También revisar `AI_WEB_SEARCH_MAX_RESULTS`.
 - Fuentes `.txt` no generadas: la generación depende de que la IA devuelva un objeto `"Fuentes"` en el JSON; el backend registra `num_sources` en la auditoría.
+
+## Healthcheck y monitoreo
+- Todos los MCP deberían exponer `GET /health` devolviendo `{ "status": "ok" }`.
+- MCP Web Search incluye ese endpoint y la imagen Docker define `HEALTHCHECK` para que Docker marque el contenedor como `healthy`.
+- La API principal realiza un preflight (GET `/health`, timeout ~2s) antes de invocar `search_web`; si el server está `unhealthy` se omite la búsqueda y se continúa en modo fallback (sin bloquear el enriquecimiento).

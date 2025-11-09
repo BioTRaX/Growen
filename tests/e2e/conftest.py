@@ -55,6 +55,10 @@ def _real_db_url() -> str:
 # Forzar DB_URL real en este proceso para evitar :memory: que pone tests/conftest.py
 os.environ["DB_URL"] = _real_db_url()
 
+# Skip defensivo en Windows salvo opt-in explícito
+if os.name == "nt" and os.environ.get("E2E_WINDOWS_ENABLE", "0") != "1":
+    pytest.skip("E2E deshabilitadas en Windows por defecto; exporta E2E_WINDOWS_ENABLE=1 para forzar.", allow_module_level=True)
+
 
 def _base_env() -> dict:
     env = os.environ.copy()

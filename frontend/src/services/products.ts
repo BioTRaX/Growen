@@ -16,6 +16,7 @@ export interface ProductSearchParams {
 export interface ProductItem {
   product_id: number
   name: string
+  preferred_name?: string | null
   supplier: { id: number; slug: string; name: string }
   precio_compra: number | null
   precio_venta: number | null

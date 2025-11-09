@@ -5,7 +5,7 @@
 
 # Roadmap del Proyecto
 
-Última actualización: 2025-10-21
+Última actualización: 2025-11-09
 
 Este documento resume el estado actual del proyecto, las funcionalidades ya implementadas y los trabajos pendientes. Debe mantenerse actualizado por cada contribución (humana o de un agente) que cambie comportamiento, endpoints, modelos o UI relevante.
 
@@ -247,6 +247,111 @@ Hito 6 — Despliegue y migraciones
   - Feature flags donde aplique; checklist de rollback.
 - Criterios de aceptación
   - Migraciones aplican en < 2s en dataset de prueba y no bloquean el arranque.
+
+## Mejoras de Enriquecimiento IA (Priorización Futura)
+
+### Contexto Actual
+El enriquecimiento de productos con IA (`POST /products/{id}/enrich`) está funcional con:
+- ✅ Búsqueda web obligatoria (MCP Web Search via DuckDuckGo)
+- ✅ Jerarquía de fuentes (fabricante > marketplaces > grow shops)
+- ✅ Generación de descripción en tono argentino con voseo
+- ✅ Keywords SEO integradas al final de la descripción
+- ✅ Archivo de fuentes consultadas en `/media/enrichment_logs/`
+- ✅ Corrección automática de encoding UTF-8 corrupto
+
+### 🔴 Prioridad ALTA: Bulk Enrich Asíncrono
+
+**Problema actual**:
+- `POST /products/enrich-multiple` ejecuta **secuencialmente** hasta 20 productos
+- Tiempo estimado: 20 productos × 12s promedio = **4 minutos**
+- **Bloquea un worker de FastAPI** completo durante toda la operación
+- **Timeout en proxy/nginx** (típicamente 60-90s) corta la conexión antes de terminar
+- **Sin retry ni recuperación** si falla a mitad del batch
+
+**Impacto**:
+- Imposible enriquecer lotes grandes (50-100 productos)
+- Experiencia de usuario degradada con timeouts frecuentes
+- Workers de FastAPI bloqueados impactan otras requests
+
+**Soluciones propuestas** (implementar una):
+
+1. **Background Tasks de FastAPI** (Rápida - 30 min)
+   - Usa `BackgroundTasks` nativo de FastAPI
+   - Libera el response inmediatamente
+   - Sin dependencias adicionales
+   - ❌ Limitaciones: no sobrevive restart, sin retry, sin monitoreo de progreso
+
+2. **Dramatiq Worker** (Robusta - 2-3 hs)
+   - Cola persistente en Redis (ya disponible en `docker-compose.yml`)
+   - Retry automático con backoff exponencial
+   - Monitoreo de progreso via polling de estado
+   - Puede procesar 100+ productos sin timeout
+   - ✅ Recomendada para producción
+
+**Criterios de aceptación**:
+- Bulk enrich de 50 productos completa sin timeout
+- Response HTTP retorna inmediatamente con `job_id`
+- Frontend puede consultar progreso del job
+- Workers de FastAPI no se bloquean
+
+### 🟡 Prioridad MEDIA: Valor de Mercado con Fechas
+
+**Problema actual**:
+- DuckDuckGo HTML **no devuelve fecha de publicación** de los resultados
+- OpenAI no puede filtrar precios por antigüedad (requisito: últimos 4 meses)
+- Mayoría de enriquecimientos reportan: *"ADVERTENCIA: Precio con más de 4 meses de antigüedad, probablemente desactualizado"*
+
+**Soluciones propuestas**:
+
+1. **API con metadatos de fecha** (Mejor, costo ~$50-100/mes)
+   - SerpAPI, Bing Search API, Google Custom Search
+   - Devuelven `published_date`, `last_modified` por resultado
+   - Permite filtrado preciso por rango de fechas
+   
+2. **Heurísticas de scraping** (Intermedia)
+   - Detectar patrones en URL: `/2024/`, `/2025/`
+   - Parsear snippet: "hace 2 días", "hace 3 semanas"
+   - Mejorar prompt para que OpenAI infiera actualidad del contexto
+
+3. **Relajar validación** (Pragmática - 15 min)
+   - Cambiar advertencia a: *"Valor de mercado estimado: $X ARS (fecha de publicación no verificada)"*
+   - Mejorar transparencia sin bloquear por falta de fecha
+
+**Criterios de aceptación**:
+- ≥80% de enriquecimientos con precios NO muestran advertencia de desactualización
+- Precios realmente antiguos (>6 meses) se omiten o identifican claramente
+
+### 🟢 Prioridad BAJA: Datos Técnicos Opcionales
+
+**Problema actual**:
+- Peso, alto, ancho, profundidad raramente se completan
+- Grow shops no publican especificaciones técnicas en snippets
+- Snippets de DuckDuckGo limitados a ~150 caracteres
+
+**Soluciones propuestas**:
+
+1. **Búsqueda dirigida al fabricante**
+   - Modificar prompt para buscar PRIMERO en sitio oficial del fabricante
+   - Segunda búsqueda en fichas técnicas de grow shops
+
+2. **Scraping del sitio del fabricante**
+   - Si se identifica URL oficial, hacer fetch completo de la página
+   - Extraer tabla de especificaciones con BeautifulSoup
+   - Requiere manejo de rate limits y caching
+
+3. **Incentivos en prompt**
+   - Recompensar a la IA por encontrar datos técnicos
+   - Ejemplo: "BONIFICACIÓN: Si encuentras peso/dimensiones, inclúyelos para mejorar la ficha"
+
+**Criterios de aceptación**:
+- ≥50% de productos enriquecidos tienen al menos 2 campos técnicos completados (peso o dimensiones)
+
+### Documentación Relacionada
+- `docs/ENRICHMENT_LOGS.md` - Logging y diagnóstico de enriquecimiento
+- `docs/PRODUCTS_UI.md` - UI de productos y enriquecimiento
+- `mcp_servers/web_search_server/` - Servidor MCP de búsqueda web
+
+---
 
 Hito 7 - Chatbot: Consulta de precios en lenguaje natural
 - Objetivo

@@ -11,7 +11,6 @@ const SERVICE_LABELS: Record<string, string> = {
   image_processing: 'Procesado de imágenes',
   dramatiq: 'Dramatiq / Redis',
   scheduler: 'Scheduler (03:00 AR)',
-  tiendanube: 'Tiendanube',
   notifier: 'Notificaciones (Telegram/Email)'
 }
 

@@ -87,5 +87,13 @@ async def invoke_tool_endpoint(
 async def health():
     return {"status": "ok", "service": "mcp_products"}
 
+@app.get("/")
+async def root():
+    """Raíz simple para healthchecks legacy (Dockerfile usa "/").
+
+    Nota: mantenemos también /health como endpoint canónico.
+    """
+    return {"status": "ok", "service": "mcp_products"}
+
 
 # Para ejecución local: uvicorn mcp_servers.products_server.main:app --reload --port 8100

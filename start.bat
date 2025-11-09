@@ -73,6 +73,18 @@ if "%USE_DOCKER_STACK%"=="1" (
     call :log "[INFO] Frontend 5173 responde (Docker)."
   )
   call :log "[INFO] Modo Docker activo: no se iniciará uvicorn local ni build del frontend. Usa los contenedores ya levantados."
+  echo.
+  echo ===================== RESUMEN DEL STACK (Docker) =====================
+  echo API:       http://localhost:8000  ^(Docs: /docs^)
+  echo Frontend:  http://localhost:5173  ^(si el contenedor 'frontend' esta activo^)
+  echo DB:        localhost:5433  ^(Postgres dentro de Docker Desktop^)
+  echo ----------------------------------------------------------------------
+  echo Login: usa tu usuario configurado en .env ^(ADMIN_USER^) y contrasenia ^(ADMIN_PASS^).
+  echo En entornos de desarrollo, si dejaste el placeholder, la contrasenia temporal suele ser 'admin1234'.
+  echo ----------------------------------------------------------------------
+  echo Los detalles completos quedaron en logs\start.log
+  echo Cierra esta ventana o presiona una tecla para salir.
+  pause >NUL
   goto :eof
 )
 

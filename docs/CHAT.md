@@ -14,7 +14,7 @@ Desde octubre 2025 el intent de consulta de productos (precio/stock) migra del m
 - Roles `admin` y `colaborador` ven la tool avanzada; otros roles solo `get_product_info`.
 - El archivo `services/chat/price_lookup.py` queda marcado como `DEPRECATED` y se mantendrá temporalmente hasta retirar dependencias residuales (tests históricos y memoria de clarificación antigua en WS/Telegram).
 - Endpoints afectados:
-	- `POST /chat`: ya usa `chat_with_tools` para preguntas que disparan intención de producto.
+	- `POST /chat`: usa `chat_with_tools` cuando la consulta incluye un SKU explícito (p. ej. "SKU123"). En consultas por nombre o descripción, se mantiene un fallback local (`price_lookup.py`) que retorna `type=product_answer` con payload estructurado y soporta memoria de aclaración.
 	- `WS /ws`: migrado a tool-calling (retirado ranking local; se simplifica la clarificación).
 	- `POST /telegram/webhook/*`: migrado a tool-calling.
 
@@ -45,7 +45,7 @@ Desde octubre 2025 el intent de consulta de productos (precio/stock) migra del m
 - El WebSocket expone la misma estructura (`type`, `intent`, `data`, `took_ms`).
 
 ## Memoria y follow-ups
-- Cuando la consulta devuelve multiples coincidencias, se guarda un estado efimero (`services/chat/memory.py`) por `session_id`/IP.
+- Cuando la consulta devuelve múltiples coincidencias (fallback local), se guarda un estado efímero (`services/chat/memory.py`) por `session_id`/IP.
 - Mensajes breves como `si`, `dale` o `stock` confirman la lista anterior sin repetir la query original.
 - Si el usuario responde con algo ambiguo, el bot pide aclaracion (`clarify_prompt`) en lugar de adivinar.
 

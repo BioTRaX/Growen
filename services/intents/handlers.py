@@ -4,11 +4,34 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Handlers de intents de ejemplo."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Callable
 import asyncio
+import threading
 from sqlalchemy import select
 
 from db.session import SessionLocal
+def _run_blocking(coro_func: Callable[[], Any]):
+    """Ejecuta una corrutina en un hilo separado para evitar RuntimeError
+    cuando ya existe un event loop en ejecución (pytest-asyncio).
+
+    Retorna el resultado de la corrutina, propagando excepciones.
+    """
+    result: dict = {}
+    err: dict = {}
+
+    def _target():
+        try:
+            res = asyncio.run(coro_func())
+            result["value"] = res
+        except BaseException as e:  # propaga cualquier excepción
+            err["exc"] = e
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join()
+    if "exc" in err:
+        raise err["exc"]
+    return result.get("value")
 from db.models import Variant, Inventory, Supplier
 from services.routers.catalog import update_product_stock, StockUpdate
 from services.routers import catalog as catalog_router
@@ -63,7 +86,7 @@ def handle_stock(args: List[str], opts: Dict[str, Any]) -> Dict[str, Any]:
                     "product_id": var.product_id,
                 }
 
-        res = asyncio.run(_adjust())
+        res = _run_blocking(_adjust)
         if not res:
             return {"message": f"SKU no encontrado: {sku}"}
         res["message"] = f"Stock ajustado para {sku} en {qty}"
@@ -90,7 +113,7 @@ def handle_stock(args: List[str], opts: Dict[str, Any]) -> Dict[str, Any]:
                     "min": qty,
                 }
 
-        res = asyncio.run(_min())
+        res = _run_blocking(_min)
         if not res:
             return {"message": f"SKU no encontrado: {sku}"}
         res["message"] = f"Stock mínimo de {sku} en {qty}"
@@ -149,7 +172,7 @@ def handle_import(args: List[str], opts: Dict[str, Any]) -> Dict[str, Any]:
             await session.commit()
             return {"imported": imported}
 
-    result = asyncio.run(_apply())
+    result = _run_blocking(_apply)
     if "error" in result:
         return {"message": result["error"]}
     return {
@@ -171,7 +194,7 @@ def handle_search(args: List[str], opts: Dict[str, Any]) -> Dict[str, Any]:
         async with SessionLocal() as session:
             return await catalog_router.list_products(q=query, session=session)
 
-    data = asyncio.run(_search())
+    data = _run_blocking(_search)
     return {
         "message": f"{data['total']} resultados para '{query}'",
         "items": data["items"],

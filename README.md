@@ -9,6 +9,7 @@
 - Compras (incluye iAVaL - Validador de IA del remito): [docs/PURCHASES.md](./docs/PURCHASES.md)
 - Persona de chat: [docs/CHAT_PERSONA.md](./docs/CHAT_PERSONA.md)
 - SKU Canónico (formato, generación, secuencias): [docs/CANONICAL_SKU.md](./docs/CANONICAL_SKU.md)
+- **Logging y diagnóstico de enriquecimiento IA**: [docs/ENRICHMENT_LOGS.md](./docs/ENRICHMENT_LOGS.md)
 
 ## Chatbot Growen
 
@@ -102,7 +103,7 @@ Notas:
   - Auditoría: `audit_log` con `action=upload_image` y metadatos (producto, filename, size).
 
 Tips:
-- Colaborador mantiene acciones de URL (“Descargar”) y push a Tiendanube; la subida directa se reserva a Admin.
+- Colaborador mantiene acciones de URL (“Descargar”) ; la subida directa se reserva a Admin.
 
 Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web e IA híbrida.
 
@@ -112,7 +113,7 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - **Base de datos**: PostgreSQL 15 (Alembic para migraciones).
 - **IA**: ruteo automático entre Ollama (local) y OpenAI.
 - **Frontend**: React + Vite con listas virtualizadas mediante `react-window`.
-- **Adapters**: stubs de Tiendanube.
+- **Adapters**: exportaci�n a TiendaNegocio v�a XLS.
 - **MCP Servers (nuevo)**: microservicios auxiliares (ej. `mcp_products`, `mcp_web_search`) que exponen herramientas (`tools`) vía un endpoint uniforme `POST /invoke_tool` para consumo de agentes LLM, actuando como fachada HTTP hacia la API principal (sin acceso directo a DB).
   - Products: tools `get_product_info` y `get_product_full_info` (URL default `http://mcp_products:8001/invoke_tool`, configurable con `MCP_PRODUCTS_URL`).
   - Web Search (MVP): tool `search_web(query)` que retorna títulos/URLs/snippets desde un buscador HTML (URL default `http://mcp_web_search:8002/invoke_tool`, configurable con `MCP_WEB_SEARCH_URL`).
@@ -125,14 +126,21 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
   - Borrar enriquecimiento: `DELETE /products/{id}/enrichment`.
 - Backend:
   - `POST /products/{id}/enrich` genera descripción y puede mapear campos técnicos (`weight_kg`, `height_cm`, `width_cm`, `depth_cm`, `market_price_reference`).
+  - Preferencia de título: usa el nombre del producto canónico (si existe) como entrada del prompt; si no hay canónico, usa el título del producto interno.
   - Si la respuesta incluye “Fuentes”, se escribe un `.txt` bajo `/media/enrichment_logs/` y se expone `enrichment_sources_url`.
   - Metadatos de trazabilidad: `last_enriched_at` y `enriched_by` se setean al enriquecer y se limpian al borrar.
   - Auditoría: acción `enrich`/`reenrich` con `prompt_hash`, `fields_generated`, `source_file` y, si `AI_USE_WEB_SEARCH=1`, `web_search_query` y `web_search_hits`.
+  - Robustez: si `AI_USE_WEB_SEARCH=1`, el backend realiza un preflight a `GET /health` del MCP Web Search; si no está saludable, omite la búsqueda y continúa el enriquecimiento sin bloquear.
 - Acciones masivas: `POST /products/enrich-multiple` (máximo 20 IDs por solicitud) con validaciones de título y omitidos si ya enriquecidos (a menos que `force`).
 - Flags relevantes:
   - `AI_USE_WEB_SEARCH` (0/1): activa búsqueda web MCP para anexar contexto al prompt.
   - `AI_WEB_SEARCH_MAX_RESULTS` (default 3): máxima cantidad de resultados anexados.
   - `ai_allow_external` (settings): debe estar en `true` para permitir llamadas externas.
+
+### Logs del enriquecimiento y de IA
+
+- El backend escribe en `logs/backend.log` (configurable con `LOG_DIR`). En el stack Docker, el volumen `./logs:/app/logs` ya centraliza estos archivos en tu host.
+- Para un log específico de IA (útil al depurar prompts y uso de MCP), activá `AI_LOG_FILE=1` y se generará `logs/ai.log` con formato JSON rotativo.
 
 ## Requisitos
 
@@ -1093,7 +1101,7 @@ python -m cli.ng db-init
 ## Roadmap
 
 - M0: estructura base y stubs (este repositorio)
-- M1: sincronización real con Tiendanube
+- M1: integraciones e-commerce adicionales
 - M2: mejoras de IA y comandos
 - M3: despliegue completo
 

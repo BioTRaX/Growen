@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import http from '../services/http'
-import { uploadProductImage, addImageFromUrl, setPrimary, lockImage, deleteImage, refreshSEO, pushTN, removeBg, watermark } from '../services/images'
+import { uploadProductImage, addImageFromUrl, setPrimary, lockImage, deleteImage, refreshSEO, removeBg, watermark } from '../services/images'
 import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
 import { useAuth } from '../auth/AuthContext'
 import { getProductDetailStylePref, putProductDetailStylePref, ProductDetailStyle, updateSalePrice, updateSupplierBuyPrice } from '../services/productsEx'
@@ -26,6 +26,7 @@ type Prod = {
   images: { id: number; url: string; alt_text?: string; title_text?: string; is_primary?: boolean; locked?: boolean; active?: boolean }[]
   canonical_product_id?: number | null
   canonical_sale_price?: number | null
+  sale_price?: number | null
   canonical_sku?: string | null
   canonical_ng_sku?: string | null
   canonical_name?: string | null
@@ -314,8 +315,15 @@ export default function ProductDetail() {
     <div className="panel p-4" style={{ background: theme.bg, color: theme.text, minHeight: '100vh' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <button className="btn-dark btn-lg" onClick={() => nav(-1)}>Volver</button>
-        <h2 style={{ margin: 0, color: theme.title }}>{prod?.title || 'Producto'}</h2>
-        <div style={{ marginLeft: 'auto' }}>Stock: {prod?.stock ?? ''}</div>
+        <h2 style={{ margin: 0, color: theme.title }}>{prod?.canonical_name || prod?.title || 'Producto'}</h2>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '16px' }}>
+          {prod?.sale_price != null && (
+            <div style={{ fontSize: '1.2em', fontWeight: 'bold', color: theme.accentGreen }}>
+              {`$ ${prod.sale_price.toFixed(2)}`}
+            </div>
+          )}
+          <div>Stock: {prod?.stock ?? ''}</div>
+        </div>
       </div>
 
       {/* Selector de estética */}
@@ -344,7 +352,7 @@ export default function ProductDetail() {
           )}
           <input className="input" placeholder="Pegar URL de imagen" value={url} onChange={(e) => setUrl(e.target.value)} />
           <button className="btn" onClick={onFromUrl} disabled={!url || loading}>Descargar</button>
-          <button className="btn" onClick={async () => { await pushTN(pid); alert('Push Tiendanube encolado/ejecutado'); }}>Enviar a Tiendanube</button>
+          {/* Botón Tiendanube removido */}
           <button className="btn" onClick={async () => { try { const a = await http.get(`/products/${pid}/images/audit-logs`, { params: { limit: 50 } }); setImgDiag(a.data.items || []); const b = await http.get(`/catalog/products/${pid}/audit-logs`, { params: { limit: 50 } }); setProdDiag(b.data.items || []) } catch (e: any) { showToast('error', e?.response?.data?.detail || 'No se pudieron obtener diagnósticos') } }}>Ver diagnósticos</button>
           <button className="btn" onClick={() => { setSupplierSel(null); setSupplierSku(''); setSupplierTitle(''); setLinkOpen(true) }}>Agregar SKU de proveedor</button>
           {canEdit && prod?.title && (

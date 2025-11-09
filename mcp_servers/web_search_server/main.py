@@ -33,5 +33,11 @@ async def _invoke(p: InvokePayload):
         raise HTTPException(status_code=502, detail="tool failure")
 
 
+@app.get("/health")
+async def _health():
+    """Endpoint de salud simple para healthchecks de Docker y preflight del backend."""
+    return {"status": "ok"}
+
+
 # Ejecutable local (opcional):
 # uvicorn mcp_servers.web_search_server.main:app --host 0.0.0.0 --port 8002

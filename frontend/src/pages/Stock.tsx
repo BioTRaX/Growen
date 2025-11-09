@@ -11,7 +11,6 @@ import { listCategories, Category } from '../services/categories'
 import { searchProducts, ProductItem, updateStock, deleteProducts } from '../services/products'
 import { updateSalePrice, updateSupplierBuyPrice, updateSupplierSalePrice } from '../services/productsEx'
 import { useAuth } from '../auth/AuthContext'
-import { pushTNBulk } from '../services/images'
 import { generateCatalog, headLatestCatalog } from '../services/catalogs'
 import { baseURL as base } from '../services/http'
 import CatalogHistoryModal from '../components/CatalogHistoryModal'
@@ -42,7 +41,6 @@ export default function Stock() {
   const [editBuyId, setEditBuyId] = useState<number | null>(null)
   const [buyVal, setBuyVal] = useState('')
   const [tab, setTab] = useState<'gt' | 'eq'>('gt')
-  const [pushing, setPushing] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [showHistory, setShowHistory] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -152,7 +150,6 @@ export default function Stock() {
   <h2 style={{ marginTop: 0, marginBottom: 8, flex: 1 }}>Stock</h2>
   <div style={{ display: 'flex', gap: 8, flexWrap:'wrap' }}>
     <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.purchases)}>Compras</button>
-    <button className="btn" disabled={pushing || !items.length} onClick={async () => { setPushing(true); try { await pushTNBulk(items.map((i) => i.product_id)); alert('Push Tiendanube (stub) completado'); } finally { setPushing(false) } }}>Enviar imágenes a Tiendanube</button>
     <button className="btn" disabled={!selected.size} onClick={async () => {
       if (!selected.size) { push({ kind:'error', message:'Debe seleccionar al menos un producto' }); return }
       try { const rIds = Array.from(selected); await generateCatalog(rIds); push({ kind:'success', message:`Catálogo generado (${rIds.length} productos)` }) } catch (e:any) { push({ kind:'error', message: e.message || 'Error generando catálogo' }) }
@@ -199,6 +196,18 @@ export default function Stock() {
   const url = base + `/stock/export.xlsx?${params.toString()}`
   window.location.href = url
     }}>Descargar XLS</button>
+    <button className="btn" disabled={!items.length} onClick={() => {
+      // Exportar a TiendaNegocio con mismos filtros
+      const params = new URLSearchParams()
+      if (q) params.set('q', q)
+      if (supplierId) params.set('supplier_id', supplierId)
+      if (categoryId) params.set('category_id', categoryId)
+      params.set('stock', tab === 'gt' ? 'gt:0' : 'eq:0')
+      params.set('sort_by', 'updated_at')
+      params.set('order', 'desc')
+      const url = base + `/stock/export-tiendanegocio.xlsx?${params.toString()}`
+      window.location.href = url
+    }}>Exportar a TiendaNegocio</button>
     <button className="btn" onClick={() => {
       const params = new URLSearchParams()
       if (q) params.set('q', q)
@@ -298,7 +307,9 @@ export default function Stock() {
         <input type="checkbox" checked={selected.has(it.product_id)} onChange={() => toggleSelect(it.product_id)} />
       </td>
       <td style={{ textAlign: 'left' }}>
-        <a className="truncate product-title" href={`/productos/${it.product_id}`}>{it.name}</a>
+        <a className="truncate product-title" href={`/productos/${it.product_id}`}>
+          {it.preferred_name || it.name}
+        </a>
       </td>
       <td style={{ textAlign: 'left' }}>{it.supplier.name}</td>
       <td className="text-center">

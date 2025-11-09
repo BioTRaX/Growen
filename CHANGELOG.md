@@ -118,6 +118,13 @@
 - purchases(iAVaL): nuevos endpoints `POST /purchases/{id}/iaval/preview` y `POST /purchases/{id}/iaval/apply` para validación IA de remitos y aplicación de cambios en BORRADOR. Incluye extracción de texto de PDF, prompt con esquema JSON estricto, parsing robusto y auditoría `purchase.iaval.apply`.
 - ui(compras): botón “iAVaL” en `PurchaseDetail` (sólo BORRADOR) y modal con confianza, comentarios y diffs (header y líneas) + confirmación “Sí, aplicar cambios”.
 - docs: `Roadmap.md` creado con estado actual y pendientes; `docs/PURCHASES.md` ampliado con sección iAVaL y variables de entorno IA.
+ - stock: nuevo endpoint `GET /stock/export-tiendanegocio.xlsx` y botón en la UI “Exportar a TiendaNegocio” que respeta filtros activos y genera un XLSX con el formato requerido (SKU, Nombre, Precio, Stock, Visibilidad, Descripción, Peso/Dimensiones, Categoría, variantes vacías).
+
+### Removed
+- Integración Tiendanube (push de imágenes):
+	- Se eliminaron los endpoints `POST /products/{pid}/images/push/tiendanube` y `POST /products/images/push/tiendanube/bulk`.
+	- Se removieron los botones “Enviar a Tiendanube” en `Stock` y `ProductDetail`.
+	- Documentación actualizada para reflejar el reemplazo por la exportación a TiendaNegocio (`docs/IMAGES_STEP2.md`, `docs/PRODUCTS_UI.md`).
 - feat(import): Añadido scaffolding de fallback IA para remitos (fase 1: sólo cuando pipeline clásico produce 0 líneas). Incluye:
 	- (Fase 2) Trigger adicional por baja `classic_confidence` (< IMPORT_AI_CLASSIC_MIN_CONFIDENCE) y cálculo heurístico (`classic_confidence` event).
 	- Prompt enriquecido con hint de líneas y confianza.

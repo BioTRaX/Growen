@@ -59,6 +59,7 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /products-ex/users/me/preferences/products-table | cliente, proveedor, colaborador, admin |
 | PUT | /products-ex/users/me/preferences/products-table | cliente, proveedor, colaborador, admin (requiere CSRF) |
 | GET | /stock/export.xlsx | cliente, proveedor, colaborador, admin |
+| GET | /stock/export-tiendanegocio.xlsx | colaborador, admin |
 | GET | /catalog/next-seq | colaborador, admin |
 | GET | /suppliers/price-list/template | cliente, proveedor, colaborador, admin |
 | GET | /suppliers/{supplier_id}/price-list/template | cliente, proveedor, colaborador, admin |
@@ -69,7 +70,6 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /actions/ | Ninguno |
 | POST | /chat | Ninguno |
 | WebSocket | /ws | Ninguno |
-| POST | /webhooks/tiendanube/ | Ninguno |
 | GET | /healthz* | admin |
 | GET | /debug/db* | admin |
 | GET | /debug/config* | admin |

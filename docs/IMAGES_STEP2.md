@@ -8,8 +8,6 @@ Env
 - REDIS_URL=redis://localhost:6379/0
 - TELEGRAM_TOKEN=<optional>
 - TELEGRAM_CHAT_ID=<optional>
-- TNUBE_API_TOKEN=<optional>
-- TNUBE_STORE_ID=<optional>
 - IMAGE_MIN_SIZE=600 (default)
 
 Workers
@@ -25,8 +23,8 @@ Admin panel endpoints
 Scraper
 - services/scrapers/santaplanta.py implements search_by_title, parse_product_page, crawl_catalog with a 1 rps limiter and thumbnail filtering.
 
-Push Tiendanube
-- services/integrations/tiendanube.py provides upload_product_images and bulk_upload with a naive 5/min limiter; real API wiring pending.
+Integración Tiendanube (REMOVIDA)
+- La funcionalidad de push de imágenes a Tiendanube fue eliminada y reemplazada por una exportación a TiendaNegocio basada en XLS (`GET /stock/export-tiendanegocio.xlsx`) que respeta los mismos filtros activos en la vista de Stock. No se mantiene ya `services/integrations/tiendanube.py` ni los endpoints `/products/*/images/push/tiendanube`.
 
 Review queue
 - GET /products/images/review?status=pending

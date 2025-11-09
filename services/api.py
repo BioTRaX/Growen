@@ -69,7 +69,7 @@ if level_name not in logging._nameToLevel:
     level_name = "INFO"
 logger = logging.getLogger("growen")
 logger.setLevel(level_name)
-LOG_DIR = Path(__file__).resolve().parents[1] / "logs"
+LOG_DIR = Path(os.getenv("LOG_DIR", str(Path(__file__).resolve().parents[1] / "logs")))
 try:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 except Exception:

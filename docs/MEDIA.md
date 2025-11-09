@@ -32,7 +32,7 @@ CLAMAV_ENABLED=true
 CLAMD_HOST=127.0.0.1
 CLAMD_PORT=3310
 WATERMARK_LOGO=./Imagenes/Logos/logo.png
-TNUBE_API_TOKEN=
-TNUBE_STORE_ID=
 ```
+
+- Exportación TiendaNegocio: no requiere variables adicionales; el XLSX se genera bajo demanda con `GET /stock/export-tiendanegocio.xlsx` reutilizando los filtros de Stock.
 

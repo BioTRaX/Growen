@@ -71,12 +71,3 @@ export async function refreshSEO(productId: number, imageId: number): Promise<{ 
   return r.data
 }
 
-export async function pushTN(productId: number) {
-  await http.post(`/products/${productId}/images/push/tiendanube`)
-}
-
-export async function pushTNBulk(productIds: number[]) {
-  const r = await http.post(`/products/images/push/tiendanube/bulk`, { product_ids: productIds })
-  return r.data as { results: { product_id: number; remote_media_id: string }[] }
-}
-

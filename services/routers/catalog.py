@@ -19,7 +19,7 @@ from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import func, select, or_
+from sqlalchemy import func, select, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -162,8 +162,75 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
             "code": "invalid_canonical_sku",
             "message": f"Formato canónico inválido: esperado {CANONICAL_SKU_PATTERN}",
         })
+    # Adicional: si parece canónico pero sin guiones bajos (AAA0000BBB), rechazar
+    try:
+        import re as _re
+        if _re.match(r"^[A-Za-z]{3}\d{4}[A-Za-z]{3}$", desired_sku or "") and not is_canonical_sku(desired_sku):
+            raise HTTPException(status_code=422, detail={
+                "code": "invalid_canonical_sku",
+                "message": f"Formato canónico inválido: esperado {CANONICAL_SKU_PATTERN}",
+            })
+    except HTTPException:
+        raise
 
     sku_is_canonical = is_canonical_sku(desired_sku)
+
+    # Si el SKU ya existe y es canónico, permitir vincular SupplierProduct en lugar de error (linking)
+    if sku_is_canonical:
+        existing_var = await session.scalar(select(Variant).where(func.lower(Variant.sku) == desired_sku.lower()))
+        if existing_var:
+            existing_prod = await session.get(Product, existing_var.product_id)
+            if payload.supplier_id is not None:
+                # Si ya existe un SupplierProduct con la misma pareja (supplier_id, supplier_sku),
+                # consideramos que es un duplicado de SKU del flujo minimal y devolvemos 409 duplicate_sku
+                if payload.supplier_sku:
+                    sp_exist = await session.scalar(
+                        select(SupplierProduct).where(
+                            SupplierProduct.supplier_id == payload.supplier_id,
+                            SupplierProduct.supplier_product_id == payload.supplier_sku,
+                        )
+                    )
+                    if sp_exist:
+                        raise HTTPException(status_code=409, detail={"code": "duplicate_sku", "message": "SKU ya existente"})
+                # Crear/asegurar SupplierProduct vinculado al producto/variante existente
+                sp = SupplierProduct(
+                    supplier_id=payload.supplier_id,
+                    supplier_product_id=(payload.supplier_sku or desired_sku),
+                    title=payload.title[:200],
+                    current_purchase_price=(payload.purchase_price if payload.purchase_price is not None else None),
+                    current_sale_price=(payload.sale_price if payload.sale_price is not None else None),
+                    internal_product_id=existing_prod.id if existing_prod else None,
+                    internal_variant_id=existing_var.id,
+                )
+                session.add(sp)
+                await session.flush()
+                try:
+                    await session.commit()
+                except IntegrityError:
+                    await session.rollback()
+                    # Si ya existe SupplierProduct con ese supplier+sku, retornamos link sin crear
+                response = {
+                    "id": existing_prod.id if existing_prod else None,
+                    "title": existing_prod.title if existing_prod else payload.title,
+                    "sku_root": getattr(existing_prod, 'sku_root', desired_sku) if existing_prod else desired_sku,
+                    "linked": True,
+                    "created": False,
+                    "idempotent": False,
+                }
+                try:
+                    response["supplier_item_id"] = sp.id
+                except Exception:
+                    pass
+                return response
+            # Sin supplier, retornar referencia sin crear duplicados
+            return {
+                "id": existing_prod.id if existing_prod else None,
+                "title": existing_prod.title if existing_prod else payload.title,
+                "sku_root": getattr(existing_prod, 'sku_root', desired_sku) if existing_prod else desired_sku,
+                "linked": True,
+                "created": False,
+                "idempotent": True,
+            }
 
     # Generación automática si se solicita o es requerido en modo estricto sin sku válido
     if (payload.generate_canonical or (strict_flag and not sku_is_canonical)):
@@ -1414,8 +1481,13 @@ async def list_products(
     if category_id is not None:
         stmt = stmt.where(p.category_id == category_id)
     if q:
+        # Búsqueda por nombre interno, título del proveedor y también por nombre canónico
         stmt = stmt.where(
-            or_(p.title.ilike(f"%{q}%"), sp.title.ilike(f"%{q}%"))
+            or_(
+                p.title.ilike(f"%{q}%"),
+                sp.title.ilike(f"%{q}%"),
+                cp.name.ilike(f"%{q}%"),
+            )
         )
     # Stock filter: 'gt:0' or 'eq:0'
     if stock:
@@ -1484,10 +1556,12 @@ async def list_products(
     items = []
     for sp_obj, p_obj, s_obj, eq_obj, cp_obj in rows:
         cat_path = await _category_path(session, p_obj.category_id)
+        preferred_name = (cp_obj.name if (cp_obj and getattr(cp_obj, "name", None)) else p_obj.title)
         items.append(
             {
                 "product_id": p_obj.id,
                 "name": p_obj.title,
+                "preferred_name": preferred_name,
                 "supplier": {
                     "id": s_obj.id,
                     "slug": s_obj.slug,
@@ -1733,6 +1807,250 @@ async def export_stock_xlsx(
     headers = {"Content-Disposition": "attachment; filename=stock.xlsx"}
     if cid:
         headers["X-Correlation-Id"] = cid
+    return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
+
+
+@router.get(
+    "/stock/export-tiendanegocio.xlsx",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+)
+async def export_stock_tiendanegocio_xlsx(
+    supplier_id: Optional[int] = None,
+    category_id: Optional[int] = None,
+    q: Optional[str] = None,
+    stock: Optional[str] = None,
+    created_since_days: Optional[int] = None,
+    sort_by: str = "updated_at",
+    order: str = "desc",
+    type: Optional[str] = Query(None, pattern="^(all|canonical|supplier)$"),
+    *,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """Exporta un XLS con el formato de importación de TiendaNegocio.
+
+    Columnas:
+    - SKU (OBLIGATORIO)
+    - Nombre del producto
+    - Precio
+    - Oferta
+    - Stock
+    - Visibilidad (Visible o Oculto)
+    - Descripción
+    - Peso en KG
+    - Alto en CM
+    - Ancho en CM
+    - Profundidad en CM
+    - Nombre de variante #1
+    - Opción de variante #1
+    - Nombre de variante #2
+    - Opción de variante #2
+    - Nombre de variante #3
+    - Opción de variante #3
+    - Categorías > Subcategorías > … > Subcategorías
+    """
+    # Reutilizar filtros y ordenamiento como en export_stock_xlsx (sin paginar)
+    try:
+        sort_by_enum = ProductSortBy(sort_by)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="sort_by inválido")
+
+    try:
+        order_enum = SortOrder(order)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="order inválido")
+
+    sp = SupplierProduct
+    p = Product
+    s = Supplier
+    eq = ProductEquivalence
+    cp = CanonicalProduct
+
+    stmt = (
+        select(sp, p, s, eq, cp)
+        .join(s, sp.supplier_id == s.id)
+        .join(p, sp.internal_product_id == p.id)
+        .outerjoin(eq, eq.supplier_product_id == sp.id)
+        .outerjoin(cp, cp.id == eq.canonical_product_id)
+    )
+
+    if supplier_id is not None:
+        stmt = stmt.where(sp.supplier_id == supplier_id)
+    if category_id is not None:
+        stmt = stmt.where(p.category_id == category_id)
+    if q:
+        stmt = stmt.where(or_(p.title.ilike(f"%{q}%"), sp.title.ilike(f"%{q}%")))
+    if stock:
+        try:
+            op, val = stock.split(":", 1)
+            val_i = int(val)
+        except Exception:
+            raise HTTPException(status_code=400, detail="stock inválido (use gt:0 o eq:0)")
+        if op == "gt":
+            stmt = stmt.where(p.stock > val_i)
+        elif op == "eq":
+            stmt = stmt.where(p.stock == val_i)
+        else:
+            raise HTTPException(status_code=400, detail="stock inválido (op debe ser gt o eq)")
+    if created_since_days is not None:
+        if created_since_days < 0 or created_since_days > 365:
+            raise HTTPException(status_code=400, detail="created_since_days fuera de rango (0-365)")
+        from datetime import datetime, timedelta
+        cutoff = datetime.utcnow() - timedelta(days=created_since_days)
+        stmt = stmt.where(p.created_at >= cutoff)
+
+    if type and type != "all":
+        if type == "canonical":
+            stmt = stmt.where(eq.canonical_product_id.is_not(None))
+        elif type == "supplier":
+            stmt = stmt.where(eq.canonical_product_id.is_(None))
+
+    sort_map = {
+        ProductSortBy.updated_at: sp.last_seen_at,
+        ProductSortBy.precio_venta: sp.current_sale_price,
+        ProductSortBy.precio_compra: sp.current_purchase_price,
+        ProductSortBy.name: p.title,
+        ProductSortBy.created_at: p.created_at,
+    }
+    sort_col = sort_map[sort_by_enum]
+    sort_col = sort_col.asc() if order_enum == SortOrder.asc else sort_col.desc()
+    stmt = stmt.order_by(sort_col)
+
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    # Prefetch primer SKU por producto
+    product_ids = list({p_obj.id for _, p_obj, *_ in rows})
+    skus_by_product: dict[int, str | None] = {}
+    if product_ids:
+        vs = (
+            await session.execute(
+                select(Variant.product_id, Variant.sku)
+                .where(Variant.product_id.in_(product_ids))
+                .order_by(Variant.product_id.asc(), Variant.id.asc())
+            )
+        ).all()
+        for pid, sku in vs:
+            if pid not in skus_by_product:
+                skus_by_product[pid] = sku
+
+    # Mapear por producto priorizando canónicos
+    by_product: dict[int, dict] = {}
+    for sp_obj, p_obj, s_obj, eq_obj, cp_obj in rows:
+        rec = by_product.get(p_obj.id)
+        if rec:
+            # Completar precio canónico si aún no
+            if rec.get("canonical_sale_price") is None and (cp_obj and cp_obj.sale_price is not None):
+                rec["canonical_sale_price"] = float(cp_obj.sale_price)
+            continue
+        by_product[p_obj.id] = {
+            "product_id": p_obj.id,
+            "name": p_obj.title,
+            "stock": p_obj.stock,
+            "description_html": getattr(p_obj, "description_html", None),
+            "weight_kg": float(p_obj.weight_kg) if p_obj.weight_kg is not None else None,
+            "height_cm": float(p_obj.height_cm) if p_obj.height_cm is not None else None,
+            "width_cm": float(p_obj.width_cm) if p_obj.width_cm is not None else None,
+            "depth_cm": float(p_obj.depth_cm) if p_obj.depth_cm is not None else None,
+            "category_id": p_obj.category_id,
+            "supplier_sale_price": float(sp_obj.current_sale_price) if sp_obj.current_sale_price is not None else None,
+            "canonical_sale_price": float(cp_obj.sale_price) if (cp_obj and cp_obj.sale_price is not None) else None,
+            "canonical_name": (cp_obj.name if (cp_obj and getattr(cp_obj, "name", None)) else None),
+            "canonical_sku": (cp_obj.sku_custom or cp_obj.ng_sku) if cp_obj else None,
+            "canonical_category_id": getattr(cp_obj, "category_id", None) if cp_obj else None,
+            "canonical_subcategory_id": getattr(cp_obj, "subcategory_id", None) if cp_obj else None,
+        }
+
+    # Construir workbook con cabecera TiendaNegocio
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Productos"
+    ws.append([
+        "SKU (OBLIGATORIO)",
+        "Nombre del producto",
+        "Precio",
+        "Oferta",
+        "Stock",
+        "Visibilidad (Visible o Oculto)",
+        "Descripción",
+        "Peso en KG",
+        "Alto en CM",
+        "Ancho en CM",
+        "Profundidad en CM",
+        "Nombre de variante #1",
+        "Opción de variante #1",
+        "Nombre de variante #2",
+        "Opción de variante #2",
+        "Nombre de variante #3",
+        "Opción de variante #3",
+        "Categorías > Subcategorías > … > Subcategorías",
+    ])
+    header_fill = PatternFill(start_color="FF333333", end_color="FF333333", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFFFF")
+    header_alignment = Alignment(horizontal="center")
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = header_alignment
+
+    # Filas
+    for pid, rec in by_product.items():
+        # SKU obligatorio: canónico si existe, si no, primer SKU de variante
+        sku = rec.get("canonical_sku") or skus_by_product.get(pid) or ""
+        # Nombre preferido
+        name = rec.get("canonical_name") or rec.get("name") or ""
+        # Precio: priorizar canónico
+        precio = rec.get("canonical_sale_price") if rec.get("canonical_sale_price") is not None else rec.get("supplier_sale_price")
+        # Stock
+        stock_val = rec.get("stock") or 0
+        # Visibilidad: Visible por defecto
+        vis = "Visible"
+        # Descripción
+        descripcion = rec.get("description_html") or ""
+        # Medidas
+        weight_kg = rec.get("weight_kg")
+        height_cm = rec.get("height_cm")
+        width_cm = rec.get("width_cm")
+        depth_cm = rec.get("depth_cm")
+        # Categoría jerárquica
+        can_subcat_id = rec.get("canonical_subcategory_id")
+        can_cat_id = rec.get("canonical_category_id")
+        if can_subcat_id:
+            cat_path = await _category_path(session, can_subcat_id)
+        elif can_cat_id:
+            cat_path = await _category_path(session, can_cat_id)
+        else:
+            cat_path = await _category_path(session, rec.get("category_id"))
+
+        ws.append([
+            sku,
+            name,
+            float(precio) if precio is not None else None,
+            "",  # Oferta (vacío)
+            int(stock_val),
+            vis,
+            descripcion,
+            weight_kg if weight_kg is not None else None,
+            height_cm if height_cm is not None else None,
+            width_cm if width_cm is not None else None,
+            depth_cm if depth_cm is not None else None,
+            "", "",  # Variante #1
+            "", "",  # Variante #2
+            "", "",  # Variante #3
+            cat_path or "",
+        ])
+
+    # Serializar
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    headers = {"Content-Disposition": "attachment; filename=productos_tiendanegocio.xlsx"}
+    try:
+        cid = request.headers.get("x-correlation-id") or request.headers.get("x-request-id")
+        if cid:
+            headers["X-Correlation-Id"] = cid
+    except Exception:
+        pass
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
 
 
@@ -2115,9 +2433,37 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
     market_price_reference = (
         float(prod.market_price_reference) if getattr(prod, "market_price_reference", None) is not None else None
     )
+    # Título preferido para UI: title_canonical (si existe) o canonical_name; si no, product.title
+    preferred_title = None
+    try:
+        preferred_title = (getattr(prod, "title_canonical", None) or None)
+    except Exception:
+        preferred_title = None
+    if not (preferred_title or "").strip():
+        preferred_title = canonical_name or prod.title
+
+    # Obtener precio de venta del proveedor como fallback
+    supplier_sale_price = None
+    try:
+        sp_row = (await session.execute(
+            select(SupplierProduct.current_sale_price)
+            .where(SupplierProduct.internal_product_id == product_id)
+            .where(SupplierProduct.current_sale_price.is_not(None))
+            .order_by(SupplierProduct.last_seen_at.desc().nulls_last())
+            .limit(1)
+        )).scalar_one_or_none()
+        if sp_row is not None:
+            supplier_sale_price = float(sp_row)
+    except Exception:
+        pass # No bloquear si falla
+
+    # Precio de venta final: priorizar canónico, luego proveedor
+    sale_price = canonical_sale if canonical_sale is not None else supplier_sale_price
+
     return {
         "id": prod.id,
         "title": prod.title,
+        "preferred_title": preferred_title,
         "slug": prod.slug,
         "stock": prod.stock,
         "sku_root": prod.sku_root,
@@ -2133,8 +2479,10 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
         "market_price_reference": market_price_reference,
         "canonical_product_id": canonical_id,
         "canonical_sale_price": canonical_sale,
-    "canonical_sku": canonical_sku,
-    "canonical_name": canonical_name,
+        "supplier_sale_price": supplier_sale_price,
+        "sale_price": sale_price,
+        "canonical_sku": canonical_sku,
+        "canonical_name": canonical_name,
         "images": [
             {
                 "id": im.id,
@@ -2360,6 +2708,179 @@ async def enrich_multiple_products(
     return {"enriched": enriched, "skipped": skipped, "errors": errors}
 
 
+@router.get(
+    "/debug/enrich/{product_id}",
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def debug_enrich_product(
+    product_id: int,
+    session: AsyncSession = Depends(get_session),
+    request: Request = None,
+    sess: SessionData = Depends(current_session),
+) -> dict:
+    """Endpoint de diagnóstico para el flujo de enriquecimiento.
+
+    No persiste cambios. Devuelve:
+    - título elegido (incluye preferencia canónica si aplica)
+    - proveedor IA seleccionado y flags relevantes
+    - estado de salud del MCP web-search (si está habilitado)
+    - prompt generado
+    - vista previa de la respuesta de IA (sin parsear)
+    """
+    prod = await session.get(Product, product_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    # Elegir título (preferir canónico): title_canonical -> CanonicalProduct.name por canonical_sku -> product.title
+    title = (getattr(prod, "title_canonical", None) or "").strip()
+    used_canonical_title = False
+    if title:
+        used_canonical_title = True
+    else:
+        try:
+            if getattr(prod, "canonical_sku", None):
+                cp = (
+                    await session.execute(
+                        select(CanonicalProduct).where(
+                            or_(
+                                CanonicalProduct.sku_custom == prod.canonical_sku,
+                                CanonicalProduct.ng_sku == prod.canonical_sku,
+                            )
+                        )
+                    )
+                ).scalars().first()
+                if cp and (cp.name or "").strip():
+                    title = cp.name.strip()
+                    used_canonical_title = True
+        except Exception:
+            pass
+    if not title:
+        title = (prod.title or "").strip()
+
+    # Armar prompt base (mismo que enrich_product)
+    schema_hint = (
+        "{"
+        "\"Título del Producto\": string, "
+        "\"Descripción para Nice Grow\": string, "
+        "\"Peso KG\": number|null, "
+        "\"Alto CM\": number|null, "
+        "\"Ancho CM\": number|null, "
+        "\"Profundidad CM\": number|null, "
+        "\"Valor de mercado estimado\": string|null, "
+        "\"Fuentes\": object|null  "
+        "}"
+    )
+    prompt = (
+        "Eres GrowMaster, un asistente de marketing de productos para jardinería y growshops. "
+        "Responde ÚNICAMENTE en JSON válido (sin texto extra, sin markdown, sin ```). "
+        "Completa el siguiente esquema con la mejor información posible, usando tono claro y útil, español latino neutro.\n\n"
+        f"Producto: {title}\n\n"
+        f"Esquema: {schema_hint}\n\n"
+        "Reglas: \n"
+        "- Si no estás seguro de un valor numérico, usa null.\n"
+        "- No inventes datos técnicos; prioriza precisión.\n"
+        "- La 'Descripción para Nice Grow' debe ser breve (2-4 oraciones), clara y orientada a clientes.\n"
+        "- Incluir un breve 'Análisis de Mercado (AR$)' resumido dentro de 'Valor de mercado estimado' cuando sea aplicable.\n"
+        "- Si dispones de fuentes o referencias, incluye un objeto 'Fuentes' con claves descriptivas y valores URL (http/https)."
+    )
+
+    # Contexto MCP (productos) y salud de web-search
+    extra_context = None
+    web_health = "disabled"
+    web_query = None
+    web_hits = 0
+    web_search_results = None
+    try:
+        fv = (
+            await session.execute(
+                select(Variant.sku).where(Variant.product_id == product_id).order_by(Variant.id.asc()).limit(1)
+            )
+        ).scalar_one_or_none()
+        role = getattr(getattr(sess, 'user', None), 'role', 'colaborador') or 'colaborador'
+        provider = OpenAIProvider()
+        if fv:
+            ctx = await provider.call_mcp_tool(tool_name="get_product_info", parameters={"sku": str(fv), "user_role": role})
+            if isinstance(ctx, dict) and ctx:
+                extra_context = ctx
+                try:
+                    import json as _json
+                    prompt += "\n\nContexto interno (MCP):\n" + _json.dumps(extra_context, ensure_ascii=False)
+                except Exception:
+                    pass
+        # Web-search si está habilitado
+        import os as _os
+        use_web = (_os.getenv("AI_USE_WEB_SEARCH", "0").lower() in {"1", "true", "yes"}) and settings.ai_allow_external
+        if use_web:
+            web_health = "unknown"
+            try:
+                import httpx as _httpx
+                mcp_url = _os.getenv("MCP_WEB_SEARCH_URL", "http://mcp_web_search:8002/invoke_tool")
+                health_url = mcp_url.replace("/invoke_tool", "/health")
+                async with _httpx.AsyncClient(timeout=2.0) as _cli:
+                    _h = await _cli.get(health_url)
+                    web_health = "ok" if _h.status_code == 200 else f"bad_status_{_h.status_code}"
+            except Exception:
+                web_health = "unhealthy"
+            if web_health == "ok":
+                web_query = title
+                try:
+                    wres = await provider.call_mcp_web_tool(tool_name="search_web", parameters={"query": web_query, "user_role": role, "max_results": int(_os.getenv("AI_WEB_SEARCH_MAX_RESULTS", "3"))})
+                    if isinstance(wres, dict) and wres:
+                        items = wres.get("items") or []
+                        if isinstance(items, list):
+                            web_hits = len(items)
+                        web_search_results = wres
+                        try:
+                            import json as _json
+                            prompt += "\n\nBúsqueda web (MCP) - top resultados:\n" + _json.dumps(web_search_results, ensure_ascii=False)
+                        except Exception:
+                            pass
+                except Exception:
+                    web_search_results = {"error": "web_search_failed"}
+    except Exception:
+        pass
+
+    # Provider seleccionado (sin ejecutar cambios)
+    router_ai = AIRouter(settings)
+    provider_obj = router_ai.get_provider(Task.REASONING.value)
+    provider_name = getattr(provider_obj, "name", type(provider_obj).__name__)
+
+    # Ejecutar una llamada de prueba (no persistente) y devolver texto crudo
+    try:
+        raw = router_ai.run(Task.REASONING.value, prompt)
+    except Exception as _e:
+        raw = f"<error: {type(_e).__name__}>"
+
+    # Normalización previa de fences y prefijos para test de parseabilidad
+    preview = (raw or "")
+    norm = preview.strip()
+    if norm.startswith("openai:") or norm.startswith("ollama:"):
+        norm = norm.split(":", 1)[1].strip()
+    if norm.startswith("```"):
+        norm = norm.strip("`\n ")
+        if norm.lower().startswith("json"):
+            norm = norm[4:].strip()
+    import json as _json
+    will_parse = True
+    try:
+        _ = _json.loads(norm)
+    except Exception:
+        will_parse = False
+
+    return {
+        "product_id": product_id,
+        "title": title,
+        "title_used": title,  # alias explícito para claridad de UI/diagnóstico
+        "used_canonical_title": used_canonical_title,
+        "ai_allow_external": settings.ai_allow_external,
+        "ai_provider_selected": provider_name,
+        "web_search": {"enabled": bool(web_health != "disabled"), "health": web_health, "query": web_query, "hits": web_hits},
+        "prompt": prompt,
+        "raw_ai_preview": preview[:1200],
+        "raw_ai_looks_json": will_parse,
+    }
+
+
 @router.post(
     "/products/{product_id}/enrich",
     dependencies=[Depends(require_csrf), Depends(require_roles("admin", "colaborador"))],
@@ -2389,13 +2910,68 @@ async def enrich_product(
         print(f"CONFLICT DETECTED: {product_id}") # DEBUG
         raise HTTPException(status_code=409, detail="El producto ya está siendo enriquecido. Intente de nuevo en unos momentos.")
 
-    title = (prod.title or "").strip()
+    # --- Inicio: Lógica de selección de título para enriquecimiento ---
+    # Prioridad:
+    # 1. Título del producto canónico (buscado vía ProductEquivalence).
+    # 2. Fallback: Título del producto de proveedor (`product.title`).
+    title = ""
+    used_canonical_title = False
+    canonical_product_id = None
+    import logging as _logging
+    logger = _logging.getLogger("growen")
+
+    try:
+        # Buscar el ID del canónico a través de la tabla de equivalencia, como en get_product
+        sp_equiv_rows = (await session.execute(
+            select(ProductEquivalence.canonical_product_id)
+            .join(SupplierProduct, SupplierProduct.id == ProductEquivalence.supplier_product_id)
+            .where(SupplierProduct.internal_product_id == product_id)
+            .limit(1)
+        )).scalars().all()
+
+        if sp_equiv_rows:
+            canonical_product_id = sp_equiv_rows[0]
+            if canonical_product_id:
+                cp = await session.get(CanonicalProduct, canonical_product_id)
+                if cp and (cp.name or "").strip():
+                    title = cp.name.strip()
+                    used_canonical_title = True
+    except Exception as e:
+        logger.warning({
+            "event": "enrich.choose_title.error",
+            "product_id": product_id,
+            "reason": "Error al buscar producto canónico",
+            "error": str(e),
+        })
+
+    # Fallback al título del producto si no se encontró un título canónico válido
+    if not title:
+        title = (prod.title or "").strip()
+
+    logger.info({
+        "event": "enrich.choose_title",
+        "product_id": product_id,
+        "title_selected": title,
+        "used_canonical_title": used_canonical_title,
+        "canonical_product_id_found": canonical_product_id,
+        "fallback_to_product_title": not used_canonical_title,
+    })
+    # --- Fin: Lógica de selección de título ---
+
     if not title:
         raise HTTPException(status_code=400, detail="El producto no tiene título definido")
 
-    # Adquirir el bloqueo
-    prod.is_enriching = True
+    # Adquirir el bloqueo de forma atómica a nivel DB para evitar carreras entre requests
+    upd = (
+        update(Product)
+        .where(Product.id == product_id, Product.is_enriching == False)  # noqa: E712
+        .values(is_enriching=True)
+    )
+    res = await session.execute(upd)
     await session.commit()
+    if res.rowcount == 0:
+        # Otro proceso ganó el lock
+        raise HTTPException(status_code=409, detail="El producto ya está siendo enriquecido. Intente de nuevo en unos momentos.")
 
     generated_fields = []
     txt_url = None
@@ -2406,33 +2982,118 @@ async def enrich_product(
         web_search_results = None
         web_hits = 0
         web_query = None
+        
+        # Obtener datos internos del producto (no bloquea búsqueda web)
         try:
             fv = (await session.execute(select(Variant.sku).where(Variant.product_id == product_id).order_by(Variant.id.asc()).limit(1))).scalar_one_or_none()
             if fv:
                 role = getattr(getattr(sess, 'user', None), 'role', 'colaborador') or 'colaborador'
                 provider = OpenAIProvider()
-                # No depende de API key; es llamada HTTP a MCP server
                 res = await provider.call_mcp_tool(tool_name="get_product_info", parameters={"sku": str(fv), "user_role": role})
                 if isinstance(res, dict) and res:
                     extra_context = res
-                # Integración opcional de búsqueda web MCP bajo feature flag
-                import os as _os, json as _json
-                use_web = (_os.getenv("AI_USE_WEB_SEARCH", "0").lower() in {"1", "true", "yes"}) and settings.ai_allow_external
-                if use_web:
-                    web_query = title
-                    try:
-                        wres = await provider.call_mcp_web_tool(tool_name="search_web", parameters={"query": web_query, "user_role": role, "max_results": int(_os.getenv("AI_WEB_SEARCH_MAX_RESULTS", "3"))})
-                        if isinstance(wres, dict) and wres:
-                            items = wres.get("items") or []
-                            if isinstance(items, list):
-                                web_hits = len(items)
-                            web_search_results = wres
-                    except Exception:
-                        web_search_results = {"error": "web_search_failed"}
-        except Exception:
-            extra_context = None
+        except Exception as e:
+            logger.warning({
+                "event": "enrich.mcp_products.failed",
+                "product_id": product_id,
+                "error": str(e),
+                "message": "Failed to fetch internal product context. Continuing with web search.",
+            })
+        
+        # ========== BÚSQUEDA WEB OBLIGATORIA ==========
+        # La búsqueda web es SIEMPRE necesaria según especificaciones del usuario
+        import os as _os, json as _json
+        use_web = (_os.getenv("AI_USE_WEB_SEARCH", "0").lower() in {"1", "true", "yes"}) and settings.ai_allow_external
+        
+        if not use_web:
+            logger.error({
+                "event": "enrich.web_search.disabled",
+                "product_id": product_id,
+                "AI_USE_WEB_SEARCH": _os.getenv("AI_USE_WEB_SEARCH", "0"),
+                "AI_ALLOW_EXTERNAL": settings.ai_allow_external,
+            })
+            raise HTTPException(
+                status_code=500,
+                detail="La búsqueda web es obligatoria para el enriquecimiento pero está deshabilitada. Verificar AI_USE_WEB_SEARCH y AI_ALLOW_EXTERNAL."
+            )
+        
+        logger.info({"event": "enrich.web_search.start", "product_id": product_id})
+        
+        # Health check del servicio MCP Web Search
+        import httpx as _httpx
+        mcp_url = _os.getenv("MCP_WEB_SEARCH_URL", "http://mcp_web_search:8002/invoke_tool")
+        health_url = mcp_url.replace("/invoke_tool", "/health")
+        web_health = "unknown"
+        
+        try:
+            async with _httpx.AsyncClient(timeout=5.0) as _cli:
+                _h = await _cli.get(health_url)
+                if _h.status_code == 200:
+                    web_health = "ok"
+                else:
+                    web_health = f"bad_status_{_h.status_code}"
+        except Exception as e:
+            web_health = "unhealthy"
+            logger.error({
+                "event": "enrich.web_search.health_check_failed",
+                "product_id": product_id,
+                "mcp_url": health_url,
+                "error": str(e),
+            })
+        
+        logger.info({
+            "event": "enrich.web_search.health_check_result",
+            "product_id": product_id,
+            "status": web_health,
+        })
+        
+        if web_health != "ok":
+            raise HTTPException(
+                status_code=502,
+                detail=f"El servicio de búsqueda web no está disponible (status: {web_health}). No se puede enriquecer sin búsqueda web."
+            )
+        
+        # Ejecutar búsqueda web OBLIGATORIA
+        web_query = title
+        role = getattr(getattr(sess, 'user', None), 'role', 'colaborador') or 'colaborador'
+        provider = OpenAIProvider()
+        
+        try:
+            wres = await provider.call_mcp_web_tool(
+                tool_name="search_web",
+                parameters={
+                    "query": web_query,
+                    "user_role": role,
+                    "max_results": int(_os.getenv("AI_WEB_SEARCH_MAX_RESULTS", "5"))
+                }
+            )
+            if isinstance(wres, dict) and wres:
+                items = wres.get("items") or []
+                if isinstance(items, list):
+                    web_hits = len(items)
+                web_search_results = wres
+                logger.info({
+                    "event": "enrich.web_search.success",
+                    "product_id": product_id,
+                    "query": web_query,
+                    "hits": web_hits,
+                    "with_sources": bool(items),
+                })
+            else:
+                raise ValueError("Web search returned empty or invalid response")
+        except Exception as e:
+            logger.error({
+                "event": "enrich.web_search.execution_failed",
+                "product_id": product_id,
+                "query": web_query,
+                "error": str(e),
+            })
+            raise HTTPException(
+                status_code=502,
+                detail=f"Error al ejecutar búsqueda web: {str(e)}"
+            )
 
-        # Prompt de enriquecimiento orientado a JSON estricto
+        # Prompt de enriquecimiento con instrucciones detalladas del usuario
         schema_hint = (
             "{"
             "\"Título del Producto\": string, "
@@ -2442,38 +3103,116 @@ async def enrich_product(
             "\"Ancho CM\": number|null, "
             "\"Profundidad CM\": number|null, "
             "\"Valor de mercado estimado\": string|null, "
-            "\"Fuentes\": object|null  "
+            "\"Fuentes\": object  "
             "}"
         )
+        
+        from datetime import datetime as _dt, timedelta as _td
+        fecha_actual = _dt.now().strftime("%Y-%m-%d")
+        fecha_limite_precios = (_dt.now() - _td(days=120)).strftime("%Y-%m-%d")
+        
         prompt = (
-            "Eres GrowMaster, un asistente de marketing de productos para jardinería y growshops. "
+            f"Eres GrowMaster, un experto asistente de marketing especializado en productos para jardinería y cultivo en Argentina.\n\n"
+            f"FECHA ACTUAL: {fecha_actual}\n"
+            f"PRODUCTO A ENRIQUECER: {title}\n\n"
+            "========== INSTRUCCIONES OBLIGATORIAS ==========\n\n"
+            "### Tarea 1: Investigación y Verificación de Datos\n\n"
+            "Búsqueda Exhaustiva: Realiza una búsqueda en internet utilizando el título del producto proporcionado. "
+            "Tu búsqueda debe centrarse en encontrar fuentes de Argentina.\n\n"
+            "Jerarquía de Fuentes (Regla de Oro): Debes priorizar las fuentes de información en el siguiente orden estricto de veracidad:\n\n"
+            "- Prioridad #1: El sitio web oficial del fabricante del producto.\n"
+            "- Prioridad #2: Publicaciones en marketplaces importantes de Argentina (ej. Mercado Libre).\n"
+            "- Prioridad #3: Páginas de otros grow shops o vendedores online de Argentina.\n\n"
+            "Resolución de Conflictos: Si encuentras datos contradictorios entre diferentes fuentes (ej. dimensiones, composición), "
+            "siempre deberás usar la información de la fuente con la prioridad más alta (el fabricante es la verdad absoluta). "
+            "No menciones la existencia de la discrepancia, simplemente presenta el dato correcto.\n\n"
+            "### Tarea 2: Generación de Contenido\n\n"
+            "Basado en la información recopilada, genera:\n\n"
+            "**Descripción del producto:**\n"
+            "- Máximo 500 palabras.\n"
+            "- Tono y Estilo: Utiliza un lenguaje amigable, informal y directo con \"voseo\" argentino. "
+            "El objetivo es conectar con el cultivador. Inspírate en este ejemplo de tono: "
+            "\"con este Fertilizante tus plantas van a ser la envidia de los claveles de tu vecina, rico en NPK en las siguientes proporciones 15-5-40, ideal para el estado vegetativo\".\n"
+            "- Contenido: La descripción debe ser atractiva, resaltar los beneficios clave para el cultivador y explicar para qué sirve el producto de manera clara.\n"
+            "- ESTRUCTURA OBLIGATORIA DE LA DESCRIPCIÓN:\n"
+            "  1. Párrafo principal: Beneficios y características del producto (3-5 oraciones)\n"
+            "  2. Párrafo secundario: Modo de uso, aplicación, recomendaciones (2-4 oraciones)\n"
+            "  3. Cierre con 5 keywords: DEBES terminar la descripción con EXACTAMENTE 5 palabras clave separadas por comas.\n"
+            "     - NO uses prefijos como 'Keywords:', 'Palabras clave:', 'SEO:', etc.\n"
+            "     - Simplemente agrega un espacio después del último punto de tu texto y lista las 5 palabras separadas por comas.\n"
+            "     - Ejemplo: '...ideal para cultivos en interior. fertilizante líquido, bloom estimulador, floración cannabis, top crop argentina, abono floración'\n\n"
+            "**Datos Técnicos (Opcional):**\n"
+            "Si encuentras esta información durante tu investigación, complétala. Si no la encuentras, usa null:\n"
+            "- Peso KG: [Valor numérico o null]\n"
+            "- Alto CM: [Valor numérico o null]\n"
+            "- Ancho CM: [Valor numérico o null]\n"
+            "- Profundidad CM: [Valor numérico o null]\n\n"
+            "**Análisis de Mercado (AR$):**\n"
+            "- Busca precios del producto en Pesos Argentinos (AR$) de fuentes argentinas.\n"
+            f"- Filtro de Actualidad: Solo considera precios de fuentes con una antigüedad máxima de 4 meses (posteriores a {fecha_limite_precios}).\n"
+            "- Presentación del Precio:\n"
+            "  * Si encuentras un solo precio válido: \"Valor de mercado estimado: $[Precio] ARS\"\n"
+            "  * Si encuentras múltiples precios válidos: \"Valor de mercado estimado: $[Precio Mínimo] a $[Precio Máximo] ARS\"\n"
+            "  * Advertencia de Desactualización: Si la única fuente de precio disponible tiene más de 4 meses de antigüedad, "
+            "debes incluirla pero con esta advertencia OBLIGATORIA: \"ADVERTENCIA: Precio con más de 4 meses de antigüedad, probablemente desactualizado.\"\n\n"
+            "**Fuentes (OBLIGATORIO):**\n"
+            "- Debes incluir TODAS las fuentes consultadas en un objeto donde:\n"
+            "  * La clave es una descripción corta de la fuente (ej: \"Sitio oficial fabricante\", \"Mercado Libre\", \"Grow Shop ABC\")\n"
+            "  * El valor es la URL completa (http/https)\n"
+            "- Indica claramente cuáles son del fabricante (prioridad #1) vs marketplaces (prioridad #2) vs grow shops (prioridad #3)\n\n"
+            "========== FORMATO DE RESPUESTA ==========\n\n"
             "Responde ÚNICAMENTE en JSON válido (sin texto extra, sin markdown, sin ```). "
-            "Completa el siguiente esquema con la mejor información posible, usando tono claro y útil, español latino neutro.\n\n"
-            f"Producto: {title}\n\n"
-            f"Esquema: {schema_hint}\n\n"
-            "Reglas: \n"
-            "- Si no estás seguro de un valor numérico, usa null.\n"
-            "- No inventes datos técnicos; prioriza precisión.\n"
-            "- La 'Descripción para Nice Grow' debe ser breve (2-4 oraciones), clara y orientada a clientes.\n"
-            "- Si dispones de fuentes o referencias, incluye un objeto 'Fuentes' con claves descriptivas y valores URL (http/https)."
+            f"Completa el siguiente esquema:\n\n{schema_hint}\n\n"
+            "RECORDATORIO CRÍTICO: La 'Descripción para Nice Grow' DEBE terminar con las 5 palabras clave separadas por comas (sin prefijos como 'Keywords:').\n"
+            "El campo 'Fuentes' es OBLIGATORIO y debe contener al menos las URLs de donde obtuviste la información.\n"
         )
+        
         if extra_context:
             try:
                 import json as _json
-                prompt += "\n\nContexto interno (MCP):\n" + _json.dumps(extra_context, ensure_ascii=False)
+                prompt += "\n\n========== CONTEXTO INTERNO (MCP Productos) ==========\n" + _json.dumps(extra_context, ensure_ascii=False, indent=2)
             except Exception:
                 pass
+        
         if web_search_results:
             try:
                 import json as _json
-                prompt += "\n\nBúsqueda web (MCP) - top resultados:\n" + _json.dumps(web_search_results, ensure_ascii=False)
+                prompt += "\n\n========== RESULTADOS DE BÚSQUEDA WEB (MCP Web Search) ==========\n" + _json.dumps(web_search_results, ensure_ascii=False, indent=2)
             except Exception:
                 pass
 
         router_ai = AIRouter(settings)
         raw = router_ai.run(Task.REASONING.value, prompt)
+        
         # Normalizar respuesta posible con prefijo y/o fences
         text = raw.strip()
+        
+        # Log para debugging: ver primeros 300 caracteres de la respuesta cruda
+        logger.debug({
+            "event": "enrich.raw_response",
+            "product_id": product_id,
+            "preview": text[:300],
+            "has_encoding_markers": any(char in text for char in ['├', '┬', '®', '¡'])
+        })
+        
+        # Fix encoding issues: ensure UTF-8 correctness
+        # Sometimes OpenAI returns text with encoding issues
+        try:
+            # Try to encode as latin-1 and decode as utf-8 if it looks corrupted
+            if '├' in text or '┬' in text:
+                text = text.encode('latin-1').decode('utf-8')
+                logger.info({
+                    "event": "enrich.encoding_fixed_pre_parse",
+                    "product_id": product_id,
+                    "message": "Applied latin-1 to UTF-8 conversion to raw response"
+                })
+        except Exception as e:
+            logger.warning({
+                "event": "enrich.encoding_fix_failed_pre_parse",
+                "product_id": product_id,
+                "error": str(e)
+            })
+        
         if text.startswith("openai:") or text.startswith("ollama:"):
             text = text.split(":", 1)[1].strip()
         if text.startswith("```"):
@@ -2485,15 +3224,52 @@ async def enrich_product(
         try:
             data = json.loads(text)
         except Exception:
+            _logging.getLogger("growen").warning({
+                "event": "enrich.error",
+                "product_id": product_id,
+                "reason": "invalid_json",
+                "preview": text[:200],
+            })
             raise HTTPException(status_code=502, detail="Respuesta de IA inválida (no JSON)")
 
         desc_key = "Descripción para Nice Grow"
         if desc_key not in data or not isinstance(data.get(desc_key), str) or not data.get(desc_key).strip():
+            _logging.getLogger("growen").warning({
+                "event": "enrich.error",
+                "product_id": product_id,
+                "reason": "missing_description",
+            })
             raise HTTPException(status_code=502, detail="Respuesta de IA inválida (falta descripción)")
+        
+        # Validar que las Fuentes estén presentes (OBLIGATORIO según especificaciones)
+        if "Fuentes" not in data or not isinstance(data.get("Fuentes"), dict) or not data.get("Fuentes"):
+            _logging.getLogger("growen").warning({
+                "event": "enrich.error",
+                "product_id": product_id,
+                "reason": "missing_sources",
+                "response_keys": list(data.keys()),
+            })
+            raise HTTPException(status_code=502, detail="Respuesta de IA inválida (falta campo 'Fuentes' obligatorio)")
 
         old_desc = getattr(prod, "description_html", None) or ""
         had_enrichment = bool((prod.enrichment_sources_url or '').strip()) or bool((old_desc or '').strip())
-        prod.description_html = data.get(desc_key).strip()
+        
+        # Obtener descripción y corregir encoding UTF-8 si es necesario
+        description = data.get(desc_key).strip()
+        
+        # Fix encoding issues: sometimes OpenAI returns text with latin-1 encoding interpreted as UTF-8
+        try:
+            if any(char in description for char in ['├', '┬', '®', '¡', '¢', '£', '▒', '│', '┤', '╡']):
+                description = description.encode('latin-1').decode('utf-8')
+        except Exception as e:
+            # If conversion fails, keep original
+            logger.warning({
+                "event": "enrich.encoding_fix_failed",
+                "product_id": product_id,
+                "error": str(e),
+            })
+        
+        prod.description_html = description
 
         # Mapear campos técnicos si vienen en la respuesta
         def _to_float_or_none(x):
@@ -2621,11 +3397,22 @@ async def enrich_product(
                     "prompt_hash": prompt_hash,
                     "web_search_query": web_query,
                     "web_search_hits": web_hits,
+                    "used_canonical_title": used_canonical_title,
                 },
                 user_id=sess.user.id if sess and sess.user else None,
                 ip=(request.client.host if request and request.client else None),
             )
         )
+
+        # Logging final de resultado visible en consola
+        _logging.getLogger("growen").info({
+            "event": "enrich.done",
+            "product_id": product_id,
+            "used_canonical_title": used_canonical_title,
+            "sources": bool(sources),
+            "source_file": txt_url,
+            "web_search_hits": web_hits,
+        })
         
         # Commit principal con todos los datos y el log de auditoría
         await session.commit()

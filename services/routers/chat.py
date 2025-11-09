@@ -32,10 +32,9 @@ from services.chat.memory import (
 from services.chat.price_lookup import (
     ProductQuery,
     extract_product_query,
-    # log_product_lookup,
-    # render_product_response,
-    # resolve_product_info,
-    # serialize_result,
+    resolve_price,
+    serialize_result,
+    render_product_response,
 )
 from services.chat.shared import (
     ALLOWED_PRODUCT_INTENT_ROLES,
@@ -121,37 +120,103 @@ async def chat_endpoint(
     # 1. Clasificar la intención del usuario
     intent = await classify_intent(ai_router, user_text)
 
-    # 2. Obtener o inicializar la memoria de la conversación
-    memory_key = build_memory_key(session_id=session_data.session.id, role=user_role)
-    conversation_state = get_memory(memory_key) or {}
+    # 2. Obtener o inicializar la memoria de la conversación (robusto ante sesión ausente)
+    try:
+        sid = session_data.session.id if getattr(session_data, "session", None) else None
+    except Exception:
+        sid = None
+    host = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    memory_key = build_memory_key(session_id=sid, role=user_role, host=host, user_agent=user_agent)
+    # Nota: la memoria estructurada (MemoryState) no es compatible con el flujo de ventas conversacionales actual.
+    # Para evitar errores de tipo, usamos un dict local transitorio cuando corresponde.
+    conversation_state: Dict[str, Any] = {}
 
-    # 3. Enrutar según la intención
+    # 3. Primero, gestionar flujo de aclaración si hay memoria pendiente
+    memory_state = get_memory(memory_key)
+    if memory_state and memory_state.pending_clarification:
+        normalized = normalize_followup_text(user_text)
+        if not normalized:
+            mark_prompted(memory_key)
+            terms = memory_terms_text(memory_state.query)
+            return ChatOut(text=clarify_prompt_text(terms), type="clarify_prompt", intent="clarify")
+        if normalized in CLARIFY_CONFIRM_WORDS:
+            include_metrics = user_role in ALLOWED_PRODUCT_METRIC_ROLES
+            try:
+                # Re-ejecutar la resolución usando la consulta previa almacenada
+                prior_query_text = memory_state.query.raw_text
+                result = await resolve_price(prior_query_text, db, limit=5)
+                payload = serialize_result(result, include_metrics=include_metrics)
+                text = render_product_response(result)
+                clear_memory(memory_key)
+                return ChatOut(text=text, type="product_answer", intent=result.intent, data=payload, took_ms=payload.get("took_ms"))
+            except Exception:
+                logger.exception("chat.local_price_confirm_error")
+                clear_memory(memory_key)
+                return ChatOut(text="Error resolviendo información de producto.", type="error", intent="clarify")
+        tokens = normalized.split()
+        if len(tokens) <= 3 and not memory_state.prompted:
+            mark_prompted(memory_key)
+            terms = memory_terms_text(memory_state.query)
+            return ChatOut(text=clarify_prompt_text(terms), type="clarify_prompt", intent="clarify")
+
+    # 4. Detección de consultas de producto (precio/stock) y fallback sin tools.
+    #    Priorizamos esta detección sobre ventas conversacionales para evitar falsos positivos.
+    product_query = extract_product_query(user_text)
+    if product_query or intent == UserIntent.CONSULTA_PRECIO:
+        # Intentar flujo nuevo: tool-calling vía provider si está disponible
+        try:
+            # Usamos tool-calling SOLO si hay candidatos de SKU explícitos en la consulta.
+            if product_query and product_query.sku_candidates:
+                provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
+                chat_with_tools = getattr(provider, "chat_with_tools", None)
+                # Si el provider elegido no soporta tools, intentar forzar OpenAI si está disponible
+                if not callable(chat_with_tools):
+                    try:
+                        openai_provider = getattr(ai_router, "_providers", {}).get("openai")
+                        if openai_provider is not None:
+                            chat_with_tools = getattr(openai_provider, "chat_with_tools", None)
+                            provider = openai_provider if callable(chat_with_tools) else provider
+                    except Exception:
+                        pass
+                if callable(chat_with_tools):
+                    try:
+                        answer = await chat_with_tools(prompt=user_text, user_role=user_role)
+                        clear_memory(memory_key)
+                        return ChatOut(text=answer, type="product_answer", intent="product_tool")
+                    except Exception:
+                        logger.exception("chat.tool_call_error")
+                        # Continuar a fallback local
+        except Exception:
+            # Si falla provider, usar fallback local
+            pass
+
+        include_metrics = user_role in ALLOWED_PRODUCT_METRIC_ROLES
+        try:
+            result = await resolve_price(user_text, db, limit=5)
+            payload = serialize_result(result, include_metrics=include_metrics)
+            text = render_product_response(result)
+            # Si hay ambigüedad, almacenamos memoria para el flujo de aclaración
+            if payload.get("needs_clarification"):
+                ensure_memory(memory_key, result.query, pending=True, rendered=text)
+            else:
+                clear_memory(memory_key)
+            return ChatOut(text=text, type="product_answer", intent=result.intent, data=payload, took_ms=payload.get("took_ms"))
+        except Exception:
+            logger.exception("chat.local_price_fallback_error")
+            return ChatOut(text="Error resolviendo información de producto.", type="error", intent=UserIntent.CONSULTA_PRECIO.value)
+
+    # 5. Ventas conversacionales (si no aplicó consulta de producto)
     if intent == UserIntent.VENTA_CONVERSACIONAL:
         sales_state = conversation_state.get("sales_flow", None)
-        
         entrada_para_venta = user_text
         if not (sales_state and sales_state.get("fase") != "INICIO"):
             partes = user_text.lower().split()
             if partes and partes[0] in ["vende", "registra", "factura", "anota"]:
                 entrada_para_venta = " ".join(partes)
-
         result = await manejar_conversacion_venta(entrada_para_venta, sales_state, user_role)
-        
-        conversation_state["sales_flow"] = result["nuevo_estado"]
-        ensure_memory(memory_key, conversation_state)
-        
+        conversation_state["sales_flow"] = result.get("nuevo_estado")
         return ChatOut(text=result["respuesta_para_usuario"], intent=UserIntent.VENTA_CONVERSACIONAL.value)
-
-    elif intent == UserIntent.CONSULTA_PRECIO:
-        palabras_clave = ["precio de", "cuánto cuesta", "valor de", "stock de", "hay de"]
-        nombre_producto = user_text
-        for palabra in palabras_clave:
-            if palabra in user_text.lower():
-                nombre_producto = user_text.lower().split(palabra)[1].strip()
-                break
-        
-        respuesta_producto = await consultar_producto(nombre_producto, user_role)
-        return ChatOut(text=respuesta_producto, intent=UserIntent.CONSULTA_PRECIO.value)
 
     # Fallback para CHAT_GENERAL o UNKNOWN
     else:

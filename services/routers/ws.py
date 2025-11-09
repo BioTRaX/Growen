@@ -37,6 +37,9 @@ from ai.router import AIRouter
 from ai.types import Task
 from services.chat.price_lookup import (
     extract_product_query,  # Solo parsing; lógica de resolución DEPRECATED
+    resolve_price,
+    serialize_result,
+    render_product_response,
 )
 from services.chat.memory import (
     build_memory_key,
@@ -185,12 +188,27 @@ async def ws_chat(socket: WebSocket) -> None:
                             "type": "error",
                         })
                         continue
-                # Fallback si provider no soporta tools
-                await socket.send_json({
-                    "role": "assistant",
-                    "text": "No puedo resolver productos ahora (tool-calling no disponible).",
-                    "type": "error",
-                })
+                # Fallback local sin tools: usar resolver interno (compat WS/tests)
+                try:
+                    async with SessionLocal() as db:
+                        result = await resolve_price(data, db, limit=5)
+                    payload = serialize_result(result, include_metrics=include_metrics)
+                    text = render_product_response(result)
+                    await socket.send_json({
+                        "role": "assistant",
+                        "text": text,
+                        "type": "product_answer",
+                        "intent": result.intent,
+                        "data": payload,
+                    })
+                    clear_memory(memory_key)
+                except Exception:
+                    logger.exception("ws.local_price_fallback_error")
+                    await socket.send_json({
+                        "role": "assistant",
+                        "text": "Error resolviendo información de producto.",
+                        "type": "error",
+                    })
                 continue
 
             if memory_state and memory_state.pending_clarification:

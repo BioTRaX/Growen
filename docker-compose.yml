@@ -34,12 +34,18 @@ services:
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_NAME: ${POSTGRES_DB:-growen}
       PGCONNECT_TIMEOUT: ${PGCONNECT_TIMEOUT:-5}
+      # Enriquecimiento IA con búsqueda web (MCP)
+      AI_USE_WEB_SEARCH: "1"
+      MCP_WEB_SEARCH_URL: "http://mcp_web_search:8002/invoke_tool"
     ports:
       - "8000:8000"
     depends_on:
       - db
     command: ["/app/infra/wait-for.sh", "db:5432", "uvicorn", "services.api:app", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
+    volumes:
+      # Consolidar logs del backend en la carpeta del host
+      - ./logs:/app/logs
   frontend:
     build:
       context: frontend

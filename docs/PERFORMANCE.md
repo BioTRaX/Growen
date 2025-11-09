@@ -3,7 +3,7 @@ Lightweight Startup and On-Demand Services
 
 Goals
 - Fast TTFB for core: Login, Home/Chat, Productos (lista), Stock (vista), Compras (listado).
-- Heavy services start on demand: PDF import (OCR), Playwright/Chromium crawler, image processing, Dramatiq/Redis, Scheduler, Tiendanube, Notifier.
+- Heavy services start on demand: PDF import (OCR), Playwright/Chromium crawler, image processing, Dramatiq/Redis, Scheduler y Notifier. La exportación TiendaNegocio es síncrona (HTTP) y no requiere servicio dedicado.
 
 Backend
 - Service Registry tables: `services`, `service_logs`, `startup_metrics` (see migration 20250904_services_registry).

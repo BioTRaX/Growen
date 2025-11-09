@@ -12,14 +12,13 @@ from sqlalchemy import select, update
 from pydantic import BaseModel
 from pathlib import Path
 
-from db.models import Image, ImageVersion, ImageReview, Product, AuditLog, ExternalMediaMap
+from db.models import Image, ImageVersion, ImageReview, Product, AuditLog
 from db.session import get_session
 from services.auth import require_roles, require_csrf, current_session, SessionData
 from services.media import get_media_root, save_upload
 from services.media.downloader import download_product_image, DownloadError, _clamav_scan
 from services.media.processor import to_square_webp_set, apply_watermark, remove_bg
 from services.media.seo import gen_alt_title
-from services.integrations.tiendanube import upload_product_images, bulk_upload
 try:
     from PIL import Image as PILImage
     PIL_AVAILABLE = True
@@ -511,27 +510,3 @@ async def reject(iid: int, payload: RejectIn, request: Request, db: AsyncSession
     await _audit(db, "review_reject", "images", iid, {"note": payload.note, "soft_delete": payload.soft_delete}, sess, request)
     await db.commit()
     return {"status": "ok"}
-
-
-class PushBulkIn(BaseModel):
-    product_ids: List[int]
-
-
-@router.post(
-    "/{pid}/images/push/tiendanube",
-    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
-)
-async def push_tn_single(pid: int, request: Request, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session)):
-    res = await upload_product_images(pid, db)
-    await _audit(db, "push_tn_single", "images", None, {"product_id": pid, **res}, sess, request)
-    return res
-
-
-@router.post(
-    "/images/push/tiendanube/bulk",
-    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
-)
-async def push_tn_bulk(payload: PushBulkIn, request: Request, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session)):
-    res = await bulk_upload(payload.product_ids, db)
-    await _audit(db, "push_tn_bulk", "images", None, {"count": len(payload.product_ids)}, sess, request)
-    return res

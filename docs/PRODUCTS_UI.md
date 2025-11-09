@@ -9,13 +9,16 @@
 - Filtros disponibles:
   - Texto (`q`), Proveedor, Categoría, Stock (`gt:0`/`eq:0`), Recientes.
   - Tipo: `Todos | Canónicos | Proveedor` → mapea a `type=all|canonical|supplier` en `GET /products`.
-- Fallback de datos en listado:
-  - `name` y `precio_venta` se calculan en backend priorizando canónico (si existe) y sino proveedor.
+- Búsqueda por texto (`q`): coincide por título interno, título del proveedor y título canónico.
+- Visualización de nombre en UI:
+  - La UI usa el campo `preferred_name` del backend (canónico primero, título interno como fallback).
+  - Esto simplifica la lógica del frontend y mantiene consistencia con enriquecimiento y catálogos.
 
 - Campos adicionales desde backend (para mejorar la UI):
   - `canonical_sku`: SKU del producto canónico (si existe), o `null`.
   - `canonical_name`: Nombre del producto canónico (si existe), o `null`.
   - `first_variant_sku`: Primer SKU interno de variante del producto (si existe), útil como fallback visual.
+  - `preferred_name`: Título preferido calculado por el backend (canónico → interno).
 
   ### Nota sobre “Stock” y enlace de Precio de Venta
 
@@ -29,6 +32,9 @@
 - Exportar stock:
   - Botones en UI: “Descargar XLS”, “Descargar CSV” y “Exportar PDF”.
   - Endpoints: `GET /stock/export.xlsx`, `GET /stock/export.csv`, `GET /stock/export.pdf`.
+  - Nuevo: “Exportar a TiendaNegocio” (XLSX) exporta con la misma vista/filtros activos en el formato requerido por TiendaNegocio.
+    - Endpoint: `GET /stock/export-tiendanegocio.xlsx` (roles: colaborador/admin).
+    - Columnas: SKU, Nombre, Precio (precio efectivo canónico→proveedor), Oferta (vacío), Stock, Visibilidad (Visible), Descripción, Peso/Alto/Ancho/Profundidad (si están cargados), Variantes (vacías), Categoría jerárquica.
   - Respetan los mismos filtros activos (texto, proveedor, categoría, stock) y el orden por defecto (`sort_by=updated_at&order=desc`).
   - El PDF se abre en una nueva pestaña y puede visualizarse o descargarse según el navegador (requiere dependencias de WeasyPrint en el backend; ver `docs/dependencies.md`).
   - XLSX: Encabezado con fondo oscuro y texto en blanco/negrita; la primera columna (“NOMBRE DE PRODUCTO”) se exporta en negrita por fila y se ajusta un ancho adecuado de forma automática.

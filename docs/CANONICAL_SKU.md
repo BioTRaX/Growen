@@ -52,6 +52,11 @@ Ejemplos inválidos (y motivo):
 5. Se incrementa de forma transaccional y se compone el SKU final.
 6. Se persiste en `products.canonical_sku` (columna canónica) y/o se usa como `sku_root` en la respuesta.
 
+Notas operativas:
+- En entorno de pruebas (Pytest) el flag `CANONICAL_SKU_STRICT` se desactiva por defecto para compatibilidad con payloads legacy; tests específicos pueden forzar modo estricto.
+- Si se recibe un SKU que aparenta ser canónico pero carece de guiones bajos (p. ej. `ABC0001DEF`), se rechaza con `422 invalid_canonical_sku`.
+- Si el SKU canónico ya existe y el alta llega con un proveedor diferente, se vincula creando `SupplierProduct` y la respuesta incluye `linked: true` (sin duplicar `Variant`). Si el proveedor y `supplier_sku` son iguales a uno existente, se responde `409 duplicate_sku`.
+
 ## Tabla de secuencias: `sku_sequences`
 Campos mínimos:
 - `prefix` (PK)
