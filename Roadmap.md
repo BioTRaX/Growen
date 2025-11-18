@@ -204,6 +204,27 @@ Hito 5 - Chatbot administrativo con acceso controlado
   - Pipeline RAG con chunking etiquetado por rol y actualización incremental tras cambios en el repositorio.
   - Auditoría centralizada de consultas, respuestas y modificaciones, con reportes para admins.
 
+Hito 5.1 - Funcionalidad "Mercado" (comparación de precios)
+- Objetivo
+  - Permitir a admins y colaboradores comparar rápidamente los precios de venta internos con los rangos actuales del mercado para tomar decisiones de precios informadas.
+- Estado actual: **Etapa 0 (Planificación) y Etapa 1 (UI básica) completadas**
+  - Documentación completa en `docs/MERCADO.md` con plan de 10 secciones (alcance, UI/UX, modelo de datos, fuentes, worker scraping, seguridad, testing, futuras mejoras).
+  - Componente frontend `Market.tsx` implementado con tabla de productos mostrando: nombre, precio venta (ARS), rango mercado (min-máx), última actualización, categoría y botón de detalle.
+  - Navegación configurada: nueva ruta `/mercado` protegida (solo admin/colaborador), botón "Mercado" agregado en `AppToolbar` junto a "Productos".
+  - Filtros implementados: búsqueda por nombre/SKU, filtro por proveedor (autocomplete) y categoría (dropdown).
+  - Indicadores visuales de comparación: precio por debajo, dentro o por encima del rango de mercado con colores distintivos.
+- Próximas etapas (pendientes)
+  - **Etapa 2**: Modelo de datos backend (tabla `Source` para fuentes obligatorias/adicionales, campos `market_price_min/max`, endpoint `GET /market/products`).
+  - **Etapa 3**: Worker de scraping (Playwright + BeautifulSoup, parsers por fuente, integración con MCP Web Search, endpoint `POST /products/{id}/update-market`).
+  - **Etapa 4**: Modal de detalles (lista de fuentes con precios y enlaces, configuración de fuentes obligatorias, botón actualizar manual, historial de precios).
+  - **Etapa 5**: Tests y QA (unit tests de parsers con HTML guardado, integration tests con respx/mocks, tests UI de filtrado/modal).
+  - Futuras mejoras: actualización automática programada, alertas de precios fuera de rango, ampliar biblioteca de parsers por dominio.
+- Criterios de aceptación
+  - Admin/Colaborador pueden visualizar lista de productos con comparación de precios vs mercado.
+  - Scraping funcional para al menos 3 fuentes obligatorias (MercadoLibre, tienda competidora, fabricante).
+  - Modal de detalles muestra todas las fuentes con enlaces clickeables y permite actualización manual.
+  - Tests de scraping cubren casos de éxito, fallo de fuente individual y formato de precio no reconocido.
+
 ### Ventas / Clientes (Sprint 1 + Sprint 2 parcial)
 - Modelos y endpoints base de Customers y Sales (BORRADOR/CONFIRMADA/ENTREGADA/ANULADA) con líneas, pagos y adjuntos.
 - Devoluciones parciales: `POST /sales/{id}/returns` + reposición de stock y auditoría `return_create`.

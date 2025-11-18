@@ -12,6 +12,7 @@ const AdminPanel = lazy(() => import('./pages/AdminPanel'))
 const ImagesAdminPanel = lazy(() => import('./pages/ImagesAdminPanel'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const Stock = lazy(() => import('./pages/Stock'))
+const Market = lazy(() => import('./pages/Market'))
 const Productos = lazy(() => import('./pages/Productos'))
 const ProductDetail = lazy(() => import('./pages/ProductDetail'))
 const Purchases = lazy(() => import('./pages/Purchases'))
@@ -32,6 +33,7 @@ const AdminUsers = lazy(() => import('./pages/admin/UsersPage'))
 const AdminServices = lazy(() => import('./pages/admin/ServicesPage'))
 const AdminImages = lazy(() => import('./pages/admin/ImagesCrawlerPage'))
 const AdminBackups = lazy(() => import('./pages/admin/BackupsPage'))
+const AdminScheduler = lazy(() => import('./components/admin/SchedulerControl'))
 const CatalogDiagnosticsPage = lazy(() => import('./pages/CatalogDiagnosticsPage'))
 
 export default function App() {
@@ -66,6 +68,14 @@ export default function App() {
             element={
               <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
                 <Stock />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path={PATHS.market}
+            element={
+              <ProtectedRoute roles={["colaborador", "admin"]}>
+                <Market />
               </ProtectedRoute>
             }
           />
@@ -154,6 +164,7 @@ export default function App() {
             <Route path="imagenes-productos" element={<AdminImages />} />
             <Route path="backups" element={<AdminBackups />} />
             <Route path="catalogos/diagnostico" element={<CatalogDiagnosticsPage />} />
+            <Route path="scheduler" element={<AdminScheduler />} />
             {/* Users only for admins */}
             <Route
               path="usuarios"

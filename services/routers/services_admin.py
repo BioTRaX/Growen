@@ -44,6 +44,7 @@ KNOWN_SERVICES = [
     "dramatiq",
     "scheduler",
     "notifier",
+    "market_worker",  # Worker de actualización de precios de mercado
 ]
 
 

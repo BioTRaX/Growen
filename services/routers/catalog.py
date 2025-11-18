@@ -1040,6 +1040,247 @@ async def create_supplier(
     }
 
 
+@router.delete(
+    "/suppliers",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+)
+async def bulk_delete_suppliers(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+    force_cascade: bool = False,
+):
+    """Eliminación bulk de proveedores con validación de integridad referencial.
+    
+    Parámetros:
+    - ids: Array de IDs de proveedores a eliminar
+    - force_cascade: Si es true, elimina en cascada import_jobs y equivalencias (solo registros no críticos)
+    
+    Retorna:
+    - requested: IDs solicitados
+    - deleted: IDs eliminados exitosamente
+    - blocked: Proveedores bloqueados con razones, conteos y detalles de registros bloqueantes
+    - not_found: IDs no encontrados
+    - cascade_deleted: Registros eliminados en cascada (si force_cascade=true)
+    """
+    if request.headers.get("content-type") != "application/json":
+        raise HTTPException(status_code=415, detail="Content-Type debe ser application/json")
+    
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    
+    ids = body.get("ids")
+    if not ids or not isinstance(ids, list):
+        raise HTTPException(status_code=400, detail="ids requerido (array)")
+    
+    if len(ids) > 500:
+        raise HTTPException(status_code=400, detail="máx 500 ids por solicitud")
+    
+    # Permitir force_cascade desde body también
+    force_cascade = body.get("force_cascade", force_cascade)
+    
+    from db.models import Purchase, PurchaseLine, ImportJob, ProductEquivalence
+    
+    requested = list(ids)
+    deleted = []
+    blocked = []
+    not_found = []
+    cascade_deleted = {
+        "import_jobs": [],
+        "product_equivalences": []
+    }
+    
+    for sid in requested:
+        supplier = await session.get(Supplier, sid)
+        if not supplier:
+            not_found.append(sid)
+            continue
+        
+        # Verificar referencias bloqueantes
+        reasons = []
+        counts = {}
+        blocking_details = {}
+        
+        # Contar compras
+        purchases_count = await session.scalar(
+            select(func.count()).select_from(Purchase).where(Purchase.supplier_id == sid)
+        )
+        if purchases_count > 0:
+            reasons.append("tiene_compras")
+            counts["purchases"] = purchases_count
+            # Obtener IDs de compras para referencia
+            purchase_ids = (await session.execute(
+                select(Purchase.id).where(Purchase.supplier_id == sid).limit(10)
+            )).scalars().all()
+            blocking_details["purchases"] = {
+                "count": purchases_count,
+                "sample_ids": list(purchase_ids),
+                "action": "No se pueden eliminar automáticamente. Revisar módulo de compras."
+            }
+        
+        # Contar archivos
+        files_count = await session.scalar(
+            select(func.count()).select_from(SupplierFile).where(SupplierFile.supplier_id == sid)
+        )
+        if files_count > 0:
+            reasons.append("tiene_archivos")
+            counts["files"] = files_count
+            file_ids = (await session.execute(
+                select(SupplierFile.id).where(SupplierFile.supplier_id == sid).limit(10)
+            )).scalars().all()
+            blocking_details["files"] = {
+                "count": files_count,
+                "sample_ids": list(file_ids),
+                "action": "Se eliminarán automáticamente (CASCADE). Este bloqueo es informativo."
+            }
+        
+        # Contar import jobs
+        import_jobs_count = await session.scalar(
+            select(func.count()).select_from(ImportJob).where(ImportJob.supplier_id == sid)
+        )
+        if import_jobs_count > 0:
+            # Obtener detalles de los jobs
+            jobs_info = (await session.execute(
+                select(ImportJob.id, ImportJob.status).where(ImportJob.supplier_id == sid)
+            )).all()
+            
+            if force_cascade:
+                # Eliminar jobs en cascada
+                for job_id, _ in jobs_info:
+                    job = await session.get(ImportJob, job_id)
+                    if job:
+                        await session.delete(job)
+                        cascade_deleted["import_jobs"].append(job_id)
+            else:
+                reasons.append("tiene_import_jobs")
+                counts["import_jobs"] = import_jobs_count
+                blocking_details["import_jobs"] = {
+                    "count": import_jobs_count,
+                    "jobs": [{"id": jid, "status": status} for jid, status in jobs_info],
+                    "action": "Usar force_cascade=true para eliminar automáticamente, o ejecutar: DELETE FROM import_jobs WHERE supplier_id = {}".format(sid)
+                }
+        
+        # Contar equivalencias
+        equivalences_count = await session.scalar(
+            select(func.count()).select_from(ProductEquivalence).where(ProductEquivalence.supplier_id == sid)
+        )
+        if equivalences_count > 0:
+            equiv_ids = (await session.execute(
+                select(ProductEquivalence.id).where(ProductEquivalence.supplier_id == sid)
+            )).scalars().all()
+            
+            if force_cascade:
+                # Eliminar equivalencias en cascada
+                for eq_id in equiv_ids:
+                    eq = await session.get(ProductEquivalence, eq_id)
+                    if eq:
+                        await session.delete(eq)
+                        cascade_deleted["product_equivalences"].append(eq_id)
+            else:
+                reasons.append("tiene_equivalencias")
+                counts["equivalences"] = equivalences_count
+                blocking_details["equivalences"] = {
+                    "count": equivalences_count,
+                    "sample_ids": list(equiv_ids)[:10],
+                    "action": "Usar force_cascade=true para eliminar automáticamente, o ejecutar: DELETE FROM product_equivalences WHERE supplier_id = {}".format(sid)
+                }
+        
+        # Contar líneas de compra a través de supplier_products
+        sp_ids = (await session.execute(
+            select(SupplierProduct.id).where(SupplierProduct.supplier_id == sid)
+        )).scalars().all()
+        
+        purchase_lines_count = 0
+        if sp_ids:
+            purchase_lines_count = await session.scalar(
+                select(func.count()).select_from(PurchaseLine).where(
+                    PurchaseLine.supplier_item_id.in_(sp_ids)
+                )
+            )
+            if purchase_lines_count > 0:
+                reasons.append("tiene_lineas_compra")
+                counts["purchase_lines"] = purchase_lines_count
+                pl_ids = (await session.execute(
+                    select(PurchaseLine.id).where(PurchaseLine.supplier_item_id.in_(sp_ids)).limit(10)
+                )).scalars().all()
+                blocking_details["purchase_lines"] = {
+                    "count": purchase_lines_count,
+                    "sample_ids": list(pl_ids),
+                    "action": "No se pueden eliminar automáticamente. Revisar líneas de compra asociadas."
+                }
+        
+        if reasons:
+            blocked.append({
+                "id": sid,
+                "name": supplier.name,
+                "reasons": reasons,
+                "counts": counts,
+                "details": blocking_details
+            })
+        else:
+            # Eliminar supplier_products asociados (si no tienen referencias)
+            for sp_id in sp_ids:
+                sp_obj = await session.get(SupplierProduct, sp_id)
+                if sp_obj:
+                    await session.delete(sp_obj)
+            
+            # Los SupplierFile tienen CASCADE, se eliminan automáticamente
+            await session.delete(supplier)
+            deleted.append(sid)
+            
+            # Audit log
+            try:
+                session.add(
+                    AuditLog(
+                        action="delete",
+                        table="suppliers",
+                        entity_id=sid,
+                        meta={"name": supplier.name, "slug": supplier.slug},
+                        user_id=sess.user.id if sess and sess.user else None,
+                        ip=(request.client.host if request and request.client else None),
+                    )
+                )
+            except Exception:
+                pass
+    
+    await session.commit()
+    
+    # Audit log resumen
+    try:
+        session.add(
+            AuditLog(
+                action="suppliers_delete_bulk",
+                table="suppliers",
+                entity_id=None,
+                meta={
+                    "requested": len(requested),
+                    "deleted": len(deleted),
+                    "blocked": len(blocked),
+                    "not_found": len(not_found)
+                },
+                user_id=sess.user.id if sess and sess.user else None,
+                ip=(request.client.host if request and request.client else None),
+            )
+        )
+        await session.commit()
+    except Exception:
+        pass
+    
+    return {
+        "requested": requested,
+        "deleted": deleted,
+        "blocked": blocked,
+        "not_found": not_found,
+        "cascade_deleted": cascade_deleted if force_cascade else None,
+        "help": {
+            "force_cascade": "Agregar 'force_cascade': true al body para eliminar automáticamente import_jobs y product_equivalences",
+            "manual_cleanup": "Para bloqueos críticos (compras, líneas), revisar detalles en 'blocked[].details'"
+        }
+    }
+
+
 @router.get(
     "/suppliers/{supplier_id}/items",
     dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))],

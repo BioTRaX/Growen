@@ -56,6 +56,8 @@ from .routers import (
     customers,
     sales,
     reports,
+    market,
+    alerts,
 )
 from services.auth import require_csrf  # para override condicional en dev
 from services.routers import bug_report  # router para reportes de bugs
@@ -294,6 +296,9 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
                 return obj.decode("utf-8", "replace")
             except Exception:
                 return f"<bytes len={len(obj)}>"
+        # Manejar excepciones en el payload de errores (Pydantic puede incluirlas en ctx)
+        if isinstance(obj, Exception):
+            return str(obj)
         if isinstance(obj, Mapping):
             return {k: _sanitize_json_for_response(v) for k, v in obj.items()}
         if isinstance(obj, (list, tuple, set)):
@@ -343,6 +348,7 @@ app.include_router(actions.router)
 app.include_router(ws.router)
 from services.routers import catalogs as catalogs_router  # import after logger setup
 from services.routers import products_stock  # nuevo router historial stock
+from services.routers import admin_scheduler  # router admin scheduler
 app.include_router(catalogs_router.router)
 app.include_router(catalog.router)
 app.include_router(imports.router)
@@ -354,12 +360,15 @@ app.include_router(purchases.router)
 app.include_router(customers.router)
 app.include_router(sales.router)
 app.include_router(reports.router)
+app.include_router(market.router)
+app.include_router(alerts.router)
 app.include_router(media.router)
 app.include_router(image_jobs.router)
 app.include_router(images.router)
 app.include_router(health.router)
 app.include_router(services_admin.router)
 app.include_router(backups_admin.router)
+app.include_router(admin_scheduler.router)  # Admin scheduler control
 try:
     # include legacy /healthz for compatibility if present
     app.include_router(health.legacy_router)  # type: ignore[attr-defined]

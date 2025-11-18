@@ -5,7 +5,14 @@
 from __future__ import annotations
 
 import os
+import sys
+import asyncio
 from datetime import datetime, time
+
+# FIX: Windows ProactorEventLoop no soporta psycopg async
+# Debe ejecutarse ANTES de cualquier import que use asyncio
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import dramatiq  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
@@ -13,9 +20,10 @@ from sqlalchemy import select, delete
 
 from db.models import Product, Image, ImageJobLog
 from services.media.orchestrator import ensure_product_image
+from agent_core.config import settings
 
 
-DB_URL = os.getenv("DB_URL", "sqlite+aiosqlite:///./growen.db")
+DB_URL = os.getenv("DB_URL") or settings.db_url
 engine = create_async_engine(DB_URL, future=True)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 

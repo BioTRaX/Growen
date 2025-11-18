@@ -48,6 +48,11 @@ export default function AppToolbar() {
           Productos
         </button>
       )}
+      {!isGuest && isStaff && (
+        <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.market)}>
+          Mercado
+        </button>
+      )}
       <button className="btn-dark btn-lg" onClick={toggle}>{themeLabel}</button>
       {!isGuest && (
         <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.stock)}>Stock</button>

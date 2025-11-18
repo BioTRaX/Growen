@@ -28,6 +28,8 @@ export default defineConfig({
       '/actions': { target: API_TARGET, changeOrigin: true },
       // Auth / sesión
       '/auth': { target: API_TARGET, changeOrigin: true },
+      // Catálogo (productos, proveedores, categorías, etc.)
+      '/catalog': { target: API_TARGET, changeOrigin: true },
       // Productos extendidos y básicos
       '/products-ex': { target: API_TARGET, changeOrigin: true },
       '/products': { target: API_TARGET, changeOrigin: true },
