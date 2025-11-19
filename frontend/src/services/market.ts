@@ -402,3 +402,38 @@ export async function batchAddSourcesFromSuggestions(
   return response.data
 }
 
+/**
+ * Request para actualizar una fuente de precio
+ */
+export interface UpdateMarketSourceRequest {
+  source_name?: string
+  url?: string
+  last_price?: number
+  is_mandatory?: boolean
+}
+
+/**
+ * Actualiza los datos de una fuente de precio
+ * 
+ * @param sourceId ID de la fuente
+ * @param payload Datos a actualizar (partial update)
+ * @returns Fuente actualizada
+ */
+export async function updateMarketSource(
+  sourceId: number,
+  payload: UpdateMarketSourceRequest
+): Promise<any> {
+  const response = await http.patch(`/market/sources/${sourceId}`, payload)
+  return response.data
+}
+
+/**
+ * Elimina una fuente de precio
+ * 
+ * @param sourceId ID de la fuente a eliminar
+ */
+export async function deleteMarketSource(sourceId: number): Promise<void> {
+  await http.delete(`/market/sources/${sourceId}`)
+}
+
+

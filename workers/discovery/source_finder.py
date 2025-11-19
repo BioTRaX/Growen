@@ -10,11 +10,49 @@ import os
 import logging
 import re
 from typing import List, Dict, Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, unquote
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from agent_core.detect_mcp_url import get_mcp_web_search_url
+
+# Usar logger principal para visibilidad en logs
+logger = logging.getLogger("growen")
+
+
+def decode_duckduckgo_url(url: str) -> str:
+    """
+    Decodifica URLs de DuckDuckGo que vienen con formato:
+    //duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com
+    
+    Args:
+        url: URL posiblemente codificada de DuckDuckGo
+        
+    Returns:
+        URL real decodificada, o la misma URL si no es de DuckDuckGo
+    """
+    if not url:
+        return url
+    
+    # Si es una URL de DuckDuckGo redirect
+    if "duckduckgo.com/l/" in url or url.startswith("//duckduckgo.com/l/"):
+        try:
+            # Agregar esquema si falta
+            if url.startswith("//"):
+                url = "https:" + url
+            
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            
+            # El parámetro 'uddg' contiene la URL real
+            if 'uddg' in params:
+                real_url = params['uddg'][0]
+                return unquote(real_url)
+        except Exception as e:
+            logger.warning(f"[discovery] Error decodificando URL de DuckDuckGo: {e}")
+            return url
+    
+    return url
 
 # Dominios conocidos de e-commerce argentino y growshops
 KNOWN_ECOMMERCE_DOMAINS = [
@@ -31,6 +69,19 @@ KNOWN_ECOMMERCE_DOMAINS = [
     "tricomas.com.ar",
     "cannabisargento.com.ar",
     "huertourbano.net",
+    "elalquimistagrow.com",
+    
+    # Tabaquerías y relacionados
+    "tabaqueriahorus.com",
+    "mosbytabaqueria.com",
+    "mercadodetabacos.com",
+    "tiendaniceto.com",
+    "cienfuegosst.com.ar",
+    "libellapapers.com",
+    
+    # Plataformas de e-commerce
+    "mitiendanube.com",
+    "tiendanube.com",
     
     # Retailers grandes
     "easy.com.ar",
@@ -43,6 +94,8 @@ KNOWN_ECOMMERCE_DOMAINS = [
     "grow-shop",
     "hidroponico",
     "hidroponia",
+    "tabaqueria",
+    "tabacalera",
 ]
 
 # Palabras clave que indican presencia de precio en snippet
@@ -75,35 +128,28 @@ URL_EXCLUDE_PATTERNS = [
 
 def build_search_query(product_name: str, category: str = "", sku: str = "") -> str:
     """
-    Construye query de búsqueda contextual para encontrar fuentes de precio.
+    Construye query de búsqueda simple y efectiva para encontrar fuentes de precio.
     
     Args:
-        product_name: Nombre del producto
-        category: Categoría del producto (opcional)
-        sku: SKU del producto (opcional, útil para productos específicos)
+        product_name: Nombre canónico del producto (OBLIGATORIO)
+        category: Categoría del producto (opcional, NO SE USA actualmente)
+        sku: SKU del producto (opcional, NO SE USA actualmente)
         
     Returns:
-        Query optimizada para búsqueda de precios
+        Query optimizada: "{nombre_canonico} comprar"
+        
+    Nota:
+        Se usa solo el nombre canónico + "comprar" porque:
+        - Añadir categoría puede generar ruido (ej: "Parafernalia")
+        - "precio" es redundante (implícito en contexto de compra)
+        - SKUs internos no aportan valor en búsqueda pública
     """
-    parts = []
+    # Query simple: solo nombre canónico + "comprar"
+    # Esto maximiza relevancia y minimiza falsos negativos
+    if not product_name:
+        raise ValueError("product_name es obligatorio para construir query de búsqueda")
     
-    # Agregar nombre del producto (obligatorio)
-    if product_name:
-        parts.append(product_name)
-    
-    # Agregar SKU si es informativo (no interno tipo "PROD-001")
-    if sku and not sku.startswith(("PROD-", "NG-", "SKU-")):
-        parts.append(sku)
-    
-    # Agregar categoría si aporta contexto
-    if category and category.lower() not in ["general", "varios", "sin categoría"]:
-        parts.append(category)
-    
-    # Agregar palabras clave para búsqueda de precios
-    parts.append("precio")
-    parts.append("comprar")
-    
-    return " ".join(parts).strip()
+    return f"{product_name.strip()} comprar"
 
 
 def is_valid_ecommerce_url(url: str) -> bool:
@@ -190,24 +236,31 @@ def extract_valid_urls(results: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     seen_urls = set()
     
     for result in results:
-        url = result.get("url", "")
+        raw_url = result.get("url", "")
         title = result.get("title", "")
         snippet = result.get("snippet", "")
         
+        # Decodificar URL de DuckDuckGo si es necesario
+        url = decode_duckduckgo_url(raw_url)
+        
         # Validaciones básicas
         if not url or not title:
+            logger.debug(f"[discovery] Rechazado por URL/título vacío: {raw_url}")
             continue
         
         # Evitar duplicados
         if url in seen_urls:
+            logger.debug(f"[discovery] Rechazado por duplicado: {url}")
             continue
         
         # Filtrar URLs excluidas
         if is_excluded_url(url):
+            logger.debug(f"[discovery] Rechazado por URL excluida: {url}")
             continue
         
         # Verificar que sea un sitio de e-commerce conocido
         if not is_valid_ecommerce_url(url):
+            logger.debug(f"[discovery] Rechazado por dominio desconocido: {url}")
             continue
         
         # Priorizar resultados con indicadores de precio
@@ -216,8 +269,10 @@ def extract_valid_urls(results: List[Dict[str, Any]]) -> List[Dict[str, str]]:
             domain = urlparse(url).netloc.lower()
             high_priority_domains = ["mercadolibre", "santaplanta"]
             if not any(d in domain for d in high_priority_domains):
+                logger.debug(f"[discovery] Rechazado por falta de indicadores de precio: {url}")
                 continue
         
+        logger.debug(f"[discovery] ✅ Fuente válida: {url}")
         seen_urls.add(url)
         valid_sources.append({
             "url": url,
@@ -244,7 +299,10 @@ async def call_mcp_web_search(
     Returns:
         Respuesta del MCP con items o error
     """
-    mcp_url = os.getenv("MCP_WEB_SEARCH_URL", "http://mcp_web_search:8002/invoke_tool")
+    # Detectar automáticamente la URL correcta según el contexto (Docker vs local)
+    mcp_url = get_mcp_web_search_url()
+    
+    logger.info(f"[discovery] Usando MCP URL: {mcp_url}")
     
     payload = {
         "tool_name": "search_web",

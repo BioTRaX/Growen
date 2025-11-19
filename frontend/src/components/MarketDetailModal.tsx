@@ -18,6 +18,7 @@ import {
 import AddSourceModal from './AddSourceModal'
 import EditablePriceField from './EditablePriceField'
 import SuggestedSourcesSection from './SuggestedSourcesSection'
+import EditSourceModal from './EditSourceModal'
 
 interface MarketDetailModalProps {
   productId: number | null
@@ -43,6 +44,7 @@ export default function MarketDetailModal({
   const [updating, setUpdating] = useState(false)
   const [showAddSource, setShowAddSource] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [editingSource, setEditingSource] = useState<MarketSource | null>(null)
 
   // Cargar fuentes cuando se abre el modal
   useEffect(() => {
@@ -393,6 +395,7 @@ export default function MarketDetailModal({
                         key={source.id}
                         source={source}
                         onDelete={handleDeleteSource}
+                        onEdit={setEditingSource}
                         deleting={deletingId === source.id}
                         formatPrice={formatPrice}
                         formatDate={formatDate}
@@ -419,6 +422,7 @@ export default function MarketDetailModal({
                         key={source.id}
                         source={source}
                         onDelete={handleDeleteSource}
+                        onEdit={setEditingSource}
                         deleting={deletingId === source.id}
                         formatPrice={formatPrice}
                         formatDate={formatDate}
@@ -477,6 +481,28 @@ export default function MarketDetailModal({
           onSuccess={handleAddSourceSuccess}
         />
       )}
+
+      {/* Modal de editar fuente */}
+      {editingSource && (
+        <EditSourceModal
+          sourceId={editingSource.id}
+          currentData={{
+            source_name: editingSource.source_name,
+            url: editingSource.url,
+            last_price: editingSource.last_price,
+            is_mandatory: editingSource.is_mandatory,
+          }}
+          open={!!editingSource}
+          onClose={() => setEditingSource(null)}
+          onSuccess={() => {
+            loadSources()
+            push({ 
+              kind: 'success', 
+              message: 'Fuente actualizada correctamente' 
+            })
+          }}
+        />
+      )}
     </>
   )
 }
@@ -485,6 +511,7 @@ export default function MarketDetailModal({
 interface SourceCardProps {
   source: MarketSource
   onDelete: (id: number, name: string) => void
+  onEdit: (source: MarketSource) => void
   deleting: boolean
   formatPrice: (price: number | null) => string
   formatDate: (date: string | null) => string
@@ -492,7 +519,7 @@ interface SourceCardProps {
   canDelete: boolean
 }
 
-function SourceCard({ source, onDelete, deleting, formatPrice, formatDate, getFreshness, canDelete }: SourceCardProps) {
+function SourceCard({ source, onDelete, onEdit, deleting, formatPrice, formatDate, getFreshness, canDelete }: SourceCardProps) {
   const freshness = getFreshness(source.last_checked_at)
   
   return (
@@ -535,15 +562,26 @@ function SourceCard({ source, onDelete, deleting, formatPrice, formatDate, getFr
           </a>
         </div>
         {canDelete && (
-          <button
-            className="btn-secondary"
-            onClick={() => onDelete(source.id, source.source_name)}
-            disabled={deleting}
-            style={{ padding: '4px 8px', fontSize: 12 }}
-            title="Eliminar fuente"
-          >
-            🗑️
-          </button>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button
+              className="btn-secondary"
+              onClick={() => onEdit(source)}
+              disabled={deleting}
+              style={{ padding: '4px 8px', fontSize: 12 }}
+              title="Editar fuente"
+            >
+              ✏️
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => onDelete(source.id, source.source_name)}
+              disabled={deleting}
+              style={{ padding: '4px 8px', fontSize: 12 }}
+              title="Eliminar fuente"
+            >
+              🗑️
+            </button>
+          </div>
         )}
       </div>
 

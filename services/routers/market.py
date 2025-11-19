@@ -967,6 +967,113 @@ async def delete_market_source(
     return None
 
 
+# ==================== PATCH /sources/{source_id} ====================
+
+class UpdateMarketSourceRequest(BaseModel):
+    """Request para actualizar una fuente de precio."""
+    source_name: Optional[str] = Field(None, description="Nuevo nombre de la fuente")
+    url: Optional[str] = Field(None, description="Nueva URL de la fuente")
+    last_price: Optional[float] = Field(None, description="Nuevo último precio detectado")
+    is_mandatory: Optional[bool] = Field(None, description="Si es fuente obligatoria")
+
+
+@router.patch(
+    "/sources/{source_id}",
+    status_code=200,
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+    summary="Actualizar fuente de precio",
+    description="""
+    Actualiza los datos de una fuente de precio de mercado.
+    
+    Campos editables:
+    - source_name: Nombre/título de la fuente
+    - url: URL de la fuente
+    - last_price: Último precio detectado manualmente
+    - is_mandatory: Si es fuente obligatoria para cálculo de precio promedio
+    
+    Solo se actualizan los campos enviados (partial update).
+    
+    Roles permitidos: admin, colaborador
+    """,
+)
+async def update_market_source(
+    source_id: int,
+    request: UpdateMarketSourceRequest,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    Actualiza una fuente de precio de mercado.
+    
+    Args:
+        source_id: ID de la fuente a actualizar
+        request: Datos a actualizar
+        db: Sesión de base de datos
+        
+    Returns:
+        Fuente actualizada
+        
+    Raises:
+        HTTPException 404: Fuente no encontrada
+        HTTPException 400: URL duplicada
+    """
+    # 1. Verificar que la fuente existe
+    query_source = select(MarketSource).where(MarketSource.id == source_id)
+    result = await db.execute(query_source)
+    source = result.scalar_one_or_none()
+    
+    if not source:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Fuente con ID {source_id} no encontrada"
+        )
+    
+    # 2. Verificar URL duplicada si se está cambiando
+    if request.url and request.url != source.url:
+        query_duplicate = select(MarketSource).where(
+            MarketSource.product_id == source.product_id,
+            MarketSource.url == request.url,
+            MarketSource.id != source_id
+        )
+        result_dup = await db.execute(query_duplicate)
+        if result_dup.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ya existe una fuente con URL '{request.url}' para este producto"
+            )
+    
+    # 3. Actualizar campos (solo los enviados)
+    if request.source_name is not None:
+        source.source_name = request.source_name
+    
+    if request.url is not None:
+        source.url = request.url
+    
+    if request.last_price is not None:
+        from decimal import Decimal
+        source.last_price = Decimal(str(request.last_price))
+        source.last_checked_at = datetime.utcnow()
+    
+    if request.is_mandatory is not None:
+        source.is_mandatory = request.is_mandatory
+    
+    # 4. Guardar cambios
+    await db.commit()
+    await db.refresh(source)
+    
+    # 5. Retornar fuente actualizada
+    return {
+        "id": source.id,
+        "product_id": source.product_id,
+        "source_name": source.source_name,
+        "url": source.url,
+        "last_price": float(source.last_price) if source.last_price else None,
+        "last_checked_at": source.last_checked_at.isoformat() if source.last_checked_at else None,
+        "is_mandatory": source.is_mandatory,
+        "currency": source.currency,
+        "source_type": source.source_type,
+    }
+
+
 # ==================== POST /products/{id}/discover-sources ====================
 
 class DiscoveredSource(BaseModel):

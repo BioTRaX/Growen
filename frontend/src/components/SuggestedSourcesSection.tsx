@@ -31,6 +31,7 @@ export default function SuggestedSourcesSection({
   const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set())
   const [adding, setAdding] = useState(false)
   const [queryUsed, setQueryUsed] = useState<string>('')
+  const [markAsMandatory, setMarkAsMandatory] = useState(false)
 
   async function handleDiscover() {
     setDiscovering(true)
@@ -107,7 +108,7 @@ export default function SuggestedSourcesSection({
           source_name: undefined, // Se detecta automáticamente del dominio
           validate_price: true,
           source_type: 'static' as const,
-          is_mandatory: false,
+          is_mandatory: markAsMandatory, // Usar valor del checkbox
         }))
 
       const result = await batchAddSourcesFromSuggestions(productId, {
@@ -210,21 +211,34 @@ export default function SuggestedSourcesSection({
                 {selectedUrls.size} de {suggestions.length} seleccionadas
               </span>
             </div>
-            <button
-              onClick={handleAddSelected}
-              disabled={selectedUrls.size === 0 || adding}
-              style={{
-                padding: '8px 16px',
-                background: selectedUrls.size > 0 ? 'var(--success)' : 'var(--bg-tertiary)',
-                color: selectedUrls.size > 0 ? 'white' : 'var(--text-secondary)',
-                border: 'none',
-                borderRadius: 6,
-                cursor: selectedUrls.size > 0 && !adding ? 'pointer' : 'not-allowed',
-                fontWeight: 500,
-              }}
-            >
-              {adding ? 'Agregando...' : `Agregar seleccionadas (${selectedUrls.size})`}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={markAsMandatory}
+                  onChange={(e) => setMarkAsMandatory(e.target.checked)}
+                  style={{ cursor: 'pointer' }}
+                />
+                <span style={{ fontWeight: markAsMandatory ? 600 : 400, color: markAsMandatory ? 'var(--warning)' : 'inherit' }}>
+                  Marcar como obligatorias
+                </span>
+              </label>
+              <button
+                onClick={handleAddSelected}
+                disabled={selectedUrls.size === 0 || adding}
+                style={{
+                  padding: '8px 16px',
+                  background: selectedUrls.size > 0 ? 'var(--success)' : 'var(--bg-tertiary)',
+                  color: selectedUrls.size > 0 ? 'white' : 'var(--text-secondary)',
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: selectedUrls.size > 0 && !adding ? 'pointer' : 'not-allowed',
+                  fontWeight: 500,
+                }}
+              >
+                {adding ? 'Agregando...' : `Agregar seleccionadas (${selectedUrls.size})`}
+              </button>
+            </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
