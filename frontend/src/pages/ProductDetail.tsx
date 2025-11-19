@@ -93,7 +93,7 @@ export default function ProductDetail() {
   }), [styleVariant])
 
   async function refresh() {
-    const r = await http.get<Prod>(`/products/${pid}`)
+    const r = await http.get<Prod>(`/catalog/products/${pid}`)
     setProd(r.data)
     setDesc(r.data?.description_html || '')
   }
@@ -228,7 +228,7 @@ export default function ProductDetail() {
     try {
       setLoading(true)
       // Nota: el cliente http ya incluye el prefijo base (ej.: /api)
-      await http.post(`/products/${pid}/enrich`)
+      await http.post(`/catalog/products/${pid}/enrich`)
       showToast('success', 'Producto enriquecido con IA')
       await refresh()
     } catch (e: any) {
@@ -245,14 +245,48 @@ export default function ProductDetail() {
     }
     try {
       setLoading(true)
-      await http.post(`/products/${pid}/enrich?force=true`)
+      await http.post(`/catalog/products/${pid}/enrich?force=true`)
       showToast('success', 'Reenriquecimiento ejecutado')
       await refresh()
     } catch (e: any) {
-      showToast('error', e?.response?.data?.detail || 'Error al reenriquecer')
+      showToast('error', e?.response?.data?.detail || 'Error al reenriquecer producto')
     } finally {
       setLoading(false)
-      setIaMenuOpen(false)
+    }
+  }
+
+  // Eliminar producto
+  const handleDelete = async () => {
+    console.log('handleDelete llamado', { pid, prod })
+    if (!pid || !prod) {
+      console.warn('handleDelete: salida temprana', { pid, prod })
+      return
+    }
+    
+    const productName = prod.canonical_name || prod.title || `producto ${pid}`
+    console.log('handleDelete: nombre del producto', productName)
+    
+    if (!window.confirm(`¿Estás seguro de eliminar "${productName}"?\n\nEsta acción es PERMANENTE y eliminará:\n• El producto\n• Todas sus imágenes\n• Relaciones con proveedores\n• Variantes asociadas\n\n¿Deseas continuar?`)) {
+      console.log('handleDelete: usuario canceló')
+      return
+    }
+
+    console.log('handleDelete: usuario confirmó, iniciando eliminación')
+    try {
+      setLoading(true)
+      console.log('handleDelete: enviando DELETE', { url: '/catalog/products', data: { ids: [pid] } })
+      await http.delete('/catalog/products', { data: { ids: [pid] } })
+      console.log('handleDelete: eliminación exitosa')
+      showToast('success', `Producto "${productName}" eliminado`)
+      // Redirigir a la lista de productos después de 1 segundo
+      setTimeout(() => nav('/productos'), 1000)
+    } catch (e: any) {
+      console.error('handleDelete: error en eliminación', e)
+      const msg = e?.response?.data?.detail || e?.message || 'Error al eliminar producto'
+      showToast('error', String(msg))
+    } finally {
+      setLoading(false)
+      console.log('handleDelete: finalizó')
     }
   }
 
@@ -260,7 +294,7 @@ export default function ProductDetail() {
   const handleLimpiarIA = async () => {
     try {
       setLoading(true)
-      await http.delete(`/products/${pid}/enrichment`)
+      await http.delete(`/catalog/products/${pid}/enrichment`)
       showToast('success', 'Enriquecimiento borrado')
       await refresh()
     } catch (e: any) {
@@ -402,6 +436,32 @@ export default function ProductDetail() {
         </div>
       )}
 
+      {/* Botón de eliminación - Solo admin, siempre visible */}
+      {isAdmin && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, position: 'relative', zIndex: 10 }}>
+          <button 
+            className="btn" 
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              console.log('CLICK EN BOTÓN ELIMINAR DETECTADO')
+              handleDelete()
+            }}
+            disabled={loading || !prod?.id}
+            style={{ 
+              borderColor: '#ef4444', 
+              color: '#ef4444',
+              fontWeight: 600,
+              cursor: 'pointer',
+              pointerEvents: 'auto'
+            }}
+            title="Eliminar producto (acción permanente)"
+          >
+            🗑️ Eliminar producto
+          </button>
+        </div>
+      )}
+
       {/* Galería principal + secundarias */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 260px', gap: 16, marginTop: 16, alignItems: 'start' }}>
         <div className="card" style={{ background: theme.card, padding: 10, borderRadius: theme.radius, border: `1px solid ${theme.border}`, minHeight: 320 }}>
@@ -448,7 +508,7 @@ export default function ProductDetail() {
               onClick={async () => {
                 try {
                   setSavingDesc(true)
-                  await http.patch(`/products/${pid}`, { description_html: desc })
+                  await http.patch(`/catalog/products/${pid}`, { description_html: desc })
                   showToast('success', 'Descripción guardada')
                 } catch (e: any) {
                   showToast('error', e?.response?.data?.detail || 'No se pudo guardar la descripción')
@@ -567,7 +627,7 @@ export default function ProductDetail() {
                             payload[f.key] = (techEditing.val || '').trim()
                           }
                           try {
-                            await http.patch(`/products/${pid}`, payload)
+                            await http.patch(`/catalog/products/${pid}`, payload)
                             showToast('success', 'Campo guardado')
                             await refresh()
                           } catch (err: any) {
@@ -589,7 +649,7 @@ export default function ProductDetail() {
                           payload[f.key] = (techEditing?.val || '').trim()
                         }
                         try {
-                          await http.patch(`/products/${pid}`, payload)
+                          await http.patch(`/catalog/products/${pid}`, payload)
                           showToast('success', 'Campo guardado')
                           await refresh()
                         } catch (err: any) {

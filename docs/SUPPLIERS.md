@@ -92,7 +92,8 @@ DELETE /suppliers
 Roles: admin (requiere CSRF)
 Body JSON:
 {
-  "ids": [1, 2, 3]
+  "ids": [1, 2, 3],
+  "force_cascade": false  // Opcional: true para eliminar automáticamente import_jobs y equivalencias
 }
 ```
 Respuesta 200 JSON:
@@ -101,23 +102,60 @@ Respuesta 200 JSON:
   "requested": [1,2,3],
   "deleted": [1,3],
   "blocked": [
-    { "id": 2, "reasons": ["has_purchases","has_files"], "counts": {"purchases": 2, "files": 1} }
+    { 
+      "id": 2, 
+      "name": "Proveedor Ejemplo",
+      "reasons": ["tiene_compras","tiene_import_jobs"], 
+      "counts": {"purchases": 2, "import_jobs": 1},
+      "details": {
+        "purchases": {
+          "count": 2,
+          "sample_ids": [45, 46],
+          "action": "No se pueden eliminar automáticamente. Revisar módulo de compras."
+        },
+        "import_jobs": {
+          "count": 1,
+          "jobs": [{"id": 84, "status": "DRY_RUN"}],
+          "action": "Usar force_cascade=true para eliminar automáticamente, o ejecutar: DELETE FROM import_jobs WHERE supplier_id = 2"
+        }
+      }
+    }
   ],
-  "not_found": []
+  "not_found": [],
+  "cascade_deleted": null,  // Si force_cascade=true, muestra IDs eliminados: {"import_jobs": [84], "product_equivalences": [92]}
+  "help": {
+    "force_cascade": "Agregar 'force_cascade': true al body para eliminar automáticamente import_jobs y product_equivalences",
+    "manual_cleanup": "Para bloqueos críticos (compras, líneas), revisar detalles en 'blocked[].details'"
+  }
 }
 ```
 Reglas de bloqueo por proveedor:
-- `has_purchases`: existe alguna compra asociada al proveedor.
-- `has_files`: existen archivos cargados del proveedor.
-- `has_purchase_lines`: existen líneas de compra que referencian SKUs del proveedor.
+- `tiene_compras`: existe alguna compra asociada al proveedor. **No se elimina automáticamente**, requiere revisión manual.
+- `tiene_archivos`: existen archivos cargados del proveedor. Se eliminan automáticamente (CASCADE).
+- `tiene_import_jobs`: existen jobs de importación asociados. **Se pueden eliminar con `force_cascade=true`** o manualmente.
+- `tiene_equivalencias`: existen equivalencias de productos. **Se pueden eliminar con `force_cascade=true`** o manualmente.
+- `tiene_lineas_compra`: existen líneas de compra que referencian SKUs del proveedor. **No se elimina automáticamente**, requiere revisión manual.
 
-Si no hay bloqueos, se elimina en cascada segura: equivalencias, historial de precios y `supplier_products` del proveedor, y luego el proveedor.
+**Eliminación en cascada con `force_cascade=true`:**
+- Elimina automáticamente: `import_jobs` y `product_equivalences`
+- NO elimina automáticamente (requieren revisión): `purchases`, `purchase_lines`
+- Retorna en `cascade_deleted` los IDs de registros eliminados
 
-Ejemplo (PowerShell):
+Si no hay bloqueos, se elimina en cascada segura: primero se eliminan los `supplier_products` asociados que no tengan referencias, los `SupplierFile` tienen CASCADE en FK y se eliminan automáticamente, y luego el proveedor.
+
+Ejemplo (PowerShell) - Eliminación básica:
 ```powershell
-curl -Method DELETE "http://localhost:8000/suppliers" `
-  -Headers @{ 'X-CSRF-Token' = '<token>'; 'Content-Type' = 'application/json' } `
-  -Body '{"ids":[10,11,12]}'
+$headers = @{ 'X-CSRF-Token' = '<token>'; 'Content-Type' = 'application/json' }
+Invoke-WebRequest -Uri "http://localhost:8000/suppliers" -Method DELETE `
+  -Headers $headers -Body '{"ids":[10,11,12]}' -UseBasicParsing
+```
+
+Ejemplo (PowerShell) - Eliminación con force_cascade:
+```powershell
+$headers = @{ 'X-CSRF-Token' = '<token>'; 'Content-Type' = 'application/json' }
+$body = @{ ids = @(10,11,12); force_cascade = $true } | ConvertTo-Json
+Invoke-WebRequest -Uri "http://localhost:8000/suppliers" -Method DELETE `
+  -Headers $headers -Body $body -UseBasicParsing
 ```
 
 ### Crear ítem de proveedor (oferta / SKU externo)

@@ -5,8 +5,24 @@
 
 # UI de Productos y Canónicos
 
+# UI de Productos y Canónicos
+
 ## Listado de Productos
-- Filtros disponibles:
+
+### Navegación y Paginación (Nov 2025)
+- **Paginación integrada**: En la vista `/productos` (modo embedded del componente `ProductsDrawer`), se implementó un sistema de paginación similar al de `/stock`:
+  - Botones "Anterior" y "Más" al pie del listado (clases `.btn-dark .btn-lg` para consistencia visual).
+  - **Botón "Anterior"**: Vuelve a la primera página y hace scroll suave hacia arriba. Deshabilitado cuando `page === 1` o durante carga.
+  - **Botón "Más"**: Carga la siguiente página de resultados. Deshabilitado cuando se han mostrado todos los productos (`items.length >= total`) o durante carga.
+  - **Tamaño de página**: 50 productos por página (configurable vía `pageSize`).
+  - **Mantenimiento de filtros**: Al cambiar de página, todos los filtros activos (texto, proveedor, categoría, stock, recientes, tipo) se preservan automáticamente.
+  - **Indicador de progreso**: Se muestra "(Mostrando X de Y)" junto al contador de resultados para dar visibilidad del estado de carga.
+
+- **Scroll único**: En modo embedded, el componente usa `overflowY: 'visible'` para eliminar el scroll interno de la tabla, dejando solo el scroll de la página principal. Esto resuelve el problema del "doble scroll vertical" que confundía la navegación.
+
+- **Scroll horizontal**: Para columnas que no caben en el ancho de pantalla, la tabla implementa un scroll horizontal único y controlado (`overflowX: 'auto'`). El `minWidth` de la tabla se calcula como la suma de los anchos de todas las columnas visibles, garantizando que ninguna columna quede oculta.
+
+### Filtros disponibles:
   - Texto (`q`), Proveedor, Categoría, Stock (`gt:0`/`eq:0`), Recientes.
   - Tipo: `Todos | Canónicos | Proveedor` → mapea a `type=all|canonical|supplier` en `GET /products`.
 - Búsqueda por texto (`q`): coincide por título interno, título del proveedor y título canónico.

@@ -40,11 +40,13 @@ REM Política: si en PRE-FLIGHT la DB estaba OK, evitar tocar Docker aunque lueg
 set "DB_NO_TOUCH_IF_PRE_OK=%DB_NO_TOUCH_IF_PRE_OK%"
 if not defined DB_NO_TOUCH_IF_PRE_OK set "DB_NO_TOUCH_IF_PRE_OK=1"
 
-REM Modo adjunto al stack Docker (no iniciar uvicorn local ni build frontend)
-set "USE_DOCKER_STACK=%USE_DOCKER_STACK%"
-if not defined USE_DOCKER_STACK set "USE_DOCKER_STACK=1"
+REM Modo desarrollo local first (API local + DB Docker) por defecto
+REM Si necesitas testing con stack Docker completo, setea USE_DOCKER_STACK=1 antes de ejecutar
+if not defined USE_DOCKER_STACK set "USE_DOCKER_STACK=0"
 
-if "%USE_DOCKER_STACK%"=="1" (
+call :log "[INFO] USE_DOCKER_STACK=[%USE_DOCKER_STACK%] (length test)"
+
+if /I "%USE_DOCKER_STACK%"=="1" (
   call :log "[INFO] Modo Docker Stack habilitado (USE_DOCKER_STACK=1). Verificando Docker Desktop..."
   call :ensure_docker 45 2
   if errorlevel 1 (
@@ -86,6 +88,8 @@ if "%USE_DOCKER_STACK%"=="1" (
   echo Cierra esta ventana o presiona una tecla para salir.
   pause >NUL
   goto :eof
+) else (
+  call :log "[INFO] Modo Local First: iniciando API local + DB Docker"
 )
 
 REM === PRE-FLIGHT: diagnóstico antes de iniciar ===
@@ -288,7 +292,22 @@ if "%_USE_SQLITE%"=="1" (
   call "%~dp0scripts\run_migrations.cmd"
   if errorlevel 1 (
     call :log "[ERROR] No se iniciará el servidor debido a errores de migración."
-    goto :eof
+    echo.
+    echo ============================================================
+    echo [ERROR] MIGRACIONES FALLARON
+    echo ============================================================
+    echo Las migraciones de base de datos no se completaron correctamente.
+    echo Revisa el log en: %LOG_DIR%\start.log
+    echo.
+    echo Posibles causas:
+    echo   - Base de datos no está disponible (verifica Docker Desktop)
+    echo   - Conflictos en el esquema de Alembic
+    echo   - Permisos insuficientes
+    echo.
+    echo Para diagnosticar: python scripts/debug_migrations.py
+    echo ============================================================
+    pause
+    goto :fatal
   )
 )
 
@@ -296,7 +315,7 @@ call :log "[INFO] Iniciando backend..."
 rem Activar modo DEBUG para backend y devolver info de debug en import
 set "LOG_LEVEL=DEBUG"
 
-start "Growen API" cmd /k set LOG_LEVEL=%LOG_LEVEL% ^&^& set IMPORT_RETURN_DEBUG=%IMPORT_RETURN_DEBUG% ^&^& set PATH=%VENV%;%PATH% ^&^& echo [BOOT] Lanzando uvicorn en puerto 8000 ^&^& "%VENV%\python.exe" -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000 --loop asyncio --http h11 --log-level debug ^>> "%LOG_DIR%\backend.log" 2^>^&1
+start "Growen API" cmd /k call "%VENV%\activate.bat" ^&^& set LOG_LEVEL=%LOG_LEVEL% ^&^& set IMPORT_RETURN_DEBUG=%IMPORT_RETURN_DEBUG% ^&^& echo [BOOT] Lanzando uvicorn en puerto 8000 ^&^& python -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000 --loop asyncio --http h11 --log-level debug ^>> "%LOG_DIR%\backend.log" 2^>^&1
 
 call :log "[INFO] Preparando frontend..."
 REM Si existe carpeta dist vacía o VITE_BUILD=1, ejecutamos build para servir desde FastAPI.
@@ -318,6 +337,35 @@ if exist "%ROOT%frontend\package.json" (
   )
   popd
 )
+
+call :log "[INFO] Iniciando Vite dev server..."
+if exist "%ROOT%frontend\package.json" (
+  pushd "%ROOT%frontend"
+  start "Growen Frontend (Vite)" cmd /k npm run dev ^>> "%LOG_DIR%\frontend.log" 2^>^&1
+  popd
+) else (
+  call :log "[WARN] No se encontró package.json en frontend. Saltando inicio de Vite."
+)
+
+call :log "[INFO] Servicios iniciados. Esperando 3 segundos antes de mostrar resumen..."
+timeout /t 3 /nobreak >NUL
+
+echo.
+echo ===================== RESUMEN DEL STACK (Local) =====================
+echo API:       http://localhost:8000  ^(Docs: /docs^)
+echo Frontend:  http://localhost:5173  ^(Vite dev server^)
+echo DB:        localhost:5433  ^(Postgres en Docker^)
+echo ----------------------------------------------------------------------
+echo Login: usa tu usuario configurado en .env ^(ADMIN_USER^) y contrasenia ^(ADMIN_PASS^).
+echo En entornos de desarrollo, si dejaste el placeholder, la contrasenia temporal suele ser 'admin1234'.
+echo ----------------------------------------------------------------------
+echo [INFO] Las ventanas de API y Frontend quedaron abiertas en segundo plano.
+echo [INFO] Los logs completos están en: %LOG_DIR%\backend.log y %LOG_DIR%\frontend.log
+echo [INFO] Para detener los servicios, ejecuta: stop.bat
+echo.
+echo Presiona cualquier tecla para cerrar esta ventana ^(los servicios seguirán corriendo^)...
+pause >NUL
+goto :eof
 
 :wait_port_free
 REM Uso: call :wait_port_free <port> [retries]
