@@ -11,7 +11,8 @@ const SERVICE_LABELS: Record<string, string> = {
   image_processing: 'Procesado de imágenes',
   dramatiq: 'Dramatiq / Redis',
   scheduler: 'Scheduler (03:00 AR)',
-  notifier: 'Notificaciones (Telegram/Email)'
+  notifier: 'Notificaciones (Telegram/Email)',
+  market_worker: 'Worker Market (actualización precios)',
 }
 
 export default function ServicesPanel() {

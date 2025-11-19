@@ -106,6 +106,112 @@ Formato por lenguaje:
 - Adjuntar ejemplos mínimos de uso y pruebas cuando sea razonable.
 - Mantener consistencia de idioma en commits, PRs y documentación: español.
 
+## Workflow de Desarrollo (LOCAL primero, DOCKER para producción)
+
+**Filosofía**: Desarrollar en local es 10x más rápido que recompilar Docker constantemente. Reservar Docker para testing de integración y producción.
+
+**Flujo Recomendado**:
+1. **Desarrollo diario**: API local + DB Docker (solo infraestructura)
+   - Hot reload instantáneo (~1s vs 3-5 min rebuild)
+   - Debugging directo (pdb, breakpoints)
+   - Logs en tiempo real
+2. **Testing integración**: Docker Compose completo (antes de merge)
+3. **Producción**: Docker (idéntico a testing)
+
+**Comandos esenciales desarrollo**:
+```powershell
+# Infra en Docker (una vez al día)
+docker compose up -d db
+
+# API local con hot reload
+python -m uvicorn services.api:app --reload --port 8000
+
+# Frontend local
+cd frontend && npm run dev
+```
+
+**Cuándo SÍ recompilar Docker**:
+- ✅ Nuevas dependencias en `requirements.txt`
+- ✅ Cambios en `Dockerfile.*` o `docker-compose.yml`
+- ✅ Antes de merge a main
+- ✅ Deploy a producción
+
+**Cuándo NO recompilar Docker**:
+- ❌ Cambios en lógica Python/TypeScript (usa local con hot reload)
+- ❌ Debugging de features nuevas
+- ❌ Probar endpoints o UI
+
+**Documentación completa**: `docs/DEVELOPMENT_WORKFLOW.md` (setup, tips, troubleshooting, comparación velocidades)
+
+## Documentación contextual según tarea
+
+Antes de realizar cualquier cambio, el agente DEBE consultar la documentación relevante según el contexto de la tarea:
+
+### Por tipo de componente/sistema
+
+| Tarea/Sistema | Documentos a consultar (orden de prioridad) |
+|---------------|---------------------------------------------|
+| **Base de datos / Modelos** | `docs/MIGRATIONS_NOTES.md`, `db/models.py`, `alembic/versions/` |
+| **API / Endpoints** | `services/api.py`, `services/routers/*.py`, documentos específicos en `docs/API_*.md` |
+| **Workers / Jobs asíncronos** | `docs/IMAGES.md`, `docs/API_MARKET.md`, `workers/*.py`, `services/jobs/*.py` |
+| **Frontend / UI** | `frontend/src/**`, `docs/FRONTEND_DEBUG.md`, `docs/PRODUCTS_UI.md` |
+| **Autenticación / Seguridad** | `docs/SECURITY.md`, `docs/CHATBOT_ROLES.md`, `services/auth.py` |
+| **Docker / Infraestructura** | `docker-compose.yml`, `infra/Dockerfile.*`, sección "Convenciones Docker" en este archivo |
+| **Tests** | `pytest.ini`, `tests/**`, sección correspondiente en `docs/` |
+| **Scraping / Precios de mercado** | `docs/API_MARKET.md`, `workers/market_scraping.py`, `services/jobs/market_scheduler.py` |
+| **Imágenes de productos** | `docs/IMAGES.md`, `docs/MEDIA.md`, `services/media/`, `workers/images.py` |
+| **Importación PDF** | `docs/IMPORT_PDF.md`, `docs/IMPORT_PDF_AI_NOTES.md`, `services/routers/imports.py` |
+| **Catálogos** | `docs/CATALOGS_OPERATIONS.md`, `services/routers/catalog.py` |
+| **Clientes / Ventas** | `docs/SALES.md`, `services/routers/sales.py`, `services/routers/customers.py` |
+| **Compras / Proveedores** | `docs/PURCHASES.md`, `docs/SUPPLIERS.md`, `services/routers/purchases.py` |
+| **Chat / IA** | `docs/CHAT.md`, `docs/CHATBOT_ARCHITECTURE.md`, `docs/CHAT_PERSONA.md`, `ai/` |
+| **MCP Servers** | `docs/MCP.md`, `mcp_servers/`, sección "MCP Servers" en este archivo |
+
+### Por tipo de operación
+
+| Operación | Documentos clave |
+|-----------|------------------|
+| **Migración de BD** | Leer `docs/MIGRATIONS_NOTES.md` ANTES de crear/modificar migraciones. Revisar `scripts/debug_migrations.py` |
+| **Nuevo endpoint admin** | `docs/roles-endpoints.md`, `services/routers/services_admin.py` o similar como referencia |
+| **Nuevo worker Dramatiq** | `docs/IMAGES.md` (referencia workers), `workers/market_scraping.py` (plantilla), verificar config Redis |
+| **Cambio en modelos** | `db/models.py`, luego `alembic revision --autogenerate -m "descripción"`, actualizar `docs/MIGRATIONS_NOTES.md` |
+| **Nuevo servicio Docker** | Revisar sección "Convenciones Docker" en este archivo, usar multi-stage builds |
+| **Problema de conexión DB** | Verificar patrón: `DB_URL = os.getenv("DB_URL") or settings.db_url` (ver corrección 2025-11-15) |
+
+### Documentos de arquitectura general
+
+- **Roadmap.md**: Estado general del proyecto, features completadas/pendientes, deuda técnica
+- **README.md**: Setup inicial, requisitos, comandos básicos
+- **CONTRIBUTING.md**: Convenciones de código, flujo de desarrollo
+- **CHANGELOG.md**: Historial de cambios importantes
+
+### Patrón crítico: DB_URL en Docker (Lección 2025-11-15)
+
+**PROBLEMA COMÚN**: Hardcodear fallback de `DB_URL` causa errores en contenedores Docker que usan PostgreSQL.
+
+**❌ Incorrecto** (falla en Docker con Postgres):
+```python
+DB_URL = os.getenv("DB_URL", "sqlite+aiosqlite:///./growen.db")
+engine = create_async_engine(DB_URL, future=True)
+```
+
+**✅ Correcto** (funciona local y en Docker):
+```python
+from agent_core.config import settings
+
+DB_URL = os.getenv("DB_URL") or settings.db_url
+engine = create_async_engine(DB_URL, future=True)
+```
+
+**Razón**: En `docker-compose.yml` se setea `DB_URL: ""` (vacío) para que `settings.db_url` construya la URL desde `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME`.
+
+**Archivos que deben usar este patrón**:
+- `workers/*.py`
+- `services/jobs/*.py`
+- Cualquier módulo que cree su propio engine SQLAlchemy
+
+**Referencia**: Ver `db/session.py` como implementación canónica.
+
 ## Checklist para cada PR generado por un agente
 - [ ] Se agregó/actualizó encabezado NG-HEADER cuando corresponde.
 - [ ] Se actualizaron docs afectadas.
@@ -143,10 +249,17 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 - `docker-compose-audit.ps1`: Audita `docker-compose.yml`, detecta imágenes públicas con tags desactualizados, permite actualizar versiones (con backup) y reconstruir/levantar el stack (`docker compose up --build -d`). Parámetros: `-OnlyReport`, `-SkipBuild`.
 
 ### Backend / Arranque / Entorno
-- `run_api.cmd` / `run_frontend.cmd` / `start_stack.ps1` / `start_worker_images.cmd`: Scripts de conveniencia para iniciar servicios locales.
+- `run_api.cmd` / `run_frontend.cmd` / `start_stack.ps1`: Scripts de conveniencia para iniciar servicios locales.
 - `launch_backend.cmd`: Variante de arranque rápido backend (revisar duplicidad con `run_api.cmd`).
 - `start.bat` / `stop.bat`: Atajos globales de inicio/parada.
-- `start_worker_images.cmd`: Lanza worker de procesamiento de imágenes (ver dependencias en README o `docs/IMAGES.md`).
+
+### Workers / Jobs Asíncronos (Dramatiq + Redis)
+- `start_worker_images.cmd`: Lanza worker de procesamiento de imágenes (cola `images`). Ver dependencias en README o `docs/IMAGES.md`.
+- `start_worker_market.cmd`: Lanza worker de scraping de precios de mercado (cola `market`). Requiere Redis. Ver `docs/API_MARKET.md`.
+- `start_worker_all.cmd`: Lanza worker unificado que procesa ambas colas (`images` + `market`) con 3 threads. Uso recomendado para entornos con recursos limitados.
+  - Sintaxis: `start_worker_all.cmd [images|market|all]` (default: `all`)
+  - Logs: `logs/worker_all.log` (modo `all`), `logs/worker_images.log` o `logs/worker_market.log` (modo específico)
+  - Requiere `REDIS_URL` configurado (default: `redis://localhost:6379/0`)
 
 ### Mantenimiento dependencias
 - `fix_deps.bat`: Reparación / reinstalación de dependencias Python (consultar log `logs/fix_deps.log`).

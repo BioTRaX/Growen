@@ -10,6 +10,7 @@ docker-compose.yml. If Docker is unavailable, falls back to a simple in-process
 import os
 import shutil
 import subprocess
+import psutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -28,6 +29,7 @@ class ServiceStatus:
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = ROOT / "docker-compose.yml"
 _LAZY_STATE: Dict[str, str] = {}
+_MARKET_WORKER_PROC: Optional[subprocess.Popen] = None  # Track market_worker process
 
 
 def _has_docker() -> bool:
@@ -66,6 +68,32 @@ def _compose(args: list[str]) -> subprocess.CompletedProcess:
 
 
 def start_service(name: str, correlation_id: str) -> ServiceStatus:
+    global _MARKET_WORKER_PROC
+    
+    # Manejo especial para market_worker (proceso local, no Docker)
+    if name == "market_worker":
+        current = status_service(name)
+        if current.status == "running":
+            return ServiceStatus(name=name, status="running", ok=True, detail="noop: already running")
+        
+        script_path = ROOT / "scripts" / "start_worker_market.cmd"
+        if not script_path.exists():
+            return ServiceStatus(name=name, status="failed", ok=False, detail="Script not found")
+        
+        try:
+            # Ejecutar el script en background
+            _MARKET_WORKER_PROC = subprocess.Popen(
+                [str(script_path)],
+                cwd=str(ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
+            )
+            return ServiceStatus(name=name, status="running", ok=True, detail=f"Started with PID {_MARKET_WORKER_PROC.pid}")
+        except Exception as e:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=str(e))
+    
+    # Lógica original para servicios Docker
     if _has_docker():
         # Idempotencia amable: si ya está en running/starting, no intentes reiniciar
         current = status_service(name)
@@ -84,6 +112,39 @@ def start_service(name: str, correlation_id: str) -> ServiceStatus:
 
 
 def stop_service(name: str, correlation_id: str) -> ServiceStatus:
+    global _MARKET_WORKER_PROC
+    
+    # Manejo especial para market_worker
+    if name == "market_worker":
+        if _MARKET_WORKER_PROC is None or _MARKET_WORKER_PROC.poll() is not None:
+            # Proceso no existe o ya terminó
+            # Buscar por nombre de proceso como fallback
+            try:
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    try:
+                        cmdline = proc.info.get('cmdline', [])
+                        if cmdline and 'dramatiq' in ' '.join(cmdline).lower() and 'market_scraping' in ' '.join(cmdline).lower():
+                            proc.terminate()
+                            proc.wait(timeout=5)
+                            return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Terminated PID {proc.info['pid']}")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                return ServiceStatus(name=name, status="stopped", ok=True, detail="Process not found (already stopped)")
+            except Exception as e:
+                return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Error finding process: {e}")
+        
+        # Terminar proceso conocido
+        try:
+            _MARKET_WORKER_PROC.terminate()
+            _MARKET_WORKER_PROC.wait(timeout=5)
+            pid = _MARKET_WORKER_PROC.pid
+            _MARKET_WORKER_PROC = None
+            return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Terminated PID {pid}")
+        except Exception as e:
+            _MARKET_WORKER_PROC = None
+            return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Force terminated: {e}")
+    
+    # Lógica original para servicios Docker
     if _has_docker():
         proc = _compose(["stop", name])
         ok = proc.returncode == 0
@@ -94,6 +155,29 @@ def stop_service(name: str, correlation_id: str) -> ServiceStatus:
 
 
 def status_service(name: str) -> ServiceStatus:
+    global _MARKET_WORKER_PROC
+    
+    # Manejo especial para market_worker
+    if name == "market_worker":
+        # Verificar proceso global primero
+        if _MARKET_WORKER_PROC is not None and _MARKET_WORKER_PROC.poll() is None:
+            return ServiceStatus(name=name, status="running", ok=True, detail=f"Running PID {_MARKET_WORKER_PROC.pid}")
+        
+        # Buscar en procesos del sistema
+        try:
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+                try:
+                    cmdline = proc.info.get('cmdline', [])
+                    if cmdline and 'dramatiq' in ' '.join(cmdline).lower() and 'market_scraping' in ' '.join(cmdline).lower():
+                        return ServiceStatus(name=name, status="running", ok=True, detail=f"Running PID {proc.info['pid']}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception:
+            pass
+        
+        return ServiceStatus(name=name, status="stopped", ok=True, detail="Not running")
+    
+    # Lógica original para servicios Docker
     if _has_docker():
         proc = _compose(["ps", name])
         out = (proc.stdout or "") + "\n" + (proc.stderr or "")

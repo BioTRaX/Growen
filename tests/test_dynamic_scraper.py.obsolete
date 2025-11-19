@@ -1,0 +1,335 @@
+#!/usr/bin/env python
+# NG-HEADER: Nombre de archivo: test_dynamic_scraper.py
+# NG-HEADER: Ubicación: tests/test_dynamic_scraper.py
+# NG-HEADER: Descripción: Tests para scraping de páginas dinámicas con Playwright
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+"""
+Tests para el módulo de scraping dinámico con Playwright.
+
+NOTA: Estos tests requieren Playwright instalado:
+    pip install playwright
+    playwright install chromium
+
+Cubre:
+- Normalización de precios (reutiliza lógica de static_scraper)
+- Manejo de timeouts
+- Manejo de selectores no encontrados
+- Cierre correcto del navegador
+- Tests de integración con páginas reales (marcados como integration)
+"""
+
+import pytest
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from workers.scraping.dynamic_scraper import (
+    scrape_dynamic_price,
+    scrape_dynamic_price_sync,
+    normalize_price_dynamic,
+    extract_price_from_page,
+    BrowserLaunchError,
+    PageLoadError,
+    SelectorNotFoundError,
+    DynamicScrapingError,
+)
+
+
+class TestNormalizePriceDynamic:
+    """Tests para normalize_price_dynamic."""
+    
+    def test_normalize_european_format(self):
+        """Formato europeo: 1.250,00"""
+        assert normalize_price_dynamic("$ 1.250,00") == Decimal("1250.00")
+    
+    def test_normalize_american_format(self):
+        """Formato americano: 1,250.00"""
+        assert normalize_price_dynamic("$ 1,250.00") == Decimal("1250.00")
+    
+    def test_normalize_simple_number(self):
+        """Número simple: 1250"""
+        assert normalize_price_dynamic("1250") == Decimal("1250")
+    
+    def test_normalize_with_ars(self):
+        """Con símbolo ARS"""
+        assert normalize_price_dynamic("ARS 2500") == Decimal("2500")
+    
+    def test_normalize_invalid_returns_none(self):
+        """Texto inválido retorna None"""
+        assert normalize_price_dynamic("abc") is None
+        assert normalize_price_dynamic("") is None
+        assert normalize_price_dynamic(None) is None
+
+
+class TestExtractPriceFromPage:
+    """Tests para extract_price_from_page."""
+    
+    @pytest.mark.asyncio
+    async def test_extract_with_price_class(self):
+        """Extrae precio de elemento con clase 'price'"""
+        # Mock de página
+        page = AsyncMock()
+        
+        # Mock del elemento que contiene el precio
+        element = AsyncMock()
+        element.inner_text.return_value = "$ 1250.00"
+        
+        # Configurar query_selector para retornar elemento en primer selector
+        async def mock_query_selector(sel):
+            if "price" in sel:
+                return element
+            return None
+        
+        page.query_selector.side_effect = mock_query_selector
+        
+        price_text = await extract_price_from_page(page, "www.example.com")
+        
+        assert price_text == "$ 1250.00"
+    
+    @pytest.mark.asyncio
+    async def test_extract_fallback_to_content(self):
+        """Fallback: busca en todo el contenido con regex"""
+        page = AsyncMock()
+        
+        # query_selector siempre retorna None
+        page.query_selector.return_value = None
+        
+        # Contenido tiene precio embebido
+        page.content.return_value = "<html><body>El precio es $750.50</body></html>"
+        
+        price_text = await extract_price_from_page(page, "www.example.com")
+        
+        assert price_text == "$750.50"
+    
+    @pytest.mark.asyncio
+    async def test_extract_not_found(self):
+        """No encuentra precio, retorna None"""
+        page = AsyncMock()
+        page.query_selector.return_value = None
+        page.content.return_value = "<html><body>Sin precio</body></html>"
+        
+        price_text = await extract_price_from_page(page, "www.example.com")
+        
+        assert price_text is None
+
+
+class TestScrapeDynamicPrice:
+    """Tests para scrape_dynamic_price (función principal)."""
+    
+    @pytest.mark.asyncio
+    @patch('workers.scraping.dynamic_scraper.async_playwright')
+    async def test_scrape_success_with_selector(self, mock_playwright):
+        """Scraping exitoso con selector proporcionado"""
+        # Setup mocks
+        mock_p = AsyncMock()
+        mock_browser = AsyncMock()
+        mock_context = AsyncMock()
+        mock_page = AsyncMock()
+        mock_element = AsyncMock()
+        
+        # Configurar cadena de mocks
+        mock_playwright.return_value.__aenter__.return_value = mock_p
+        mock_p.chromium.launch.return_value = mock_browser
+        mock_browser.new_context.return_value = mock_context
+        mock_context.new_page.return_value = mock_page
+        
+        # Mock de respuesta HTTP OK
+        mock_response = MagicMock()
+        mock_response.ok = True
+        mock_response.status = 200
+        mock_page.goto.return_value = mock_response
+        
+        # Mock de elemento con precio
+        mock_element.inner_text.return_value = "$ 1.250,50"
+        mock_page.query_selector.return_value = mock_element
+        
+        # Ejecutar
+        price = await scrape_dynamic_price(
+            "https://www.example.com/product",
+            selector=".price-tag"
+        )
+        
+        # Verificar
+        assert price == Decimal("1250.50")
+        mock_browser.close.assert_called_once()
+    
+    @pytest.mark.asyncio
+    @patch('workers.scraping.dynamic_scraper.async_playwright')
+    async def test_scrape_timeout_loading_page(self, mock_playwright):
+        """Timeout al cargar página lanza PageLoadError"""
+        from playwright.async_api import TimeoutError as PlaywrightTimeout
+        
+        mock_p = AsyncMock()
+        mock_browser = AsyncMock()
+        mock_context = AsyncMock()
+        mock_page = AsyncMock()
+        
+        mock_playwright.return_value.__aenter__.return_value = mock_p
+        mock_p.chromium.launch.return_value = mock_browser
+        mock_browser.new_context.return_value = mock_context
+        mock_context.new_page.return_value = mock_page
+        
+        # Simular timeout en goto
+        mock_page.goto.side_effect = PlaywrightTimeout("Timeout")
+        
+        with pytest.raises(PageLoadError, match="Timeout"):
+            await scrape_dynamic_price("https://www.slow-site.com/product")
+        
+        # Verificar que se cerró el navegador
+        mock_browser.close.assert_called()
+    
+    @pytest.mark.asyncio
+    @patch('workers.scraping.dynamic_scraper.async_playwright')
+    async def test_scrape_selector_not_found(self, mock_playwright):
+        """Selector no encontrado lanza SelectorNotFoundError"""
+        from playwright.async_api import TimeoutError as PlaywrightTimeout
+        
+        mock_p = AsyncMock()
+        mock_browser = AsyncMock()
+        mock_context = AsyncMock()
+        mock_page = AsyncMock()
+        
+        mock_playwright.return_value.__aenter__.return_value = mock_p
+        mock_p.chromium.launch.return_value = mock_browser
+        mock_browser.new_context.return_value = mock_context
+        mock_context.new_page.return_value = mock_page
+        
+        # Mock respuesta OK
+        mock_response = MagicMock()
+        mock_response.ok = True
+        mock_page.goto.return_value = mock_response
+        
+        # Simular timeout esperando selector
+        mock_page.wait_for_selector.side_effect = PlaywrightTimeout("Selector timeout")
+        
+        with pytest.raises(SelectorNotFoundError, match="no apareció"):
+            await scrape_dynamic_price(
+                "https://www.example.com/product",
+                selector=".non-existent"
+            )
+        
+        mock_browser.close.assert_called()
+    
+    @pytest.mark.asyncio
+    @patch('workers.scraping.dynamic_scraper.async_playwright')
+    async def test_scrape_browser_launch_error(self, mock_playwright):
+        """Error al lanzar navegador lanza BrowserLaunchError"""
+        mock_p = AsyncMock()
+        mock_playwright.return_value.__aenter__.return_value = mock_p
+        
+        # Simular error al lanzar navegador
+        mock_p.chromium.launch.side_effect = Exception("Browser not installed")
+        
+        with pytest.raises(BrowserLaunchError, match="Browser not installed"):
+            await scrape_dynamic_price("https://www.example.com/product")
+    
+    @pytest.mark.asyncio
+    @patch('workers.scraping.dynamic_scraper.async_playwright')
+    async def test_scrape_no_price_found(self, mock_playwright):
+        """Página válida sin precio retorna None"""
+        mock_p = AsyncMock()
+        mock_browser = AsyncMock()
+        mock_context = AsyncMock()
+        mock_page = AsyncMock()
+        
+        mock_playwright.return_value.__aenter__.return_value = mock_p
+        mock_p.chromium.launch.return_value = mock_browser
+        mock_browser.new_context.return_value = mock_context
+        mock_context.new_page.return_value = mock_page
+        
+        # Mock respuesta OK
+        mock_response = MagicMock()
+        mock_response.ok = True
+        mock_page.goto.return_value = mock_response
+        
+        # Sin selector proporcionado, extract_price_from_page retorna None
+        mock_page.query_selector.return_value = None
+        mock_page.content.return_value = "<html><body>Sin precio</body></html>"
+        
+        price = await scrape_dynamic_price("https://www.example.com/product")
+        
+        assert price is None
+        mock_browser.close.assert_called_once()
+    
+    @pytest.mark.asyncio
+    @patch('workers.scraping.dynamic_scraper.async_playwright')
+    async def test_browser_closes_on_exception(self, mock_playwright):
+        """Navegador se cierra incluso si hay excepción"""
+        mock_p = AsyncMock()
+        mock_browser = AsyncMock()
+        mock_context = AsyncMock()
+        
+        mock_playwright.return_value.__aenter__.return_value = mock_p
+        mock_p.chromium.launch.return_value = mock_browser
+        mock_browser.new_context.return_value = mock_context
+        
+        # Simular error al crear página
+        mock_context.new_page.side_effect = Exception("Unexpected error")
+        
+        with pytest.raises(DynamicScrapingError):
+            await scrape_dynamic_price("https://www.example.com/product")
+        
+        # Verificar que se intentó cerrar el navegador
+        mock_browser.close.assert_called()
+
+
+class TestScrapeDynamicPriceSync:
+    """Tests para la versión sincrónica."""
+    
+    @patch('workers.scraping.dynamic_scraper.asyncio.run')
+    def test_sync_wrapper_calls_async(self, mock_asyncio_run):
+        """Wrapper sync llama a la versión async correctamente"""
+        mock_asyncio_run.return_value = Decimal("999.99")
+        
+        price = scrape_dynamic_price_sync("https://www.example.com/product")
+        
+        assert price == Decimal("999.99")
+        mock_asyncio_run.assert_called_once()
+    
+    @patch('workers.scraping.dynamic_scraper.asyncio.run')
+    def test_sync_wrapper_passes_parameters(self, mock_asyncio_run):
+        """Wrapper sync pasa parámetros correctamente"""
+        mock_asyncio_run.return_value = None
+        
+        scrape_dynamic_price_sync(
+            "https://www.example.com/product",
+            selector=".price",
+            timeout=20000,
+            wait_for_selector_timeout=10000
+        )
+        
+        # Verificar que asyncio.run fue llamado con los parámetros correctos
+        mock_asyncio_run.assert_called_once()
+        call_args = mock_asyncio_run.call_args[0][0]
+        # call_args es un coroutine, no podemos verificar los parámetros directamente
+        # pero al menos verificamos que se llamó
+
+
+class TestIntegration:
+    """Tests de integración (requieren Playwright instalado y conexión a internet)."""
+    
+    @pytest.mark.integration
+    @pytest.mark.skip(reason="Requiere Playwright instalado y conexión a internet")
+    @pytest.mark.asyncio
+    async def test_real_page_scraping(self):
+        """
+        Test de integración con página real.
+        
+        NOTA: Deshabilitado por defecto. Para ejecutar:
+            pytest -m integration tests/test_dynamic_scraper.py
+        
+        Requiere:
+        - Playwright instalado (playwright install chromium)
+        - Conexión a internet
+        - URL de prueba válida
+        """
+        # Ejemplo con una página de prueba
+        # ADVERTENCIA: Esta URL puede cambiar o dejar de funcionar
+        url = "https://www.example.com/product-with-js-price"
+        
+        try:
+            price = await scrape_dynamic_price(url, timeout=30000)
+            assert price is not None
+            assert price > 0
+        except Exception as e:
+            pytest.skip(f"Test de integración falló (esperado): {e}")

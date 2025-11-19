@@ -7,6 +7,7 @@ export const PATHS = {
   products: "/productos",
   productDetail: (id: number | string) => `/productos/${id}`,
   stock: "/stock",
+  market: "/mercado",
   suppliers: "/proveedores",
   purchases: "/compras",
   purchasesNew: "/compras/nueva",
@@ -20,6 +21,7 @@ export const PATHS = {
   adminImages: "/admin/imagenes-productos",
   adminCatalogDiagnostics: "/admin/catalogos/diagnostico",
   adminBackups: "/admin/backups",
+  adminScheduler: "/admin/scheduler",
   // legacy alias
   imagesAdmin: "/admin/imagenes",
 } as const;

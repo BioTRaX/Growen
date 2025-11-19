@@ -1,0 +1,318 @@
+#!/usr/bin/env python
+# NG-HEADER: Nombre de archivo: test_static_scraper.py
+# NG-HEADER: Ubicación: tests/test_static_scraper.py
+# NG-HEADER: Descripción: Tests para scraping de páginas estáticas
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+"""
+Tests para el módulo de scraping estático.
+
+Cubre:
+- Normalización de precios en diferentes formatos
+- Extractores específicos por dominio (con HTML fixtures)
+- Extractor genérico
+- Manejo de errores de red
+- Manejo de precios no encontrados
+"""
+
+import os
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+import responses
+from bs4 import BeautifulSoup
+
+from workers.scraping.static_scraper import (
+    NetworkError,
+    PriceNotFoundError,
+    extract_price_amazon,
+    extract_price_generic,
+    extract_price_mercadolibre,
+    normalize_price,
+    scrape_static_price,
+)
+
+# Directorio de fixtures HTML
+FIXTURES_DIR = Path(__file__).parent / "html_fixtures"
+
+
+class TestNormalizePrice:
+    """Tests para la función normalize_price."""
+    
+    def test_normalize_price_european_format(self):
+        """Formato europeo: 1.250,00"""
+        assert normalize_price("1.250,00") == Decimal("1250.00")
+    
+    def test_normalize_price_american_format(self):
+        """Formato americano: 1,250.00"""
+        assert normalize_price("1,250.00") == Decimal("1250.00")
+    
+    def test_normalize_price_simple_integer(self):
+        """Entero simple: 1250"""
+        assert normalize_price("1250") == Decimal("1250")
+    
+    def test_normalize_price_with_currency_symbol(self):
+        """Con símbolo de moneda: $ 1.250,50"""
+        assert normalize_price("$ 1.250,50") == Decimal("1250.50")
+    
+    def test_normalize_price_with_ars(self):
+        """Con ARS: ARS 2500"""
+        assert normalize_price("ARS 2500") == Decimal("2500")
+    
+    def test_normalize_price_comma_as_decimal(self):
+        """Coma como decimal: 750,00"""
+        assert normalize_price("750,00") == Decimal("750.00")
+    
+    def test_normalize_price_dot_as_decimal(self):
+        """Punto como decimal: 750.99"""
+        assert normalize_price("750.99") == Decimal("750.99")
+    
+    def test_normalize_price_invalid_returns_none(self):
+        """Texto inválido retorna None"""
+        assert normalize_price("abc") is None
+        assert normalize_price("") is None
+        assert normalize_price(None) is None
+
+
+class TestExtractPriceMercadolibre:
+    """Tests para el extractor de MercadoLibre."""
+    
+    def test_extract_mercadolibre_with_fixture(self):
+        """Extraer precio desde HTML fixture de MercadoLibre"""
+        html_path = FIXTURES_DIR / "mercadolibre_example.html"
+        with open(html_path, encoding="utf-8") as f:
+            html = f.read()
+        
+        soup = BeautifulSoup(html, "html.parser")
+        price = extract_price_mercadolibre(soup)
+        
+        assert price is not None
+        assert price == Decimal("1250.50")
+    
+    def test_extract_mercadolibre_without_cents(self):
+        """MercadoLibre sin centavos"""
+        html = """
+        <div class="ui-pdp-price__main-container">
+            <span class="andes-money-amount__fraction">999</span>
+        </div>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        price = extract_price_mercadolibre(soup)
+        
+        assert price is not None
+        assert price == Decimal("999.00")
+    
+    def test_extract_mercadolibre_not_found(self):
+        """HTML sin precio de MercadoLibre retorna None"""
+        html = "<html><body><h1>No hay precio aquí</h1></body></html>"
+        soup = BeautifulSoup(html, "html.parser")
+        price = extract_price_mercadolibre(soup)
+        
+        assert price is None
+
+
+class TestExtractPriceAmazon:
+    """Tests para el extractor de Amazon."""
+    
+    def test_extract_amazon_with_fixture(self):
+        """Extraer precio desde HTML fixture de Amazon"""
+        html_path = FIXTURES_DIR / "amazon_example.html"
+        with open(html_path, encoding="utf-8") as f:
+            html = f.read()
+        
+        soup = BeautifulSoup(html, "html.parser")
+        price = extract_price_amazon(soup)
+        
+        assert price is not None
+        assert price == Decimal("2499.99")
+    
+    def test_extract_amazon_fallback_priceblock(self):
+        """Amazon con selector antiguo priceblock_ourprice"""
+        html = """
+        <span id="priceblock_ourprice">$ 1,850.00</span>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        price = extract_price_amazon(soup)
+        
+        assert price is not None
+        assert price == Decimal("1850.00")
+    
+    def test_extract_amazon_not_found(self):
+        """HTML sin precio de Amazon retorna None"""
+        html = "<html><body><h1>No hay precio aquí</h1></body></html>"
+        soup = BeautifulSoup(html, "html.parser")
+        price = extract_price_amazon(soup)
+        
+        assert price is None
+
+
+class TestExtractPriceGeneric:
+    """Tests para el extractor genérico."""
+    
+    def test_extract_generic_with_fixture(self):
+        """Extraer precio desde HTML fixture genérico"""
+        html_path = FIXTURES_DIR / "generic_example.html"
+        with open(html_path, encoding="utf-8") as f:
+            html = f.read()
+        
+        soup = BeautifulSoup(html, "html.parser")
+        price = extract_price_generic(soup)
+        
+        assert price is not None
+        assert price == Decimal("750.00")
+    
+    def test_extract_generic_with_price_class(self):
+        """Genérico encuentra precio en clase 'price'"""
+        html = """
+        <div class="product">
+            <span class="price">ARS 1500</span>
+        </div>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        price = extract_price_generic(soup)
+        
+        assert price is not None
+        assert price == Decimal("1500")
+    
+    def test_extract_generic_with_itemprop(self):
+        """Genérico encuentra precio en itemprop='price'"""
+        html = """
+        <span itemprop="price">$ 2,250.50</span>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        price = extract_price_generic(soup)
+        
+        assert price is not None
+        assert price == Decimal("2250.50")
+    
+    def test_extract_generic_not_found(self):
+        """HTML sin precio retorna None"""
+        html = "<html><body><h1>Página sin precios</h1></body></html>"
+        soup = BeautifulSoup(html, "html.parser")
+        price = extract_price_generic(soup)
+        
+        assert price is None
+
+
+class TestScrapeStaticPrice:
+    """Tests para la función principal scrape_static_price."""
+    
+    @responses.activate
+    def test_scrape_mercadolibre_success(self):
+        """Scraping exitoso de MercadoLibre con mock"""
+        url = "https://www.mercadolibre.com.ar/producto-test/p/MLA123"
+        
+        html_path = FIXTURES_DIR / "mercadolibre_example.html"
+        with open(html_path, encoding="utf-8") as f:
+            html_content = f.read()
+        
+        responses.add(responses.GET, url, body=html_content, status=200)
+        
+        price = scrape_static_price(url)
+        
+        assert price is not None
+        assert price == Decimal("1250.50")
+    
+    @responses.activate
+    def test_scrape_amazon_success(self):
+        """Scraping exitoso de Amazon con mock"""
+        url = "https://www.amazon.com.ar/producto-test/dp/B123"
+        
+        html_path = FIXTURES_DIR / "amazon_example.html"
+        with open(html_path, encoding="utf-8") as f:
+            html_content = f.read()
+        
+        responses.add(responses.GET, url, body=html_content, status=200)
+        
+        price = scrape_static_price(url)
+        
+        assert price is not None
+        assert price == Decimal("2499.99")
+    
+    @responses.activate
+    def test_scrape_generic_success(self):
+        """Scraping exitoso con extractor genérico"""
+        url = "https://www.tienda-generica.com/producto/123"
+        
+        html_path = FIXTURES_DIR / "generic_example.html"
+        with open(html_path, encoding="utf-8") as f:
+            html_content = f.read()
+        
+        responses.add(responses.GET, url, body=html_content, status=200)
+        
+        price = scrape_static_price(url)
+        
+        assert price is not None
+        assert price == Decimal("750.00")
+    
+    @responses.activate
+    def test_scrape_timeout_error(self):
+        """Error de timeout lanza NetworkError"""
+        import requests
+        url = "https://www.example.com/slow-product"
+        
+        # Simular timeout con exception
+        responses.add(responses.GET, url, body=requests.exceptions.Timeout("Timeout simulado"))
+        
+        with pytest.raises(NetworkError, match="Timeout"):
+            scrape_static_price(url, timeout=1)
+    
+    @responses.activate
+    def test_scrape_http_error(self):
+        """Error HTTP 404 lanza NetworkError"""
+        url = "https://www.example.com/not-found"
+        
+        responses.add(responses.GET, url, status=404)
+        
+        with pytest.raises(NetworkError, match="Error HTTP 404"):
+            scrape_static_price(url)
+    
+    @responses.activate
+    def test_scrape_price_not_found(self):
+        """Página válida sin precio lanza PriceNotFoundError"""
+        url = "https://www.example.com/no-price"
+        
+        html = "<html><body><h1>Producto sin precio</h1></body></html>"
+        responses.add(responses.GET, url, body=html, status=200)
+        
+        with pytest.raises(PriceNotFoundError):
+            scrape_static_price(url)
+    
+    @responses.activate
+    def test_scrape_with_custom_timeout(self):
+        """Timeout personalizado se respeta"""
+        url = "https://www.example.com/product"
+        
+        html_path = FIXTURES_DIR / "generic_example.html"
+        with open(html_path, encoding="utf-8") as f:
+            html_content = f.read()
+        
+        responses.add(responses.GET, url, body=html_content, status=200)
+        
+        price = scrape_static_price(url, timeout=30)
+        
+        assert price is not None
+        assert price == Decimal("750.00")
+
+
+class TestIntegration:
+    """Tests de integración (opcional, requieren red real)."""
+    
+    @pytest.mark.integration
+    @pytest.mark.skip(reason="Requiere conexión a internet y puede ser inestable")
+    def test_real_mercadolibre_url(self):
+        """
+        Test de integración con URL real de MercadoLibre.
+        
+        NOTA: Este test está deshabilitado por defecto porque:
+        - Requiere conexión a internet
+        - Puede fallar si la página cambia estructura
+        - La URL puede quedar obsoleta
+        
+        Para ejecutarlo: pytest -m integration tests/test_static_scraper.py
+        """
+        url = "https://www.mercadolibre.com.ar/producto-ejemplo"
+        price = scrape_static_price(url)
+        assert price is not None
+        assert price > 0

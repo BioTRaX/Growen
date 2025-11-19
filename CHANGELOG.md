@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 ### Added
+- Endpoint `DELETE /suppliers` mejorado con detalles extendidos y eliminación en cascada opcional:
+  - Parámetro `force_cascade` para eliminar automáticamente `import_jobs` y `product_equivalences`
+  - Respuesta incluye `details` con IDs de registros bloqueantes, estados y acciones sugeridas
+  - Campo `help` con guía de uso de `force_cascade` y limpieza manual
+  - Validación de integridad referencial completa: compras, archivos, import_jobs, equivalencias, líneas de compra
+  - Retorna nombre del proveedor en `blocked[]` para facilitar identificación
 - Enriquecimiento de productos con IA:
 	- Backend: `POST /products/{id}/enrich` (force=true), `DELETE /products/{id}/enrichment`, `POST /products/enrich-multiple` (máx 20). Guardas, validaciones y auditoría (`enrich|reenrich|delete_enrichment`).
 	- Modelo `products`: `enrichment_sources_url`, campos técnicos (`weight_kg`, `height_cm`, `width_cm`, `depth_cm`, `market_price_reference`) y metadatos `last_enriched_at`, `enriched_by`.

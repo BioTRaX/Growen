@@ -44,6 +44,7 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
   const [q, setQ] = useState('')
   const [items, setItems] = useState<ProductItem[]>([])
   const [page, setPage] = useState(1)
+  const [pageSize] = useState(50)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [stockFilter, setStockFilter] = useState<string>('')
@@ -310,6 +311,7 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
         created_since_days: recentFilter ? Number(recentFilter) : undefined,
         type: typeFilter,
         page,
+        page_size: pageSize,
       })
         .then((r) => {
           setItems((prev) => (page === 1 ? r.items : [...prev, ...r.items]))
@@ -822,7 +824,14 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
           <option value="30">≤ 30 días</option>
         </select>
       </div>
-      <div style={{ fontSize: 12, marginBottom: 8 }}>{total} resultados</div>
+      <div style={{ fontSize: 12, marginBottom: 8 }}>
+        {total} resultados
+        {isEmbedded && total > 0 && (
+          <span style={{ marginLeft: 8, opacity: 0.8 }}>
+            (Mostrando {Math.min(items.length, total)} de {total})
+          </span>
+        )}
+      </div>
       {/* Horizontal scroll container */}
       <div style={{ flex: '1 1 auto', overflowX: 'auto', overflowY: isEmbedded ? 'visible' : 'hidden' }}>
         <div style={{ minWidth: orderedCols.reduce((sum, c) => sum + widthFor(c.id as ColId), 0) + 40 }}>
@@ -900,6 +909,29 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
       {!isEmbedded && (
         <div style={{ height: 16, overflowX: 'auto' }}>
           <div style={{ width: orderedCols.reduce((sum, c) => sum + widthFor(c.id as ColId), 0) + 40 }} />
+        </div>
+      )}
+      {/* Pagination controls for embedded mode */}
+      {isEmbedded && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'center' }}>
+          <button 
+            className="btn-dark btn-lg" 
+            disabled={page === 1 || loading} 
+            onClick={() => {
+              setPage(1)
+              setItems([])
+              window.scrollTo({ top: 0, behavior: 'smooth' })
+            }}
+          >
+            Anterior
+          </button>
+          <button 
+            className="btn-dark btn-lg" 
+            disabled={items.length >= total || loading} 
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Más
+          </button>
         </div>
       )}
       {historyProduct && (

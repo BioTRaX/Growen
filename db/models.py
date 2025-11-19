@@ -23,6 +23,7 @@ from sqlalchemy import (
     UniqueConstraint,
     CheckConstraint,
     Index,
+    Enum,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -372,6 +373,10 @@ class CanonicalProduct(Base):
     brand: Mapped[Optional[str]] = mapped_column(String(100))
     # Precio de venta a nivel canónico
     sale_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
+    # Precio de referencia del mercado (valor manual o calculado)
+    market_price_reference: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
+    # Fecha de última actualización del precio de mercado de referencia
+    market_price_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     specs_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     # Taxonomía: categoría padre y subcategoría (opcional)
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True)
@@ -382,6 +387,79 @@ class CanonicalProduct(Base):
     equivalences: Mapped[list["ProductEquivalence"]] = relationship(
         back_populates="canonical_product"
     )
+    market_sources: Mapped[list["MarketSource"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan"
+    )
+    price_history: Mapped[list["MarketPriceHistory"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan", order_by="MarketPriceHistory.created_at.desc()"
+    )
+    category: Mapped[Optional["Category"]] = relationship(foreign_keys=[category_id])
+    subcategory: Mapped[Optional["Category"]] = relationship(foreign_keys=[subcategory_id])
+
+
+class MarketSource(Base):
+    """Fuente de precio de mercado para un producto canónico."""
+    __tablename__ = "market_sources"
+    __table_args__ = (
+        Index("idx_market_sources_product_id", "product_id"),
+        UniqueConstraint("product_id", "url", name="uq_market_sources_product_url"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
+    )
+    source_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    url: Mapped[str] = mapped_column(String(500), nullable=False)
+    last_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
+    last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    is_mandatory: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Campos adicionales para gestión de scraping
+    currency: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, default="ARS")
+    source_type: Mapped[Optional[str]] = mapped_column(
+        Enum("static", "dynamic", name="source_type_enum"), nullable=True, default="static"
+    )
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    product: Mapped["CanonicalProduct"] = relationship(back_populates="market_sources")
+
+
+class MarketPriceHistory(Base):
+    """
+    Historial de precios de mercado por producto y fuente.
+    
+    Registra cada precio obtenido mediante scraping o actualización manual,
+    permitiendo análisis de tendencias y variaciones temporales.
+    """
+    __tablename__ = "market_price_history"
+    __table_args__ = (
+        Index("idx_market_price_history_product_id", "product_id"),
+        Index("idx_market_price_history_source_id", "source_id"),
+        Index("idx_market_price_history_created_at", "created_at"),
+        # Índice compuesto para consultas por producto y rango de fechas
+        Index("idx_market_price_history_product_date", "product_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
+    )
+    source_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("market_sources.id", ondelete="SET NULL"), nullable=True
+    )
+    price: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), default="ARS", nullable=False)
+    # Metadatos adicionales para auditoría
+    source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    source_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # Diferencia porcentual con el precio anterior (calculado al insertar)
+    price_change_pct: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
+
+    # Relaciones
+    product: Mapped["CanonicalProduct"] = relationship(back_populates="price_history")
+    source: Mapped[Optional["MarketSource"]] = relationship()
 
 
 class ProductEquivalence(Base):
@@ -839,6 +917,80 @@ class ReturnLine(Base):
     return_ref: Mapped["Return"] = relationship(back_populates="lines")
     sale_line: Mapped[Optional["SaleLine"]] = relationship()
     product: Mapped["Product"] = relationship()
+
+
+class MarketAlert(Base):
+    """
+    Alertas de variación significativa en precios de mercado.
+    
+    Se generan automáticamente cuando el scraping detecta cambios de precio
+    que superan los umbrales configurados. Permite a los administradores
+    monitorear y reaccionar a fluctuaciones importantes del mercado.
+    """
+    __tablename__ = "market_alerts"
+    __table_args__ = (
+        Index("idx_market_alerts_product_id", "product_id"),
+        Index("idx_market_alerts_created_at", "created_at"),
+        Index("idx_market_alerts_resolved", "resolved"),
+        # Índice compuesto para consultas de alertas activas por producto
+        Index("idx_market_alerts_product_active", "product_id", "resolved"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
+    )
+    
+    # Tipo de alerta
+    alert_type: Mapped[str] = mapped_column(
+        Enum(
+            "sale_vs_market",      # Precio venta vs mercado actual
+            "market_vs_previous",  # Precio mercado actual vs anterior
+            "market_spike",        # Aumento repentino (>X%)
+            "market_drop",         # Caída repentina (>X%)
+            name="market_alert_type_enum"
+        ),
+        nullable=False
+    )
+    
+    # Severidad de la alerta
+    severity: Mapped[str] = mapped_column(
+        Enum("low", "medium", "high", "critical", name="alert_severity_enum"),
+        nullable=False,
+        default="medium"
+    )
+    
+    # Valores involucrados
+    old_value: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
+    new_value: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False)
+    delta_percentage: Mapped[Numeric] = mapped_column(Numeric(10, 2), nullable=False)  # % de cambio
+    
+    # Mensaje descriptivo
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    # Estado de la alerta
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    resolved_by: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    resolution_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    # Notificaciones enviadas
+    email_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    email_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        default=datetime.utcnow, 
+        onupdate=datetime.utcnow, 
+        nullable=False
+    )
+    
+    # Relaciones
+    product: Mapped["CanonicalProduct"] = relationship()
+    resolver: Mapped[Optional["User"]] = relationship(foreign_keys=[resolved_by])
 
 
 # --- Stock Ledger (Movimientos de stock unificados) ---

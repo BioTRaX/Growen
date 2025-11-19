@@ -1,8 +1,9 @@
 # Growen
 
-## Documentacion
+## Documentación
 
 - Hoja de ruta: [Roadmap.md](./Roadmap.md)
+- **Workflow de Desarrollo (Local vs Docker)**: [docs/DEVELOPMENT_WORKFLOW.md](./docs/DEVELOPMENT_WORKFLOW.md) ⚡
 - Capa MCP (servers/tools): [docs/MCP.md](./docs/MCP.md)
 - Arquitectura chatbot admin: [docs/CHATBOT_ARCHITECTURE.md](./docs/CHATBOT_ARCHITECTURE.md)
 - Roles del chatbot admin: [docs/CHATBOT_ROLES.md](./docs/CHATBOT_ROLES.md)
@@ -113,7 +114,7 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - **Base de datos**: PostgreSQL 15 (Alembic para migraciones).
 - **IA**: ruteo automático entre Ollama (local) y OpenAI.
 - **Frontend**: React + Vite con listas virtualizadas mediante `react-window`.
-- **Adapters**: exportaci�n a TiendaNegocio v�a XLS.
+- **Adapters**: exportación a TiendaNegocio via XLS.
 - **MCP Servers (nuevo)**: microservicios auxiliares (ej. `mcp_products`, `mcp_web_search`) que exponen herramientas (`tools`) vía un endpoint uniforme `POST /invoke_tool` para consumo de agentes LLM, actuando como fachada HTTP hacia la API principal (sin acceso directo a DB).
   - Products: tools `get_product_info` y `get_product_full_info` (URL default `http://mcp_products:8001/invoke_tool`, configurable con `MCP_PRODUCTS_URL`).
   - Web Search (MVP): tool `search_web(query)` que retorna títulos/URLs/snippets desde un buscador HTML (URL default `http://mcp_web_search:8002/invoke_tool`, configurable con `MCP_WEB_SEARCH_URL`).
@@ -183,7 +184,64 @@ python tools/doctor.py
 ```
 
 O a través del endpoint de la API (disponible solo para administradores en entorno de desarrollo): `GET /admin/import/doctor`.
-- OCR: `ocrmypdf` (requiere Tesseract, Ghostscript y Poppler). TODO: agregar "doctor" para validar instalación.
+
+### Workers en Segundo Plano (Dramatiq + Redis)
+
+Growen usa **Dramatiq** con **Redis** como broker para procesar tareas asíncronas en segundo plano sin bloquear la API. Existen dos colas principales:
+
+- **Cola `images`**: procesamiento de imágenes (descarga, conversión, thumbnails)
+- **Cola `market`**: scraping de precios de mercado con Playwright/requests
+
+#### Iniciar Workers
+
+**Opción 1 - Workers separados** (mayor control):
+```bash
+# Worker de imágenes (cola images)
+scripts\start_worker_images.cmd
+
+# Worker de mercado (cola market)
+scripts\start_worker_market.cmd
+```
+
+**Opción 2 - Worker unificado** (recomendado para desarrollo):
+```bash
+# Procesa ambas colas (images + market) con 3 threads
+scripts\start_worker_all.cmd
+
+# O especificar cola específica
+scripts\start_worker_all.cmd images
+scripts\start_worker_all.cmd market
+```
+
+**Opción 3 - Modo desarrollo sin Redis** (sin persistencia):
+```bash
+# Usar StubBroker en memoria
+set RUN_INLINE_JOBS=1
+python services/main.py
+```
+
+#### Variables de Entorno
+
+- `REDIS_URL`: URL de Redis (default: `redis://localhost:6379/0`)
+- `RUN_INLINE_JOBS`: Si es `1`, usa StubBroker (sin Redis, solo desarrollo)
+
+#### Logs
+
+- `logs/worker_images.log`: worker de imágenes
+- `logs/worker_market.log`: worker de mercado
+- `logs/worker_all.log`: worker unificado
+
+#### Monitoreo
+
+```bash
+# Ver estado de Redis, colas y workers
+curl http://localhost:8000/health/dramatiq
+
+# Ver resumen completo del sistema
+curl http://localhost:8000/health/summary
+```
+
+Para más detalles sobre el scraping de mercado, ver [docs/API_MARKET.md](./docs/API_MARKET.md).
 
 ## Instalación local
 
