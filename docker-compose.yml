@@ -5,7 +5,7 @@
 services:
   db:
     container_name: growen-postgres
-    image: growen/postgres:local
+    image: growen/postgres:pgvector
     build:
       context: .
       dockerfile: infra/Dockerfile.postgres

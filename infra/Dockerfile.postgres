@@ -1,12 +1,15 @@
 # NG-HEADER: Nombre de archivo: Dockerfile.postgres
 # NG-HEADER: Ubicación: infra/Dockerfile.postgres
-# NG-HEADER: Descripción: Imagen de Postgres 17-alpine para entornos locales con parches de seguridad.
+# NG-HEADER: Descripción: Imagen de Postgres 17 con extensión pgvector para RAG (Etapa 2).
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-FROM postgres:17.6-alpine
+FROM pgvector/pgvector:pg17
 
-# Actualizamos los paquetes del sistema base (Alpine) para aplicar parches de seguridad.
-# Se usa 'apk' en lugar de 'apt-get'.
-RUN apk update && apk upgrade
+# Actualizamos los paquetes del sistema base (Debian) para aplicar parches de seguridad.
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+
+# Habilitar extensión pgvector automáticamente al iniciar la BD
+# (Opcional: puede habilitarse manualmente con CREATE EXTENSION vector;)
+RUN echo "CREATE EXTENSION IF NOT EXISTS vector;" > /docker-entrypoint-initdb.d/01-enable-pgvector.sql
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 	CMD pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" || exit 1

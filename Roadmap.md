@@ -5,7 +5,7 @@
 
 # Roadmap del Proyecto
 
-Última actualización: 2025-11-09
+Última actualización: 2025-11-25
 
 Este documento resume el estado actual del proyecto, las funcionalidades ya implementadas y los trabajos pendientes. Debe mantenerse actualizado por cada contribución (humana o de un agente) que cambie comportamiento, endpoints, modelos o UI relevante.
 
@@ -44,9 +44,26 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
   - ✅ Campos JSONB agregados al modelo `Product`: `technical_specs` (dimensiones, potencia, peso, etc.) y `usage_instructions` (pasos, consejos de uso).
   - ✅ Esquemas Pydantic actualizados en `chat.py` y `catalog.py` para exponer los nuevos campos.
   - ✅ MCP `products_server` actualizado para incluir los datos estructurados en las respuestas de `get_product_info` y `get_product_full_info`.
-  - ⏳ **Pendiente**: Migración de base de datos (`alembic revision --autogenerate -m "add_product_specs_and_usage"`).
+  - ✅ Migración de base de datos aplicada (`20251119_add_product_specs_and_usage`).
   - ⏸️ Futuros pasos: UI para editar especificaciones técnicas, pipeline de enriquecimiento automático con IA, validación de esquemas JSON.
-- **Etapa 2**: RAG para documentación propia — Implementación de Retrieval-Augmented Generation usando `pgvector` para indexar y consultar manuales, PDFs de proveedores y documentación técnica interna.
+
+- **Etapa 2**: RAG para documentación propia — **✅ COMPLETADA (Infraestructura + Motor de Ingesta)**
+  - ✅ PostgreSQL actualizado a `pgvector/pgvector:pg17` con extensión pgvector 0.8.1 instalada.
+  - ✅ Dependencias agregadas: `pgvector>=0.3.8`, `langchain-text-splitters>=0.3.0`, `tiktoken>=0.8.0`.
+  - ✅ Modelos `KnowledgeSource` y `KnowledgeChunk` implementados con Vector(1536).
+  - ✅ Migración aplicada: `b2d22a7ce889_add_rag_knowledge_tables_manual`.
+  - ✅ `EmbeddingService` implementado en `ai/embeddings.py` con AsyncOpenAI (modelo: text-embedding-3-small).
+  - ✅ `DocumentIngestor` implementado en `services/rag/ingest.py` con chunking inteligente (RecursiveCharacterTextSplitter).
+  - ✅ Script de carga `scripts/index_docs.py` funcional con detección de cambios por hash SHA256.
+  - ✅ Directorio `docs/knowledge_base/` creado con documentación completa.
+  - ✅ Testing exitoso: 2 documentos indexados (11 chunks, ~2K tokens, $0.00004 USD).
+  - 🔄 **Próximos pasos**:
+    - Implementar endpoint `/api/v1/rag/search` para búsquedas semánticas.
+    - Integrar recuperación RAG en respuestas del chatbot.
+    - Agregar reranking para mejorar relevancia de resultados.
+    - Implementar índice IVFFlat después de alcanzar 10K+ vectores.
+    - Monitorear costos de OpenAI API y latencias de búsqueda.
+
 - **Etapa 3**: Conciencia de Roles y Seguridad — Integración con SSO/MFA (Keycloak/Authentik), token firmado (HMAC/JWT) con claims de rol, y control de acceso granular en tools según el usuario autenticado.
 - **Etapa 4**: Modo Desarrollador — Indexación del repositorio local, acceso controlado al código fuente, gateway de lectura/escritura confinada a `PR/`, y memoria conversacional a largo plazo.
 - **Etapa 5**: Business Intelligence — Text-to-SQL para consultas de finanzas, stock, ventas y análisis de tendencias; dashboards conversacionales.

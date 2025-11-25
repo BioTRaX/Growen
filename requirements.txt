@@ -56,3 +56,8 @@ PyPDF2>=2.10,<3
 # LLM proveedor OpenAI
 openai>=1.40.0
 notion-client>=2.2.1
+
+# RAG (Retrieval-Augmented Generation) - Etapa 2
+pgvector>=0.3.8  # Driver PostgreSQL para búsqueda vectorial
+langchain-text-splitters>=0.3.0  # Utilidad para dividir documentos en chunks
+tiktoken>=0.8.0  # Tokenizador OpenAI para calcular costos de embeddings

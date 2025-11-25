@@ -29,6 +29,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 
+# RAG: Soporte vectorial para embeddings (Etapa 2)
+from pgvector.sqlalchemy import Vector
+
 
 class JSONBCompat(TypeDecorator):
     """
@@ -1032,3 +1035,45 @@ class StockLedger(Base):
     meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     product: Mapped["Product"] = relationship()
+
+
+# --- RAG (Retrieval-Augmented Generation) - Etapa 2 ---
+
+class KnowledgeSource(Base):
+    """Representa un documento fuente de conocimiento (PDF, MD, TXT, etc.)."""
+    __tablename__ = "knowledge_sources"
+    __table_args__ = (
+        Index("ix_knowledge_sources_hash", "hash"),
+        Index("ix_knowledge_sources_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    hash: Mapped[str] = mapped_column(String(64), nullable=False)  # SHA256 para detectar duplicados
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
+    meta_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
+
+    # Relación con fragmentos vectorizados
+    chunks: Mapped[list["KnowledgeChunk"]] = relationship(
+        back_populates="source",
+        cascade="all, delete-orphan"
+    )
+
+
+class KnowledgeChunk(Base):
+    """Representa un fragmento de texto vectorizado de un documento fuente."""
+    __tablename__ = "knowledge_chunks"
+    __table_args__ = (
+        Index("ix_knowledge_chunks_source", "source_id"),
+        Index("ix_knowledge_chunks_embedding", "embedding", postgresql_using="ivfflat"),  # Índice para búsqueda vectorial
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("knowledge_sources.id", ondelete="CASCADE"), nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)  # Orden del fragmento en el documento
+    content: Mapped[str] = mapped_column(Text, nullable=False)  # Texto plano del fragmento
+    embedding: Mapped[Optional[Vector]] = mapped_column(Vector(1536), nullable=True)  # Dimensiones text-embedding-3-small de OpenAI
+    chunk_metadata: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')  # Ej: {"page": 1}
+
+    # Relación con el documento fuente
+    source: Mapped["KnowledgeSource"] = relationship(back_populates="chunks")
