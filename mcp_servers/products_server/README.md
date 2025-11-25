@@ -41,16 +41,43 @@ curl -X POST http://localhost:8100/invoke_tool \
 
 ## Tools implementadas
 
-1. `get_product_info`
+1. **`get_product_info`** (versión ligera)
   - Accesible para cualquier rol.
-  - Retorna: `sku, name, sale_price, stock`.
-2. `get_product_full_info`
+  - Retorna información básica: `sku, name, sale_price, stock`.
+  - **No incluye** campos de enriquecimiento para optimizar tokens.
+  - Ideal para consultas rápidas donde no se necesita información técnica detallada.
+
+2. **`get_product_full_info`** (versión completa - Etapa 1)
   - Requiere rol en {`admin`, `colaborador`}.
-  - En este MVP retorna lo mismo que la anterior. Se ampliará con detalles adicionales.
-3. `find_products_by_name` (nuevo)
+  - Retorna información completa incluyendo:
+    - Datos básicos: `sku, name, sale_price, stock`
+    - **Datos de enriquecimiento (Etapa 1):**
+      - `technical_specs`: Especificaciones técnicas (dimensiones, potencia, peso, materiales, etc.)
+      - `usage_instructions`: Instrucciones de uso (pasos, consejos, advertencias)
+  - **Optimización de tokens:** Los campos `technical_specs` y `usage_instructions` solo se incluyen si tienen contenido (no vacíos/nulos).
+  - Ejemplo de respuesta con datos enriquecidos:
+    ```json
+    {
+      "sku": "PROD-001",
+      "name": "Fertilizante Premium",
+      "sale_price": 150.0,
+      "stock": 10,
+      "technical_specs": {
+        "dimensions": {"height": "50 cm", "width": "30 cm"},
+        "power": "1000W",
+        "weight": "5.2 kg"
+      },
+      "usage_instructions": {
+        "steps": ["Lavar antes del primer uso", "Conectar a corriente"],
+        "tips": "Usar con precaución"
+      }
+    }
+    ```
+
+3. **`find_products_by_name`**
   - Búsqueda parcial por nombre. Parámetros: `query` (string), `user_role`.
   - Retorna: `{ "items": [ {"name": str, "sku": str}, ...], "count": int, "query": str }`.
-  - Uso típico por agentes LLM para resolver primero el SKU y luego invocar `get_product_info`.
+  - Uso típico por agentes LLM para resolver primero el SKU y luego invocar `get_product_info` o `get_product_full_info`.
 
 ## Roles y permisos (MVP)
 | Rol | get_product_info | get_product_full_info |
