@@ -70,10 +70,35 @@ def get_mcp_web_search_url() -> str:
         return "http://localhost:8102/invoke_tool"
 
 
+def get_mcp_products_url() -> str:
+    """
+    Obtiene la URL correcta del servicio MCP Products dependiendo del contexto.
+    
+    Returns:
+        URL del servicio MCP Products:
+        - Si está en Docker: http://mcp_products:8100/invoke_tool (red interna)
+        - Si está en host: http://localhost:8100/invoke_tool (puerto mapeado)
+    """
+    # Primero verificar si hay una URL explícita en variables de entorno
+    env_url = os.getenv("MCP_PRODUCTS_URL")
+    if env_url:
+        return env_url
+    
+    # Si no, detectar automáticamente
+    if is_running_in_docker():
+        # Dentro de Docker: usar nombre del servicio y puerto interno
+        return "http://mcp_products:8100/invoke_tool"
+    else:
+        # En el host: usar localhost y puerto mapeado
+        return "http://localhost:8100/invoke_tool"
+
+
 # Para uso como script standalone
 if __name__ == "__main__":
-    url = get_mcp_web_search_url()
+    web_search_url = get_mcp_web_search_url()
+    products_url = get_mcp_products_url()
     in_docker = is_running_in_docker()
     
     print(f"Contexto: {'Docker' if in_docker else 'Host local'}")
-    print(f"URL MCP Web Search: {url}")
+    print(f"URL MCP Web Search: {web_search_url}")
+    print(f"URL MCP Products: {products_url}")
