@@ -24,6 +24,28 @@ from db.models import Session as DBSess, User
 from db.session import get_session
 
 
+def verify_internal_service_token(request: Request) -> bool:
+    """Verifica si la petición incluye un token válido de servicio interno.
+    
+    Los servicios internos (MCP servers, workers) pueden autenticarse usando
+    el header X-Internal-Service-Token con el valor de INTERNAL_SERVICE_TOKEN.
+    
+    Returns:
+        True si el token es válido, False en caso contrario.
+    """
+    token_from_header = request.headers.get("X-Internal-Service-Token")
+    if not token_from_header:
+        return False
+    
+    expected_token = settings.internal_service_token
+    if not expected_token or expected_token == "":
+        # Si no está configurado, rechazar (seguridad por defecto)
+        return False
+    
+    # Comparación de tiempo constante para prevenir timing attacks
+    return secrets.compare_digest(token_from_header, expected_token)
+
+
 def hash_pw(pwd: str) -> str:
     """Hashea una contraseña usando Argon2id."""
 
@@ -150,19 +172,19 @@ async def current_session(
 def require_roles(*roles: str) -> Callable[[SessionData], SessionData]:
     """Dependencia que asegura que la sesión tenga uno de los roles permitidos.
 
-    En entorno de desarrollo restaura ``current_session`` al rol ``admin`` tras
-    cada solicitud para evitar que los tests dejen un override persistente que
-    afecte a los siguientes.
+    Soporta tres métodos de autenticación (en orden de prioridad):
+    1. Token de servicio interno (X-Internal-Service-Token): asume rol admin
+    2. Sesión de usuario con cookie (growen_session)
+    3. Headers de prueba (X-User-Roles, X-User-Id) - solo para tests
     """
 
     async def dep(
         request: Request, sess: SessionData = Depends(current_session)
     ) -> SessionData:
-        # Modo dev: reasignar override si corresponde
-        if settings.env == "dev" and settings.dev_assume_admin:
-            request.app.dependency_overrides[current_session] = (
-                lambda: SessionData(None, None, "admin")
-            )
+        # 1. Verificar token de servicio interno (mayor prioridad)
+        if verify_internal_service_token(request):
+            # Servicios internos siempre tienen rol admin
+            return SessionData(None, None, "admin")
 
         # Fallback para pruebas que no usan cookie de sesión: aceptar cabeceras X-User-Roles / X-User-Id
         try:

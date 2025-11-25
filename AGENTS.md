@@ -1,4 +1,4 @@
-<!-- NG-HEADER: Nombre de archivo: AGENTS.md -->
+-- NG-HEADER: Nombre de archivo: AGENTS.md -->
 <!-- NG-HEADER: Ubicación: AGENTS.md -->
 <!-- NG-HEADER: Descripción: Lineamientos para agentes de desarrollo -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
@@ -292,6 +292,39 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 
 ---
 Actualizado inventario scripts: 2025-10-07.
+
+## Testing (pytest)
+
+**Documentación completa**: [`docs/TESTING.md`](docs/TESTING.md) - Consultar antes de ejecutar o escribir tests.
+
+### Ejecución rápida (resumen)
+
+```powershell
+# SIEMPRE usar la venv (obligatorio)
+C:/Proyectos/NiceGrow/Growen/.venv/Scripts/python.exe -m pytest tests/ -v
+
+# O activar venv primero
+& C:/Proyectos/NiceGrow/Growen/.venv/Scripts/Activate.ps1
+pytest -q
+```
+
+### Si encuentras errores de tests
+
+1. **Primero**: Consultar `docs/TESTING.md` sección "Troubleshooting"
+2. **Errores comunes**:
+   - `visit_JSONB`: Usar `JSONBCompat` en lugar de `JSONB`
+   - `no such table`: Problema con fixtures de DB
+   - `'coroutine' object`: Falta `@pytest_asyncio.fixture`
+3. **Tests fallan en batch pero pasan solos**: Usar `-p no:randomly`
+
+### Compatibilidad crítica
+
+- **SQLite para tests** / **PostgreSQL para producción**
+- Usar `JSONBCompat` (no `JSONB` directo) en `db/models.py`
+- Ver `docs/TESTING.md` para tabla completa de tipos compatibles
+
+---
+Actualizado Testing: 2025-11-24.
 
 ## MCP Servers (Nueva capa de herramientas para IA)
 

@@ -63,18 +63,28 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       // eslint-disable-next-line no-console
       console.debug('[Auth] refreshMe() iniciando fetch /auth/me')
     }
-    const resp = await http.get('/auth/me')
-    if (resp.data.is_authenticated) {
-      setState({ user: resp.data.user, role: resp.data.role, isAuthenticated: true })
-      savePersist(resp.data.role as Role)
-    } else {
-      setState({ role: 'guest', isAuthenticated: false })
+    try {
+      const resp = await http.get('/auth/me')
+      if (resp.data.is_authenticated) {
+        setState({ user: resp.data.user, role: resp.data.role, isAuthenticated: true })
+        savePersist(resp.data.role as Role)
+      } else {
+        setState({ role: 'guest', isAuthenticated: false })
+        clearPersist()
+      }
+      if (import.meta.env?.DEV) {
+        // eslint-disable-next-line no-console
+        console.debug('[Auth] refreshMe() resultado', resp.data)
+      }
+    } catch (error) {
+      if (import.meta.env?.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn('[Auth] refreshMe() error', error)
+      }
+      setState({ role: 'guest', isAuthenticated: false, user: undefined })
       clearPersist()
-    }
-    if (!hydrated) setHydrated(true)
-    if (import.meta.env?.DEV) {
-      // eslint-disable-next-line no-console
-      console.debug('[Auth] refreshMe() resultado', resp.data)
+    } finally {
+      setHydrated(true)
     }
   }
 
@@ -84,7 +94,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     if (persisted) {
       setState(prev => ({ ...prev, role: persisted.role, isAuthenticated: true }))
     }
-    refreshMe().finally(() => setHydrated(true))
+    refreshMe()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

@@ -62,6 +62,8 @@
    - “Reenriquecer (forzar)”: `POST /products/{id}/enrich?force=true` (reemplaza fuentes y reescribe descripción/campos técnicos si vienen en la respuesta).
    - “Borrar enriquecimiento”: `DELETE /products/{id}/enrichment` (limpia descripción, campos técnicos y fuentes asociadas).
  - Descripción enriquecida: se muestra en una card dedicada y puede editarse por Admin/Colab (persistencia vía `PATCH /products/{id}` con `description_html`).
+ - Descripción enriquecida: se muestra en una card dedicada y puede editarse por Admin/Colab (persistencia vía `PATCH /products/{id}` con `description_html`). Toda la UI (incluyendo admins) ve una vista previa HTML sanitizada: se eliminan `script`, `iframe`, `object`, `embed` y atributos `on*` antes de inyectar el contenido, y si el resultado queda vacío se muestra el fallback "Sin descripción".
+- Visibilidad invitados: el detalle `/productos/:id` admite accesos con rol `guest` en modo sólo lectura. Los invitados pueden ver nombre/canónico, precio efectivo y la vista previa de descripción enriquecida, pero no se muestran controles de edición ni acciones IA.
  - Datos técnicos (Admin/Colab): `weight_kg`, `height_cm`, `width_cm`, `depth_cm`, `market_price_reference` con edición inline. La persistencia se realiza vía `PATCH /products/{id}` y se validan valores numéricos no negativos.
  - Fuentes consultadas: si `enrichment_sources_url` está presente en el producto, aparece el botón “Fuentes consultadas” que abre un modal con el contenido del `.txt` y enlace de descarga.
  - Metadatos de enriquecimiento: el backend expone `last_enriched_at` (ISO UTC) y `enriched_by` (id de usuario) para trazabilidad; la UI puede mostrarlos en una sección de “Actividad reciente” (opcional).

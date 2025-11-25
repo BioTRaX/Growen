@@ -122,7 +122,7 @@ export default function App() {
           <Route
             path="/productos/:id"
             element={
-              <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
+              <ProtectedRoute roles={["guest", "cliente", "proveedor", "colaborador", "admin"]}>
                 <ProductDetail />
               </ProtectedRoute>
             }

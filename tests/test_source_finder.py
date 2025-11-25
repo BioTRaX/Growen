@@ -16,24 +16,31 @@ from workers.discovery.source_finder import (
 
 
 class TestBuildSearchQuery:
-    """Tests para construcción de query de búsqueda"""
+    """Tests para construcción de query de búsqueda.
+    
+    Nota: La función fue optimizada para usar solo nombre + "comprar".
+    category y sku ya no se incluyen en la query (ver docstring de build_search_query).
+    """
     
     def test_query_with_name_only(self):
         query = build_search_query("Sustrato de coco")
         assert "Sustrato de coco" in query
-        assert "precio" in query
         assert "comprar" in query
+        # "precio" ya no se incluye (optimización)
     
     def test_query_with_category(self):
+        """category se ignora intencionalmente para evitar ruido"""
         query = build_search_query("Sustrato de coco", category="Sustratos")
         assert "Sustrato de coco" in query
-        assert "Sustratos" in query
-        assert "precio" in query
+        assert "comprar" in query
+        # category NO se incluye (por diseño - ver docstring)
     
     def test_query_with_sku(self):
+        """sku se ignora intencionalmente - no aporta en búsqueda pública"""
         query = build_search_query("Sustrato de coco", sku="COCO-20L")
         assert "Sustrato de coco" in query
-        assert "COCO-20L" in query
+        assert "comprar" in query
+        # sku NO se incluye (por diseño - ver docstring)
     
     def test_query_skips_internal_sku(self):
         query = build_search_query("Sustrato de coco", sku="PROD-001")

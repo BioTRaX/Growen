@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import time
 import pytest
+import pytest_asyncio
 from decimal import Decimal
 from typing import List
 
@@ -28,21 +29,10 @@ from sqlalchemy.orm import selectinload, joinedload
 from db.models import CanonicalProduct, MarketSource, Category, Supplier
 from services.routers.market import list_market_products
 
-
-@pytest.fixture
-async def test_category(db: AsyncSession) -> Category:
-    """Crea categoría de prueba"""
-    category = Category(
-        name="SQL Performance Test",
-        description="Para validar queries"
-    )
-    db.add(category)
-    await db.commit()
-    await db.refresh(category)
-    return category
+# test_category y db vienen de tests/performance/conftest.py
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def large_product_dataset(
     db: AsyncSession,
     test_category: Category

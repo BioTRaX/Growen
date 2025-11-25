@@ -185,7 +185,7 @@ export interface ProductVariantItem {
 }
 
 export async function listProductVariants(productId: number): Promise<ProductVariantItem[]> {
-  const res = await fetch(`${base}/catalog/products/${productId}/variants`, { credentials: 'include' })
+  const res = await fetch(`${base}/products/${productId}/variants`, { credentials: 'include' })
   if (res.status === 404) throw new Error('Producto no encontrado')
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const data = await res.json()

@@ -43,31 +43,31 @@ export async function addImageFromUrl(productId: number, url: string): Promise<{
 }
 
 export async function setPrimary(productId: number, imageId: number) {
-  await http.post(`/catalog/products/${productId}/images/${imageId}/set-primary`)
+  await http.post(`/products/${productId}/images/${imageId}/set-primary`)
 }
 
 export async function lockImage(productId: number, imageId: number) {
-  await http.post(`/catalog/products/${productId}/images/${imageId}/lock`)
+  await http.post(`/products/${productId}/images/${imageId}/lock`)
 }
 
 export async function deleteImage(productId: number, imageId: number) {
-  await http.delete(`/catalog/products/${productId}/images/${imageId}`)
+  await http.delete(`/products/${productId}/images/${imageId}`)
 }
 
 export async function reorderImages(productId: number, imageIds: number[]) {
-  await http.post(`/catalog/products/${productId}/images/reorder`, { image_ids: imageIds })
+  await http.post(`/products/${productId}/images/reorder`, { image_ids: imageIds })
 }
 
 export async function removeBg(productId: number, imageId: number) {
-  await http.post(`/catalog/products/${productId}/images/${imageId}/process/remove-bg`)
+  await http.post(`/products/${productId}/images/${imageId}/process/remove-bg`)
 }
 
 export async function watermark(productId: number, imageId: number, position: 'br' | 'bl' | 'tr' | 'tl' = 'br', opacity = 0.18) {
-  await http.post(`/catalog/products/${productId}/images/${imageId}/process/watermark`, { position, opacity })
+  await http.post(`/products/${productId}/images/${imageId}/process/watermark`, { position, opacity })
 }
 
 export async function refreshSEO(productId: number, imageId: number): Promise<{ alt: string; title: string }> {
-  const r = await http.post(`/catalog/products/${productId}/images/${imageId}/seo/refresh`)
+  const r = await http.post(`/products/${productId}/images/${imageId}/seo/refresh`)
   return r.data
 }
 
