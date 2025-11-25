@@ -47,7 +47,24 @@ def _get_cache_ttl() -> float:
 
 
 def _get_api_base_url() -> str:
+    """Retorna la URL base de la API principal desde env o default."""
     return os.getenv("API_BASE_URL", "http://api:8000")
+
+
+def _get_internal_auth_headers() -> Dict[str, str]:
+    """Genera headers de autenticación para servicios internos.
+    
+    Incluye el token de servicio interno (INTERNAL_SERVICE_TOKEN) en el header
+    X-Internal-Service-Token para autenticarse ante la API principal.
+    
+    Returns:
+        Dict con headers HTTP incluyendo token de autenticación.
+    """
+    token = os.getenv("INTERNAL_SERVICE_TOKEN", "")
+    if not token:
+        logger.warning("INTERNAL_SERVICE_TOKEN no configurado. Las peticiones pueden fallar con 403.")
+        return {}
+    return {"X-Internal-Service-Token": token}
 
 
 def _cache_get(key: str) -> Dict[str, Any] | None:
@@ -72,7 +89,13 @@ def _cache_put(key: str, value: Dict[str, Any]) -> None:
 
 
 async def get_product_info(sku: str, user_role: str) -> Dict[str, Any]:
-    """Obtiene información de primer nivel de un producto por SKU interno.
+    """Obtiene información básica de un producto por SKU interno.
+
+    Esta es la versión ligera que retorna solo datos esenciales de primer nivel:
+    name, sale_price, stock, sku.
+
+    Para información completa incluyendo technical_specs y usage_instructions,
+    usar get_product_full_info (requiere roles admin/colaborador).
 
     Args:
         sku: SKU interno del sistema (variant.sku en el dominio actual).
@@ -101,12 +124,13 @@ async def get_product_info(sku: str, user_role: str) -> Dict[str, Any]:
         f"{base_url}/variants/lookup?sku={sku}",  # endpoint sugerido / a implementar
         f"{base_url}/products/by-sku/{sku}",      # alternativa posible
     ]
+    headers = _get_internal_auth_headers()
     async with httpx.AsyncClient(timeout=5.0) as client:
         last_exc: Exception | None = None
         for url in candidate_endpoints:
             try:
                 logger.debug("Consultando URL=%s", url)
-                resp = await client.get(url)
+                resp = await client.get(url, headers=headers)
                 if resp.status_code == 404:
                     # probamos siguiente
                     logger.debug("Endpoint %s devolvió 404, probando siguiente", url)
@@ -115,6 +139,8 @@ async def get_product_info(sku: str, user_role: str) -> Dict[str, Any]:
                 data = resp.json()
                 # Se asume shape potencial:
                 # Variante: {"sku":..., "name":..., "sale_price":..., "stock": ...}
+                # Nota: get_product_info mantiene respuesta ligera (no incluye technical_specs/usage_instructions)
+                # Para información completa usar get_product_full_info
                 result = {
                     "sku": data["sku"],
                     "name": data.get("name") or data.get("title") or "(sin nombre)",
@@ -142,7 +168,11 @@ async def get_product_info(sku: str, user_role: str) -> Dict[str, Any]:
 
 
 async def get_product_full_info(sku: str, user_role: str) -> Dict[str, Any]:
-    """Obtiene información completa (MVP: igual a primer nivel) validando permisos.
+    """Obtiene información completa del producto incluyendo datos de enriquecimiento.
+
+    Incluye toda la información básica más:
+      - technical_specs: Especificaciones técnicas (dimensiones, potencia, materiales, etc.)
+      - usage_instructions: Instrucciones de uso (pasos, consejos, advertencias)
 
     En el futuro se añadirá:
       - detalles extendidos (categorías, suppliers, históricos, métricas).
@@ -152,7 +182,8 @@ async def get_product_full_info(sku: str, user_role: str) -> Dict[str, Any]:
         user_role: Rol declarado del usuario que solicita. Debe ser 'admin' o 'colaborador'.
 
     Returns:
-        Diccionario con la misma estructura que `get_product_info` en este MVP.
+        Diccionario con estructura extendida incluyendo campos de enriquecimiento.
+        Los campos technical_specs y usage_instructions solo se incluyen si tienen contenido.
 
     Raises:
         PermissionError: Si el rol no está autorizado para información "full".
@@ -161,8 +192,71 @@ async def get_product_full_info(sku: str, user_role: str) -> Dict[str, Any]:
     """
     if user_role not in _FULL_INFO_ROLES:
         raise PermissionError("Permission denied: rol insuficiente para información completa.")
-    # Por ahora reutiliza la función simple.
-    return await get_product_info(sku=sku, user_role=user_role)
+    
+    # Cache lookup (cache separada para full info)
+    cache_key = f"product_full_info:{sku}"
+    cached = _cache_get(cache_key)
+    if cached:
+        logger.debug("Cache HIT para full info sku=%s", sku)
+        return cached
+
+    base_url = _get_api_base_url()
+    candidate_endpoints = [
+        f"{base_url}/variants/lookup?sku={sku}",
+        f"{base_url}/products/by-sku/{sku}",
+    ]
+    headers = _get_internal_auth_headers()
+    
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        last_exc: Exception | None = None
+        for url in candidate_endpoints:
+            try:
+                logger.debug("Consultando URL=%s (full info)", url)
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 404:
+                    logger.debug("Endpoint %s devolvió 404, probando siguiente", url)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                
+                # Construir respuesta base
+                result = {
+                    "sku": data["sku"],
+                    "name": data.get("name") or data.get("title") or "(sin nombre)",
+                    "sale_price": data.get("sale_price"),
+                    "stock": data.get("stock"),
+                }
+                
+                # Etapa 1: Agregar datos de enriquecimiento solo si tienen contenido
+                # Optimización de contexto: no enviar campos vacíos/nulos para ahorrar tokens
+                technical_specs = data.get("technical_specs")
+                if technical_specs and (isinstance(technical_specs, dict) and technical_specs):
+                    result["technical_specs"] = technical_specs
+                
+                usage_instructions = data.get("usage_instructions")
+                if usage_instructions and (isinstance(usage_instructions, dict) and usage_instructions):
+                    result["usage_instructions"] = usage_instructions
+                
+                _cache_put(cache_key, result)
+                logger.debug("Cache SET full info sku=%s", sku)
+                return result
+                
+            except httpx.TimeoutException as exc:  # noqa: PERF203
+                logger.warning("Timeout URL=%s sku=%s: %s", url, sku, exc)
+                last_exc = exc
+                continue
+            except httpx.RequestError as exc:
+                logger.warning("RequestError URL=%s sku=%s: %s", url, sku, exc)
+                last_exc = exc
+                continue
+            except Exception as exc:  # noqa: BLE001 (controlado para fallback)
+                last_exc = exc
+                continue
+        
+        if last_exc:
+            logger.warning("Fallo al obtener producto full info sku=%s: %s", sku, last_exc)
+            raise last_exc
+        raise KeyError("No se encontró el producto ni se pudo mapear la respuesta.")
 
 
 async def find_products_by_name(query: str, user_role: str) -> Dict[str, Any]:
@@ -176,16 +270,18 @@ async def find_products_by_name(query: str, user_role: str) -> Dict[str, Any]:
         Dict con clave `items` que es una lista de productos (name, sku) y `count`.
 
     Notas:
-        - Endpoint asumido: /products/search?q= (debe existir en la API principal).
+        - Endpoint usado: /catalog/search?q= (endpoint real implementado en catalog.py).
+        - Se autentica como servicio interno usando X-Internal-Service-Token.
         - En caso de error de red o status >=400 se propaga la excepción httpx.* para manejo superior.
         - Se normalizan claves mínimas para el agente.
     """
     if not query or not isinstance(query, str):
         raise ValueError("Parámetro 'query' requerido (string no vacío).")
     base_url = _get_api_base_url()
-    url = f"{base_url}/products/search?q={httpx.QueryParams({'q': query})['q']}"  # asegura encoding
+    url = f"{base_url}/catalog/search?q={httpx.QueryParams({'q': query})['q']}"  # asegura encoding
+    headers = _get_internal_auth_headers()
     async with httpx.AsyncClient(timeout=5.0) as client:
-        resp = await client.get(url)
+        resp = await client.get(url, headers=headers)
         resp.raise_for_status()
         data = resp.json()
         # Se asume una lista de productos. Adaptar si la API devuelve otro shape.

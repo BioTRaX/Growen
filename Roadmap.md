@@ -14,11 +14,42 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 
 - DB/Backend: Se agregaron metadatos de trazabilidad de enriquecimiento en `products` (`last_enriched_at`, `enriched_by`) y se exponen en `GET /products/{id}`. El endpoint `POST /products/{id}/enrich` los setea automáticamente; `DELETE /products/{id}/enrichment` los limpia. Migración: `20251021_add_product_enrichment_trace.py`.
 
+- Frontend: La ficha de producto vuelve a mostrar la "Descripción enriquecida" con vista previa HTML sanitizada para todos los roles (scripts/iframes/eventos inline se eliminan). Los usuarios con permisos de edición mantienen el textarea y pueden guardar via `PATCH /catalog/products/{id}`.
+- Frontend/Backend: El detalle `/productos/:id` se habilitó en modo lectura para el rol `guest` (ProtectedRoute + endpoint `GET /catalog/products/{id}` aceptan invitados). Los invitados ven nombre, precio y descripción, mientras que las acciones siguen restringidas a colaborador/admin.
+
 
 - Backend: FastAPI + SQLAlchemy (async) para gestión de compras (borradores, validación, confirmación), adjuntos (PDF remito), logs y auditoría.
 - AI: Capa `ai/` con enrutador y proveedores (OpenAI y/o Ollama) para tareas de razonamiento y validación.
 - Frontend: SPA React/TypeScript (Vite) con páginas de compras y servicios HTTP.
 - Almacenamiento de archivos: `data/purchases/{id}/...` para PDFs y artefactos relacionados.
+
+## Roadmap de Inteligencia Growen (Evolución 2025)
+
+### Etapa 0: Refactorización Core AI (Tool Calling & Async)
+- **Estado**: En progreso (Prioridad Alta).
+- **Diagnóstico**: El router actual (`ai/router.py`) opera de forma síncrona, impidiendo el uso correcto de `chat_with_tools` en `OpenAIProvider` que requiere `async/await` para consultar el MCP de productos. Esto genera una desconexión arquitectónica que impide al chatbot responder correctamente consultas de stock y precios que requieren información externa en tiempo real.
+- **Plan de Acción**:
+  1. **Estandarización del Provider**: Unificar la interfaz en `OpenAIProvider` implementando `generate_async` que soporte inyección de herramientas y contexto de usuario, permitiendo el paso dinámico de tools disponibles según el rol.
+  2. **Router Asíncrono**: Convertir `AIRouter.run` a asíncrono y permitir el paso de `user_role` para control de acceso en herramientas. Actualizar la firma de métodos relevantes en la cadena de llamadas.
+  3. **Sincronización de Esquemas**: Asegurar que las definiciones JSON de las tools en el provider (`_build_tools_schema` en `openai_provider.py`) coincidan exactamente con la implementación en `mcp_servers/products_server/tools.py`.
+  4. **Conexión de Servicios**: Actualizar los consumidores del router (endpoints de chat en `services/routers/chat.py`, WebSocket y Telegram) para usar `await router.run(...)` y propagar correctamente el contexto de usuario.
+- **Criterios de Aceptación**:
+  - El chatbot responde consultas de stock/precios usando tool calling de forma asíncrona.
+  - No hay bloqueos ni timeouts en consultas que requieren acceso al MCP.
+  - Las pruebas existentes en `tests/test_ai_router.py` y `tests/test_chat_ws_price.py` pasan con la nueva implementación asíncrona.
+  - Documentación actualizada en `docs/CHAT.md` y `docs/CHATBOT_ARCHITECTURE.md` reflejando el nuevo flujo.
+
+### Etapas Futuras (Resumen)
+- **Etapa 1**: Enriquecimiento de datos estructurados — **EN PROGRESO**
+  - ✅ Campos JSONB agregados al modelo `Product`: `technical_specs` (dimensiones, potencia, peso, etc.) y `usage_instructions` (pasos, consejos de uso).
+  - ✅ Esquemas Pydantic actualizados en `chat.py` y `catalog.py` para exponer los nuevos campos.
+  - ✅ MCP `products_server` actualizado para incluir los datos estructurados en las respuestas de `get_product_info` y `get_product_full_info`.
+  - ⏳ **Pendiente**: Migración de base de datos (`alembic revision --autogenerate -m "add_product_specs_and_usage"`).
+  - ⏸️ Futuros pasos: UI para editar especificaciones técnicas, pipeline de enriquecimiento automático con IA, validación de esquemas JSON.
+- **Etapa 2**: RAG para documentación propia — Implementación de Retrieval-Augmented Generation usando `pgvector` para indexar y consultar manuales, PDFs de proveedores y documentación técnica interna.
+- **Etapa 3**: Conciencia de Roles y Seguridad — Integración con SSO/MFA (Keycloak/Authentik), token firmado (HMAC/JWT) con claims de rol, y control de acceso granular en tools según el usuario autenticado.
+- **Etapa 4**: Modo Desarrollador — Indexación del repositorio local, acceso controlado al código fuente, gateway de lectura/escritura confinada a `PR/`, y memoria conversacional a largo plazo.
+- **Etapa 5**: Business Intelligence — Text-to-SQL para consultas de finanzas, stock, ventas y análisis de tendencias; dashboards conversacionales.
 
 ### Capa MCP Servers (estado)
 
@@ -36,8 +67,16 @@ Servicio actual:
 Integración chatbot:
 - Endpoint `/chat` ahora usa tool-calling (OpenAI → MCP) para consultas de producto. `price_lookup.py` marcado DEPRECATED.
 
+**Autenticación MCP → API (2025-11-19):**
+- ✅ **Token de servicio interno implementado**: Se agregó `INTERNAL_SERVICE_TOKEN` al `.env` para autenticación entre microservicios (MCP servers → API principal).
+- ✅ **Middleware de autenticación**: Función `verify_internal_service_token()` en `services/auth.py` valida el header `X-Internal-Service-Token` con comparación de tiempo constante (prevención de timing attacks).
+- ✅ **Integración en require_roles**: El middleware de autenticación por roles ahora acepta token de servicio interno como método prioritario (asume rol `admin` cuando el token es válido).
+- ✅ **MCP server actualizado**: `mcp_servers/products_server/tools.py` ahora incluye la función `_get_internal_auth_headers()` que agrega el token en todas las peticiones HTTP hacia la API principal.
+- ✅ **Configuración unificada**: Se agregó `internal_service_token` a `agent_core/config.py` para centralizar la lectura del entorno.
+- ⚠️ **Seguridad**: El token actual es para desarrollo. En producción debe rotarse por uno generado con `secrets.token_urlsafe(32)` y mantenerse secreto (no commitear).
+
 Próximos pasos MCP:
-- Firmar token (HMAC/JWT) con expiración y rol.
+- Firmar token (HMAC/JWT) con expiración y rol (evolución del token actual).
 - Auditoría estructurada de invocaciones (latencia, tool_name, rol, éxito/error).
 - Extender tools: métricas de ventas, equivalencias SKU, historial de precios.
 - Rate limiting por rol y circuito de retry/backoff.
@@ -374,38 +413,31 @@ El enriquecimiento de productos con IA (`POST /products/{id}/enrich`) está func
 
 ---
 
-Hito 7 - Chatbot: Consulta de precios en lenguaje natural
-- Objetivo
-  - Permitir que el chatbot responda el precio de venta actual de un producto a partir de consultas en español.
-- Estado
-  - Backend listo: matcher `price_query`, servicio `price_lookup`, búsqueda SKU/nombre y auditoría registrados.
-  - Frontend en curso: ChatWindow representa respuestas `price_answer` con detalle de ofertas.
-  - Prompt ajustado para desalentar respuestas inventadas sobre precios.
-- Backend / Dominio
-  - Agregar un intent específico en el router de chat (`services/routers/chat.py`, `ai/router.py`) que detecte solicitudes de precio.
-  - Crear servicio de búsqueda de precios (`services/chat/price_lookup.py` o equivalente) que resuelva por SKU interno, SKU proveedor o coincidencia fuzzy de nombre.
-  - Exponer información de precio preferente (`sale_price` canónico; fallback a `current_sale_price` del supplier item) y moneda configurable.
-  - Manejar casos sin resultado o con múltiples coincidencias (respuesta con sugerencias y guía para desambiguar).
-- Frontend / UI
-  - Adaptar el render de respuestas del chat para mostrar formatos específicos de precio (texto más posible enlace a ficha de producto).
-  - Ajustar prompt y ayudas en la interfaz para que los usuarios sepan que pueden preguntar por precios.
-- IA / Prompting
-  - Enriquecer el `SYSTEM_PROMPT` para que priorice el intent antes de delegar al LLM.
-  - Definir fallback IA solo para clarificar consultas ambiguas, registrando eventos en ImportLog/ServiceLog.
-- Observabilidad
-  - Métricas básicas: cantidad de consultas de precio, tasa de éxito, latencia promedio, cantidad de resultados múltiples/no encontrados.
-  - Auditoría opcional por usuario (`AuditLog` con acción `chat.price_lookup`).
-- QA / Pruebas
-  - Unit tests para matcher de intent y para el servicio de resolución de precios.
-  - Tests API (`tests/test_ai_router.py`) simulando la conversación.
-  - Playwright/E2E: flujo desde la SPA validando respuesta visible.
-- Documentación
-  - Actualizar `docs/CHAT.md` (crear si no existe) y `CHANGELOG.md` cuando se implemente.
-  - Añadir sección en `README.md` sobre capacidades del chatbot.
-- Criterios de aceptación
-  - El chatbot debe responder con el precio vigente para al menos SKU exacto y nombre parcial.
-  - Debe manejar ausencia de datos sin errores 500.
-  - Respuestas alineadas con políticas de idioma (español) y tono definido.
+Hito 7 - Chatbot: Consulta de precios en lenguaje natural (REDEFINIDO - Ver "Roadmap de Inteligencia Growen")
+- **Estado**: Parcialmente implementado, requiere refactorización (ver Etapa 0 arriba).
+- **Diagnóstico actual**:
+  - ✅ Matcher `price_query` y servicio `price_lookup.py` implementados (funcional pero marcado DEPRECATED).
+  - ✅ Frontend `ChatWindow` representa respuestas `price_answer` con detalle de ofertas.
+  - ✅ MCP Products Server implementado con tools `get_product_info` y `get_product_full_info`.
+  - ❌ **Problema crítico**: Router síncrono (`ai/router.py`) no puede usar `chat_with_tools` asíncrono correctamente, impidiendo consultas de stock/precios en tiempo real mediante tool calling.
+  - ⚠️ Fallback a `price_lookup.py` funcional pero no escala ni permite acceso a información externa actualizada.
+- **Plan de evolución**:
+  - Este hito se reestructura como parte de la **Etapa 0: Refactorización Core AI** (ver sección superior).
+  - Una vez completada la Etapa 0, el chatbot podrá:
+    - Responder consultas de precio/stock usando tool calling asíncrono.
+    - Acceder dinámicamente a MCP Products para información actualizada.
+    - Escalar a nuevas tools (ventas, proveedores, equivalencias SKU) sin modificar el núcleo del router.
+  - Etapas 1-5 expandirán las capacidades con RAG, roles, BI y más.
+- **Acciones pendientes inmediatas** (parte de Etapa 0):
+  - Convertir `AIRouter.run` a asíncrono.
+  - Implementar `generate_async` en `OpenAIProvider` con soporte de tools dinámicas.
+  - Actualizar endpoints `/chat`, `/ws` y `/telegram/webhook` para usar `await router.run(...)`.
+  - Sincronizar esquemas de tools entre provider y MCP.
+- **Criterios de aceptación** (actualizados):
+  - El chatbot responde consultas de precio/stock sin bloqueos ni timeouts.
+  - Tool calling funcional con inyección de contexto de usuario (rol).
+  - Tests existentes (`test_ai_router.py`, `test_chat_ws_price.py`) pasan con implementación asíncrona.
+  - `price_lookup.py` puede ser retirado tras migración completa de canales (WS, Telegram).
 
 Hito 8 — Módulo MCP de Ventas Conversacionales
 - Objetivo

@@ -3,11 +3,28 @@
 # NG-HEADER: Descripcion: Endpoints y WebSocket para el chat asistido.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 
-"""Endpoint de chat sincrono que consulta la IA."""
+"""Endpoint de chat asíncrono que consulta la IA mediante AIRouter.
+
+El flujo principal es:
+1. Clasificar intención del usuario (classify_intent).
+2. Gestionar memoria de conversación para aclaraciones.
+3. Si es consulta de producto: run_async con contexto de usuario.
+4. Si es venta conversacional: manejar_conversacion_venta.
+5. Fallback: chat general vía run_async.
+
+El AIRouter abstrae la selección de proveedor (OpenAI/Ollama) y el manejo
+de tools, simplificando este endpoint a: detección → router → respuesta.
+
+Nota Etapa 0: Durante la transición, la variable de entorno 
+CHAT_USE_LLM_FOR_PRODUCTS controla si usamos LLM (con tool calling) o
+el fallback local para consultas de producto. Por defecto, usa fallback local
+para mantener compatibilidad con tests legacy.
+"""
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Request
@@ -46,13 +63,12 @@ from services.chat.shared import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ai.intent_classifier import classify_intent, UserIntent
+from services.chat.sales_handler.tools import manejar_conversacion_venta, consultar_producto
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from ai.intent_classifier import classify_intent, UserIntent
-from services.chat.sales_handler.tools import manejar_conversacion_venta, consultar_producto
 
 
 class ProductEntryOut(BaseModel):
@@ -71,6 +87,9 @@ class ProductEntryOut(BaseModel):
     variant_skus: List[str] = []
     score: Optional[float] = None
     match_reason: Optional[str] = None
+    # Etapa 1: Campos de enriquecimiento estructurado
+    technical_specs: Optional[Dict[str, Any]] = None
+    usage_instructions: Optional[Dict[str, Any]] = None
 
 
 class ProductLookupOut(BaseModel):
@@ -160,37 +179,31 @@ async def chat_endpoint(
             terms = memory_terms_text(memory_state.query)
             return ChatOut(text=clarify_prompt_text(terms), type="clarify_prompt", intent="clarify")
 
-    # 4. Detección de consultas de producto (precio/stock) y fallback sin tools.
-    #    Priorizamos esta detección sobre ventas conversacionales para evitar falsos positivos.
+    # 4. Detección de consultas de producto (precio/stock) con tool calling asíncrono
+    #    El AIRouter maneja internamente el tool calling con OpenAI.
     product_query = extract_product_query(user_text)
     if product_query or intent == UserIntent.CONSULTA_PRECIO:
-        # Intentar flujo nuevo: tool-calling vía provider si está disponible
+        # Flujo principal: usar run_async con el LLM (OpenAI + tool calling)
         try:
-            # Usamos tool-calling SOLO si hay candidatos de SKU explícitos en la consulta.
-            if product_query and product_query.sku_candidates:
-                provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
-                chat_with_tools = getattr(provider, "chat_with_tools", None)
-                # Si el provider elegido no soporta tools, intentar forzar OpenAI si está disponible
-                if not callable(chat_with_tools):
-                    try:
-                        openai_provider = getattr(ai_router, "_providers", {}).get("openai")
-                        if openai_provider is not None:
-                            chat_with_tools = getattr(openai_provider, "chat_with_tools", None)
-                            provider = openai_provider if callable(chat_with_tools) else provider
-                    except Exception:
-                        pass
-                if callable(chat_with_tools):
-                    try:
-                        answer = await chat_with_tools(prompt=user_text, user_role=user_role)
-                        clear_memory(memory_key)
-                        return ChatOut(text=answer, type="product_answer", intent="product_tool")
-                    except Exception:
-                        logger.exception("chat.tool_call_error")
-                        # Continuar a fallback local
-        except Exception:
-            # Si falla provider, usar fallback local
-            pass
+            answer = await ai_router.run_async(
+                task=Task.SHORT_ANSWER.value,
+                prompt=user_text,
+                user_context={"role": user_role, "intent": "product_lookup"},
+            )
+            
+            # Limpiar prefijo técnico si existe (openai:, ollama:)
+            if ":" in answer and answer.split(":")[0] in ("openai", "ollama"):
+                answer = answer.split(":", 1)[1].strip()
+            
+            # Retornar respuesta del LLM
+            clear_memory(memory_key)
+            return ChatOut(text=answer, type="product_answer", intent="price")
+                
+        except Exception as e:
+            # Si falla el LLM, usar fallback local
+            logger.warning("chat.run_async_error: %s, usando fallback local", e)
 
+        # Fallback: resolución local legacy (mantener mientras se completa migración)
         include_metrics = user_role in ALLOWED_PRODUCT_METRIC_ROLES
         try:
             result = await resolve_price(user_text, db, limit=5)
@@ -218,12 +231,25 @@ async def chat_endpoint(
         conversation_state["sales_flow"] = result.get("nuevo_estado")
         return ChatOut(text=result["respuesta_para_usuario"], intent=UserIntent.VENTA_CONVERSACIONAL.value)
 
-    # Fallback para CHAT_GENERAL o UNKNOWN
+    # 6. Fallback: Chat general con contexto de usuario
     else:
-        raw = ai_router.run(Task.SHORT_ANSWER.value, user_text)
+        # Usar run_async para chat general, pasando el contexto del usuario
+        # El chatbot puede necesitar saber si habla con Admin/Colaborador vs Cliente
+        raw = await ai_router.run_async(
+            task=Task.SHORT_ANSWER.value,
+            prompt=user_text,
+            user_context={"role": user_role, "intent": "chat_general"},
+        )
+        
+        # Limpiar prefijo técnico si existe
+        if ":" in raw and raw.split(":")[0] in ("openai", "ollama"):
+            raw = raw.split(":", 1)[1].strip()
+        
+        # Separar system prompt si está presente (compatibilidad legacy)
         separator = "\n\n"
         if separator in raw:
             reply = raw.split(separator)[-1].strip()
         else:
             reply = raw.strip()
+        
         return ChatOut(text=reply, intent=UserIntent.CHAT_GENERAL.value)

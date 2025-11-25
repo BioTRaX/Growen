@@ -170,7 +170,7 @@ export default function Stock() {
       try {
         setBulkEnriching(true)
         const ids = Array.from(selected)
-        await http.post('/catalog/products/enrich-multiple', { ids })
+        await http.post('/products/enrich-multiple', { ids })
         push({ kind: 'success', message: 'Productos enviados a enriquecimiento' })
         clearSelection()
         // refrescar página 1

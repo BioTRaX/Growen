@@ -1828,6 +1828,9 @@ async def list_products(
                 "canonical_sku": (cp_obj.sku_custom if (cp_obj and cp_obj.sku_custom) else (cp_obj.ng_sku if cp_obj else None)),
                 "canonical_name": (cp_obj.name if cp_obj else None),
                 "first_variant_sku": skus_by_product.get(p_obj.id),
+                # Etapa 1: Datos estructurados de enriquecimiento
+                "technical_specs": getattr(p_obj, 'technical_specs', None),
+                "usage_instructions": getattr(p_obj, 'usage_instructions', None),
             }
         )
 
@@ -2629,7 +2632,7 @@ async def update_product_stock(
 
 @router.get(
     "/products/{product_id}",
-    dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))],
+    dependencies=[Depends(require_roles("guest", "cliente", "proveedor", "colaborador", "admin"))],
 )
 async def get_product(product_id: int, session: AsyncSession = Depends(get_session)):
     prod = await session.get(Product, product_id)

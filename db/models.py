@@ -25,7 +25,24 @@ from sqlalchemy import (
     Index,
     Enum,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import TypeDecorator
+
+
+class JSONBCompat(TypeDecorator):
+    """
+    Tipo compatible SQLite/PostgreSQL para columnas JSON estructuradas.
+    - En PostgreSQL: usa JSONB nativo (con índices y operadores avanzados).
+    - En SQLite: usa JSON estándar (suficiente para tests).
+    """
+    impl = JSON  # fallback por defecto
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(JSONB())
+        return dialect.type_descriptor(JSON())
 
 from .base import Base
 
@@ -54,6 +71,9 @@ class Product(Base):
     width_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
     depth_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
     market_price_reference: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
+    # Etapa 1: Enriquecimiento de datos estructurados para IA
+    technical_specs: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
+    usage_instructions: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
     slug: Mapped[Optional[str]] = mapped_column(String(200))
     status: Mapped[Optional[str]] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)

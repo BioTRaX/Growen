@@ -77,7 +77,9 @@ El chatbot administrativo brindará asistencia en tiempo real para desarrollo y 
 - Pruebas de regresión del pipeline RAG tras reindexado.
 - Smoke test que valide escritura confinada a `PR/` y auditoría obligatoria.
 
-## Migración a Tool-Calling para Productos
+## Migración a Tool-Calling para Productos (EN REVISIÓN - Ver Roadmap)
+
+> **⚠️ ESTADO ACTUAL (2025-11-19)**: Esta sección describe el objetivo arquitectónico, pero la implementación completa requiere refactorización. **Problema detectado**: El router `ai/router.py` es síncrono y no puede usar correctamente `chat_with_tools` asíncrono, lo que impide la consulta efectiva de servicios MCP para stock/precios en tiempo real. Consultar **"Roadmap de Inteligencia Growen → Etapa 0: Refactorización Core AI"** en `Roadmap.md` para el plan de migración.
 
 La obtención de información de productos (precio, stock básico) está en proceso de migración desde el módulo monolítico `services/chat/price_lookup.py` hacia un enfoque desacoplado basado en:
 
@@ -90,12 +92,19 @@ Ventajas:
 - Permite escalar y versionar tools sin tocar núcleo del chatbot.
 - Cache y control de acceso localizados en el servidor MCP.
 
-Estado actual (2025-10-06):
-- Endpoint `/chat` ya usa tool-calling para intents de producto.
-- `price_lookup.py` marcado como DEPRECATED (solo parsing y compatibilidad temporal para otros canales).
-- Pendiente migrar WebSocket (`ws.py`) y Telegram (`telegram.py`).
+Estado actual (2025-11-19):
+- ✅ MCP Products Server implementado y funcional (`mcp_servers/products_server`).
+- ✅ Tools `get_product_info` y `get_product_full_info` definidas y operativas.
+- ❌ **Bloqueador**: Router síncrono impide uso correcto de `chat_with_tools` asíncrono.
+- ⚠️ Endpoint `/chat` usa fallback a `price_lookup.py` (funcional pero no escala).
+- ⚠️ `price_lookup.py` marcado como DEPRECATED pero aún en uso activo.
+- ⏸️ Pendiente migrar WebSocket (`ws.py`) y Telegram (`telegram.py`) tras resolver problema de sincronía.
 
-Próximos pasos sugeridos:
+Próximos pasos (parte de Etapa 0):
+- Convertir `AIRouter.run` a asíncrono (`async def`).
+- Implementar `generate_async` en `OpenAIProvider` con inyección dinámica de tools según rol.
+- Actualizar endpoints consumidores para usar `await router.run(...)`.
+- Sincronizar esquemas JSON de tools entre provider y MCP.
 - Extraer parsing residual a módulo liviano independiente de legacy.
 - Eliminar funciones no usadas en `price_lookup.py` tras migrar canales restantes.
 - Añadir nuevas tools (métricas de ventas, proveedores relacionados, equivalencias SKU) siguiendo el contrato MCP.

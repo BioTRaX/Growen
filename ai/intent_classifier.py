@@ -46,8 +46,16 @@ async def classify_intent(ai_router: AIRouter, user_text: str) -> UserIntent:
     prompt = INTENT_CLASSIFICATION_PROMPT_TEMPLATE.format(user_text=user_text)
     
     try:
-        # Usamos una tarea de razonamiento o respuesta corta para una clasificación simple.
-        raw_response = ai_router.run(Task.SHORT_ANSWER.value, prompt)
+        # Usamos run_async para clasificación asíncrona
+        raw_response = await ai_router.run_async(
+            task=Task.SHORT_ANSWER.value,
+            prompt=prompt,
+            user_context={"intent": "classification"}
+        )
+        
+        # Limpiar prefijo técnico si existe (openai:, ollama:)
+        if ":" in raw_response and raw_response.split(":")[0].lower() in ("openai", "ollama"):
+            raw_response = raw_response.split(":", 1)[1].strip()
         
         # Limpiamos la respuesta del LLM para obtener solo el nombre de la intención.
         # Los modelos a veces añaden espacios o texto extra.

@@ -2,7 +2,7 @@
 // NG-HEADER: Ubicación: frontend/src/pages/ProductDetail.tsx
 // NG-HEADER: Descripción: Ficha de producto con galería, estilo y acciones (Minimal Dark + upload Admin)
 // NG-HEADER: Lineamientos: Ver AGENTS.md
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import http from '../services/http'
 import { uploadProductImage, addImageFromUrl, setPrimary, lockImage, deleteImage, refreshSEO, removeBg, watermark } from '../services/images'
@@ -39,11 +39,35 @@ type Prod = {
   enrichment_sources_url?: string | null
 }
 
+const FALLBACK_DESC_HTML = '<p>Sin descripción</p>'
+
+function sanitizeDescription(raw: string): string {
+  if (!raw) return ''
+  const strippedScripts = raw.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+  try {
+    const Parser = (globalThis as any).DOMParser as typeof DOMParser | undefined
+    if (!Parser) return strippedScripts
+    const parser = new Parser()
+    const doc = parser.parseFromString(strippedScripts, 'text/html')
+    doc.querySelectorAll('script, iframe, object, embed').forEach(el => el.remove())
+    doc.querySelectorAll('*').forEach(el => {
+      for (const attr of Array.from(el.attributes)) {
+        if (attr.name.toLowerCase().startsWith('on')) {
+          el.removeAttribute(attr.name)
+        }
+      }
+    })
+    return doc.body.innerHTML || ''
+  } catch {
+    return strippedScripts
+  }
+}
+
 export default function ProductDetail() {
   const { id } = useParams()
   const pid = Number(id)
   const nav = useNavigate()
-  const { state } = useAuth()
+  const { state, refreshMe, hydrated } = useAuth()
   const isAdmin = state.role === 'admin'
   const canEdit = isAdmin || state.role === 'colaborador'
 
@@ -66,6 +90,14 @@ export default function ProductDetail() {
   const [offeringsTick, setOfferingsTick] = useState(0)
   const [linkOpen, setLinkOpen] = useState(false)
   const [linkBusy, setLinkBusy] = useState(false)
+  const [iaMenuOpen, setIaMenuOpen] = useState(false)
+  const sanitizedDesc = useMemo(() => {
+    const raw = desc || ''
+    const clean = sanitizeDescription(raw)
+    return clean || ''
+  }, [desc])
+  const hasSanitizedDesc = (sanitizedDesc || '').trim().length > 0
+  const previewHtml = hasSanitizedDesc ? sanitizedDesc : FALLBACK_DESC_HTML
   const [variants, setVariants] = useState<ProductVariantItem[]>([])
   const [selectedVariantId, setSelectedVariantId] = useState<number | null>(null)
   const [supplierSel, setSupplierSel] = useState<SupplierSearchItem | null>(null)
@@ -79,8 +111,6 @@ export default function ProductDetail() {
   const [srcOpen, setSrcOpen] = useState(false)
   const [srcLoading, setSrcLoading] = useState(false)
   const [srcText, setSrcText] = useState<string>('')
-  const [iaMenuOpen, setIaMenuOpen] = useState(false)
-
   const theme = useMemo(() => ({
     bg: styleVariant === 'minimalDark' ? '#0b0f14' : '#0d1117',
     card: styleVariant === 'minimalDark' ? 'rgba(17,24,39,0.7)' : '#111827',
@@ -92,20 +122,37 @@ export default function ProductDetail() {
     radius: styleVariant === 'minimalDark' ? 14 : 8,
   }), [styleVariant])
 
-  async function refresh() {
-    const r = await http.get<Prod>(`/catalog/products/${pid}`)
-    setProd(r.data)
-    setDesc(r.data?.description_html || '')
-  }
+  const refresh = useCallback(async (options?: { silent?: boolean; retried?: boolean }) => {
+    if (!pid) return
+    try {
+      const r = await http.get<Prod>(`/products/${pid}`)
+      setProd(r.data)
+      setDesc(r.data?.description_html || '')
+    } catch (e: any) {
+      const status = e?.response?.status
+      const retried = options?.retried ?? false
+      if ((status === 401 || status === 403) && !retried) {
+        try { await refreshMe() } catch {}
+        return refresh({ ...options, silent: true, retried: true })
+      }
+      if (!options?.silent) {
+        const msg = e?.response?.data?.detail || e?.message || 'No se pudo cargar el producto'
+        showToast('error', String(msg))
+      }
+      setProd(null)
+    }
+  }, [pid, refreshMe])
 
   useEffect(() => {
-    if (pid) refresh()
-  }, [pid])
+    if (!pid || !hydrated) return
+    if (!state.isAuthenticated && state.role !== 'guest') return
+    refresh({ silent: true })
+  }, [pid, hydrated, state.isAuthenticated, state.role, refresh])
 
   useEffect(() => {
+    if (!pid || state.role === 'guest') { setVariants([]); return }
     let mounted = true
     ;(async () => {
-      if (!pid) return
       try {
         const v = await listProductVariants(pid)
         if (mounted) setVariants(v)
@@ -115,16 +162,17 @@ export default function ProductDetail() {
       }
     })()
     return () => { mounted = false }
-  }, [pid])
+  }, [pid, state.role])
 
   // Cargar categorías para selector
   useEffect(() => {
+    if (state.role === 'guest') { setCategories([]); return }
     let mounted = true
     ;(async () => {
       try { const cs = await listCategories(); if (mounted) setCategories(cs) } catch {}
     })()
     return () => { mounted = false }
-  }, [])
+  }, [state.role])
 
   // Derivar selección actual por path si existe
   useEffect(() => {
@@ -139,6 +187,11 @@ export default function ProductDetail() {
   useEffect(() => {
     let mounted = true
     ;(async () => {
+      if (state.role === 'guest') {
+        const local = (localStorage.getItem('ng_product_detail_style') || 'default') as ProductDetailStyle
+        if (mounted) setStyleVariant(local)
+        return
+      }
       try {
         const r = await getProductDetailStylePref()
         if ((r as any)?.style && mounted) setStyleVariant((r as any).style as ProductDetailStyle)
@@ -152,7 +205,7 @@ export default function ProductDetail() {
       }
     })()
     return () => { mounted = false }
-  }, [])
+  }, [state.role])
 
   // Validaciones de imagen
   async function validateImage(file: File): Promise<string | null> {
@@ -228,7 +281,7 @@ export default function ProductDetail() {
     try {
       setLoading(true)
       // Nota: el cliente http ya incluye el prefijo base (ej.: /api)
-      await http.post(`/catalog/products/${pid}/enrich`)
+      await http.post(`/products/${pid}/enrich`)
       showToast('success', 'Producto enriquecido con IA')
       await refresh()
     } catch (e: any) {
@@ -245,7 +298,7 @@ export default function ProductDetail() {
     }
     try {
       setLoading(true)
-      await http.post(`/catalog/products/${pid}/enrich?force=true`)
+      await http.post(`/products/${pid}/enrich?force=true`)
       showToast('success', 'Reenriquecimiento ejecutado')
       await refresh()
     } catch (e: any) {
@@ -294,7 +347,7 @@ export default function ProductDetail() {
   const handleLimpiarIA = async () => {
     try {
       setLoading(true)
-      await http.delete(`/catalog/products/${pid}/enrichment`)
+      await http.delete(`/products/${pid}/enrichment`)
       showToast('success', 'Enriquecimiento borrado')
       await refresh()
     } catch (e: any) {
@@ -387,7 +440,7 @@ export default function ProductDetail() {
           <input className="input" placeholder="Pegar URL de imagen" value={url} onChange={(e) => setUrl(e.target.value)} />
           <button className="btn" onClick={onFromUrl} disabled={!url || loading}>Descargar</button>
           {/* Botón Tiendanube removido */}
-          <button className="btn" onClick={async () => { try { const a = await http.get(`/products/${pid}/images/audit-logs`, { params: { limit: 50 } }); setImgDiag(a.data.items || []); const b = await http.get(`/catalog/products/${pid}/audit-logs`, { params: { limit: 50 } }); setProdDiag(b.data.items || []) } catch (e: any) { showToast('error', e?.response?.data?.detail || 'No se pudieron obtener diagnósticos') } }}>Ver diagnósticos</button>
+          <button className="btn" onClick={async () => { try { const a = await http.get(`/products/${pid}/images/audit-logs`, { params: { limit: 50 } }); setImgDiag(a.data.items || []); const b = await http.get(`/products/${pid}/audit-logs`, { params: { limit: 50 } }); setProdDiag(b.data.items || []) } catch (e: any) { showToast('error', e?.response?.data?.detail || 'No se pudieron obtener diagnósticos') } }}>Ver diagnósticos</button>
           <button className="btn" onClick={() => { setSupplierSel(null); setSupplierSku(''); setSupplierTitle(''); setLinkOpen(true) }}>Agregar SKU de proveedor</button>
           {canEdit && prod?.title && (
             <button
@@ -508,7 +561,7 @@ export default function ProductDetail() {
               onClick={async () => {
                 try {
                   setSavingDesc(true)
-                  await http.patch(`/catalog/products/${pid}`, { description_html: desc })
+                  await http.patch(`/products/${pid}`, { description_html: desc })
                   showToast('success', 'Descripción guardada')
                 } catch (e: any) {
                   showToast('error', e?.response?.data?.detail || 'No se pudo guardar la descripción')
@@ -519,12 +572,26 @@ export default function ProductDetail() {
             >{savingDesc ? 'Guardando...' : 'Guardar'}</button>
           )}
         </div>
-        <div style={{ marginTop: 8 }}>
-          {canEdit ? (
-            <textarea className="input" rows={8} value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Descripción (HTML o texto)" />
-          ) : (
-            <div style={{ whiteSpace: 'pre-wrap' }}>{desc || 'Sin descripción'}</div>
+        <div style={{ marginTop: 8, display: 'grid', gap: 12 }}>
+          {canEdit && (
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span className="desc-html-label">Editor</span>
+              <textarea
+                className="input"
+                rows={8}
+                value={desc}
+                onChange={(e) => setDesc(e.target.value)}
+                placeholder="Descripción (HTML o texto)"
+              />
+            </label>
           )}
+          <div>
+            <div className="desc-html-label">Vista previa</div>
+            <div
+              className={hasSanitizedDesc ? 'desc-html' : 'desc-html desc-html--empty'}
+              dangerouslySetInnerHTML={{ __html: previewHtml }}
+            />
+          </div>
         </div>
       </div>
 
@@ -627,7 +694,7 @@ export default function ProductDetail() {
                             payload[f.key] = (techEditing.val || '').trim()
                           }
                           try {
-                            await http.patch(`/catalog/products/${pid}`, payload)
+                            await http.patch(`/products/${pid}`, payload)
                             showToast('success', 'Campo guardado')
                             await refresh()
                           } catch (err: any) {
@@ -649,7 +716,7 @@ export default function ProductDetail() {
                           payload[f.key] = (techEditing?.val || '').trim()
                         }
                         try {
-                          await http.patch(`/catalog/products/${pid}`, payload)
+                          await http.patch(`/products/${pid}`, payload)
                           showToast('success', 'Campo guardado')
                           await refresh()
                         } catch (err: any) {

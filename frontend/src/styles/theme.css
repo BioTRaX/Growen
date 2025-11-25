@@ -293,3 +293,34 @@ body {
 .ring-2 {
   box-shadow: 0 0 0 2px var(--primary);
 }
+
+.desc-html {
+  line-height: 1.6;
+  color: var(--text-color);
+}
+
+.desc-html-label {
+  font-size: 0.85rem;
+  opacity: 0.8;
+  margin-bottom: 4px;
+  display: block;
+}
+
+.desc-html p {
+  margin: 0 0 0.75rem;
+}
+
+.desc-html ul,
+.desc-html ol {
+  padding-left: 1.25rem;
+  margin: 0 0 0.75rem;
+}
+
+.desc-html a {
+  color: var(--accent-soft);
+}
+
+.desc-html--empty {
+  opacity: 0.7;
+  font-style: italic;
+}

@@ -213,19 +213,10 @@ describe('MarketDetailModal', () => {
 
       vi.mocked(marketServices.getProductSources).mockResolvedValue(mockProductSources)
       vi.mocked(marketServices.updateProductMarketPrices).mockResolvedValue({
+        status: 'ok',
+        message: 'Actualización encolada',
         product_id: 1,
-        updated_sources: [
-          {
-            name: 'MercadoLibre',
-            old_price: 1450,
-            new_price: 1480,
-            success: true,
-          },
-        ],
-        market_price_min: 1380,
-        market_price_max: 1800,
-        market_price_reference: 1600,
-        errors: [],
+        job_id: 'job-123',
       })
 
       render(
@@ -262,12 +253,10 @@ describe('MarketDetailModal', () => {
             setTimeout(
               () =>
                 resolve({
+                  status: 'ok',
+                  message: 'Actualización encolada',
                   product_id: 1,
-                  updated_sources: [],
-                  market_price_min: null,
-                  market_price_max: null,
-                  market_price_reference: null,
-                  errors: [],
+                  job_id: 'job-123',
                 }),
               1000
             )
@@ -310,19 +299,10 @@ describe('MarketDetailModal', () => {
         })
 
       vi.mocked(marketServices.updateProductMarketPrices).mockResolvedValue({
+        status: 'ok',
+        message: 'Actualización encolada',
         product_id: 1,
-        updated_sources: [
-          {
-            name: 'MercadoLibre',
-            old_price: 1450,
-            new_price: 1480,
-            success: true,
-          },
-        ],
-        market_price_min: 1380,
-        market_price_max: 1800,
-        market_price_reference: 1600,
-        errors: [],
+        job_id: 'job-123',
       })
 
       render(

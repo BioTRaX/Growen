@@ -5,6 +5,8 @@
 
 # Chatbot Growen
 
+> **⚠️ NOTA IMPORTANTE (2025-11-19)**: La implementación de Tool Calling descrita en este documento está parcialmente funcional pero requiere refactorización arquitectónica. Se ha detectado un problema de sincronía: el router actual (`ai/router.py`) es síncrono, mientras que `chat_with_tools` en `OpenAIProvider` requiere `async/await` para consultar servicios MCP externos. Consultar **"Roadmap de Inteligencia Growen → Etapa 0"** en `Roadmap.md` para el plan de evolución completo. La funcionalidad actual usa fallback a `price_lookup.py` que es funcional pero limitado.
+
 ## Actualización (Tool Calling + MCP Products)
 
 Desde octubre 2025 el intent de consulta de productos (precio/stock) migra del motor interno `price_lookup.py` a un flujo de Tool Calling con OpenAI y un servidor MCP (`mcp_products`).

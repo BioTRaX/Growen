@@ -66,6 +66,11 @@ class OpenAIProvider(ILLMProvider):
         return "Eres un asistente útil.", prompt
 
     def generate(self, prompt: str) -> Iterable[str]:
+        """DEPRECATED: Usar generate_async para nuevas implementaciones.
+        
+        Mantenido por compatibilidad legacy. Este método síncrono no soporta
+        tool calling y será removido en futuras versiones.
+        """
         # Fallback inmediato si falta API key o lib
         if not self.api_key or OpenAI is None:
             yield f"openai:{prompt}"
@@ -95,20 +100,277 @@ class OpenAIProvider(ILLMProvider):
             # Degradar a eco para no romper funcionalidad general
             yield f"openai:{user_prompt}"
 
+    async def generate_async(
+        self,
+        prompt: str,
+        tools_schema: list | None = None,
+        user_context: dict | None = None,
+    ) -> str:
+        """Genera respuesta asíncrona con soporte unificado de herramientas.
+
+        Este método reemplaza a chat_with_tools y unifica la lógica de generación
+        asíncrona con tool calling dinámico.
+
+        Args:
+            prompt: Prompt completo (puede incluir system + user concatenados con \n\n).
+            tools_schema: Lista de tools en formato OpenAI. Si None, genera sin tools.
+            user_context: Dict con contexto del usuario. Claves esperadas:
+                - 'role': str (admin, colaborador, cliente, etc.) para control de acceso.
+                - Otros campos opcionales para futuras extensiones.
+
+        Returns:
+            Respuesta generada sin prefijo técnico (solo el texto limpio).
+
+        Flujo:
+            1. Si tools_schema is None: generación simple de una llamada.
+            2. Si tools_schema is not None:
+                - Primera llamada con tools disponibles (tool_choice="auto").
+                - Si el modelo responde con tool_calls, invocar MCP.
+                - Inyectar resultados como mensajes role="tool".
+                - Segunda llamada para obtener respuesta final.
+
+        Manejo de errores:
+            - Si falta API key o librería: devuelve el prompt del usuario como eco.
+            - Si falla la red/MCP: devuelve estructura de error serializada para que
+              el modelo pueda responder amigablemente al usuario.
+        """
+        # Validaciones iniciales
+        if not self.api_key or OpenAI is None:
+            # Degradar a eco sin prefijo para que el caller maneje
+            return prompt.split("\n\n", 1)[-1] if "\n\n" in prompt else prompt
+
+        system_prompt, user_prompt = self._split_prompt(prompt)
+        user_role = user_context.get("role", "guest") if user_context else "guest"
+
+        # Construir mensajes iniciales
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        client = OpenAI(api_key=self.api_key)
+
+        # Caso 1: Sin tools → generación simple
+        if not tools_schema:
+            try:
+                # Detectar si se requiere JSON estricto
+                wants_json = (
+                    "Esquema de salida EXACTO:" in user_prompt
+                    or "Esquema de salida esperado:" in user_prompt
+                )
+                resp = client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
+                    max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")),
+                    response_format=(
+                        {"type": "json_object"} if wants_json else {"type": "text"}
+                    ),
+                )
+                text = resp.choices[0].message.content if resp.choices else ""
+                return text.strip()
+            except Exception:
+                # Fallback: devolver prompt del usuario
+                return user_prompt
+
+        # Caso 2: Con tools → tool calling
+        try:
+            first = client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=tools_schema,
+                tool_choice="auto",
+                temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
+                max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")),
+            )
+        except Exception:
+            return user_prompt
+
+        choice = first.choices[0] if first.choices else None
+        tool_calls = getattr(choice.message, "tool_calls", None) if choice else None
+
+        # Si no hay tool_calls, devolver respuesta directa
+        if not tool_calls:
+            content = choice.message.content if choice and choice.message.content else ""
+            return content.strip()
+
+        # Procesar tool_calls (ciclo de invocación MCP)
+        used_search_sku: str | None = None
+        for idx, call in enumerate(tool_calls[:3]):  # límite de 3 calls por seguridad
+            fn_name = call.function.name
+            try:
+                fn_args = json.loads(call.function.arguments or "{}")
+            except Exception:
+                fn_args = {}
+
+            # ------------------------------------------------------------------
+            # Normalización defensiva de parámetros
+            # ------------------------------------------------------------------
+            # El LLM puede alucinar nombres de parámetros ligeramente diferentes.
+            # Aplicamos aliases comunes para hacer el sistema más resiliente.
+            
+            if fn_name == "find_products_by_name":
+                # Normalización: buscar "query" con aliases comunes
+                query = (
+                    fn_args.get("query")           # Parámetro correcto (esperado por MCP)
+                    or fn_args.get("name")         # Alias: el LLM puede usar "name"
+                    or fn_args.get("product_name") # Alias: "product_name"
+                    or fn_args.get("search")       # Alias: "search"
+                    or fn_args.get("text")         # Alias: "text"
+                )
+                
+                if not query or not isinstance(query, str):
+                    # Error: falta parámetro obligatorio
+                    tool_result = {
+                        "error": "missing_query",
+                        "message": "El parámetro 'query' (string) es obligatorio para find_products_by_name"
+                    }
+                    logging.warning(
+                        "Tool call find_products_by_name sin 'query' válido. Args recibidos: %s",
+                        fn_args
+                    )
+                else:
+                    # Llamada correcta al MCP
+                    tool_result = await self.call_mcp_tool(
+                        tool_name=fn_name,
+                        parameters={"query": query, "user_role": user_role},
+                    )
+                    # Auto-extracción de SKU si búsqueda retorna 1 resultado único
+                    if isinstance(tool_result, dict) and not tool_result.get("error"):
+                        items = tool_result.get("items", [])
+                        if isinstance(items, list) and len(items) == 1 and items[0].get("sku"):
+                            used_search_sku = items[0]["sku"]
+                            logging.debug(
+                                "Auto-extracción de SKU desde búsqueda: %s",
+                                used_search_sku
+                            )
+            
+            else:
+                # Tools basadas en SKU: get_product_info, get_product_full_info
+                # Normalización: buscar "sku" con fallback a used_search_sku
+                sku = (
+                    fn_args.get("sku")             # Parámetro correcto (esperado por MCP)
+                    or fn_args.get("product_sku")  # Alias posible
+                    or fn_args.get("code")         # Alias posible
+                    or used_search_sku             # Fallback: SKU extraído de búsqueda previa
+                )
+                
+                if not sku or not isinstance(sku, str):
+                    # Error: falta parámetro obligatorio
+                    tool_result = {
+                        "error": "missing_sku",
+                        "message": f"El parámetro 'sku' (string) es obligatorio para {fn_name}"
+                    }
+                    logging.warning(
+                        "Tool call %s sin 'sku' válido. Args recibidos: %s, used_search_sku: %s",
+                        fn_name, fn_args, used_search_sku
+                    )
+                else:
+                    # Validación de permisos para get_product_full_info
+                    if fn_name == "get_product_full_info" and user_role not in {"admin", "colaborador"}:
+                        tool_result = {
+                            "error": "permission_denied",
+                            "message": f"El rol '{user_role}' no tiene permisos para get_product_full_info"
+                        }
+                        logging.warning(
+                            "Intento de usar get_product_full_info con rol '%s' (requiere admin/colaborador)",
+                            user_role
+                        )
+                    else:
+                        # Llamada correcta al MCP
+                        tool_result = await self.call_mcp_tool(
+                            tool_name=fn_name,
+                            parameters={"sku": sku, "user_role": user_role},
+                        )
+
+            # Inyectar resultado en mensajes
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": getattr(call, "id", f"call_{idx}"),
+                    "name": fn_name,
+                    "content": json.dumps(tool_result, ensure_ascii=False),
+                }
+            )
+
+            # Si búsqueda retornó 1 SKU y no hay get_product_info pendiente,
+            # forzar llamada sintética para completar información
+            if (
+                fn_name == "find_products_by_name"
+                and used_search_sku
+                and all(c.function.name != "get_product_info" for c in tool_calls)
+            ):
+                synthetic_result = await self.call_mcp_tool(
+                    tool_name="get_product_info",
+                    parameters={"sku": used_search_sku, "user_role": user_role},
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_auto_sku",
+                        "name": "get_product_info",
+                        "content": json.dumps(synthetic_result, ensure_ascii=False),
+                    }
+                )
+                break  # Cerrar ciclo temprano
+
+        # Segunda llamada para obtener respuesta final
+        try:
+            followup = client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
+                max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")),
+            )
+            final_choice = followup.choices[0] if followup.choices else None
+            answer = (
+                final_choice.message.content
+                if final_choice and final_choice.message.content
+                else ""
+            )
+            return answer.strip()
+        except Exception:
+            # Fallback amigable
+            return "No pude completar la operación con las herramientas disponibles. Probá nuevamente más tarde."
+
     # ------------------------------------------------------------------
     # Tool Calling (MCP Products) --------------------------------------
     # ------------------------------------------------------------------
     def _build_tools_schema(self, user_role: str) -> List[Dict[str, Any]]:
+        """Construye el schema de tools disponibles según el rol del usuario.
+        
+        IMPORTANTE: Este schema debe coincidir EXACTAMENTE con la implementación
+        en mcp_servers/products_server/tools.py. Cualquier cambio en los parámetros
+        o nombres de tools debe sincronizarse en ambos archivos.
+        
+        Args:
+            user_role: Rol del usuario (admin, colaborador, cliente, guest).
+                Roles 'admin' y 'colaborador' tienen acceso a get_product_full_info.
+        
+        Returns:
+            Lista de definiciones de functions en formato OpenAI Function Calling.
+        """
         base_tools: List[Dict[str, Any]] = [
             {
                 "type": "function",
                 "function": {
                     "name": "find_products_by_name",
-                    "description": "Busca productos por nombre parcial y devuelve lista de coincidencias (name, sku). Usar antes de pedir info si el usuario no provee SKU.",
+                    "description": (
+                        "Use this tool to search for products when the user provides a partial or complete product name "
+                        "(e.g., 'maceta', 'tierra', 'LED lamp'). Returns a list of matching products with their names and SKUs. "
+                        "Always use this tool BEFORE get_product_info if you don't have an exact SKU. "
+                        "Do NOT use this if the user already provided a specific SKU code."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": {"type": "string", "description": "Fragmento o nombre de producto a buscar"},
+                            "query": {
+                                "type": "string",
+                                "description": (
+                                    "The search text provided by the user. Can be a partial product name, "
+                                    "full product name, or product category (e.g., 'maceta 10L', 'sustrato', 'fertilizante')."
+                                )
+                            },
                         },
                         "required": ["query"],
                     },
@@ -118,28 +380,52 @@ class OpenAIProvider(ILLMProvider):
                 "type": "function",
                 "function": {
                     "name": "get_product_info",
-                    "description": "Obtiene información básica de un producto por SKU interno (name, sale_price, stock, sku).",
+                    "description": (
+                        "Use this tool to get detailed information about a specific product when you have an exact SKU code. "
+                        "Returns: product name, sale price, stock availability, and SKU. "
+                        "The SKU must be obtained from find_products_by_name or provided directly by the user. "
+                        "Do NOT guess or invent SKU codes."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "sku": {"type": "string", "description": "SKU interno exacto del producto"},
+                            "sku": {
+                                "type": "string",
+                                "description": (
+                                    "The exact internal SKU code of the product. Must be obtained from a previous "
+                                    "find_products_by_name call or provided explicitly by the user (e.g., 'SKU123', 'PROD-456')."
+                                )
+                            },
                         },
                         "required": ["sku"],
                     },
                 },
             }
         ]
+        
+        # Tool avanzada solo para roles autorizados (coincide con _FULL_INFO_ROLES en MCP)
         if user_role in {"admin", "colaborador"}:
             base_tools.append(
                 {
                     "type": "function",
                     "function": {
                         "name": "get_product_full_info",
-                        "description": "Obtiene información extendida del producto (en el MVP igual a básica) por SKU interno.",
+                        "description": (
+                            "Use this tool to get extended product information (admin/colaborador only). "
+                            "In the current MVP, returns the same data as get_product_info. "
+                            "Future versions will include: supplier details, price history, category relationships, and audit logs. "
+                            "Requires exact SKU code obtained from find_products_by_name or user input."
+                        ),
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "sku": {"type": "string", "description": "SKU interno exacto del producto"},
+                                "sku": {
+                                    "type": "string",
+                                    "description": (
+                                        "The exact internal SKU code of the product. Must be obtained from a previous "
+                                        "find_products_by_name call or provided explicitly by the user."
+                                    )
+                                },
                             },
                             "required": ["sku"],
                         },
@@ -194,9 +480,19 @@ class OpenAIProvider(ILLMProvider):
             return {"error": "tool_internal_failure"}
 
     async def chat_with_tools(self, *, prompt: str, user_role: str) -> str:
-        """Ejecuta un ciclo de tool-calling con OpenAI y el servidor MCP.
-
-        Flujo:
+        """DEPRECATED: Usar generate_async en su lugar.
+        
+        Este método es mantenido temporalmente por compatibilidad con código
+        existente pero será removido en futuras versiones. Migrar a:
+        
+            result = await provider.generate_async(
+                prompt=prompt,
+                tools_schema=provider._build_tools_schema(user_role),
+                user_context={"role": user_role}
+            )
+            return f"openai:{result}"  # Si se requiere el prefijo legacy
+        
+        Flujo original:
         1. Primera llamada al modelo con las tools disponibles.
         2. Si responde con `tool_calls`, se invoca el MCP (`http://mcp_products:8001/invoke_tool`).
         3. Se añade el resultado como mensaje de role `tool` y se hace segunda llamada.

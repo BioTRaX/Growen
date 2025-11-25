@@ -29,44 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import CanonicalProduct, MarketSource, Category, Supplier
 from workers.market_scraping import update_market_prices_for_product
-from db.session import get_session
 
-
-@pytest.fixture
-async def db(db_session) -> AsyncSession:
-    """
-    Fixture que proporciona una sesión de BD para tests de performance.
-    Usa db_session del conftest.py como base.
-    """
-    async for session in get_session():
-        yield session
-        break
-
-
-@pytest.fixture
-async def test_category(db: AsyncSession) -> Category:
-    """Crea categoría de prueba para productos"""
-    category = Category(
-        name="Categoría Test Performance",
-        description="Para tests de performance"
-    )
-    db.add(category)
-    await db.commit()
-    await db.refresh(category)
-    return category
-
-
-@pytest.fixture
-async def test_supplier(db: AsyncSession) -> Supplier:
-    """Crea proveedor de prueba"""
-    supplier = Supplier(
-        name="Proveedor Test Performance",
-        email="test.perf@example.com"
-    )
-    db.add(supplier)
-    await db.commit()
-    await db.refresh(supplier)
-    return supplier
+# Fixtures db, test_category, test_supplier vienen de tests/performance/conftest.py
 
 
 async def create_test_product_with_sources(
