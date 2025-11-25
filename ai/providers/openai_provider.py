@@ -23,6 +23,7 @@ import logging
 
 from ..provider_base import ILLMProvider
 from ..types import Task
+from agent_core.detect_mcp_url import get_mcp_products_url, get_mcp_web_search_url
 
 try:  # Import perezoso para no forzar dependencia si no se usa
     from openai import OpenAI  # type: ignore
@@ -437,11 +438,11 @@ class OpenAIProvider(ILLMProvider):
     async def call_mcp_tool(self, *, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any] | str:
         """Invoca el servidor MCP de productos de forma resiliente.
 
-        Lee URL desde `MCP_PRODUCTS_URL`. Maneja errores de red devolviendo un
-        JSON serializado que el modelo pueda interpretar para responder al usuario
-        sin exponer detalles técnicos.
+        Lee URL desde `MCP_PRODUCTS_URL` o detecta automáticamente según contexto
+        (Docker vs host local). Maneja errores de red devolviendo un JSON serializado
+        que el modelo pueda interpretar para responder al usuario sin exponer detalles técnicos.
         """
-        mcp_url = os.getenv("MCP_PRODUCTS_URL", "http://mcp_products:8001/invoke_tool")
+        mcp_url = get_mcp_products_url()
         payload = {"tool_name": tool_name, "parameters": parameters}
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
@@ -460,10 +461,10 @@ class OpenAIProvider(ILLMProvider):
     async def call_mcp_web_tool(self, *, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any] | str:
         """Invoca el servidor MCP de búsqueda web (MVP) de forma resiliente.
 
-        URL por defecto: `MCP_WEB_SEARCH_URL` o `http://mcp_web_search:8002/invoke_tool`.
-        Maneja errores de red devolviendo estructura con `error`.
+        Lee URL desde `MCP_WEB_SEARCH_URL` o detecta automáticamente según contexto
+        (Docker vs host local). Maneja errores de red devolviendo estructura con `error`.
         """
-        mcp_url = os.getenv("MCP_WEB_SEARCH_URL", "http://mcp_web_search:8002/invoke_tool")
+        mcp_url = get_mcp_web_search_url()
         payload = {"tool_name": tool_name, "parameters": parameters}
         try:
             async with httpx.AsyncClient(timeout=6.0) as client:
