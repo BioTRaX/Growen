@@ -1077,3 +1077,19 @@ class KnowledgeChunk(Base):
 
     # Relación con el documento fuente
     source: Mapped["KnowledgeSource"] = relationship(back_populates="chunks")
+
+
+class ChatMessage(Base):
+    """Representa un mensaje en una conversación de chat (historial)."""
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        Index("ix_chat_messages_session", "session_id"),
+        Index("ix_chat_messages_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(100), nullable=False)  # UUID o identificador de sesión
+    role: Mapped[str] = mapped_column(String(20), nullable=False)  # "user", "assistant", "tool", "system"
+    content: Mapped[str] = mapped_column(Text, nullable=False)  # Contenido del mensaje
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    meta: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')  # Ej: {"tool_name": "...", "tokens": 123}

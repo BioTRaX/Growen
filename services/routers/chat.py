@@ -65,6 +65,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai.intent_classifier import classify_intent, UserIntent
 from services.chat.sales_handler.tools import manejar_conversacion_venta, consultar_producto
+from services.chat.history import save_message, get_recent_history
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,23 @@ async def chat_endpoint(
     user_text = payload.text
     user_role = session_data.role
 
+    # 0. Generar session_id estable para historial conversacional
+    # Usar session.id si existe, sino construir con host+user_agent (fallback para guests)
+    try:
+        chat_session_id = session_data.session.id if getattr(session_data, "session", None) else None
+    except Exception:
+        chat_session_id = None
+    
+    if not chat_session_id:
+        # Fallback: generar ID basado en IP + user agent (menos robusto pero funcional para MVP)
+        host = request.client.host if request.client else "unknown"
+        user_agent = request.headers.get("user-agent", "unknown")
+        import hashlib
+        chat_session_id = hashlib.md5(f"{host}_{user_agent}".encode()).hexdigest()[:16]
+    
+    # 0.1 Recuperar historial reciente para memoria conversacional
+    history_context = await get_recent_history(db, chat_session_id, limit=6)
+
     # 1. Clasificar la intención del usuario
     intent = await classify_intent(ai_router, user_text)
 
@@ -185,15 +203,31 @@ async def chat_endpoint(
     if product_query or intent == UserIntent.CONSULTA_PRECIO:
         # Flujo principal: usar run_async con el LLM (OpenAI + tool calling)
         try:
+            # Construir prompt con historial conversacional
+            prompt_with_history = f"{history_context}\n\nUsuario: {user_text}" if history_context else user_text
+            
             answer = await ai_router.run_async(
                 task=Task.SHORT_ANSWER.value,
-                prompt=user_text,
+                prompt=prompt_with_history,
                 user_context={"role": user_role, "intent": "product_lookup"},
             )
             
             # Limpiar prefijo técnico si existe (openai:, ollama:)
             if ":" in answer and answer.split(":")[0] in ("openai", "ollama"):
                 answer = answer.split(":", 1)[1].strip()
+            
+            # Guardar mensajes en historial
+            try:
+                logger.info(f"Guardando mensaje user en session {chat_session_id[:8]}...")
+                await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent})
+                logger.info(f"Guardando mensaje assistant en session {chat_session_id[:8]}...")
+                await save_message(db, chat_session_id, "assistant", answer, metadata={"type": "product_answer"})
+                logger.info(f"Commit de mensajes para session {chat_session_id[:8]}...")
+                await db.commit()
+                logger.info(f"✓ Mensajes guardados exitosamente para session {chat_session_id[:8]}")
+            except Exception as e:
+                logger.error(f"Error guardando mensajes: {type(e).__name__}: {e}")
+                # No fallar el request, continuar con la respuesta
             
             # Retornar respuesta del LLM
             clear_memory(memory_key)
@@ -229,15 +263,25 @@ async def chat_endpoint(
                 entrada_para_venta = " ".join(partes)
         result = await manejar_conversacion_venta(entrada_para_venta, sales_state, user_role)
         conversation_state["sales_flow"] = result.get("nuevo_estado")
+        
+        # Guardar mensajes en historial
+        await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent})
+        await save_message(db, chat_session_id, "assistant", result["respuesta_para_usuario"], metadata={"type": "sales_conversation"})
+        await db.commit()
+        
         return ChatOut(text=result["respuesta_para_usuario"], intent=UserIntent.VENTA_CONVERSACIONAL.value)
 
     # 6. Fallback: Chat general con contexto de usuario
     else:
         # Usar run_async para chat general, pasando el contexto del usuario
         # El chatbot puede necesitar saber si habla con Admin/Colaborador vs Cliente
+        
+        # Construir prompt con historial conversacional
+        prompt_with_history = f"{history_context}\n\nUsuario: {user_text}" if history_context else user_text
+        
         raw = await ai_router.run_async(
             task=Task.SHORT_ANSWER.value,
-            prompt=user_text,
+            prompt=prompt_with_history,
             user_context={"role": user_role, "intent": "chat_general"},
         )
         
@@ -251,5 +295,10 @@ async def chat_endpoint(
             reply = raw.split(separator)[-1].strip()
         else:
             reply = raw.strip()
+        
+        # Guardar mensajes en historial
+        await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent})
+        await save_message(db, chat_session_id, "assistant", reply, metadata={"type": "chat_general"})
+        await db.commit()
         
         return ChatOut(text=reply, intent=UserIntent.CHAT_GENERAL.value)

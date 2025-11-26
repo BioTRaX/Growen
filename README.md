@@ -253,6 +253,42 @@ Este repositorio mantiene sus módulos en la raíz, así que es necesario declar
 include = ["agent_core", "ai", "cli", "adapters", "services", "db"]
 ```
 
+Si se prefiere un layout `src/`, trasladá las carpetas anteriores a `src/` y añadí `where = ["src"]` en la misma sección.
+
+### Setup inicial
+
+```bash
+# Crear entorno virtual
+python -m venv .venv
+
+# Activar entorno virtual (OBLIGATORIO - usar SIEMPRE)
+# Windows PowerShell:
+.venv\Scripts\Activate.ps1
+# Windows CMD:
+.venv\Scripts\activate.bat
+# Linux/Mac:
+source .venv/bin/activate
+
+# Instalar dependencias
+pip install -e .[dev]
+
+# Configurar variables de entorno
+cp .env.example .env
+# en producción reemplazar los placeholders SECRET_KEY, ADMIN_USER y ADMIN_PASS
+# en desarrollo se usan valores de prueba si se omiten
+
+# Crear base de datos growen en PostgreSQL
+# Aplicar migraciones
+alembic -c ./alembic.ini upgrade head
+
+# Iniciar API
+uvicorn services.api:app --reload
+```
+
+**⚠️ IMPORTANTE**: Siempre activar el entorno virtual antes de ejecutar cualquier comando Python. Si `python` no usa `.venv`, los módulos instalados no estarán disponibles y fallará la importación (ej: `ModuleNotFoundError: No module named 'pgvector'`).
+
+### Comandos de migraciones
+
 ```bash
 # Crear una nueva revisión a partir de los modelos
 alembic -c ./alembic.ini revision -m "descripcion" --autogenerate
@@ -262,21 +298,6 @@ alembic -c ./alembic.ini upgrade head
 
 # Revertir la última migración
 alembic -c ./alembic.ini downgrade -1
-```
-
-Si se prefiere un layout `src/`, trasladá las carpetas anteriores a `src/` y añadí `where = ["src"]` en la misma sección.
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-cp .env.example .env
-# en producción reemplazar los placeholders SECRET_KEY, ADMIN_USER y ADMIN_PASS
-# en desarrollo se usan valores de prueba si se omiten
-# las variables de entorno se cargan automáticamente desde .env
-# crear base de datos growen en PostgreSQL
-alembic -c ./alembic.ini upgrade head
-uvicorn services.api:app --reload
 ```
 
 ## Migraciones automáticas
