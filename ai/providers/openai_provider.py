@@ -495,7 +495,8 @@ class OpenAIProvider(ILLMProvider):
         
         Flujo original:
         1. Primera llamada al modelo con las tools disponibles.
-        2. Si responde con `tool_calls`, se invoca el MCP (`http://mcp_products:8001/invoke_tool`).
+        2. Si responde con `tool_calls`, se invoca el MCP vía detección automática
+           (localhost:8100 en host, mcp_products:8100 en Docker).
         3. Se añade el resultado como mensaje de role `tool` y se hace segunda llamada.
         4. Devuelve texto final prefijado `openai:`.
 
@@ -528,6 +529,25 @@ class OpenAIProvider(ILLMProvider):
         if not tool_calls:
             content = choice.message.content if choice and choice.message.content else ""
             return f"openai:{content.strip()}"
+
+        # IMPORTANTE: Agregar el mensaje del assistant con tool_calls antes de procesar las respuestas
+        messages.append(
+            {
+                "role": "assistant",
+                "content": choice.message.content,
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments,
+                        }
+                    }
+                    for call in tool_calls
+                ]
+            }
+        )
 
         # Procesar secuencialmente cada tool_call (hasta 2 pasos búsqueda→info)
         tool_results_for_model: List[Dict[str, Any]] = []
@@ -591,8 +611,10 @@ class OpenAIProvider(ILLMProvider):
             final_choice = followup.choices[0] if followup.choices else None
             answer = final_choice.message.content if final_choice and final_choice.message.content else ""
             return f"openai:{answer.strip()}"
-        except Exception:
+        except Exception as e:
             # fallback: devolver resumen amigable
+            # Loggear el error para debugging
+            logging.error(f"Error en chat_with_tools followup: {type(e).__name__}: {str(e)}")
             # No exponemos trazas técnicas al usuario final.
             return "openai:No pude completar la operación con las herramientas disponibles. Probá nuevamente más tarde."
 
