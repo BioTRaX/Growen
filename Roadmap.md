@@ -16,6 +16,7 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 
 - Frontend: La ficha de producto vuelve a mostrar la "Descripción enriquecida" con vista previa HTML sanitizada para todos los roles (scripts/iframes/eventos inline se eliminan). Los usuarios con permisos de edición mantienen el textarea y pueden guardar via `PATCH /catalog/products/{id}`.
 - Frontend/Backend: El detalle `/productos/:id` se habilitó en modo lectura para el rol `guest` (ProtectedRoute + endpoint `GET /catalog/products/{id}` aceptan invitados). Los invitados ven nombre, precio y descripción, mientras que las acciones siguen restringidas a colaborador/admin.
+- Chatbot: El WebSocket `/ws` ahora comparte la misma memoria conversacional que el endpoint HTTP, inyectando el historial reciente en los prompts y persistiendo cada intercambio en `chat_messages`.
 
 
 - Backend: FastAPI + SQLAlchemy (async) para gestión de compras (borradores, validación, confirmación), adjuntos (PDF remito), logs y auditoría.

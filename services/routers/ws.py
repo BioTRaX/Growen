@@ -22,6 +22,7 @@ import asyncio
 import os
 import uuid
 import logging
+import hashlib
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket
@@ -30,6 +31,7 @@ from sqlalchemy.orm import selectinload
 
 from db.models import Session as DBSess
 from db.session import SessionLocal
+from services.chat.history import save_message, get_recent_history
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from agent_core.config import settings as core_settings
@@ -68,6 +70,40 @@ except Exception:  # pragma: no cover
 # Intervalos en segundos para mantener la conexión
 PING_INTERVAL = 30
 READ_TIMEOUT = 60
+
+
+def _build_prompt_with_history(history: str, user_text: str) -> str:
+    """Concatena historial formateado con el mensaje actual."""
+    if history:
+        return f"{history}\n\nUsuario: {user_text}"
+    return user_text
+
+
+def _strip_provider_prefix(text: str) -> str:
+    """Quita prefijos técnicos (openai:/ollama:) antes de guardar o responder."""
+    if ":" in text:
+        prefix = text.split(":", 1)[0]
+        if prefix in {"openai", "ollama"}:
+            return text.split(":", 1)[1].strip()
+    return text.strip()
+
+
+async def _persist_chat_history(
+    db_session,
+    session_id: str,
+    user_text: str,
+    assistant_text: str,
+    intent: str,
+    response_type: str,
+) -> None:
+    """Guarda el intercambio en la tabla chat_messages."""
+    try:
+        await save_message(db_session, session_id, "user", user_text, metadata={"intent": intent})
+        await save_message(db_session, session_id, "assistant", assistant_text, metadata={"type": response_type})
+        await db_session.commit()
+    except Exception:
+        logger.exception("ws.chat_history_save_error")
+
 async def ai_reply(prompt: str) -> str:
     """Genera una respuesta breve usando AIRouter.
 
@@ -124,13 +160,19 @@ async def ws_chat(socket: WebSocket) -> None:
             )
             sess = res.scalar_one_or_none()
 
+    host = getattr(socket.client, "host", "unknown")
+    user_agent = socket.headers.get("user-agent", "unknown")
+    if sid:
+        chat_session_id = sid
+    else:
+        raw = f"{host}_{user_agent}"
+        chat_session_id = hashlib.md5(raw.encode()).hexdigest()[:16]
+
     await socket.accept()
     correlation_header = socket.headers.get("x-correlation-id") or socket.headers.get("x-request-id")
     base_correlation_id = correlation_header or f"ws-{uuid.uuid4().hex[:10]}"
     message_index = 0
     role = getattr(sess, "role", "anon") or "anon"
-    host = getattr(socket.client, "host", None)
-    user_agent = socket.headers.get("user-agent")
     memory_key = build_memory_key(session_id=sid, role=role, host=host, user_agent=user_agent)
     ping_task = asyncio.create_task(_ping(socket))
     try:
@@ -158,206 +200,260 @@ async def ws_chat(socket: WebSocket) -> None:
                 await socket.send_json({"role": "system", "text": "Tu mensaje es muy largo. Por favor, resumilo (max. 2000 caracteres)."})
                 continue
 
-            memory_state = get_memory(memory_key)
-            include_metrics = role in ALLOWED_PRODUCT_METRIC_ROLES
+            async with SessionLocal() as chat_db:
+                history_context = await get_recent_history(chat_db, chat_session_id, limit=6)
 
-            product_query = extract_product_query(data)
-            if product_query:
-                # Nuevo flujo: delegar directamente a OpenAI tool-calling (MCP Products)
-                ai_router = AIRouter(core_settings)
-                provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
-                chat_with_tools = getattr(provider, "chat_with_tools", None)
-                if callable(chat_with_tools):
-                    try:
-                        answer = await chat_with_tools(prompt=data, user_role=role)
-                        # Para mantener compatibilidad de clientes, emitimos type=product_answer simplificado
-                        await socket.send_json({
-                            "role": "assistant",
-                            "text": answer,
-                            "type": "product_answer",
-                            "intent": "product_tool",
-                        })
-                        # No utilizamos memoria de ambigüedad en el nuevo flujo (MVP)
-                        clear_memory(memory_key)
-                        continue
-                    except Exception:
-                        logger.exception("ws.tool_call_error")
-                        await socket.send_json({
-                            "role": "assistant",
-                            "text": "Error consultando información de producto.",
-                            "type": "error",
-                        })
-                        continue
-                # Fallback local sin tools: usar resolver interno (compat WS/tests)
-                try:
-                    async with SessionLocal() as db:
-                        result = await resolve_price(data, db, limit=5)
-                    payload = serialize_result(result, include_metrics=include_metrics)
-                    text = render_product_response(result)
-                    await socket.send_json({
-                        "role": "assistant",
-                        "text": text,
-                        "type": "product_answer",
-                        "intent": result.intent,
-                        "data": payload,
-                    })
-                    clear_memory(memory_key)
-                except Exception:
-                    logger.exception("ws.local_price_fallback_error")
-                    await socket.send_json({
-                        "role": "assistant",
-                        "text": "Error resolviendo información de producto.",
-                        "type": "error",
-                    })
-                continue
+                memory_state = get_memory(memory_key)
+                include_metrics = role in ALLOWED_PRODUCT_METRIC_ROLES
 
-            if memory_state and memory_state.pending_clarification:
-                normalized = normalize_followup_text(data)
-                if not normalized:
-                    mark_prompted(memory_key)
-                    terms = memory_terms_text(memory_state.query)
-                    try:
-                        logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
-                    except Exception:
-                        pass
-                    await socket.send_json({
-                        "role": "assistant",
-                        "type": "clarify_prompt",
-                        "intent": "clarify",
-                        "text": clarify_prompt_text(terms),
-                    })
-                    continue
-                if normalized in CLARIFY_CONFIRM_WORDS:
-                    # Nuevo flujo: pedimos al usuario reformular con SKU exacto en lugar de relanzar ranking local
-                    await socket.send_json({
-                        "role": "assistant",
-                        "text": "Por favor pedime nuevamente el producto indicando el SKU exacto para darte precio y stock actualizado.",
-                        "type": "clarify_ack",
-                        "intent": "clarify",
-                    })
-                    clear_memory(memory_key)
-                    continue
-                tokens = normalized.split()
-                if len(tokens) <= 3 and not memory_state.prompted:
-                    mark_prompted(memory_key)
-                    terms = memory_terms_text(memory_state.query)
-                    try:
-                        logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
-                    except Exception:
-                        pass
-                    await socket.send_json({
-                        "role": "assistant",
-                        "type": "clarify_prompt",
-                        "intent": "clarify",
-                        "text": clarify_prompt_text(terms),
-                    })
-                    continue
-
-            if memory_state and not memory_state.pending_clarification:
-                clear_memory(memory_key)
-
-            t0 = time.perf_counter()
-            prompt = data
-            if sess:
-                if sess.user:
-                    nombre = sess.user.name or sess.user.identifier
-                    prompt = f"{nombre} ({sess.role}) dice: {data}"
-                else:
-                    prompt = f"{sess.role} dice: {data}"
-            streaming_enabled = os.getenv("AI_STREAM_WS", "false").lower() in {"1", "true", "yes"}
-            if streaming_enabled:
-                router_ai = AIRouter(core_settings)
-                msg_id = uuid.uuid4().hex
-                await socket.send_json({"role": "assistant", "stream": "start", "id": msg_id})
-                logger.debug(
-                    "[ai:stream:start] id=%s task=%s auth=%s prompt_chars=%s",
-                    msg_id,
-                    Task.SHORT_ANSWER.value,
-                    bool(sess),
-                    len(prompt),
-                    extra={"correlation_id": correlation_id},
-                )
-                acc = []
-                try:
-                    for chunk in router_ai.run_stream(Task.SHORT_ANSWER.value, prompt):
-                        if not acc and (chunk.startswith("openai:") or chunk.startswith("ollama:")):
-                            _, _, chunk = chunk.partition(":")
-                        if chunk:
-                            acc.append(chunk)
+                product_query = extract_product_query(data)
+                if product_query:
+                    # Nuevo flujo: delegar directamente a OpenAI tool-calling (MCP Products)
+                    ai_router = AIRouter(core_settings)
+                    provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
+                    chat_with_tools = getattr(provider, "chat_with_tools", None)
+                    if callable(chat_with_tools):
+                        try:
+                            prompt_with_history = _build_prompt_with_history(history_context, data)
+                            answer_raw = await chat_with_tools(prompt=prompt_with_history, user_role=role)
+                            answer = _strip_provider_prefix(answer_raw)
                             await socket.send_json({
                                 "role": "assistant",
-                                "stream": "chunk",
-                                "id": msg_id,
-                                "text": chunk,
+                                "text": answer,
+                                "type": "product_answer",
+                                "intent": "product_tool",
                             })
-                            logger.debug(
-                                "[ai:stream:chunk] id=%s delta_chars=%s total_chars=%s",
-                                msg_id,
-                                len(chunk),
-                                sum(len(c) for c in acc),
-                                extra={"correlation_id": correlation_id},
+                            await _persist_chat_history(
+                                chat_db,
+                                chat_session_id,
+                                data,
+                                answer,
+                                intent="product_tool",
+                                response_type="product_answer",
                             )
-                    full = "".join(acc).strip()
-                    await socket.send_json({
-                        "role": "assistant",
-                        "stream": "end",
-                        "id": msg_id,
-                        "text": full,
-                        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
-                    })
+                            clear_memory(memory_key)
+                            continue
+                        except Exception:
+                            logger.exception("ws.tool_call_error")
+                            await socket.send_json({
+                                "role": "assistant",
+                                "text": "Error consultando información de producto.",
+                                "type": "error",
+                            })
+                            await _persist_chat_history(
+                                chat_db,
+                                chat_session_id,
+                                data,
+                                "Error consultando información de producto.",
+                                intent="product_tool_error",
+                                response_type="error",
+                            )
+                            continue
+                    # Fallback local sin tools: usar resolver interno (compat WS/tests)
+                    try:
+                        async with SessionLocal() as db:
+                            result = await resolve_price(data, db, limit=5)
+                        payload = serialize_result(result, include_metrics=include_metrics)
+                        text = render_product_response(result)
+                        await socket.send_json({
+                            "role": "assistant",
+                            "text": text,
+                            "type": "product_answer",
+                            "intent": result.intent,
+                            "data": payload,
+                        })
+                        await _persist_chat_history(
+                            chat_db,
+                            chat_session_id,
+                            data,
+                            text,
+                            intent=result.intent or "product_fallback",
+                            response_type="product_answer",
+                        )
+                        clear_memory(memory_key)
+                    except Exception:
+                        logger.exception("ws.local_price_fallback_error")
+                        error_text = "Error resolviendo información de producto."
+                        await socket.send_json({
+                            "role": "assistant",
+                            "text": error_text,
+                            "type": "error",
+                        })
+                        await _persist_chat_history(
+                            chat_db,
+                            chat_session_id,
+                            data,
+                            error_text,
+                            intent="product_fallback_error",
+                            response_type="error",
+                        )
+                    continue
+
+                if memory_state and memory_state.pending_clarification:
+                    normalized = normalize_followup_text(data)
+                    if not normalized:
+                        mark_prompted(memory_key)
+                        terms = memory_terms_text(memory_state.query)
+                        try:
+                            logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
+                        except Exception:
+                            pass
+                        await socket.send_json({
+                            "role": "assistant",
+                            "type": "clarify_prompt",
+                            "intent": "clarify",
+                            "text": clarify_prompt_text(terms),
+                        })
+                        continue
+                    if normalized in CLARIFY_CONFIRM_WORDS:
+                        # Nuevo flujo: pedimos al usuario reformular con SKU exacto en lugar de relanzar ranking local
+                        await socket.send_json({
+                            "role": "assistant",
+                            "text": "Por favor pedime nuevamente el producto indicando el SKU exacto para darte precio y stock actualizado.",
+                            "type": "clarify_ack",
+                            "intent": "clarify",
+                        })
+                        clear_memory(memory_key)
+                        continue
+                    tokens = normalized.split()
+                    if len(tokens) <= 3 and not memory_state.prompted:
+                        mark_prompted(memory_key)
+                        terms = memory_terms_text(memory_state.query)
+                        try:
+                            logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
+                        except Exception:
+                            pass
+                        await socket.send_json({
+                            "role": "assistant",
+                            "type": "clarify_prompt",
+                            "intent": "clarify",
+                            "text": clarify_prompt_text(terms),
+                        })
+                        continue
+
+                if memory_state and not memory_state.pending_clarification:
+                    clear_memory(memory_key)
+
+                t0 = time.perf_counter()
+                prompt = data
+                if sess:
+                    if sess.user:
+                        nombre = sess.user.name or sess.user.identifier
+                        prompt = f"{nombre} ({sess.role}) dice: {data}"
+                    else:
+                        prompt = f"{sess.role} dice: {data}"
+                prompt_with_history = _build_prompt_with_history(history_context, prompt)
+
+                streaming_enabled = os.getenv("AI_STREAM_WS", "false").lower() in {"1", "true", "yes"}
+                if streaming_enabled:
+                    router_ai = AIRouter(core_settings)
+                    msg_id = uuid.uuid4().hex
+                    await socket.send_json({"role": "assistant", "stream": "start", "id": msg_id})
                     logger.debug(
-                        "[ai:stream:end] id=%s total_chars=%s ms=%s",
+                        "[ai:stream:start] id=%s task=%s auth=%s prompt_chars=%s",
                         msg_id,
-                        len(full),
-                        int((time.perf_counter() - t0) * 1000),
+                        Task.SHORT_ANSWER.value,
+                        bool(sess),
+                        len(prompt_with_history),
                         extra={"correlation_id": correlation_id},
                     )
+                    acc = []
+                    try:
+                        for chunk in router_ai.run_stream(Task.SHORT_ANSWER.value, prompt_with_history):
+                            if not acc and (chunk.startswith("openai:") or chunk.startswith("ollama:")):
+                                _, _, chunk = chunk.partition(":")
+                            if chunk:
+                                acc.append(chunk)
+                                await socket.send_json({
+                                    "role": "assistant",
+                                    "stream": "chunk",
+                                    "id": msg_id,
+                                    "text": chunk,
+                                })
+                                logger.debug(
+                                    "[ai:stream:chunk] id=%s delta_chars=%s total_chars=%s",
+                                    msg_id,
+                                    len(chunk),
+                                    sum(len(c) for c in acc),
+                                    extra={"correlation_id": correlation_id},
+                                )
+                        full = "".join(acc).strip()
+                        await socket.send_json({
+                            "role": "assistant",
+                            "stream": "end",
+                            "id": msg_id,
+                            "text": full,
+                            "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                        })
+                        logger.debug(
+                            "[ai:stream:end] id=%s total_chars=%s ms=%s",
+                            msg_id,
+                            len(full),
+                            int((time.perf_counter() - t0) * 1000),
+                            extra={"correlation_id": correlation_id},
+                        )
+                        logger.info(
+                            "ws_chat message",
+                            extra={
+                                "prompt_chars": len(prompt_with_history),
+                                "reply_chars": len(full),
+                                "duration_ms": int((time.perf_counter() - t0) * 1000),
+                                "auth": bool(sess),
+                                "stream": True,
+                                "correlation_id": correlation_id,
+                            },
+                        )
+                        await _persist_chat_history(
+                            chat_db,
+                            chat_session_id,
+                            data,
+                            full,
+                            intent="general",
+                            response_type="assistant_stream",
+                        )
+                    except Exception as exc:  # pragma: no cover
+                        logger.error("Error streaming ws_chat: %s", exc)
+                        await socket.send_json({
+                            "role": "system",
+                            "stream": "error",
+                            "id": msg_id,
+                            "error": str(exc),
+                        })
+                else:
+                    try:
+                        logger.debug(
+                            "[ai:request] task=%s auth=%s prompt_chars=%s",
+                            Task.SHORT_ANSWER.value,
+                            bool(sess),
+                            len(prompt_with_history),
+                            extra={"correlation_id": correlation_id},
+                        )
+                        raw_reply = await ai_reply(prompt_with_history)
+                    except Exception as exc:  # pragma: no cover
+                        logger.error("Error inesperado en ws_chat: %s", exc)
+                        await socket.send_json({"role": "system", "text": f"error: {exc}"})
+                        continue
+                    reply = raw_reply.strip()
+                    await socket.send_json({"role": "assistant", "text": reply})
                     logger.info(
                         "ws_chat message",
                         extra={
-                            "prompt_chars": len(prompt),
-                            "reply_chars": len(full),
+                            "prompt_chars": len(prompt_with_history),
+                            "reply_chars": len(reply),
                             "duration_ms": int((time.perf_counter() - t0) * 1000),
                             "auth": bool(sess),
-                            "stream": True,
+                            "stream": False,
                             "correlation_id": correlation_id,
                         },
                     )
-                except Exception as exc:  # pragma: no cover
-                    logger.error("Error streaming ws_chat: %s", exc)
-                    await socket.send_json({
-                        "role": "system",
-                        "stream": "error",
-                        "id": msg_id,
-                        "error": str(exc),
-                    })
-            else:
-                try:
-                    logger.debug(
-                        "[ai:request] task=%s auth=%s prompt_chars=%s",
-                        Task.SHORT_ANSWER.value,
-                        bool(sess),
-                        len(prompt),
-                        extra={"correlation_id": correlation_id},
+                    await _persist_chat_history(
+                        chat_db,
+                        chat_session_id,
+                        data,
+                        reply,
+                        intent="general",
+                        response_type="assistant_message",
                     )
-                    raw_reply = await ai_reply(prompt)
-                except Exception as exc:  # pragma: no cover
-                    logger.error("Error inesperado en ws_chat: %s", exc)
-                    await socket.send_json({"role": "system", "text": f"error: {exc}"})
-                    continue
-                reply = raw_reply.strip()
-                await socket.send_json({"role": "assistant", "text": reply})
-                logger.info(
-                    "ws_chat message",
-                    extra={
-                        "prompt_chars": len(prompt),
-                        "reply_chars": len(reply),
-                        "duration_ms": int((time.perf_counter() - t0) * 1000),
-                        "auth": bool(sess),
-                        "stream": False,
-                        "correlation_id": correlation_id,
-                    },
-                )
     except WebSocketDisconnect:
         logger.warning("Cliente desconectado")
     except Exception as exc:
