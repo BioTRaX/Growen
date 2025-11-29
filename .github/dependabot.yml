@@ -1,0 +1,21 @@
+# NG-HEADER: Nombre de archivo: dependabot.yml
+# NG-HEADER: Ubicación: .github/dependabot.yml
+# NG-HEADER: Descripción: Configuración de actualizaciones automáticas de seguridad.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+version: 2
+updates:
+  # Python (pip) - raíz del proyecto
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+
+  # JavaScript/TypeScript (npm) - frontend
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+
