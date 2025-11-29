@@ -16,7 +16,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-growen}
     ports:
       # Nota: en Windows a veces hay un Postgres local en 5432. Mapeamos a 5433 para evitar colisiones.
-      - "5433:5432"
+      # Bind a localhost para prevenir acceso externo en entornos sin firewall.
+      - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
   api:

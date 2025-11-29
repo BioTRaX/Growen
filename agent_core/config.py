@@ -130,5 +130,14 @@ class Settings:
             )
         self.allowed_origins = origins
 
+        # Fail-safe: forzar dev_assume_admin=False fuera de entorno dev
+        if self.env != "dev" and self.dev_assume_admin:
+            import logging
+            logging.getLogger("growen.config").warning(
+                "SEGURIDAD: dev_assume_admin fue ignorado porque ENV=%s (no es 'dev')",
+                self.env
+            )
+            self.dev_assume_admin = False
+
 
 settings = Settings()
