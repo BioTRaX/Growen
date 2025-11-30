@@ -3,10 +3,12 @@
 // NG-HEADER: Descripción: Listado y alta básica de clientes
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import AppToolbar from '../components/AppToolbar'
 import { listCustomers, createCustomer, type Customer } from '../services/customers'
 
 export default function CustomersPage() {
+  const navigate = useNavigate()
   const [items, setItems] = useState<Customer[]>([])
   const [loading, setLoading] = useState(false)
   const [name, setName] = useState('')
@@ -46,7 +48,12 @@ export default function CustomersPage() {
             <thead><tr><th>ID</th><th>Nombre</th><th>Email</th><th>Teléfono</th></tr></thead>
             <tbody>
               {items.map(c => (
-                <tr key={c.id}>
+                <tr 
+                  key={c.id}
+                  onClick={() => navigate(`/clientes/${c.id}`)}
+                  style={{ cursor: 'pointer' }}
+                  className="clickable-row"
+                >
                   <td>{c.id}</td>
                   <td>{c.name}</td>
                   <td>{c.email}</td>

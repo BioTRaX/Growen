@@ -623,30 +623,51 @@ async def list_products_for_sales(
     db: AsyncSession = Depends(get_session)
 ):
     """Lista productos con stock disponible para usar en el POS de ventas."""
-    from sqlalchemy.orm import selectinload
-    from db.models import Variant
-    # Usar selectinload para evitar lazy loading en async
+    from db.models import SupplierProduct, ProductEquivalence, CanonicalProduct
+    
+    # Primero obtener productos con stock
     stmt = (
         select(Product)
-        .options(selectinload(Product.variants))
         .where(Product.stock > stock_gt)
         .order_by(Product.title)
         .limit(limit)
     )
-    rows = (await db.execute(stmt)).scalars().all()
+    products = (await db.execute(stmt)).scalars().all()
+    
     items = []
-    for p in rows:
-        # Obtener precio de la primera variante si existe
+    for p in products:
         price = None
-        sku = p.sku_root
-        if p.variants:
-            v = p.variants[0]
-            price = float(v.promo_price or v.price or 0)
-            sku = v.sku or p.sku_root
+        
+        # 1. Intentar obtener canonical_sale_price (prioridad, igual que Stock)
+        canonical_stmt = (
+            select(CanonicalProduct.sale_price)
+            .join(ProductEquivalence, ProductEquivalence.canonical_product_id == CanonicalProduct.id)
+            .join(SupplierProduct, SupplierProduct.id == ProductEquivalence.supplier_product_id)
+            .where(SupplierProduct.internal_product_id == p.id)
+            .where(CanonicalProduct.sale_price.is_not(None))
+            .limit(1)
+        )
+        canonical_price = (await db.execute(canonical_stmt)).scalar_one_or_none()
+        
+        if canonical_price is not None:
+            price = float(canonical_price)
+        else:
+            # 2. Si no hay precio canónico, usar current_sale_price del SupplierProduct
+            supplier_stmt = (
+                select(SupplierProduct.current_sale_price)
+                .where(SupplierProduct.internal_product_id == p.id)
+                .where(SupplierProduct.current_sale_price.is_not(None))
+                .order_by(SupplierProduct.last_seen_at.desc().nulls_last())
+                .limit(1)
+            )
+            supplier_price = (await db.execute(supplier_stmt)).scalar_one_or_none()
+            if supplier_price is not None:
+                price = float(supplier_price)
+        
         items.append({
             "id": p.id,
             "title": p.title,
-            "sku": sku,
+            "sku": p.sku_root,
             "stock": p.stock or 0,
             "price": price,
         })
