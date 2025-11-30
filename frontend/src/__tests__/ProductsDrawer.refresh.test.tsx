@@ -7,7 +7,25 @@ import { render, screen, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
 
-// Mock de datos de producto completo
+// Mock de servicios (datos inline para evitar problemas de hoisting)
+vi.mock('../services/products', async () => {
+  const actual = await vi.importActual<any>('../services/products')
+  const mockProduct = {
+    product_id: 1,
+    name: 'P1',
+    sku: 'SKU001',
+    supplier: { id: 1, name: 'Proveedor Test' },
+    category: { id: 1, name: 'Categoría Test' },
+    sale_price: 100,
+    stock_quantity: 10,
+  }
+  return {
+    ...actual,
+    searchProducts: vi.fn().mockResolvedValue({ items: [mockProduct], total: 1 })
+  }
+})
+
+// Mock de datos de producto para uso en tests
 const mockProduct = {
   product_id: 1,
   name: 'P1',
@@ -17,15 +35,6 @@ const mockProduct = {
   sale_price: 100,
   stock_quantity: 10,
 }
-
-// Mock de servicios
-vi.mock('../services/products', async () => {
-  const actual = await vi.importActual<any>('../services/products')
-  return {
-    ...actual,
-    searchProducts: vi.fn().mockResolvedValue({ items: [mockProduct], total: 1 })
-  }
-})
 
 vi.mock('../services/categories', async () => {
   const actual = await vi.importActual<any>('../services/categories')
@@ -84,7 +93,7 @@ describe('ProductsDrawer refresh after canonical creation', () => {
   })
 
   it('forces refetch on page 1 after onCreated', async () => {
-    vi.useFakeTimers()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ delay: null })
     const sp = productsSvc as unknown as { searchProducts: any }
     sp.searchProducts.mockResolvedValueOnce({ items: [mockProduct], total: 1 })

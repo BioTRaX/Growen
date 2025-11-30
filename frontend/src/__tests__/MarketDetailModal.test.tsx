@@ -184,7 +184,8 @@ describe('MarketDetailModal', () => {
       })
 
       await waitFor(() => {
-        const marketRefField = screen.getByTestId('editable-price-valor-mercado')
+        // Label "Valor Mercado (Referencia)" genera testid "editable-price-valor-mercado-(referencia)"
+        const marketRefField = screen.getByTestId('editable-price-valor-mercado-(referencia)')
         expect(marketRefField).toHaveTextContent('$1600.00')
       })
     })
@@ -293,6 +294,8 @@ describe('MarketDetailModal', () => {
     })
 
     it('recarga las fuentes después de actualizar', async () => {
+      // Usar fake timers para el setTimeout(3000) interno
+      vi.useFakeTimers({ shouldAdvanceTime: true })
       const user = userEvent.setup({ delay: null })
 
       vi.mocked(marketServices.getProductSources)
@@ -331,6 +334,9 @@ describe('MarketDetailModal', () => {
       const updateButton = await screen.findByRole('button', { name: /actualizar/i })
       await user.click(updateButton)
 
+      // El componente tiene un setTimeout(3000) antes de recargar - avanzar timers
+      await vi.advanceTimersByTimeAsync(3500)
+
       // Verificar que se recargaron las fuentes
       await waitFor(() => {
         expect(vi.mocked(marketServices.getProductSources)).toHaveBeenCalledTimes(2)
@@ -338,6 +344,8 @@ describe('MarketDetailModal', () => {
 
       // Verificar que se notificó al padre
       expect(mockOnPricesUpdated).toHaveBeenCalled()
+      
+      vi.useRealTimers()
     })
   })
 
