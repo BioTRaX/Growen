@@ -30,7 +30,7 @@
     "@types/react-window": "^1.8.8",
     "@vitejs/plugin-react": "^5.1.1",
     "jsdom": "^25.0.1",
-    "typescript": "^5.5.4",
+    "typescript": "^5.9.3",
     "vite": "^7.2.4",
     "vitest": "^4.0.14"
   }
