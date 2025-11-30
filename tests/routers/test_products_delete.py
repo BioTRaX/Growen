@@ -1,12 +1,12 @@
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 
 from services.api import app
 
 pytestmark = pytest.mark.asyncio
 
 async def test_delete_products_flow():
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         # Crear dos productos
         r1 = await ac.post("/products", json={"title": "A Borrar 1"})
         r2 = await ac.post("/products", json={"title": "A Borrar 2"})

@@ -5,7 +5,7 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from services.api import app
 from services.auth import current_session, require_csrf, SessionData
 from db.session import get_session
@@ -21,7 +21,7 @@ app.dependency_overrides[get_session] = get_session  # usar implementación real
 
 
 async def test_create_product_with_new_inline_category():
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post(
             "/products",
             json={
@@ -40,7 +40,7 @@ async def test_create_product_with_new_inline_category():
 
 
 async def test_create_product_with_new_inline_subcategory():
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         parent_resp = await client.post("/categories", json={"name": "Nutrientes"})
         assert parent_resp.status_code in (200, 409)
         if parent_resp.status_code == 200:
@@ -70,7 +70,7 @@ async def test_create_product_with_new_inline_subcategory():
 async def test_update_prices():
     from db.models import CanonicalProduct, ProductEquivalence
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         sup_resp = await client.post("/suppliers", json={"slug": "test-sup", "name": "Test Supplier"})
         assert sup_resp.status_code in (200, 409)
         if sup_resp.status_code == 200:

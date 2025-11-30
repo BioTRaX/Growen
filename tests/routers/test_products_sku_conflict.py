@@ -5,7 +5,7 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import uuid
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from services.api import app
 
 pytestmark = pytest.mark.asyncio
@@ -26,7 +26,7 @@ async def test_create_minimal_product_and_duplicate_sku():
     prefix = "TST"  # categoría sintética de pruebas
     suffix = uniq[:3]
     canonical_sku = f"{prefix}_{num:04d}_{suffix}"
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         rs = await ac.post("/suppliers", json={"slug": f"sku-sup-{uniq.lower()}", "name": f"Sup {uniq}"})
         assert rs.status_code in (200, 409)
         if rs.status_code in (200, 201):

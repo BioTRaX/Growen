@@ -72,7 +72,7 @@ async def db_session():
 from services.api import app  # noqa: E402
 from services.auth import current_session, require_csrf, SessionData  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from httpx import AsyncClient  # noqa: E402
+from httpx import AsyncClient, ASGITransport  # noqa: E402
 from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
 from starlette.requests import Request  # noqa: E402
 
@@ -207,14 +207,14 @@ def product_payload_factory():
 @pytest_asyncio.fixture
 async def client() -> AsyncGenerator[AsyncClient, None]:
     """Cliente HTTP async genérico con contexto admin."""
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 
 @pytest_asyncio.fixture
 async def client_admin() -> AsyncGenerator[AsyncClient, None]:
     """Cliente HTTP async con rol admin explícito."""
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 
@@ -225,7 +225,7 @@ async def client_collab() -> AsyncGenerator[AsyncClient, None]:
     original_override = app.dependency_overrides.get(current_session)
     app.dependency_overrides[current_session] = lambda: SessionData(None, None, "colaborador")
     
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
     
     # Restaurar override original
