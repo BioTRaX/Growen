@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 ### Added
+- **Estilización de nombres de productos canónicos** (Title Case):
+  - Función `stylize_product_name()` en `db/text_utils.py` convierte nombres en mayúsculas a formato legible.
+  - Preserva unidades de medida en mayúsculas (GR, KG, L, ML, etc.) y acrónimos (LED, NPK, UV, etc.).
+  - Aplica conectores en español en minúsculas (de, la, el, etc.) excepto al inicio.
+  - Integrada en: listado de Stock, exports XLS, export TiendaNegocio, detalle de producto, API de productos canónicos.
+  - Ejemplo: `"FEEDING BIO GROW (125 GR)"` → `"Feeding Bio Grow (125 GR)"`.
+  - Tests: `tests/test_text_utils.py`.
 - Endpoint `DELETE /suppliers` mejorado con detalles extendidos y eliminación en cascada opcional:
   - Parámetro `force_cascade` para eliminar automáticamente `import_jobs` y `product_equivalences`
   - Respuesta incluye `details` con IDs de registros bloqueantes, estados y acciones sugeridas

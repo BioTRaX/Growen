@@ -208,14 +208,24 @@ async def ws_chat(socket: WebSocket) -> None:
 
                 product_query = extract_product_query(data)
                 if product_query:
-                    # Nuevo flujo: delegar directamente a OpenAI tool-calling (MCP Products)
+                    # Flujo principal: usar run_async con tools_schema (OpenAI + MCP Products)
                     ai_router = AIRouter(core_settings)
                     provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
-                    chat_with_tools = getattr(provider, "chat_with_tools", None)
-                    if callable(chat_with_tools):
+                    
+                    # Obtener el schema de herramientas para consulta de productos
+                    tools_schema = None
+                    if hasattr(provider, '_build_tools_schema'):
+                        tools_schema = provider._build_tools_schema(role)
+                    
+                    if tools_schema:
                         try:
                             prompt_with_history = _build_prompt_with_history(history_context, data)
-                            answer_raw = await chat_with_tools(prompt=prompt_with_history, user_role=role)
+                            answer_raw = await ai_router.run_async(
+                                task=Task.SHORT_ANSWER.value,
+                                prompt=prompt_with_history,
+                                user_context={"role": role, "intent": "product_lookup"},
+                                tools_schema=tools_schema,
+                            )
                             answer = _strip_provider_prefix(answer_raw)
                             await socket.send_json({
                                 "role": "assistant",

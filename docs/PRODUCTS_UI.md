@@ -36,6 +36,19 @@
   - `first_variant_sku`: Primer SKU interno de variante del producto (si existe), útil como fallback visual.
   - `preferred_name`: Título preferido calculado por el backend (canónico → interno).
 
+### Estilización de nombres de productos (Nov 2025)
+- **Formato Title Case**: Los nombres de productos canónicos se muestran con estilización automática:
+  - Cada palabra inicia con mayúscula inicial (Title Case).
+  - Unidades de medida se preservan en mayúsculas: GR, KG, L, ML, CC, etc.
+  - Acrónimos comunes en mayúsculas: LED, UV, NPK, PH, etc.
+  - Conectores en español van en minúsculas: de, la, el, para, con, etc. (excepto al inicio).
+- **Ejemplos**:
+  - `"FEEDING BIO GROW (125 GR)"` → `"Feeding Bio Grow (125 GR)"`
+  - `"ACEITE DE NEEM 250 ML"` → `"Aceite de Neem 250 ML"`
+  - `"FERTILIZANTE NPK 20-20-20"` → `"Fertilizante NPK 20-20-20"`
+- **Aplica en**: Vista de Stock, exports XLS, export TiendaNegocio, detalle de producto.
+- **Implementación**: `db/text_utils.stylize_product_name()` (ver tests en `tests/test_text_utils.py`).
+
   ### Nota sobre “Stock” y enlace de Precio de Venta
 
   - En la vista Stock (`/stock`) la columna “Precio venta” muestra el precio efectivo con la misma regla que el listado de Productos:

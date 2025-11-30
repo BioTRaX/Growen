@@ -18,6 +18,7 @@ from db.models import (
     SupplierProduct,
 )
 from db.session import get_session
+from db.text_utils import stylize_product_name
 from services.auth import require_csrf, require_roles, current_session, SessionData
 
 canonical_router = APIRouter(prefix="/canonical-products", tags=["catalog"])
@@ -64,7 +65,7 @@ async def resolve_canonical_by_sku(
         "id": row.id,
         "ng_sku": row.ng_sku,
         "sku_custom": row.sku_custom,
-        "name": row.name,
+        "name": stylize_product_name(row.name),
     }
 
 
@@ -146,7 +147,7 @@ async def create_canonical_product(
     return {
         "id": cp.id,
         "ng_sku": cp.ng_sku,
-        "name": cp.name,
+        "name": stylize_product_name(cp.name),
         "brand": cp.brand,
         "specs_json": cp.specs_json,
         "sku_custom": cp.sku_custom,
@@ -181,7 +182,7 @@ async def list_canonical_products(
             {
                 "id": cp.id,
                 "ng_sku": cp.ng_sku,
-                "name": cp.name,
+                "name": stylize_product_name(cp.name),
                 "brand": cp.brand,
                 "specs_json": cp.specs_json,
             }
@@ -201,7 +202,7 @@ async def get_canonical_product(
     return {
         "id": cp.id,
         "ng_sku": cp.ng_sku,
-        "name": cp.name,
+        "name": stylize_product_name(cp.name),
         "brand": cp.brand,
         "specs_json": cp.specs_json,
     }
@@ -237,7 +238,7 @@ async def update_canonical_product(
     return {
         "id": cp.id,
         "ng_sku": cp.ng_sku,
-        "name": cp.name,
+        "name": stylize_product_name(cp.name),
         "brand": cp.brand,
         "specs_json": cp.specs_json,
         "sku_custom": cp.sku_custom,

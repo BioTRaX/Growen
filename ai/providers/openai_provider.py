@@ -195,8 +195,29 @@ class OpenAIProvider(ILLMProvider):
             content = choice.message.content if choice and choice.message.content else ""
             return content.strip()
 
+        # IMPORTANTE: Agregar el mensaje del assistant con tool_calls antes de procesar las respuestas
+        # Esto es requerido por la API de OpenAI para mantener el formato correcto de mensajes
+        messages.append(
+            {
+                "role": "assistant",
+                "content": choice.message.content,
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments,
+                        }
+                    }
+                    for call in tool_calls
+                ]
+            }
+        )
+
         # Procesar tool_calls (ciclo de invocación MCP)
         used_search_sku: str | None = None
+        used_search_product_id: int | None = None
         for idx, call in enumerate(tool_calls[:3]):  # límite de 3 calls por seguridad
             fn_name = call.function.name
             try:
@@ -236,35 +257,46 @@ class OpenAIProvider(ILLMProvider):
                         tool_name=fn_name,
                         parameters={"query": query, "user_role": user_role},
                     )
-                    # Auto-extracción de SKU si búsqueda retorna 1 resultado único
+                    # Auto-extracción de product_id y sku si búsqueda retorna 1 resultado único
                     if isinstance(tool_result, dict) and not tool_result.get("error"):
                         items = tool_result.get("items", [])
-                        if isinstance(items, list) and len(items) == 1 and items[0].get("sku"):
-                            used_search_sku = items[0]["sku"]
-                            logging.debug(
-                                "Auto-extracción de SKU desde búsqueda: %s",
-                                used_search_sku
-                            )
+                        if isinstance(items, list) and len(items) == 1:
+                            if items[0].get("product_id"):
+                                used_search_product_id = items[0]["product_id"]
+                                logging.debug(
+                                    "Auto-extracción de product_id desde búsqueda: %s",
+                                    used_search_product_id
+                                )
+                            if items[0].get("sku"):
+                                used_search_sku = items[0]["sku"]
+                                logging.debug(
+                                    "Auto-extracción de SKU desde búsqueda: %s",
+                                    used_search_sku
+                                )
             
             else:
-                # Tools basadas en SKU: get_product_info, get_product_full_info
-                # Normalización: buscar "sku" con fallback a used_search_sku
+                # Tools basadas en producto: get_product_info, get_product_full_info
+                # Prioridad: product_id > sku (product_id es más confiable)
+                product_id = (
+                    fn_args.get("product_id")      # Parámetro preferido
+                    or used_search_product_id      # Fallback: ID extraído de búsqueda previa
+                )
                 sku = (
-                    fn_args.get("sku")             # Parámetro correcto (esperado por MCP)
+                    fn_args.get("sku")             # Parámetro SKU canónico
                     or fn_args.get("product_sku")  # Alias posible
                     or fn_args.get("code")         # Alias posible
                     or used_search_sku             # Fallback: SKU extraído de búsqueda previa
                 )
                 
-                if not sku or not isinstance(sku, str):
+                if not product_id and (not sku or not isinstance(sku, str)):
                     # Error: falta parámetro obligatorio
                     tool_result = {
-                        "error": "missing_sku",
-                        "message": f"El parámetro 'sku' (string) es obligatorio para {fn_name}"
+                        "error": "missing_identifier",
+                        "message": f"Se requiere 'product_id' o 'sku' para {fn_name}"
                     }
                     logging.warning(
-                        "Tool call %s sin 'sku' válido. Args recibidos: %s, used_search_sku: %s",
-                        fn_name, fn_args, used_search_sku
+                        "Tool call %s sin identificador válido. Args: %s, used_product_id: %s, used_sku: %s",
+                        fn_name, fn_args, used_search_product_id, used_search_sku
                     )
                 else:
                     # Validación de permisos para get_product_full_info
@@ -278,10 +310,15 @@ class OpenAIProvider(ILLMProvider):
                             user_role
                         )
                     else:
-                        # Llamada correcta al MCP
+                        # Llamada correcta al MCP (preferir product_id sobre sku)
+                        params = {"user_role": user_role}
+                        if product_id:
+                            params["product_id"] = product_id
+                        if sku:
+                            params["sku"] = sku
                         tool_result = await self.call_mcp_tool(
                             tool_name=fn_name,
-                            parameters={"sku": sku, "user_role": user_role},
+                            parameters=params,
                         )
 
             # Inyectar resultado en mensajes
@@ -294,21 +331,27 @@ class OpenAIProvider(ILLMProvider):
                 }
             )
 
-            # Si búsqueda retornó 1 SKU y no hay get_product_info pendiente,
+            # Si búsqueda retornó 1 producto y no hay get_product_info pendiente,
             # forzar llamada sintética para completar información
             if (
                 fn_name == "find_products_by_name"
-                and used_search_sku
+                and (used_search_product_id or used_search_sku)
                 and all(c.function.name != "get_product_info" for c in tool_calls)
             ):
+                synthetic_params = {"user_role": user_role}
+                if used_search_product_id:
+                    synthetic_params["product_id"] = used_search_product_id
+                if used_search_sku:
+                    synthetic_params["sku"] = used_search_sku
+                
                 synthetic_result = await self.call_mcp_tool(
                     tool_name="get_product_info",
-                    parameters={"sku": used_search_sku, "user_role": user_role},
+                    parameters=synthetic_params,
                 )
                 messages.append(
                     {
                         "role": "tool",
-                        "tool_call_id": "call_auto_sku",
+                        "tool_call_id": "call_auto_product",
                         "name": "get_product_info",
                         "content": json.dumps(synthetic_result, ensure_ascii=False),
                     }
@@ -358,9 +401,11 @@ class OpenAIProvider(ILLMProvider):
                     "name": "find_products_by_name",
                     "description": (
                         "Use this tool to search for products when the user provides a partial or complete product name "
-                        "(e.g., 'maceta', 'tierra', 'LED lamp'). Returns a list of matching products with their names and SKUs. "
-                        "Always use this tool BEFORE get_product_info if you don't have an exact SKU. "
-                        "Do NOT use this if the user already provided a specific SKU code."
+                        "(e.g., 'feeding', 'tierra', 'LED lamp', 'fertilizante 1kg'). "
+                        "Returns a list of matching products with: product_id, name, sku (canonical format XXX_####_YYY), stock, and price. "
+                        "Always use this tool FIRST to find products. "
+                        "Use the returned product_id or sku with get_product_info for detailed information. "
+                        "IMPORTANT: Only show SKU codes in format XXX_####_YYY to users (canonical SKUs)."
                     ),
                     "parameters": {
                         "type": "object",
@@ -369,7 +414,7 @@ class OpenAIProvider(ILLMProvider):
                                 "type": "string",
                                 "description": (
                                     "The search text provided by the user. Can be a partial product name, "
-                                    "full product name, or product category (e.g., 'maceta 10L', 'sustrato', 'fertilizante')."
+                                    "full product name, product category, or size (e.g., 'feeding 125g', 'sustrato', 'maceta 10L')."
                                 )
                             },
                         },
@@ -382,23 +427,31 @@ class OpenAIProvider(ILLMProvider):
                 "function": {
                     "name": "get_product_info",
                     "description": (
-                        "Use this tool to get detailed information about a specific product when you have an exact SKU code. "
-                        "Returns: product name, sale price, stock availability, and SKU. "
-                        "The SKU must be obtained from find_products_by_name or provided directly by the user. "
-                        "Do NOT guess or invent SKU codes."
+                        "Use this tool to get detailed information about a specific product. "
+                        "Returns: product name, sale price, stock availability, sku, and product description. "
+                        "You can use EITHER product_id (preferred) OR sku to identify the product. "
+                        "The product_id or sku must be obtained from find_products_by_name results. "
+                        "Do NOT guess or invent IDs or SKU codes."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "product_id": {
+                                "type": "integer",
+                                "description": (
+                                    "The internal product ID. Obtained from find_products_by_name results. "
+                                    "Preferred over sku for accuracy."
+                                )
+                            },
                             "sku": {
                                 "type": "string",
                                 "description": (
-                                    "The exact internal SKU code of the product. Must be obtained from a previous "
-                                    "find_products_by_name call or provided explicitly by the user (e.g., 'SKU123', 'PROD-456')."
+                                    "The canonical SKU code (format XXX_####_YYY, e.g., 'FER_0028_MIN'). "
+                                    "Use product_id instead when available."
                                 )
                             },
                         },
-                        "required": ["sku"],
+                        "required": [],
                     },
                 },
             }
@@ -412,23 +465,30 @@ class OpenAIProvider(ILLMProvider):
                     "function": {
                         "name": "get_product_full_info",
                         "description": (
-                            "Use this tool to get extended product information (admin/colaborador only). "
-                            "In the current MVP, returns the same data as get_product_info. "
-                            "Future versions will include: supplier details, price history, category relationships, and audit logs. "
-                            "Requires exact SKU code obtained from find_products_by_name or user input."
+                            "Use this tool to get extended product information including description and technical specs "
+                            "(admin/colaborador only). "
+                            "Returns all basic info plus: description, technical_specs, usage_instructions. "
+                            "You can use EITHER product_id (preferred) OR sku to identify the product."
                         ),
                         "parameters": {
                             "type": "object",
                             "properties": {
+                                "product_id": {
+                                    "type": "integer",
+                                    "description": (
+                                        "The internal product ID. Obtained from find_products_by_name results. "
+                                        "Preferred over sku for accuracy."
+                                    )
+                                },
                                 "sku": {
                                     "type": "string",
                                     "description": (
-                                        "The exact internal SKU code of the product. Must be obtained from a previous "
-                                        "find_products_by_name call or provided explicitly by the user."
+                                        "The canonical SKU code (format XXX_####_YYY). "
+                                        "Use product_id instead when available."
                                     )
                                 },
                             },
-                            "required": ["sku"],
+                            "required": [],
                         },
                     },
                 }
