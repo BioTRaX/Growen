@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@tanstack/react-table": "^8.19.2",
-    "axios": "^1.7.7",
+    "axios": "^1.13.2",
     "html2canvas": "1.4.1",
     "react": "^18.3.1",
     "react-dom": "^19.2.0",
@@ -30,8 +30,8 @@
     "@types/react-window": "^1.8.8",
     "@vitejs/plugin-react": "^5.1.1",
     "jsdom": "^25.0.1",
-    "typescript": "^5.5.4",
-    "vite": "^7.1.5",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.4",
     "vitest": "^4.0.14"
   }
 }
