@@ -18,9 +18,48 @@ export type Payment = {
   reference?: string
 }
 
-export async function createSale(payload: { customer: Partial<Customer>; items: SaleItem[]; payments?: Payment[]; note?: string; status?: 'BORRADOR' | 'CONFIRMADA'; sale_date?: string; }) {
+export type AdditionalCost = {
+  concept: string
+  amount: number
+}
+
+export type SalesChannel = {
+  id: number
+  name: string
+  created_at: string
+}
+
+export type CreateSalePayload = {
+  customer: Partial<Customer>
+  items: SaleItem[]
+  payments?: Payment[]
+  note?: string
+  status?: 'BORRADOR' | 'CONFIRMADA'
+  sale_date?: string
+  channel_id?: number
+  additional_costs?: AdditionalCost[]
+}
+
+export async function createSale(payload: CreateSalePayload) {
   const r = await http.post('/sales', payload)
   return r.data as { sale_id: number; status: string; total: number }
+}
+
+// --- Canales de Venta ---
+
+export async function listChannels() {
+  const r = await http.get('/sales/channels')
+  return r.data as { items: SalesChannel[]; total: number }
+}
+
+export async function createChannel(name: string) {
+  const r = await http.post('/sales/channels', { name })
+  return r.data as SalesChannel
+}
+
+export async function deleteChannel(id: number) {
+  const r = await http.delete(`/sales/channels/${id}`)
+  return r.data as { status: string; id: number }
 }
 
 export async function uploadSaleAttachment(saleId: number, file: File) {

@@ -4,7 +4,7 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import json
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from pathlib import Path
 
 import services.api as api
@@ -39,7 +39,7 @@ async def test_supplier_search_and_links_flow(monkeypatch):
         await s.execute(text("INSERT INTO variants (product_id, sku, created_at, updated_at) VALUES (1,'SKU-ROOT', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
         await s.commit()
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Buscar supplier por nombre
         r = await client.get("/suppliers/search", params={"q": "Santa"})
         assert r.status_code == 200

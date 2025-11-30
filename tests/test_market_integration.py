@@ -18,7 +18,7 @@ Valida:
 
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from decimal import Decimal
@@ -43,8 +43,7 @@ async def db(db_session):
 @pytest_asyncio.fixture
 async def client_collab(db_session):
     """Cliente HTTP con rol colaborador (permisos completos para Market)"""
-    from httpx import AsyncClient
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 
@@ -55,8 +54,7 @@ async def client_no_perms(db_session):
     original_override = app.dependency_overrides.get(current_session)
     app.dependency_overrides[current_session] = lambda: SessionData(None, None, "cliente")
     
-    from httpx import AsyncClient
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
     
     # Restaurar override original
