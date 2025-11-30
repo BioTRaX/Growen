@@ -110,8 +110,8 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
     id: ColId
     label: string
     defaultWidth: number
-    renderHeader?: () => JSX.Element
-    renderCell: (it: ProductItem) => JSX.Element
+    renderHeader?: () => React.ReactNode
+    renderCell: (it: ProductItem) => React.ReactNode
   }
 
   const defaultOrder: ColId[] = [

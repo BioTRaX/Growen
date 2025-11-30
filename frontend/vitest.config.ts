@@ -14,14 +14,16 @@ export default defineConfig({
       '**/node_modules/**',
       '**/tests/e2e/**',
     ],
-    deps: {
-      inline: [
-        'react',
-        'react-dom',
-        '@testing-library/react',
-        '@testing-library/user-event',
-        '@testing-library/jest-dom'
-      ]
+    server: {
+      deps: {
+        inline: [
+          'react',
+          'react-dom',
+          '@testing-library/react',
+          '@testing-library/user-event',
+          '@testing-library/jest-dom'
+        ]
+      }
     }
   },
   esbuild: {
