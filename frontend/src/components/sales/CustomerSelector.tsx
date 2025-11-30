@@ -145,7 +145,7 @@ export default function CustomerSelector({
                 <div
                   key={c.id}
                   onClick={() => {
-                    onSelect(c.id)
+                    if (c.id !== undefined) onSelect(c.id)
                     setIsOpen(false)
                     setSearch('')
                   }}
