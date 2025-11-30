@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 import respx
-from httpx import AsyncClient, Response
+from httpx import AsyncClient, ASGITransport, Response
 
 from services.api import app
 
@@ -94,7 +94,7 @@ async def test_chat_tool_call_flow(mock_openai_cycle):
     respx.post("http://mcp_products:8001/invoke_tool").mock(
         return_value=Response(200, json={"tool_name": "get_product_info", "result": {"sku": "SKU123", "sale_price": 100}})
     )
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         # Simula texto que parsea como consulta de producto (‘SKU123?’ u otro trigger)
         r = await ac.post("/chat", json={"text": "Precio SKU123"})
         assert r.status_code == 200, r.text

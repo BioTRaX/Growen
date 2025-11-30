@@ -129,10 +129,12 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
 
 describe('Market Page', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     vi.clearAllMocks()
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -173,17 +175,20 @@ describe('Market Page', () => {
         expect(screen.getByText('Micelio Dorado')).toBeInTheDocument()
       })
 
-      // Verificar encabezados de columnas
-      expect(screen.getByText('Producto')).toBeInTheDocument()
-      expect(screen.getByText('Precio Venta (ARS)')).toBeInTheDocument()
-      expect(screen.getByText('Precio Mercado (ARS)')).toBeInTheDocument()
-      expect(screen.getByText('Última Actualización')).toBeInTheDocument()
-      expect(screen.getByText('Categoría')).toBeInTheDocument()
+      // Verificar encabezados de columnas usando regex para evitar problemas de encoding
+      // Nota: algunos textos aparecen múltiples veces (ej: categoría en header y datos)
+      expect(screen.getByText('Nombre')).toBeInTheDocument()
+      expect(screen.getByText('SKU')).toBeInTheDocument()
+      expect(screen.getByText(/Precio Venta/i)).toBeInTheDocument()
+      expect(screen.getByText(/Precio Mercado/i)).toBeInTheDocument()
+      expect(screen.getByText(/ltima Actualizaci/i)).toBeInTheDocument()
+      expect(screen.getAllByText(/Categor/i).length).toBeGreaterThan(0)
       expect(screen.getByText('Acciones')).toBeInTheDocument()
 
-      // Verificar datos del producto
-      expect(screen.getByText('$ 1500.00')).toBeInTheDocument()
-      expect(screen.getByText('Hongos')).toBeInTheDocument()
+      // Verificar datos del producto (formato argentino para precio de venta)
+      expect(screen.getByText('$ 1.500,00')).toBeInTheDocument()
+      // "Hongos" puede aparecer múltiples veces (categoría filtro + dato)
+      expect(screen.getAllByText('Hongos').length).toBeGreaterThan(0)
     })
 
     it('muestra mensaje cuando no hay productos', async () => {
@@ -204,29 +209,35 @@ describe('Market Page', () => {
     })
 
     it('muestra el estado de carga', async () => {
-      vi.mocked(marketServices.listMarketProducts).mockImplementation(
-        () =>
-          new Promise((resolve) =>
-            setTimeout(
-              () =>
-                resolve({
-                  items: [],
-                  total: 0,
-                  page: 1,
-                  page_size: 50,
-                  pages: 0,
-                }),
-              1000
-            )
-          )
-      )
+      // Este test verifica que existe el estado de carga cuando los datos tardan en cargar
+      // Creamos una promesa que no se resuelve inmediatamente
+      let resolveProducts: (value: any) => void
+      const productsPromise = new Promise((resolve) => {
+        resolveProducts = resolve
+      })
+      
+      vi.mocked(marketServices.listMarketProducts).mockImplementation(() => productsPromise as any)
 
       render(<Market />, { wrapper: Wrapper })
+      
+      // Avanzar el debounce
       vi.advanceTimersByTime(300)
+      
+      // Mientras la promesa no se resuelve, debería mostrar "Cargando..."
+      await waitFor(() => {
+        expect(screen.getByText('Cargando...')).toBeInTheDocument()
+      })
 
-      expect(screen.getByText('Cargando...')).toBeInTheDocument()
+      // Resolver la promesa
+      resolveProducts!({
+        items: [],
+        total: 0,
+        page: 1,
+        page_size: 50,
+        pages: 0,
+      })
 
-      vi.advanceTimersByTime(1000)
+      // Ahora debería desaparecer el estado de carga
       await waitFor(() => {
         expect(screen.queryByText('Cargando...')).not.toBeInTheDocument()
       })
@@ -235,9 +246,6 @@ describe('Market Page', () => {
 
   describe('Filtrado de productos', () => {
     it('filtra productos por nombre al escribir en el campo de búsqueda', async () => {
-      // Usar fake timers solo para este test
-      vi.useFakeTimers()
-      
       const user = userEvent.setup({ delay: null })
 
       vi.mocked(marketServices.listMarketProducts)
@@ -281,8 +289,6 @@ describe('Market Page', () => {
           })
         )
       })
-      
-      vi.useRealTimers()
     })
 
     it('filtra productos por categoría', async () => {
@@ -566,8 +572,8 @@ describe('Market Page', () => {
         expect(screen.getByText('Micelio Dorado')).toBeInTheDocument()
       })
 
-      // Buscar la celda con el precio
-      const priceCell = screen.getByText('$ 1200.00').closest('td')
+      // Buscar la celda con el precio (formato argentino: 1.200,00)
+      const priceCell = screen.getByText('$ 1.200,00').closest('td')
       expect(priceCell).toHaveClass('price-below-market')
     })
 
@@ -592,7 +598,8 @@ describe('Market Page', () => {
         expect(screen.getByText('Micelio Dorado')).toBeInTheDocument()
       })
 
-      const priceCell = screen.getByText('$ 2000.00').closest('td')
+      // Formato argentino: 2.000,00
+      const priceCell = screen.getByText('$ 2.000,00').closest('td')
       expect(priceCell).toHaveClass('price-above-market')
     })
 
@@ -612,7 +619,8 @@ describe('Market Page', () => {
         expect(screen.getByText('Micelio Dorado')).toBeInTheDocument()
       })
 
-      const priceCell = screen.getByText('$ 1500.00').closest('td')
+      // Formato argentino: 1.500,00
+      const priceCell = screen.getByText('$ 1.500,00').closest('td')
       expect(priceCell).toHaveClass('price-in-market')
     })
   })

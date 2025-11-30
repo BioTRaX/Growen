@@ -2,19 +2,39 @@
 // NG-HEADER: Ubicación: frontend/src/__tests__/ProductsDrawer.refresh.test.tsx
 // NG-HEADER: Descripción: Test para verificar refetch tras creación de canónico en ProductsDrawer.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
 
-// Mock de servicios
+// Mock de servicios (datos inline para evitar problemas de hoisting)
 vi.mock('../services/products', async () => {
   const actual = await vi.importActual<any>('../services/products')
+  const mockProduct = {
+    product_id: 1,
+    name: 'P1',
+    sku: 'SKU001',
+    supplier: { id: 1, name: 'Proveedor Test' },
+    category: { id: 1, name: 'Categoría Test' },
+    sale_price: 100,
+    stock_quantity: 10,
+  }
   return {
     ...actual,
-    searchProducts: vi.fn().mockResolvedValue({ items: [{ product_id: 1, name: 'P1' }], total: 1 })
+    searchProducts: vi.fn().mockResolvedValue({ items: [mockProduct], total: 1 })
   }
 })
+
+// Mock de datos de producto para uso en tests
+const mockProduct = {
+  product_id: 1,
+  name: 'P1',
+  sku: 'SKU001',
+  supplier: { id: 1, name: 'Proveedor Test' },
+  category: { id: 1, name: 'Categoría Test' },
+  sale_price: 100,
+  stock_quantity: 10,
+}
 
 vi.mock('../services/categories', async () => {
   const actual = await vi.importActual<any>('../services/categories')
@@ -46,6 +66,19 @@ vi.mock('../components/ProductCreateModal', () => ({
   }
 }))
 
+// Mock de SupplierAutocomplete para evitar dependencia de ThemeProvider
+vi.mock('../components/supplier/SupplierAutocomplete', () => ({
+  __esModule: true,
+  default: ({ value, onChange, placeholder }: any) => (
+    <input
+      data-testid="supplier-autocomplete"
+      placeholder={placeholder}
+      value={value?.name || ''}
+      onChange={(e) => onChange?.(e.target.value === '' ? null : { name: e.target.value })}
+    />
+  ),
+}))
+
 import ProductsDrawer from '../components/ProductsDrawer'
 import * as productsSvc from '../services/products'
 
@@ -54,10 +87,16 @@ function advanceTimers(ms: number) {
 }
 
 describe('ProductsDrawer refresh after canonical creation', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.clearAllMocks()
+  })
+
   it('forces refetch on page 1 after onCreated', async () => {
-    vi.useFakeTimers()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ delay: null })
     const sp = productsSvc as unknown as { searchProducts: any }
-    sp.searchProducts.mockResolvedValueOnce({ items: [{ product_id: 1, name: 'P1' }], total: 1 })
+    sp.searchProducts.mockResolvedValueOnce({ items: [mockProduct], total: 1 })
 
     render(<ProductsDrawer open={true} onClose={() => {}} mode="embedded" />)
 
@@ -68,7 +107,7 @@ describe('ProductsDrawer refresh after canonical creation', () => {
 
     // Abrir modal "Nuevo producto"
     const btn = await screen.findByRole('button', { name: /nuevo producto/i })
-    await userEvent.click(btn)
+    await user.click(btn)
 
     // El mock del modal dispara onCreated y fuerza refresh
     advanceTimers(300)

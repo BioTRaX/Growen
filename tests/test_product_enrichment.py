@@ -7,6 +7,7 @@ import json
 import pytest
 import asyncio
 import httpx
+from httpx import ASGITransport
 import time
 from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
@@ -173,7 +174,7 @@ async def test_enrich_concurrency_lock(monkeypatch):
     # Usar un cliente asíncrono para llamadas concurrentes
     # FastAPI corre el endpoint síncrono en un threadpool, permitiendo que el event loop
     # procese otras corutinas (como la segunda request) en paralelo.
-    async with httpx.AsyncClient(app=app, base_url="http://test") as aclient:
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as aclient:
         # Lanzar dos llamadas de enriquecimiento al mismo tiempo
         task1 = aclient.post(f"/products/{pid}/enrich")
         # Pequeña demora para asegurar que la primera llamada llegue al servidor y adquiera el bloqueo
