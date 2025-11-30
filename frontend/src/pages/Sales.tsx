@@ -15,7 +15,7 @@ import {
   type AdditionalCost
 } from '../services/sales'
 import { listCustomers, type Customer } from '../services/customers'
-import { listProducts } from '../services/products'
+import http from '../services/http'
 
 // Componentes de ventas
 import CustomerSelector from '../components/sales/CustomerSelector'
@@ -60,17 +60,17 @@ export default function SalesPage() {
     try {
       const [cRes, pRes, sRes] = await Promise.all([
         listCustomers({ page_size: 500 }),
-        listProducts({ page: 1, page_size: 500, stock: 'gt:0' } as any),
+        http.get('/sales/products', { params: { stock_gt: 0, limit: 500 } }),
         listSales({ page: 1, page_size: 10 })
       ])
       setCustomers(cRes.items)
       // Mapear productos con stock > 0
-      setProducts(pRes.items.filter((x: any) => x.stock > 0).map((x: any) => ({
+      setProducts(pRes.data.items.map((x: any) => ({
         id: x.id,
         title: x.title,
         stock: x.stock,
-        sku: x.sku || x.first_variant_sku,
-        price: x.precio_venta || x.canonical_sale_price
+        sku: x.sku,
+        price: x.price
       })))
       setRecentSales(sRes.items)
     } catch (err) {
@@ -177,13 +177,13 @@ export default function SalesPage() {
       setRecentSales(s.items)
       
       // Refresh products (stock changed)
-      const pRes = await listProducts({ page: 1, page_size: 500, stock: 'gt:0' } as any)
-      setProducts(pRes.items.filter((x: any) => x.stock > 0).map((x: any) => ({
+      const pRes = await http.get('/sales/products', { params: { stock_gt: 0, limit: 500 } })
+      setProducts(pRes.data.items.map((x: any) => ({
         id: x.id,
         title: x.title,
         stock: x.stock,
-        sku: x.sku || x.first_variant_sku,
-        price: x.precio_venta || x.canonical_sale_price
+        sku: x.sku,
+        price: x.price
       })))
     } catch (e: any) {
       alert(e?.response?.data?.detail || e.message)

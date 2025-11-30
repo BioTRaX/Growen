@@ -5,7 +5,7 @@
 """sales_channels_and_costs
 
 Revision ID: 20251130_sales_channels
-Revises: fa50a5cba1bb
+Revises: 155b54f2528b
 Create Date: 2025-11-30
 
 """
@@ -15,7 +15,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = '20251130_sales_channels'
-down_revision = 'fa50a5cba1bb'
+down_revision = '155b54f2528b'
 branch_labels = None
 depends_on = None
 
@@ -34,6 +34,13 @@ def upgrade() -> None:
     # Agregar columnas a sales
     op.add_column('sales', sa.Column('channel_id', sa.Integer(), nullable=True))
     op.add_column('sales', sa.Column('additional_costs', sa.JSON(), nullable=True))
+    # Agregar columna meta si no existe
+    from sqlalchemy import inspect
+    conn = op.get_bind()
+    inspector = inspect(conn)
+    columns = [col['name'] for col in inspector.get_columns('sales')]
+    if 'meta' not in columns:
+        op.add_column('sales', sa.Column('meta', sa.JSON(), nullable=True))
 
     # Crear FK channel_id -> sales_channels
     op.create_foreign_key(

@@ -614,6 +614,45 @@ async def list_sales(
     return {"items": [_row(s) for s in rows], "total": int(total or 0), "page": page, "pages": ((int(total or 0) + page_size - 1)//page_size) if total else 0}
 
 
+# --- Productos para ventas (lista simple) ---
+# IMPORTANTE: Este endpoint DEBE estar antes de /{sale_id} para evitar conflictos de rutas
+@router.get("/products", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def list_products_for_sales(
+    stock_gt: int = Query(0, description="Filtrar por stock mayor a este valor"),
+    limit: int = Query(500, ge=1, le=1000),
+    db: AsyncSession = Depends(get_session)
+):
+    """Lista productos con stock disponible para usar en el POS de ventas."""
+    from sqlalchemy.orm import selectinload
+    from db.models import Variant
+    # Usar selectinload para evitar lazy loading en async
+    stmt = (
+        select(Product)
+        .options(selectinload(Product.variants))
+        .where(Product.stock > stock_gt)
+        .order_by(Product.title)
+        .limit(limit)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    items = []
+    for p in rows:
+        # Obtener precio de la primera variante si existe
+        price = None
+        sku = p.sku_root
+        if p.variants:
+            v = p.variants[0]
+            price = float(v.promo_price or v.price or 0)
+            sku = v.sku or p.sku_root
+        items.append({
+            "id": p.id,
+            "title": p.title,
+            "sku": sku,
+            "stock": p.stock or 0,
+            "price": price,
+        })
+    return {"items": items, "total": len(items)}
+
+
 @router.get("/{sale_id}", dependencies=[Depends(require_roles("colaborador", "admin"))])
 async def get_sale_detail(sale_id: int, db: AsyncSession = Depends(get_session)):
     s = await db.get(Sale, sale_id)
