@@ -129,10 +129,12 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
 
 describe('Market Page', () => {
   beforeEach(() => {
+    vi.useFakeTimers()
     vi.clearAllMocks()
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -235,9 +237,6 @@ describe('Market Page', () => {
 
   describe('Filtrado de productos', () => {
     it('filtra productos por nombre al escribir en el campo de búsqueda', async () => {
-      // Usar fake timers solo para este test
-      vi.useFakeTimers()
-      
       const user = userEvent.setup({ delay: null })
 
       vi.mocked(marketServices.listMarketProducts)
@@ -281,8 +280,6 @@ describe('Market Page', () => {
           })
         )
       })
-      
-      vi.useRealTimers()
     })
 
     it('filtra productos por categoría', async () => {

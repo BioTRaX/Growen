@@ -15,13 +15,23 @@ Implementa un POS simple + pedidos con clientes (mini CRM), manejo de stock, dev
 - `ANULADA`: revierte stock si estaba confirmada/entregada; no admite más cambios salvo lectura
 
 ## Endpoints Principales (`/sales`)
- POST `/sales` crear venta (rate-limited 30/min usuario/IP; configurable desactivar sólo con `SALES_RATE_LIMIT_DISABLED=1`).
-- GET `/sales` listar (filtros por estado, fecha, cliente)
- Aplicado a creación de ventas (POST /sales). Límite 30/min por usuario (o IP). Implementación in-memory simple (adecuado single-process). Respuesta exceso: 429 `{code: rate_limited, retry_in: <segundos>}`. Para despliegues multi-proceso: migrar a Redis token bucket.
 
- Variables:
+### Ventas
+- POST `/sales` crear venta (rate-limited 30/min usuario/IP; configurable desactivar sólo con `SALES_RATE_LIMIT_DISABLED=1`).
+  - Acepta `channel_id` (FK a sales_channels) y `additional_costs` (JSON array de objetos `{concept, amount}`).
+- GET `/sales` listar (filtros por estado, fecha, cliente)
+- GET `/sales/{id}` detalle (incluye `channel_id` y `additional_costs`)
+- PATCH `/sales/{id}` actualizar campos (BORRADOR) - acepta `channel_id` y `additional_costs`
+
+### Canales de Venta (nuevo 2025-11-30)
+- GET `/sales/channels` listar canales
+- POST `/sales/channels` crear canal (requiere rol colaborador/admin)
+- DELETE `/sales/channels/{id}` eliminar canal (requiere rol admin)
+
+Límite rate: 30/min por usuario (o IP). Implementación in-memory simple (adecuado single-process). Respuesta exceso: 429 `{code: rate_limited, retry_in: <segundos>}`. Para despliegues multi-proceso: migrar a Redis token bucket.
+
+Variables:
 - `SALES_RATE_LIMIT_DISABLED=1` desactiva temporalmente (uso local / scripts controlados). Ya no se utiliza `TESTING` para bypass.
-- PATCH `/sales/{id}` actualizar campos (BORRADOR)
  Pagos y Normalización
  Métodos normalizados: `tarjeta` -> `credito`; valores desconocidos -> `otro`.
  Estado global de pago `payment_status` en detalle de venta:
@@ -79,6 +89,47 @@ Cache interno 30s. Extracción de `elapsed_ms` desde JSON via `json_extract` (SQ
 - Por línea: `line_discount` (% 0-100) aplicado a (qty * unit_price)
 - Global: `discount_percent` o `discount_amount` (si ambos se envían prevalece monto). Se recalculan totales usando `Decimal` y se guardan `subtotal`, `total_amount`.
 
+## Canales de Venta (nuevo 2025-11-30)
+Permite clasificar ventas por origen (Instagram, WhatsApp, Local, MercadoLibre, etc.).
+
+### Modelo `SalesChannel`
+- `id`: PK
+- `name`: String(100), único
+- `created_at`: timestamp
+
+### Uso
+1. Crear canales: `POST /sales/channels { "name": "Instagram" }`
+2. Al crear/editar venta, incluir `channel_id`
+3. Listar canales: `GET /sales/channels`
+
+## Costos Adicionales (nuevo 2025-11-30)
+Permite agregar costos extra (envío, packaging, recargos) a una venta.
+
+### Estructura
+Campo `additional_costs` en `Sale` (tipo JSONB):
+```json
+[
+  {"concept": "Envío", "amount": 500.00},
+  {"concept": "Packaging premium", "amount": 150.00}
+]
+```
+
+### Validación
+- Debe ser un array de objetos
+- Cada objeto debe tener `concept` (string) y `amount` (número válido)
+- El monto se suma al total de la venta en el frontend (cálculo local)
+
+### Uso
+```
+POST /sales {
+  "customer": {"id": 1},
+  "items": [...],
+  "additional_costs": [
+    {"concept": "Envío express", "amount": 800}
+  ]
+}
+```
+
 ## Validaciones Clave
 - Confirmación: falla con 409 si existen líneas `SIN_VINCULAR`.
 - Confirmación: falla con 400 si falta stock (detalle por producto).
@@ -99,12 +150,19 @@ Cache in-memory invalidado en confirmaciones, devoluciones y anulaciones. Métri
 - Migrar cache a Redis en despliegues multi-proceso.
 - Endpoint PDF oficial del recibo.
 - Búsqueda de productos con trigram / full-text.
+- Reportes por canal de venta.
+- Integrar costos adicionales en el cálculo de totales del backend (actualmente solo frontend).
 
 ## Notas de Migración
 Nueva migración `20250926_stock_ledger_and_sales_indexes.py`:
 - Crea `stock_ledger`
 - Índices adicionales en ventas, líneas, returns
 - Índice único parcial `customers(document_number)` (Postgres) / índice normal fallback.
+
+Nueva migración `20251130_sales_channels_and_costs.py`:
+- Crea tabla `sales_channels` (id, name, created_at)
+- Agrega `channel_id` (FK) y `additional_costs` (JSONB) a `sales`
+- Índice en `sales.channel_id`
 
 Actualizar `MIGRATIONS_NOTES.md` si se ajustan más cambios estructurales.
 
@@ -123,4 +181,4 @@ Pruebas planificadas (backlog): validar estructura completa de movimientos en `S
 6. GET /sales/{id}/receipt
 
 ---
-Última actualización: 2025-09-26 (actualizado: endpoint batch líneas `/sales/{id}/lines`, auditoría `sale_lines_ops`, json_extract métricas)
+Última actualización: 2025-11-30 (agregado: canales de venta, costos adicionales, UI mejorada con búsqueda en selectores)

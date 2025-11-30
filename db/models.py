@@ -808,6 +808,17 @@ class Customer(Base):
     sales: Mapped[list["Sale"]] = relationship(back_populates="customer")
 
 
+class SalesChannel(Base):
+    """Canal de venta (Instagram, WhatsApp, Local, etc.)."""
+    __tablename__ = "sales_channels"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+    sales: Mapped[list["Sale"]] = relationship(back_populates="channel")
+
+
 class Sale(Base):
     __tablename__ = "sales"
     __table_args__ = (
@@ -819,9 +830,12 @@ class Sale(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     customer_id: Mapped[Optional[int]] = mapped_column(ForeignKey("customers.id", ondelete="SET NULL"), nullable=True)
+    channel_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sales_channels.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="BORRADOR")
     sale_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     sale_kind: Mapped[str] = mapped_column(String(16), default="MOSTRADOR")  # MOSTRADOR|PEDIDO
+    # Costos adicionales (envío, packaging, etc.) como JSON: [{"concept": "Envío", "amount": 500}, ...]
+    additional_costs: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
     # Totales y descuentos
     discount_percent: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
     discount_amount: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
@@ -838,6 +852,7 @@ class Sale(Base):
     meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     customer: Mapped[Optional["Customer"]] = relationship(back_populates="sales")
+    channel: Mapped[Optional["SalesChannel"]] = relationship(back_populates="sales")
     lines: Mapped[list["SaleLine"]] = relationship(back_populates="sale")
     payments: Mapped[list["SalePayment"]] = relationship(back_populates="sale")
     attachments: Mapped[list["SaleAttachment"]] = relationship(back_populates="sale")

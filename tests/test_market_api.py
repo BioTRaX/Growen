@@ -17,7 +17,7 @@ Valida:
 
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -379,8 +379,7 @@ async def db(db_session):
 @pytest_asyncio.fixture
 async def client(db_session):
     """Cliente HTTP sin autenticación"""
-    from httpx import AsyncClient
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 
@@ -389,8 +388,7 @@ async def client_collab(db_session):
     """Cliente HTTP con rol colaborador"""
     # TODO: Implementar fixture con sesión de colaborador
     # Por ahora, mock básico
-    from httpx import AsyncClient
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         # Agregar headers de autenticación si es necesario
         yield ac
 
@@ -398,8 +396,7 @@ async def client_collab(db_session):
 @pytest_asyncio.fixture
 async def client_viewer(db_session):
     """Cliente HTTP con rol viewer"""
-    from httpx import AsyncClient
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 

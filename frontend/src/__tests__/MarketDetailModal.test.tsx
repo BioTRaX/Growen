@@ -62,8 +62,17 @@ vi.mock('../components/ToastProvider', () => ({
 
 vi.mock('../hooks/usePermissions', () => ({
   usePermissions: () => ({
-    canEditProducts: true,
-    canManagePrices: true,
+    canEditProducts: () => true,
+    canManagePrices: () => true,
+    canEditMarketPrices: () => true,
+    canManageMarketSources: () => true,
+    canRefreshMarketPrices: () => true,
+    canDiscoverMarketSources: () => true,
+    canViewMarket: () => true,
+    isAdmin: () => true,
+    isCollaboratorOrAdmin: () => true,
+    hasRole: () => true,
+    role: 'admin',
   }),
 }))
 
