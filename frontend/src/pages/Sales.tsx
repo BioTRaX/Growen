@@ -3,6 +3,7 @@
 // NG-HEADER: Descripción: Página de registro de ventas con selectores mejorados, costos adicionales y adjuntos
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import AppToolbar from '../components/AppToolbar'
 import { 
   createSale, 
@@ -33,6 +34,8 @@ type LineItem = SaleItem & {
 }
 
 export default function SalesPage() {
+  const navigate = useNavigate()
+  
   // Data
   const [customers, setCustomers] = useState<Customer[]>([])
   const [products, setProducts] = useState<ProductLite[]>([])
@@ -46,6 +49,12 @@ export default function SalesPage() {
   const [channelId, setChannelId] = useState<number | null>(null)
   const [additionalCosts, setAdditionalCosts] = useState<AdditionalCost[]>([])
   const [documents, setDocuments] = useState<FilePreview[]>([])
+  // Fecha/hora de la venta (por defecto ahora en zona horaria local)
+  const [saleDate, setSaleDate] = useState<string>(() => {
+    const now = new Date()
+    // Formato para datetime-local: YYYY-MM-DDTHH:mm
+    return now.toISOString().slice(0, 16)
+  })
 
   // UI state
   const [saving, setSaving] = useState(false)
@@ -123,6 +132,11 @@ export default function SalesPage() {
     setItems(items.filter((_, i) => i !== index))
   }
 
+  function updateItemPrice(index: number, price: number) {
+    if (price < 0) price = 0
+    setItems(items.map((it, i) => i === index ? { ...it, unit_price: price } : it))
+  }
+
   // Calcular totales
   const subtotal = items.reduce((sum, it) => sum + (it.unit_price || it.price || 0) * it.qty, 0)
   const costsTotal = additionalCosts.reduce((sum, c) => sum + c.amount, 0)
@@ -147,7 +161,8 @@ export default function SalesPage() {
         items: saleItems,
         note: note || undefined,
         channel_id: channelId || undefined,
-        additional_costs: additionalCosts.length > 0 ? additionalCosts : undefined
+        additional_costs: additionalCosts.length > 0 ? additionalCosts : undefined,
+        sale_date: saleDate ? new Date(saleDate).toISOString() : undefined
       })
 
       // Subir documentos si hay
@@ -171,6 +186,8 @@ export default function SalesPage() {
       setChannelId(null)
       setAdditionalCosts([])
       setDocuments([])
+      // Reset fecha a la actual
+      setSaleDate(new Date().toISOString().slice(0, 16))
       
       // Refresh sales list
       const s = await listSales({ page: 1, page_size: 10 })
@@ -211,8 +228,8 @@ export default function SalesPage() {
         <div className="panel" style={{ padding: 20 }}>
           <h2 style={{ marginTop: 0, marginBottom: 20 }}>Nueva Venta</h2>
 
-          {/* Sección Cliente y Canal */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 24 }}>
+          {/* Sección Cliente, Canal y Fecha */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20, marginBottom: 24 }}>
             <CustomerSelector
               customers={customers}
               selectedId={customerId}
@@ -224,6 +241,18 @@ export default function SalesPage() {
               value={channelId}
               onChange={(id) => setChannelId(id)}
             />
+            <div>
+              <label style={{ fontWeight: 600, marginBottom: 8, display: 'block' }}>
+                Fecha y Hora
+              </label>
+              <input
+                type="datetime-local"
+                value={saleDate}
+                onChange={(e) => setSaleDate(e.target.value)}
+                className="input"
+                style={{ width: '100%' }}
+              />
+            </div>
           </div>
 
           {/* Selector de productos */}
@@ -262,8 +291,24 @@ export default function SalesPage() {
                   >
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 500 }}>{it.title}</div>
-                      <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>
-                        ${(it.unit_price || it.price || 0).toFixed(2)} c/u
+                      <div style={{ fontSize: '0.85rem', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span>$</span>
+                        <input
+                          type="number"
+                          value={it.unit_price ?? it.price ?? 0}
+                          onChange={(e) => updateItemPrice(idx, parseFloat(e.target.value) || 0)}
+                          className="input"
+                          style={{ 
+                            width: 100, 
+                            padding: '2px 6px',
+                            fontSize: '0.85rem',
+                            background: 'var(--bg-secondary)',
+                            border: '1px solid var(--border)'
+                          }}
+                          min={0}
+                          step="0.01"
+                        />
+                        <span>c/u</span>
                       </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -300,7 +345,7 @@ export default function SalesPage() {
                       fontWeight: 600,
                       color: 'var(--success)' 
                     }}>
-                      ${((it.unit_price || it.price || 0) * it.qty).toFixed(2)}
+                      ${((it.unit_price ?? it.price ?? 0) * it.qty).toFixed(2)}
                     </div>
                     <button
                       type="button"
@@ -386,12 +431,17 @@ export default function SalesPage() {
               {recentSales.map(s => (
                 <div 
                   key={s.id}
+                  onClick={() => navigate(`/ventas/${s.id}`)}
                   style={{
                     padding: 12,
                     background: 'var(--input-bg)',
                     borderRadius: 8,
                     border: '1px solid var(--input-border)',
+                    cursor: 'pointer',
+                    transition: 'background 0.2s',
                   }}
+                  onMouseOver={e => (e.currentTarget.style.background = 'var(--bg-secondary)')}
+                  onMouseOut={e => (e.currentTarget.style.background = 'var(--input-bg)')}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                     <span style={{ fontWeight: 600 }}>Venta #{s.id}</span>

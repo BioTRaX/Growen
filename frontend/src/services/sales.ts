@@ -74,9 +74,35 @@ export async function listSales(params?: { status?: string; customer_id?: number
   return r.data as { items: Array<{ id: number; status: string; sale_date: string; customer_id?: number; total: number; paid_total: number }>; total: number; page: number; pages: number }
 }
 
+export type SaleDetail = {
+  id: number
+  status: string
+  sale_date: string
+  customer_id?: number
+  channel_id?: number
+  additional_costs?: AdditionalCost[]
+  total: number
+  paid_total: number
+  payment_status?: string
+  lines: Array<{
+    id: number
+    product_id: number
+    qty: number
+    unit_price: number
+    line_discount: number
+  }>
+  payments: Array<{
+    id: number
+    method: string
+    amount: number
+    reference?: string
+    paid_at?: string | null
+  }>
+}
+
 export async function getSale(id: number) {
   const r = await http.get(`/sales/${id}`)
-  return r.data as { id: number; status: string; sale_date: string; customer_id?: number; total: number; paid_total: number; lines: Array<{ id: number; product_id: number; qty: number; unit_price: number; line_discount: number }>; payments: Array<{ id: number; method: string; amount: number; reference?: string; paid_at?: string | null }> }
+  return r.data as SaleDetail
 }
 
 export async function annulSale(id: number, reason: string) {

@@ -1,6 +1,6 @@
 // NG-HEADER: Nombre de archivo: customers.ts
-// NG-HEADER: Ubicación: frontend/src/services/customers.ts
-// NG-HEADER: Descripción: Servicios HTTP para clientes (CRUD, búsqueda y ventas asociadas)
+// NG-HEADER: Ubicaciï¿½n: frontend/src/services/customers.ts
+// NG-HEADER: Descripciï¿½n: Servicios HTTP para clientes (CRUD, bï¿½squeda y ventas asociadas)
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import http from './http'
 
@@ -29,6 +29,11 @@ export async function listCustomers(params?: {
 }) {
   const r = await http.get('/customers', { params })
   return r.data as { items: Customer[]; total: number; page: number; pages: number }
+}
+
+export async function getCustomer(id: number) {
+  const r = await http.get(`/customers/${id}`)
+  return r.data as Customer & { total_compras_bruto: number }
 }
 
 export async function createCustomer(payload: Customer) {

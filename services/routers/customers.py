@@ -291,3 +291,33 @@ async def quick_search_customers(q: str, limit: int = Query(20, ge=1, le=100), d
             }
         )
     return {"query": term, "items": items, "count": len(items)}
+
+
+@router.get("/{cid}", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def get_customer(cid: int, db: AsyncSession = Depends(get_session)):
+    """Obtener un cliente específico con su total bruto de compras."""
+    c = await db.get(Customer, cid)
+    if not c:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    # Calcular total bruto de compras (ventas confirmadas/entregadas)
+    total_stmt = select(func.coalesce(func.sum(Sale.total_amount), 0)).where(
+        Sale.customer_id == cid,
+        Sale.status.in_(["CONFIRMADA", "ENTREGADA"])
+    )
+    total_bruto = await db.scalar(total_stmt) or 0
+    return {
+        "id": c.id,
+        "name": c.name,
+        "email": c.email,
+        "phone": c.phone,
+        "address": c.address,
+        "city": c.city,
+        "province": c.province,
+        "doc_id": c.doc_id,
+        "document_type": c.document_type,
+        "document_number": c.document_number,
+        "kind": c.kind,
+        "notes": c.notes,
+        "is_active": bool(getattr(c, "is_active", True)),
+        "total_compras_bruto": float(total_bruto),
+    }
