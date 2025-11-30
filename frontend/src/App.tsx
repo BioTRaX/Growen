@@ -21,7 +21,9 @@ const PurchaseDetail = lazy(() => import('./pages/PurchaseDetail'))
 const SuppliersPage = lazy(() => import('./pages/Suppliers'))
 const SupplierDetailPage = lazy(() => import('./pages/SupplierDetail'))
 const CustomersPage = lazy(() => import('./pages/Customers'))
+const CustomerDetail = lazy(() => import('./pages/CustomerDetail'))
 const SalesPage = lazy(() => import('./pages/Sales'))
+const SaleDetail = lazy(() => import('./pages/SaleDetail'))
 import { PATHS } from "./routes/paths";
 import { ToastProvider, InjectToastStyles } from './components/ToastProvider'
 import ErrorBoundary from './components/ErrorBoundary'
@@ -108,6 +110,22 @@ export default function App() {
             element={
               <ProtectedRoute roles={["colaborador", "admin"]}>
                 <SalesPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/ventas/:id"
+            element={
+              <ProtectedRoute roles={["colaborador", "admin"]}>
+                <SaleDetail />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/clientes/:id"
+            element={
+              <ProtectedRoute roles={["colaborador", "admin"]}>
+                <CustomerDetail />
               </ProtectedRoute>
             }
           />
