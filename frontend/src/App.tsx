@@ -36,6 +36,7 @@ const AdminServices = lazy(() => import('./pages/admin/ServicesPage'))
 const AdminImages = lazy(() => import('./pages/admin/ImagesCrawlerPage'))
 const AdminBackups = lazy(() => import('./pages/admin/BackupsPage'))
 const AdminScheduler = lazy(() => import('./components/admin/SchedulerControl'))
+const AdminKnowledge = lazy(() => import('./pages/admin/KnowledgePage'))
 const CatalogDiagnosticsPage = lazy(() => import('./pages/CatalogDiagnosticsPage'))
 
 export default function App() {
@@ -183,6 +184,7 @@ export default function App() {
             <Route path="backups" element={<AdminBackups />} />
             <Route path="catalogos/diagnostico" element={<CatalogDiagnosticsPage />} />
             <Route path="scheduler" element={<AdminScheduler />} />
+            <Route path="cerebro" element={<AdminKnowledge />} />
             {/* Users only for admins */}
             <Route
               path="usuarios"

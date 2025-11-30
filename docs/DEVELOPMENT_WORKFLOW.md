@@ -74,6 +74,83 @@ pip install -r requirements.txt
 python scripts/check_admin_user.py
 ```
 
+## Desarrollo LAN (Compartir con otros dispositivos)
+
+Si necesitas probar la aplicación desde otro dispositivo en la misma red (celular, tablet, otra PC), sigue estos pasos:
+
+### 1. Obtener tu IP local
+
+```powershell
+# Windows
+ipconfig
+# Buscar "IPv4 Address" en tu adaptador de red activo (ej: 192.168.1.50)
+
+# Linux/Mac
+ip addr  # o ifconfig
+```
+
+### 2. Configurar el Frontend
+
+El servidor Vite ya está configurado para escuchar en todas las interfaces (`host: true`). Al iniciar verás:
+
+```
+  VITE v5.x.x  ready in XXX ms
+
+  ➜  Local:   http://localhost:5175/
+  ➜  Network: http://192.168.1.50:5175/   ← Usar esta URL
+```
+
+**Opcional**: Crear archivo `frontend/.env.development.local` para forzar la URL de API:
+
+```bash
+# frontend/.env.development.local
+# Reemplazar 192.168.1.X con tu IP real
+VITE_API_URL=http://192.168.1.X:8000
+VITE_PORT=5175
+```
+
+> **Nota**: El cliente HTTP (`http.ts`) usa `window.location.hostname` automáticamente, por lo que normalmente NO necesitas este archivo.
+
+### 3. Configurar la API
+
+La API también debe escuchar en `0.0.0.0`. `start.bat` ya lo hace por defecto.
+
+**Inicio manual** (si no usas start.bat):
+
+```powershell
+# Con --host 0.0.0.0 para aceptar conexiones externas
+python -m uvicorn services.api:app --reload --host 0.0.0.0 --port 8000
+```
+
+### 4. Verificar Firewall
+
+Asegúrate de que Windows Firewall permita conexiones entrantes en:
+- Puerto `5175` (Frontend Vite)
+- Puerto `8000` (API FastAPI)
+
+```powershell
+# Agregar reglas de firewall (ejecutar como Admin)
+netsh advfirewall firewall add rule name="Vite Dev" dir=in action=allow protocol=tcp localport=5175
+netsh advfirewall firewall add rule name="FastAPI Dev" dir=in action=allow protocol=tcp localport=8000
+```
+
+### 5. Acceder desde otro dispositivo
+
+Desde el otro dispositivo en la misma red, abrir:
+- **Frontend**: `http://192.168.1.X:5175` (reemplazar con tu IP)
+- **API Swagger**: `http://192.168.1.X:8000/docs`
+
+### Troubleshooting LAN
+
+| Problema | Solución |
+|----------|----------|
+| "Connection refused" | Verificar firewall, verificar que API/Vite estén corriendo |
+| HMR no funciona | Refrescar página manualmente (F5), WebSocket puede estar bloqueado |
+| CORS errors | La API ya permite CORS, pero verificar que la IP sea correcta |
+| Login no persiste | Verificar que accedes por IP (no localhost) en ambos servicios |
+
+---
+
 ## Flujo de Desarrollo Diario
 
 ### Iniciar Sesión de Trabajo
@@ -337,6 +414,48 @@ docker compose down
 ```
 
 ## Troubleshooting Común
+
+### Problema: UI queda "Cargando" y se resuelve al presionar tecla en terminal
+
+**Causa**: Modo **QuickEdit** de la consola de Windows está habilitado.
+
+Cuando QuickEdit está activo (comportamiento por defecto en Windows):
+1. Si haces clic en la ventana de la terminal (aunque sea accidentalmente)
+2. La consola entra en "modo de selección"
+3. **PAUSA completamente** la ejecución del proceso (uvicorn, node, etc.)
+4. Presionar cualquier tecla (espacio, Enter) "despausa" la ejecución
+
+**Solución 1: Deshabilitar QuickEdit permanentemente (Recomendado)**
+1. Click derecho en la barra de título de la ventana CMD/PowerShell
+2. Seleccionar **"Propiedades"** (Properties)
+3. En pestaña **"Opciones"** (Options)
+4. **Desmarcar** la casilla **"QuickEdit Mode"** / "Modo de edición rápida"
+5. Click en **OK**
+
+**Solución 2: Script de inicio que deshabilita QuickEdit**
+
+Usar `scripts/start_api_noquickedit.ps1` que deshabilita QuickEdit automáticamente:
+```powershell
+.\scripts\start_api_noquickedit.ps1
+```
+
+**Solución 3: Ejecutar sin ventana interactiva (Background)**
+
+Si no necesitas ver los logs en tiempo real:
+```powershell
+# API en background con logs a archivo
+Start-Process -NoNewWindow -FilePath python -ArgumentList "-m uvicorn services.api:app --reload --port 8000" -RedirectStandardOutput "logs\api_stdout.log" -RedirectStandardError "logs\api_stderr.log"
+
+# Ver logs cuando quieras
+Get-Content logs\api_stdout.log -Tail 50 -Wait
+```
+
+**Nota**: Este problema NO ocurre en:
+- Windows Terminal (la app nueva de Microsoft)
+- Terminales integradas de VS Code/Cursor (aunque pueden tener configuración similar)
+- Linux/Mac
+
+---
 
 ### Problema: "DB connection refused"
 

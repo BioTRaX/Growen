@@ -315,7 +315,7 @@ call :log "[INFO] Iniciando backend..."
 rem Activar modo DEBUG para backend y devolver info de debug en import
 set "LOG_LEVEL=DEBUG"
 
-start "Growen API" cmd /k call "%VENV%\activate.bat" ^&^& set LOG_LEVEL=%LOG_LEVEL% ^&^& set IMPORT_RETURN_DEBUG=%IMPORT_RETURN_DEBUG% ^&^& echo [BOOT] Lanzando uvicorn en puerto 8000 ^&^& python -m uvicorn services.api:app --reload --host 127.0.0.1 --port 8000 --loop asyncio --http h11 --log-level debug ^>> "%LOG_DIR%\backend.log" 2^>^&1
+start "Growen API" cmd /k call "%VENV%\activate.bat" ^&^& set LOG_LEVEL=%LOG_LEVEL% ^&^& set IMPORT_RETURN_DEBUG=%IMPORT_RETURN_DEBUG% ^&^& echo [BOOT] Lanzando uvicorn en puerto 8000 ^&^& python -m uvicorn services.api:app --reload --host 0.0.0.0 --port 8000 --loop asyncio --http h11 --log-level debug ^>> "%LOG_DIR%\backend.log" 2^>^&1
 
 call :log "[INFO] Preparando frontend..."
 REM Si existe carpeta dist vacía o VITE_BUILD=1, ejecutamos build para servir desde FastAPI.

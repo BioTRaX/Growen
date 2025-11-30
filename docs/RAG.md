@@ -7,7 +7,7 @@
 
 Sistema de recuperación de información con búsqueda vectorial para el chatbot de Growen.
 
-**Estado**: ✅ **Infraestructura + Motor de Ingesta Completos** (Etapa 2) - 2025-11-25
+**Estado**: ✅ **Infraestructura + Admin UI Completos** (Etapa 2.5) - 2025-11-30
 
 ## Resumen
 
@@ -19,7 +19,14 @@ El sistema RAG permite al chatbot acceder a documentación interna mediante bús
 2. **Modelos de datos**: `KnowledgeSource` (documentos) + `KnowledgeChunk` (fragmentos vectorizados)
 3. **Servicio de embeddings**: `ai/embeddings.py` con AsyncOpenAI
 4. **Motor de ingesta**: `services/rag/ingest.py` con chunking inteligente
-5. **Script de carga**: `scripts/index_docs.py` para indexación batch
+5. **Servicio de gestión**: `services/rag/service.py` - KnowledgeService
+6. **Parser de PDF**: `services/rag/pdf_parser.py` con PyMuPDF
+7. **API Admin**: `services/routers/knowledge.py` - endpoints REST
+8. **UI Admin**: Panel "Cerebro" en `/admin/cerebro`
+9. **Script CLI** (legado): `scripts/index_docs.py` para indexación batch
+
+> **Nota**: Para gestión de documentos, usar la UI del Admin Panel en `/admin/cerebro`.
+> Ver documentación completa en [docs/KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md).
 
 ## Arquitectura
 
@@ -253,7 +260,10 @@ result = await ingestor.ingest_documents_batch(
 - La transacción se hace commit solo si **todos** los chunks procesan exitosamente
 - Los fallos se reportan en `failed_documents`
 
-## Script de Carga
+## Script de Carga (Legado)
+
+> **⚠️ DEPRECADO**: Se recomienda usar la UI del Admin Panel en `/admin/cerebro` para gestionar documentos.
+> El script CLI se mantiene para casos de uso avanzados o automatización.
 
 **Archivo**: `scripts/index_docs.py`
 
@@ -573,6 +583,7 @@ self.text_splitter = RecursiveCharacterTextSplitter(
 
 ---
 
-**Última actualización**: 2025-11-25  
+**Última actualización**: 2025-11-30  
 **Mantenedor**: Backend Team  
-**Estado**: ✅ Infraestructura completa, listo para Etapa 3 (búsqueda + integración chatbot)
+**Estado**: ✅ Infraestructura + Admin UI completos, listo para Etapa 3 (búsqueda + integración chatbot)  
+**Ver también**: [docs/KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md) - Guía de uso del Admin Panel "Cerebro"

@@ -61,3 +61,4 @@ notion-client>=2.2.1
 pgvector>=0.3.8  # Driver PostgreSQL para búsqueda vectorial
 langchain-text-splitters>=0.3.0  # Utilidad para dividir documentos en chunks
 tiktoken>=0.8.0  # Tokenizador OpenAI para calcular costos de embeddings
+PyMuPDF>=1.24.0  # Extracción de texto de PDFs para Knowledge Base

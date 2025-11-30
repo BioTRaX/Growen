@@ -1,0 +1,4 @@
+# Este archivo asegura que la carpeta se incluya en el repositorio
+# Los documentos de conocimiento (MD, TXT, PDF) se almacenan aquí
+# y son indexados por el sistema RAG para el chatbot
+

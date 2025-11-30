@@ -47,6 +47,8 @@ services:
     volumes:
       # Consolidar logs del backend en la carpeta del host
       - ./logs:/app/logs
+      # Carpeta de documentos de conocimiento para RAG
+      - ./Conocimientos:/app/Conocimientos
   frontend:
     build:
       context: frontend

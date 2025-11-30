@@ -317,7 +317,15 @@ origins = [
     "http://127.0.0.1:5173",
     "http://localhost:5175",
     "http://127.0.0.1:5175",
+    # LAN development - agregar IPs de tu red local aquí
+    "http://192.168.100.100:5175",
 ]
+
+# Agregar orígenes LAN adicionales desde variable de entorno (separados por coma)
+# Ejemplo: CORS_EXTRA_ORIGINS=http://192.168.1.50:5175
+extra_origins = os.getenv("CORS_EXTRA_ORIGINS", "")
+if extra_origins:
+    origins.extend([o.strip() for o in extra_origins.split(",") if o.strip()])
 
 app.add_middleware(
     CORSMiddleware,
@@ -369,6 +377,8 @@ app.include_router(health.router)
 app.include_router(services_admin.router)
 app.include_router(backups_admin.router)
 app.include_router(admin_scheduler.router)  # Admin scheduler control
+from services.routers import knowledge as knowledge_admin  # Knowledge Base admin
+app.include_router(knowledge_admin.router)
 try:
     # include legacy /healthz for compatibility if present
     app.include_router(health.legacy_router)  # type: ignore[attr-defined]

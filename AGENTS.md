@@ -252,6 +252,7 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 - `run_api.cmd` / `run_frontend.cmd` / `start_stack.ps1`: Scripts de conveniencia para iniciar servicios locales.
 - `launch_backend.cmd`: Variante de arranque rápido backend (revisar duplicidad con `run_api.cmd`).
 - `start.bat` / `stop.bat`: Atajos globales de inicio/parada.
+- `start_api_noquickedit.ps1`: **Recomendado para Windows**. Inicia la API deshabilitando QuickEdit Mode de la consola, evitando que clicks accidentales en la terminal pausen el servidor. Ver `docs/DEVELOPMENT_WORKFLOW.md` sección Troubleshooting.
 
 ### Workers / Jobs Asíncronos (Dramatiq + Redis)
 - `start_worker_images.cmd`: Lanza worker de procesamiento de imágenes (cola `images`). Ver dependencias en README o `docs/IMAGES.md`.
