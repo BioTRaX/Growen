@@ -128,10 +128,19 @@ async def get_product_info(sku: str = None, product_id: int = None, user_role: s
     
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
-            logger.debug("Consultando URL=%s", url)
+            logger.debug("get_product_info: Consultando URL=%s", url)
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
+            
+            # DEBUG: Log de respuesta raw de la API
+            logger.debug(
+                "get_product_info: API Response raw - product_id=%s, sku=%s, has_description=%s, description_length=%d",
+                data.get("product_id"),
+                data.get("sku"),
+                bool(data.get("description")),
+                len(data.get("description") or "") if data.get("description") else 0,
+            )
             
             # Construir resultado con toda la información disponible
             result = {
@@ -146,17 +155,39 @@ async def get_product_info(sku: str = None, product_id: int = None, user_role: s
             description = data.get("description")
             if description:
                 result["description"] = description
+                logger.debug(
+                    "get_product_info: Incluyendo descripción (%d chars): %s...",
+                    len(description),
+                    description[:200] if len(description) > 200 else description,
+                )
+            else:
+                logger.warning(
+                    "get_product_info: SIN DESCRIPCION para product_id=%s sku=%s",
+                    data.get("product_id"),
+                    data.get("sku"),
+                )
             
             technical_specs = data.get("technical_specs")
             if technical_specs and isinstance(technical_specs, dict) and technical_specs:
                 result["technical_specs"] = technical_specs
+                logger.debug("get_product_info: Incluyendo technical_specs: %s", list(technical_specs.keys()))
             
             usage_instructions = data.get("usage_instructions")
             if usage_instructions and isinstance(usage_instructions, dict) and usage_instructions:
                 result["usage_instructions"] = usage_instructions
+                logger.debug("get_product_info: Incluyendo usage_instructions: %s", list(usage_instructions.keys()))
+            
+            # DEBUG: Log final del resultado que se devuelve al LLM
+            logger.info(
+                "get_product_info: Tool Output - product_id=%s, sku=%s, name=%s, stock=%s, has_description=%s",
+                result.get("product_id"),
+                result.get("sku"),
+                result.get("name"),
+                result.get("stock"),
+                "description" in result,
+            )
             
             _cache_put(cache_key, result)
-            logger.debug("Cache SET %s", cache_key)
             return result
             
         except httpx.TimeoutException as exc:
@@ -346,6 +377,9 @@ async def invoke_tool(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, A
         KeyError: Si el tool no existe.
         ValueError: Validaciones internas de parámetros.
     """
+    # DEBUG: Log de entrada
+    logger.info("invoke_tool: Tool Call Inputs: %s -> %s", tool_name, parameters)
+    
     if tool_name not in TOOLS_REGISTRY:
         raise KeyError(f"Tool desconocida: {tool_name}")
     if not isinstance(parameters, dict):
@@ -355,12 +389,14 @@ async def invoke_tool(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, A
         raise ValueError("Parámetro 'user_role' requerido (string).")
 
     func = TOOLS_REGISTRY[tool_name]
+    result: Dict[str, Any] = {}
+    
     if tool_name == "find_products_by_name":
         query = parameters.get("query")
         if not query or not isinstance(query, str):
             raise ValueError("Parámetro 'query' requerido (string).")
-        logger.info("Invocando tool=%s query=%s role=%s", tool_name, query, user_role)
-        return await func(query=query, user_role=user_role)  # type: ignore[arg-type]
+        logger.info("invoke_tool: Ejecutando %s con query='%s' role='%s'", tool_name, query, user_role)
+        result = await func(query=query, user_role=user_role)  # type: ignore[arg-type]
     else:
         # Tools de producto: aceptan sku o product_id
         sku = parameters.get("sku")
@@ -373,5 +409,33 @@ async def invoke_tool(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, A
         if not sku and not product_id:
             raise ValueError("Se requiere 'sku' o 'product_id'.")
         
-        logger.info("Invocando tool=%s sku=%s product_id=%s role=%s", tool_name, sku, product_id, user_role)
-        return await func(sku=sku, product_id=product_id, user_role=user_role)  # type: ignore[arg-type]
+        logger.info("invoke_tool: Ejecutando %s con sku='%s' product_id=%s role='%s'", tool_name, sku, product_id, user_role)
+        result = await func(sku=sku, product_id=product_id, user_role=user_role)  # type: ignore[arg-type]
+    
+    # DEBUG: Log de salida (truncado si es muy largo)
+    result_summary = _summarize_tool_output(result)
+    logger.info("invoke_tool: Tool Call Output (%s): %s", tool_name, result_summary)
+    
+    return result
+
+
+def _summarize_tool_output(result: Dict[str, Any], max_length: int = 500) -> str:
+    """Resume el output de una tool para logging.
+    
+    Trunca campos largos como 'description' para mantener los logs legibles.
+    """
+    if not isinstance(result, dict):
+        return str(result)[:max_length]
+    
+    summary = {}
+    for key, value in result.items():
+        if key == "description" and isinstance(value, str):
+            summary[key] = f"({len(value)} chars) {value[:100]}..." if len(value) > 100 else value
+        elif key == "items" and isinstance(value, list):
+            summary[key] = f"[{len(value)} items]"
+        elif isinstance(value, str) and len(value) > 200:
+            summary[key] = f"{value[:200]}..."
+        else:
+            summary[key] = value
+    
+    return str(summary)[:max_length]

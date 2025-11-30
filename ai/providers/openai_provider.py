@@ -321,13 +321,33 @@ class OpenAIProvider(ILLMProvider):
                             parameters=params,
                         )
 
+            # DEBUG: Log del resultado de la tool antes de inyectarlo en mensajes
+            tool_result_json = json.dumps(tool_result, ensure_ascii=False)
+            logging.debug(
+                "Tool Call Output para LLM (%s): %s",
+                fn_name,
+                tool_result_json[:1000] + "..." if len(tool_result_json) > 1000 else tool_result_json,
+            )
+            
+            # Verificar si la herramienta devolvió descripción
+            if isinstance(tool_result, dict):
+                has_description = "description" in tool_result and tool_result["description"]
+                logging.info(
+                    "Tool %s result: product_id=%s, sku=%s, has_description=%s, desc_length=%d",
+                    fn_name,
+                    tool_result.get("product_id"),
+                    tool_result.get("sku"),
+                    has_description,
+                    len(tool_result.get("description", "") or "") if has_description else 0,
+                )
+            
             # Inyectar resultado en mensajes
             messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": getattr(call, "id", f"call_{idx}"),
                     "name": fn_name,
-                    "content": json.dumps(tool_result, ensure_ascii=False),
+                    "content": tool_result_json,
                 }
             )
 

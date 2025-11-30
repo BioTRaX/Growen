@@ -38,7 +38,7 @@ if ! .venv/bin/python -m alembic upgrade head; then
   echo "[ERROR] Falló la ejecución de migraciones. Abortando inicio."
   exit 1
 fi
-( uvicorn services.api:app --host 127.0.0.1 --port 8000 --reload --log-level debug --access-log ) &
+( uvicorn services.api:app --host 0.0.0.0 --port 8000 --reload --log-level debug --access-log ) &
 
 cd frontend
 if [[ ! -d node_modules ]]; then

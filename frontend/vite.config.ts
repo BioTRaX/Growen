@@ -17,9 +17,9 @@ export default defineConfig({
     'import.meta.env.VITE_API_URL': JSON.stringify(API_TARGET),
   },
   server: {
-    host: '127.0.0.1',
+    host: true,  // Escuchar en todas las interfaces (0.0.0.0) para acceso LAN
     port,
-    hmr: { host: '127.0.0.1', protocol: 'ws', port },
+    hmr: { protocol: 'ws', port },  // Sin host fijo para permitir conexión dinámica
     proxy: {
       // WebSocket principal
       '/ws': { target: API_TARGET, ws: true, changeOrigin: true },
