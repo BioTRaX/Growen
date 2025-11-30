@@ -15,7 +15,7 @@ from sqlalchemy import select, func, and_, or_, cast, Float
 
 from db.session import get_session
 from db.models import Customer, Sale, SaleLine, SalePayment, SaleAttachment, Product, AuditLog, Return, ReturnLine
-from db.models import StockLedger
+from db.models import StockLedger, SalesChannel
 from services.auth import require_roles, require_csrf, current_session, SessionData
 from services.media import save_upload, get_media_root
 from fastapi.responses import HTMLResponse
@@ -99,6 +99,50 @@ def _audit(db: AsyncSession, action: str, table: str, entity_id: int | None, met
         pass
 
 
+
+
+# --- Canales de Venta ---
+
+@router.get("/channels", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def list_channels(db: AsyncSession = Depends(get_session)):
+    """Lista todos los canales de venta disponibles."""
+    channels = (await db.execute(select(SalesChannel).order_by(SalesChannel.name))).scalars().all()
+    return {
+        "items": [{"id": c.id, "name": c.name, "created_at": c.created_at.isoformat()} for c in channels],
+        "total": len(channels)
+    }
+
+
+@router.post("/channels", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
+async def create_channel(payload: dict, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session), request: Request = None):
+    """Crea un nuevo canal de venta."""
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name es requerido")
+    # Verificar si ya existe
+    existing = (await db.execute(select(SalesChannel).where(SalesChannel.name == name))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="Ya existe un canal con ese nombre")
+    channel = SalesChannel(name=name)
+    db.add(channel)
+    await db.commit()
+    await db.refresh(channel)
+    _audit(db, "channel_create", "sales_channels", channel.id, {"name": name}, sess, request)
+    await db.commit()
+    return {"id": channel.id, "name": channel.name, "created_at": channel.created_at.isoformat()}
+
+
+@router.delete("/channels/{channel_id}", dependencies=[Depends(require_roles("admin")), Depends(require_csrf)])
+async def delete_channel(channel_id: int, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session), request: Request = None):
+    """Elimina un canal de venta (solo admin)."""
+    channel = await db.get(SalesChannel, channel_id)
+    if not channel:
+        raise HTTPException(status_code=404, detail="Canal no encontrado")
+    name = channel.name
+    await db.delete(channel)
+    _audit(db, "channel_delete", "sales_channels", channel_id, {"name": name}, sess, request)
+    await db.commit()
+    return {"status": "deleted", "id": channel_id}
 
 
 # --- Ventas ---
@@ -232,6 +276,27 @@ async def create_sale(payload: dict, db: AsyncSession = Depends(get_session), se
     if sale_kind not in ("MOSTRADOR", "PEDIDO"):
         sale_kind = "MOSTRADOR"
 
+    # Canal de venta
+    channel_id = payload.get("channel_id")
+    if channel_id is not None:
+        channel = await db.get(SalesChannel, int(channel_id))
+        if not channel:
+            raise HTTPException(status_code=400, detail="Canal de venta no existe")
+        channel_id = channel.id
+
+    # Costos adicionales (validar estructura)
+    additional_costs = payload.get("additional_costs")
+    if additional_costs is not None:
+        if not isinstance(additional_costs, list):
+            raise HTTPException(status_code=400, detail="additional_costs debe ser una lista")
+        for i, cost in enumerate(additional_costs):
+            if not isinstance(cost, dict) or "concept" not in cost or "amount" not in cost:
+                raise HTTPException(status_code=400, detail=f"additional_costs[{i}] debe tener 'concept' y 'amount'")
+            try:
+                Decimal(str(cost["amount"]))
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"additional_costs[{i}].amount inválido")
+
     # Cliente
     customer_id: Optional[int] = customer_payload.get("id") if isinstance(customer_payload, dict) else None
     customer_obj: Optional[Customer] = None
@@ -252,9 +317,11 @@ async def create_sale(payload: dict, db: AsyncSession = Depends(get_session), se
 
     sale = Sale(
         customer_id=customer_obj.id if customer_obj else None,
+        channel_id=channel_id,
         status="BORRADOR",  # se ajustará si se confirma
         sale_date=datetime.fromisoformat(payload.get("sale_date")) if payload.get("sale_date") else datetime.utcnow(),
         sale_kind=sale_kind,
+        additional_costs=additional_costs,
         note=(payload.get("note") or None),
         created_by=sess.user_id if getattr(sess, "user_id", None) else None,
         discount_percent=(payload.get("discount_percent") or 0),
@@ -474,6 +541,30 @@ async def patch_sale(sale_id: int, payload: dict, db: AsyncSession = Depends(get
                 raise HTTPException(status_code=400, detail="customer_id inválido")
             sale.customer_id = c.id
             changed.append("customer_id")
+    if "channel_id" in payload:
+        ch_id = payload.get("channel_id")
+        if ch_id is not None:
+            ch = await db.get(SalesChannel, int(ch_id))
+            if not ch:
+                raise HTTPException(status_code=400, detail="channel_id inválido")
+            sale.channel_id = ch.id
+        else:
+            sale.channel_id = None
+        changed.append("channel_id")
+    if "additional_costs" in payload:
+        ac = payload.get("additional_costs")
+        if ac is not None:
+            if not isinstance(ac, list):
+                raise HTTPException(status_code=400, detail="additional_costs debe ser una lista")
+            for i, cost in enumerate(ac):
+                if not isinstance(cost, dict) or "concept" not in cost or "amount" not in cost:
+                    raise HTTPException(status_code=400, detail=f"additional_costs[{i}] debe tener 'concept' y 'amount'")
+                try:
+                    Decimal(str(cost["amount"]))
+                except Exception:
+                    raise HTTPException(status_code=400, detail=f"additional_costs[{i}].amount inválido")
+        sale.additional_costs = ac
+        changed.append("additional_costs")
     await db.flush()
     lines_full = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
     _recalc_totals(sale, lines_full)
@@ -535,6 +626,8 @@ async def get_sale_detail(sale_id: int, db: AsyncSession = Depends(get_session))
         "status": s.status,
         "sale_date": s.sale_date.isoformat(),
         "customer_id": s.customer_id,
+        "channel_id": s.channel_id,
+        "additional_costs": s.additional_costs,
         "total": float(s.total_amount or 0),
         "paid_total": float(s.paid_total or 0),
         "payment_status": s.payment_status,

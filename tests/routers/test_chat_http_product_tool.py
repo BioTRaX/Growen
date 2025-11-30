@@ -5,7 +5,7 @@
 import pytest
 import types
 import json
-from httpx import AsyncClient, Response, Request
+from httpx import AsyncClient, ASGITransport, Response, Request
 
 from services.api import app
 
@@ -85,7 +85,7 @@ def patch_httpx(monkeypatch):
     monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
 
 async def test_chat_http_product_tool_flow(patch_httpx):
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         r = await ac.post("/chat", json={"text": "cuanto cuesta SKU123?"})
         assert r.status_code == 200, r.text
         data = r.json()

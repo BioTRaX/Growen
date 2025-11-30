@@ -1,12 +1,12 @@
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 
 from services.api import app
 
 pytestmark = pytest.mark.asyncio
 
 async def test_chat_http_basic():
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         r = await ac.post("/chat", json={"text": "Hola, ¿quién sos?"})
         assert r.status_code == 200
         data = r.json()
