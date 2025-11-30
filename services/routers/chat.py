@@ -206,10 +206,18 @@ async def chat_endpoint(
             # Construir prompt con historial conversacional
             prompt_with_history = f"{history_context}\n\nUsuario: {user_text}" if history_context else user_text
             
+            # Obtener el schema de herramientas para consulta de productos
+            # El provider OpenAI construye el schema basado en el rol del usuario
+            provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
+            tools_schema = None
+            if hasattr(provider, '_build_tools_schema'):
+                tools_schema = provider._build_tools_schema(user_role)
+            
             answer = await ai_router.run_async(
                 task=Task.SHORT_ANSWER.value,
                 prompt=prompt_with_history,
                 user_context={"role": user_role, "intent": "product_lookup"},
+                tools_schema=tools_schema,
             )
             
             # Limpiar prefijo técnico si existe (openai:, ollama:)

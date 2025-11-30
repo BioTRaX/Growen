@@ -88,102 +88,105 @@ def _cache_put(key: str, value: Dict[str, Any]) -> None:
     _cache[key] = (time.time(), value)
 
 
-async def get_product_info(sku: str, user_role: str) -> Dict[str, Any]:
-    """Obtiene información básica de un producto por SKU interno.
+async def get_product_info(sku: str = None, product_id: int = None, user_role: str = "guest") -> Dict[str, Any]:
+    """Obtiene información de un producto por SKU canónico o ID, incluyendo descripción.
 
-    Esta es la versión ligera que retorna solo datos esenciales de primer nivel:
-    name, sale_price, stock, sku.
-
-    Para información completa incluyendo technical_specs y usage_instructions,
-    usar get_product_full_info (requiere roles admin/colaborador).
+    Retorna datos del producto: name, sale_price, stock, sku, y descripción/especificaciones
+    cuando están disponibles.
 
     Args:
-        sku: SKU interno del sistema (variant.sku en el dominio actual).
-        user_role: Rol declarado del usuario que solicita la información. No se restringe en MVP.
+        sku: SKU canónico del producto (formato XXX_####_YYY).
+        product_id: ID interno del producto (alternativa al SKU).
+        user_role: Rol declarado del usuario que solicita la información.
 
     Returns:
-        Diccionario con claves: name, sale_price, stock, sku.
+        Diccionario con claves: name, sale_price, stock, sku, description, technical_specs, usage_instructions.
 
     Raises:
         httpx.HTTPStatusError: Si la API responde un status >= 400.
         httpx.RequestError: Problema de red al invocar la API.
-        KeyError: Si la respuesta no contiene campos esperados (indicará necesidad de ajustar mapping).
+        KeyError: Si la respuesta no contiene campos esperados.
     """
-    # Diseño: la API actual probablemente expone /products o /variants.
-    # Suponemos un endpoint existente /variants/lookup?sku={sku} (si no existe, se documentará para backend principal).
-    # Como fallback se intenta /products/by-sku/{sku}.
+    if not sku and not product_id:
+        raise ValueError("Se requiere 'sku' o 'product_id'.")
+    
     # Cache lookup
-    cache_key = f"product_info:{sku}"
+    cache_key = f"product_info:{product_id or sku}"
     cached = _cache_get(cache_key)
     if cached:
-        logger.debug("Cache HIT para sku=%s", sku)
+        logger.debug("Cache HIT para %s", cache_key)
         return cached
 
     base_url = _get_api_base_url()
-    candidate_endpoints = [
-        f"{base_url}/variants/lookup?sku={sku}",  # endpoint sugerido / a implementar
-        f"{base_url}/products/by-sku/{sku}",      # alternativa posible
-    ]
     headers = _get_internal_auth_headers()
+    
+    # Construir URL con el parámetro disponible
+    if product_id:
+        url = f"{base_url}/variants/lookup?product_id={product_id}"
+    else:
+        url = f"{base_url}/variants/lookup?sku={sku}"
+    
     async with httpx.AsyncClient(timeout=5.0) as client:
-        last_exc: Exception | None = None
-        for url in candidate_endpoints:
-            try:
-                logger.debug("Consultando URL=%s", url)
-                resp = await client.get(url, headers=headers)
-                if resp.status_code == 404:
-                    # probamos siguiente
-                    logger.debug("Endpoint %s devolvió 404, probando siguiente", url)
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                # Se asume shape potencial:
-                # Variante: {"sku":..., "name":..., "sale_price":..., "stock": ...}
-                # Nota: get_product_info mantiene respuesta ligera (no incluye technical_specs/usage_instructions)
-                # Para información completa usar get_product_full_info
-                result = {
-                    "sku": data["sku"],
-                    "name": data.get("name") or data.get("title") or "(sin nombre)",
-                    "sale_price": data.get("sale_price"),
-                    "stock": data.get("stock"),
-                }
-                _cache_put(cache_key, result)
-                logger.debug("Cache SET sku=%s", sku)
-                return result
-            except httpx.TimeoutException as exc:  # noqa: PERF203
-                logger.warning("Timeout URL=%s sku=%s: %s", url, sku, exc)
-                last_exc = exc
-                continue
-            except httpx.RequestError as exc:
-                logger.warning("RequestError URL=%s sku=%s: %s", url, sku, exc)
-                last_exc = exc
-                continue
-            except Exception as exc:  # noqa: BLE001 (controlado para fallback)
-                last_exc = exc
-                continue
-        if last_exc:
-            logger.warning("Fallo al obtener producto sku=%s: %s", sku, last_exc)
-            raise last_exc
-        raise KeyError("No se encontró el producto ni se pudo mapear la respuesta.")
+        try:
+            logger.debug("Consultando URL=%s", url)
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            
+            # Construir resultado con toda la información disponible
+            result = {
+                "product_id": data.get("product_id"),
+                "sku": data.get("sku"),
+                "name": data.get("name") or data.get("title") or "(sin nombre)",
+                "sale_price": data.get("sale_price"),
+                "stock": data.get("stock"),
+            }
+            
+            # Incluir descripción y especificaciones si están disponibles
+            description = data.get("description")
+            if description:
+                result["description"] = description
+            
+            technical_specs = data.get("technical_specs")
+            if technical_specs and isinstance(technical_specs, dict) and technical_specs:
+                result["technical_specs"] = technical_specs
+            
+            usage_instructions = data.get("usage_instructions")
+            if usage_instructions and isinstance(usage_instructions, dict) and usage_instructions:
+                result["usage_instructions"] = usage_instructions
+            
+            _cache_put(cache_key, result)
+            logger.debug("Cache SET %s", cache_key)
+            return result
+            
+        except httpx.TimeoutException as exc:
+            logger.warning("Timeout URL=%s: %s", url, exc)
+            raise
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                logger.warning("Producto no encontrado: sku=%s product_id=%s", sku, product_id)
+                raise KeyError("Producto no encontrado")
+            raise
+        except httpx.RequestError as exc:
+            logger.warning("RequestError URL=%s: %s", url, exc)
+            raise
 
 
-async def get_product_full_info(sku: str, user_role: str) -> Dict[str, Any]:
+async def get_product_full_info(sku: str = None, product_id: int = None, user_role: str = "guest") -> Dict[str, Any]:
     """Obtiene información completa del producto incluyendo datos de enriquecimiento.
 
     Incluye toda la información básica más:
+      - description: Descripción enriquecida del producto
       - technical_specs: Especificaciones técnicas (dimensiones, potencia, materiales, etc.)
       - usage_instructions: Instrucciones de uso (pasos, consejos, advertencias)
 
-    En el futuro se añadirá:
-      - detalles extendidos (categorías, suppliers, históricos, métricas).
-
     Args:
-        sku: SKU interno del sistema.
+        sku: SKU canónico del producto (formato XXX_####_YYY).
+        product_id: ID interno del producto (alternativa al SKU).
         user_role: Rol declarado del usuario que solicita. Debe ser 'admin' o 'colaborador'.
 
     Returns:
         Diccionario con estructura extendida incluyendo campos de enriquecimiento.
-        Los campos technical_specs y usage_instructions solo se incluyen si tienen contenido.
 
     Raises:
         PermissionError: Si el rol no está autorizado para información "full".
@@ -193,87 +196,91 @@ async def get_product_full_info(sku: str, user_role: str) -> Dict[str, Any]:
     if user_role not in _FULL_INFO_ROLES:
         raise PermissionError("Permission denied: rol insuficiente para información completa.")
     
-    # Cache lookup (cache separada para full info)
-    cache_key = f"product_full_info:{sku}"
+    if not sku and not product_id:
+        raise ValueError("Se requiere 'sku' o 'product_id'.")
+    
+    # Cache lookup
+    cache_key = f"product_full_info:{product_id or sku}"
     cached = _cache_get(cache_key)
     if cached:
-        logger.debug("Cache HIT para full info sku=%s", sku)
+        logger.debug("Cache HIT para full info %s", cache_key)
         return cached
 
     base_url = _get_api_base_url()
-    candidate_endpoints = [
-        f"{base_url}/variants/lookup?sku={sku}",
-        f"{base_url}/products/by-sku/{sku}",
-    ]
     headers = _get_internal_auth_headers()
     
+    # Construir URL con el parámetro disponible
+    if product_id:
+        url = f"{base_url}/variants/lookup?product_id={product_id}"
+    else:
+        url = f"{base_url}/variants/lookup?sku={sku}"
+    
     async with httpx.AsyncClient(timeout=5.0) as client:
-        last_exc: Exception | None = None
-        for url in candidate_endpoints:
-            try:
-                logger.debug("Consultando URL=%s (full info)", url)
-                resp = await client.get(url, headers=headers)
-                if resp.status_code == 404:
-                    logger.debug("Endpoint %s devolvió 404, probando siguiente", url)
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                
-                # Construir respuesta base
-                result = {
-                    "sku": data["sku"],
-                    "name": data.get("name") or data.get("title") or "(sin nombre)",
-                    "sale_price": data.get("sale_price"),
-                    "stock": data.get("stock"),
-                }
-                
-                # Etapa 1: Agregar datos de enriquecimiento solo si tienen contenido
-                # Optimización de contexto: no enviar campos vacíos/nulos para ahorrar tokens
-                technical_specs = data.get("technical_specs")
-                if technical_specs and (isinstance(technical_specs, dict) and technical_specs):
-                    result["technical_specs"] = technical_specs
-                
-                usage_instructions = data.get("usage_instructions")
-                if usage_instructions and (isinstance(usage_instructions, dict) and usage_instructions):
-                    result["usage_instructions"] = usage_instructions
-                
-                _cache_put(cache_key, result)
-                logger.debug("Cache SET full info sku=%s", sku)
-                return result
-                
-            except httpx.TimeoutException as exc:  # noqa: PERF203
-                logger.warning("Timeout URL=%s sku=%s: %s", url, sku, exc)
-                last_exc = exc
-                continue
-            except httpx.RequestError as exc:
-                logger.warning("RequestError URL=%s sku=%s: %s", url, sku, exc)
-                last_exc = exc
-                continue
-            except Exception as exc:  # noqa: BLE001 (controlado para fallback)
-                last_exc = exc
-                continue
-        
-        if last_exc:
-            logger.warning("Fallo al obtener producto full info sku=%s: %s", sku, last_exc)
-            raise last_exc
-        raise KeyError("No se encontró el producto ni se pudo mapear la respuesta.")
+        try:
+            logger.debug("Consultando URL=%s (full info)", url)
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            
+            # Construir respuesta completa
+            result = {
+                "product_id": data.get("product_id"),
+                "sku": data.get("sku"),
+                "name": data.get("name") or data.get("title") or "(sin nombre)",
+                "sale_price": data.get("sale_price"),
+                "stock": data.get("stock"),
+            }
+            
+            # Incluir descripción enriquecida si existe
+            description = data.get("description")
+            if description:
+                result["description"] = description
+            
+            # Agregar datos de enriquecimiento solo si tienen contenido
+            technical_specs = data.get("technical_specs")
+            if technical_specs and isinstance(technical_specs, dict) and technical_specs:
+                result["technical_specs"] = technical_specs
+            
+            usage_instructions = data.get("usage_instructions")
+            if usage_instructions and isinstance(usage_instructions, dict) and usage_instructions:
+                result["usage_instructions"] = usage_instructions
+            
+            _cache_put(cache_key, result)
+            logger.debug("Cache SET full info %s", cache_key)
+            return result
+            
+        except httpx.TimeoutException as exc:
+            logger.warning("Timeout URL=%s: %s", url, exc)
+            raise
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                logger.warning("Producto no encontrado: sku=%s product_id=%s", sku, product_id)
+                raise KeyError("Producto no encontrado")
+            raise
+        except httpx.RequestError as exc:
+            logger.warning("RequestError URL=%s: %s", url, exc)
+            raise
 
 
 async def find_products_by_name(query: str, user_role: str) -> Dict[str, Any]:
-    """Busca productos por nombre (búsqueda parcial) y retorna coincidencias básicas.
+    """Busca productos por nombre (búsqueda parcial) y retorna coincidencias con stock.
 
     Args:
         query: Texto ingresado por el usuario (nombre parcial o completo).
         user_role: Rol declarado (no se restringe en MVP).
 
     Returns:
-        Dict con clave `items` que es una lista de productos (name, sku) y `count`.
+        Dict con clave `items` que es una lista de productos con:
+        - product_id: ID interno (usar para get_product_info)
+        - name: Nombre estilizado del producto
+        - sku: SKU canónico (formato XXX_####_YYY)
+        - stock: Cantidad disponible
+        - price: Precio de venta
 
     Notas:
         - Endpoint usado: /catalog/search?q= (endpoint real implementado en catalog.py).
         - Se autentica como servicio interno usando X-Internal-Service-Token.
-        - En caso de error de red o status >=400 se propaga la excepción httpx.* para manejo superior.
-        - Se normalizan claves mínimas para el agente.
+        - Solo devuelve productos con SKU canónico (ignora SKUs internos del sistema).
     """
     if not query or not isinstance(query, str):
         raise ValueError("Parámetro 'query' requerido (string no vacío).")
@@ -284,21 +291,37 @@ async def find_products_by_name(query: str, user_role: str) -> Dict[str, Any]:
         resp = await client.get(url, headers=headers)
         resp.raise_for_status()
         data = resp.json()
-        # Se asume una lista de productos. Adaptar si la API devuelve otro shape.
+        # Se asume una lista de productos
         items: List[Dict[str, Any]] = []
         if isinstance(data, list):
             source_iter = data
         else:
-            # Fallback si la API responde {"items": [...]} o similar
             source_iter = data.get("items", []) if isinstance(data, dict) else []
+        
         for prod in source_iter:
             if not isinstance(prod, dict):
                 continue
+            
+            # Obtener datos del producto
+            product_id = prod.get("id")
             name = prod.get("name") or prod.get("title") or "(sin nombre)"
-            sku = prod.get("sku") or prod.get("variant_sku") or prod.get("id")
-            if not sku:
-                continue  # ignorar entradas sin SKU interno
-            items.append({"name": name, "sku": sku})
+            sku = prod.get("sku")  # SKU canónico (formato XXX_####_YYY)
+            stock = prod.get("stock")
+            price = prod.get("price") or prod.get("sale_price")
+            
+            # Solo incluir si tiene SKU canónico (no mostrar SKUs internos)
+            # El SKU canónico tiene formato XXX_####_YYY
+            if not sku or not product_id:
+                continue
+            
+            items.append({
+                "product_id": product_id,
+                "name": name,
+                "sku": sku,
+                "stock": stock,
+                "price": price,
+            })
+        
         return {"items": items, "count": len(items), "query": query}
 
 
@@ -314,7 +337,7 @@ async def invoke_tool(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, A
 
     Args:
         tool_name: Nombre registrado de la herramienta.
-        parameters: Parámetros (deben incluir `sku` y `user_role`).
+        parameters: Parámetros (deben incluir `user_role` y `sku` o `product_id`).
 
     Returns:
         Resultado de la herramienta como dict.
@@ -339,8 +362,16 @@ async def invoke_tool(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, A
         logger.info("Invocando tool=%s query=%s role=%s", tool_name, query, user_role)
         return await func(query=query, user_role=user_role)  # type: ignore[arg-type]
     else:
+        # Tools de producto: aceptan sku o product_id
         sku = parameters.get("sku")
-        if not sku or not isinstance(sku, str):
-            raise ValueError("Parámetro 'sku' requerido (string).")
-        logger.info("Invocando tool=%s sku=%s role=%s", tool_name, sku, user_role)
-        return await func(sku=sku, user_role=user_role)  # type: ignore[arg-type]
+        product_id = parameters.get("product_id")
+        
+        # Convertir product_id a int si viene como string
+        if product_id and isinstance(product_id, str) and product_id.isdigit():
+            product_id = int(product_id)
+        
+        if not sku and not product_id:
+            raise ValueError("Se requiere 'sku' o 'product_id'.")
+        
+        logger.info("Invocando tool=%s sku=%s product_id=%s role=%s", tool_name, sku, product_id, user_role)
+        return await func(sku=sku, product_id=product_id, user_role=user_role)  # type: ignore[arg-type]

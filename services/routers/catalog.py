@@ -39,6 +39,7 @@ from db.models import (
     PurchaseLine,
 )
 from db.session import get_session
+from db.text_utils import stylize_product_name
 from agent_core.config import settings
 from ai.router import AIRouter
 from ai.providers.openai_provider import OpenAIProvider
@@ -510,63 +511,259 @@ async def catalog_search(
     limit: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
 ):
-    """Búsqueda rápida para POS.
+    """Búsqueda rápida para POS y chatbot.
 
-    Prioriza productos con stock>0, combinando:
-      - Products: título contiene q o sku_root contiene q.
-      - CanonicalProducts: name contiene q o sku_custom contiene q (si existe).
-    Devuelve hasta 'limit' resultados ordenados por (stock desc, título asc).
+    Busca productos con su información canónica vinculada.
+    Devuelve SKU canónico (formato XXX_####_YYY) preferentemente sobre el interno.
+    Prioriza productos con stock>0.
     """
     term = (q or "").strip()
+    
+    # Query base: productos con su info canónica vinculada
+    base_query = (
+        select(
+            Product.id,
+            Product.title,
+            Product.stock,
+            Product.description_html,
+            CanonicalProduct.id.label("canonical_id"),
+            CanonicalProduct.name.label("canonical_name"),
+            CanonicalProduct.sku_custom.label("canonical_sku"),
+            CanonicalProduct.ng_sku,
+            CanonicalProduct.sale_price,
+        )
+        .join(SupplierProduct, SupplierProduct.internal_product_id == Product.id, isouter=True)
+        .join(ProductEquivalence, ProductEquivalence.supplier_product_id == SupplierProduct.id, isouter=True)
+        .join(CanonicalProduct, CanonicalProduct.id == ProductEquivalence.canonical_product_id, isouter=True)
+    )
+    
     if not term:
         # Top por stock (productos con stock)
         rows = (
             await session.execute(
-                select(Product.id, Product.title, Product.sku_root, Product.stock)
+                base_query
                 .where((Product.stock != None) & (Product.stock > 0))
                 .order_by(Product.stock.desc(), Product.title.asc())
                 .limit(limit)
             )
         ).all()
-        return [
-            {"id": r[0], "kind": "product", "title": r[1], "sku": r[2], "stock": int(r[3] or 0), "price": None}
-            for r in rows
-        ]
-
-    like = f"%{term}%"
-    # Buscar en productos
-    prod_rows = (
-        await session.execute(
-            select(Product.id, Product.title, Product.sku_root, Product.stock)
-            .where(or_(Product.title.ilike(like), Product.sku_root.ilike(like)))
-            .order_by(Product.stock.desc().nullslast(), Product.title.asc())
-            .limit(limit)
-        )
-    ).all()
-
-    # Buscar en canónicos
-    can_rows = (
-        await session.execute(
-            select(CanonicalProduct.id, CanonicalProduct.name, CanonicalProduct.sku_custom, CanonicalProduct.sale_price)
-            .where(or_(CanonicalProduct.name.ilike(like), CanonicalProduct.sku_custom.ilike(like)))
-            .order_by(CanonicalProduct.name.asc())
-            .limit(limit)
-        )
-    ).all()
-
-    # Merge priorizando productos con stock
+    else:
+        like = f"%{term}%"
+        # Buscar en título del producto o nombre canónico o SKU canónico
+        rows = (
+            await session.execute(
+                base_query
+                .where(
+                    or_(
+                        Product.title.ilike(like),
+                        CanonicalProduct.name.ilike(like),
+                        CanonicalProduct.sku_custom.ilike(like),
+                        CanonicalProduct.ng_sku.ilike(like),
+                    )
+                )
+                .order_by(Product.stock.desc().nullslast(), Product.title.asc())
+                .limit(limit * 2)  # Extra para deduplicar
+            )
+        ).all()
+    
+    # Deduplicar por product_id (puede haber múltiples filas si hay varios SupplierProducts)
+    seen_ids: set[int] = set()
     items: list[dict] = []
-    for r in prod_rows:
-        items.append({"id": r[0], "kind": "product", "title": r[1], "sku": r[2], "stock": int(r[3] or 0), "price": None})
-    for r in can_rows:
-        items.append({"id": r[0], "kind": "canonical", "title": r[1], "sku": r[2], "stock": None, "price": float(r[3]) if r[3] is not None else None})
-
-    # Orden: productos con stock primero; luego canónicos/otros
-    def _key(it: dict):
-        return (0 if (it.get("kind") == "product" and (it.get("stock") or 0) > 0) else 1, (it.get("title") or ""))
-
-    items.sort(key=_key)
+    
+    for row in rows:
+        if row.id in seen_ids:
+            continue
+        seen_ids.add(row.id)
+        
+        # SKU preferido: canónico (formato XXX_####_YYY) sobre interno
+        preferred_sku = row.canonical_sku or row.ng_sku
+        # Nombre preferido: canónico sobre interno
+        preferred_name = stylize_product_name(row.canonical_name or row.title) or row.title
+        # Precio de venta desde canónico
+        sale_price = float(row.sale_price) if row.sale_price else None
+        
+        items.append({
+            "id": row.id,
+            "title": preferred_name,
+            "sku": preferred_sku,
+            "stock": int(row.stock or 0),
+            "price": sale_price,
+            "has_description": bool(row.description_html),
+        })
+    
+    # Orden: productos con stock primero; luego por nombre
+    items.sort(key=lambda it: (0 if (it.get("stock") or 0) > 0 else 1, (it.get("title") or "")))
+    
     return items[:limit]
+
+
+# ------------------------------- Helper: Build Product Response -------------------------------
+async def _build_product_response(session: AsyncSession, product: Product) -> dict:
+    """Construye la respuesta completa de un producto con su info canónica.
+    
+    Devuelve SKU canónico (formato XXX_####_YYY) preferentemente.
+    """
+    # Calcular stock real
+    stock = product.stock or 0
+    try:
+        inv_result = await session.execute(
+            select(func.sum(Inventory.stock_qty))
+            .join(Variant, Variant.id == Inventory.variant_id)
+            .where(Variant.product_id == product.id)
+        )
+        inv_total = inv_result.scalar()
+        if inv_total is not None:
+            stock = int(inv_total)
+    except Exception:
+        pass
+
+    # Obtener info canónica vinculada
+    canonical_info = (
+        await session.execute(
+            select(CanonicalProduct)
+            .join(ProductEquivalence, ProductEquivalence.canonical_product_id == CanonicalProduct.id)
+            .join(SupplierProduct, SupplierProduct.id == ProductEquivalence.supplier_product_id)
+            .where(SupplierProduct.internal_product_id == product.id)
+            .limit(1)
+        )
+    ).scalars().first()
+
+    # SKU preferido: canónico (formato XXX_####_YYY) sobre interno
+    canonical_sku = None
+    sale_price = None
+    canonical_name = None
+    
+    if canonical_info:
+        canonical_sku = canonical_info.sku_custom or canonical_info.ng_sku
+        canonical_name = canonical_info.name
+        if canonical_info.sale_price:
+            sale_price = float(canonical_info.sale_price)
+
+    # Si no hay precio canónico, intentar desde variante
+    if sale_price is None:
+        variant = (
+            await session.execute(
+                select(Variant).where(Variant.product_id == product.id).limit(1)
+            )
+        ).scalars().first()
+        if variant and (variant.promo_price or variant.price):
+            sale_price = float(variant.promo_price or variant.price)
+
+    return {
+        "product_id": product.id,
+        "sku": canonical_sku,  # SKU canónico (puede ser None si no hay)
+        "name": stylize_product_name(canonical_name or product.title) or "(sin nombre)",
+        "sale_price": sale_price,
+        "stock": stock,
+        "description": getattr(product, 'description_html', None),
+        "technical_specs": getattr(product, 'technical_specs', None),
+        "usage_instructions": getattr(product, 'usage_instructions', None),
+    }
+
+
+# ------------------------------- Variants Lookup (para MCP Products) -------------------------------
+@router.get(
+    "/variants/lookup",
+    dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))],
+)
+async def variants_lookup(
+    sku: str = Query(None, description="SKU del producto a buscar (canónico preferido)"),
+    product_id: int = Query(None, description="ID del producto interno"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Busca un producto por SKU canónico o ID y devuelve información completa.
+
+    Este endpoint es usado por el servidor MCP de productos para obtener
+    información detallada de un producto específico.
+
+    Parámetros (usar uno u otro):
+      - sku: SKU canónico (formato XXX_####_YYY) o interno
+      - product_id: ID interno del producto
+
+    Búsqueda en orden:
+      1. Por product_id si se proporciona
+      2. Por SKU canónico (CanonicalProduct.sku_custom o ng_sku)
+      3. Por SKU interno (Product.sku_root)
+
+    Devuelve: sku (canónico), name, sale_price, stock, description, technical_specs, usage_instructions.
+    """
+    if not sku and not product_id:
+        raise HTTPException(status_code=400, detail={"code": "missing_sku_or_product_id"})
+
+    # 0. Buscar por product_id directamente
+    if product_id:
+        product = await session.get(Product, product_id)
+        if product:
+            return await _build_product_response(session, product)
+        raise HTTPException(status_code=404, detail={"code": "product_not_found", "product_id": product_id})
+
+    sku_lower = sku.strip().lower()
+    if not sku_lower:
+        raise HTTPException(status_code=400, detail={"code": "empty_sku"})
+
+    # 1. PRIORIDAD: Buscar por SKU canónico (formato XXX_####_YYY)
+    canonical = (
+        await session.execute(
+            select(CanonicalProduct).where(
+                or_(
+                    func.lower(CanonicalProduct.sku_custom) == sku_lower,
+                    func.lower(CanonicalProduct.ng_sku) == sku_lower,
+                )
+            )
+        )
+    ).scalars().first()
+
+    if canonical:
+        # Encontrar el producto vinculado al canónico
+        product_row = (
+            await session.execute(
+                select(Product)
+                .join(SupplierProduct, SupplierProduct.internal_product_id == Product.id)
+                .join(ProductEquivalence, ProductEquivalence.supplier_product_id == SupplierProduct.id)
+                .where(ProductEquivalence.canonical_product_id == canonical.id)
+                .limit(1)
+            )
+        ).scalars().first()
+        
+        if product_row:
+            return await _build_product_response(session, product_row)
+        
+        # Si no hay producto vinculado, devolver info del canónico
+        return {
+            "product_id": None,
+            "sku": canonical.sku_custom or canonical.ng_sku,
+            "name": stylize_product_name(canonical.name) or "(sin nombre)",
+            "sale_price": float(canonical.sale_price) if canonical.sale_price else None,
+            "stock": 0,
+            "description": None,
+            "technical_specs": None,
+            "usage_instructions": None,
+        }
+
+    # 2. Buscar por SKU interno (Product.sku_root) - fallback
+    product = (
+        await session.execute(
+            select(Product).where(func.lower(Product.sku_root) == sku_lower)
+        )
+    ).scalars().first()
+
+    if product:
+        return await _build_product_response(session, product)
+
+    # 3. Buscar en Variant por sku - último recurso
+    variant = (
+        await session.execute(
+            select(Variant).where(func.lower(Variant.sku) == sku_lower)
+        )
+    ).scalars().first()
+
+    if variant and variant.product_id:
+        parent_product = await session.get(Product, variant.product_id)
+        if parent_product:
+            return await _build_product_response(session, parent_product)
+
+    # No encontrado
+    raise HTTPException(status_code=404, detail={"code": "product_not_found", "sku": sku})
 
 
 # ------------------------------- SupplierProduct: link ↔ Variant (upsert) -------------------------------
@@ -1797,11 +1994,13 @@ async def list_products(
     items = []
     for sp_obj, p_obj, s_obj, eq_obj, cp_obj in rows:
         cat_path = await _category_path(session, p_obj.category_id)
-        preferred_name = (cp_obj.name if (cp_obj and getattr(cp_obj, "name", None)) else p_obj.title)
+        # Estilizar nombre: Title Case con unidades preservadas
+        raw_name = cp_obj.name if (cp_obj and getattr(cp_obj, "name", None)) else p_obj.title
+        preferred_name = stylize_product_name(raw_name)
         items.append(
             {
                 "product_id": p_obj.id,
-                "name": p_obj.title,
+                "name": stylize_product_name(p_obj.title),
                 "preferred_name": preferred_name,
                 "supplier": {
                     "id": s_obj.id,
@@ -1826,7 +2025,7 @@ async def list_products(
                 "canonical_product_id": eq_obj.canonical_product_id if eq_obj else None,
                 "canonical_sale_price": float(cp_obj.sale_price) if (cp_obj and cp_obj.sale_price is not None) else None,
                 "canonical_sku": (cp_obj.sku_custom if (cp_obj and cp_obj.sku_custom) else (cp_obj.ng_sku if cp_obj else None)),
-                "canonical_name": (cp_obj.name if cp_obj else None),
+                "canonical_name": stylize_product_name(cp_obj.name) if cp_obj else None,
                 "first_variant_sku": skus_by_product.get(p_obj.id),
                 # Etapa 1: Datos estructurados de enriquecimiento
                 "technical_specs": getattr(p_obj, 'technical_specs', None),
@@ -1998,8 +2197,8 @@ async def export_stock_xlsx(
     max_sku_len = 0
     for pid, rec in by_product.items():
         # Preferir datos canónicos si están disponibles
-        # Nombre
-        name = rec.get("canonical_name") or rec["name"]
+        # Nombre: estilizado con Title Case
+        name = stylize_product_name(rec.get("canonical_name") or rec["name"])
         # Categoría: priorizar subcategoría canónica si existe; luego categoría canónica; si no, categoría del producto interno
         can_subcat_id = rec.get("canonical_subcategory_id")
         can_cat_id = rec.get("canonical_category_id")
@@ -2241,8 +2440,8 @@ async def export_stock_tiendanegocio_xlsx(
     for pid, rec in by_product.items():
         # SKU obligatorio: canónico si existe, si no, primer SKU de variante
         sku = rec.get("canonical_sku") or skus_by_product.get(pid) or ""
-        # Nombre preferido
-        name = rec.get("canonical_name") or rec.get("name") or ""
+        # Nombre preferido: estilizado con Title Case
+        name = stylize_product_name(rec.get("canonical_name") or rec.get("name") or "")
         # Precio: priorizar canónico
         precio = rec.get("canonical_sale_price") if rec.get("canonical_sale_price") is not None else rec.get("supplier_sale_price")
         # Stock
@@ -2665,7 +2864,7 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
                     canonical_sale = float(cp.sale_price)
                 if cp:
                     canonical_sku = cp.sku_custom or cp.ng_sku
-                    canonical_name = cp.name
+                    canonical_name = stylize_product_name(cp.name)
     except Exception:
         pass
     cat_path = await _category_path(session, prod.category_id)
@@ -2678,13 +2877,14 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
         float(prod.market_price_reference) if getattr(prod, "market_price_reference", None) is not None else None
     )
     # Título preferido para UI: title_canonical (si existe) o canonical_name; si no, product.title
+    # Aplicar estilización Title Case
     preferred_title = None
     try:
-        preferred_title = (getattr(prod, "title_canonical", None) or None)
+        preferred_title = stylize_product_name(getattr(prod, "title_canonical", None) or None)
     except Exception:
         preferred_title = None
     if not (preferred_title or "").strip():
-        preferred_title = canonical_name or prod.title
+        preferred_title = canonical_name or stylize_product_name(prod.title)
 
     # Obtener precio de venta del proveedor como fallback
     supplier_sale_price = None
@@ -2706,7 +2906,7 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
 
     return {
         "id": prod.id,
-        "title": prod.title,
+        "title": stylize_product_name(prod.title),
         "preferred_title": preferred_title,
         "slug": prod.slug,
         "stock": prod.stock,
