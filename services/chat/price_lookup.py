@@ -116,6 +116,39 @@ STOCK_KEYWORDS = {
     "dispo",
 }
 
+# Keywords para consultas generales de información de producto
+PRODUCT_INFO_KEYWORDS = {
+    "detalle",
+    "detalles",
+    "info",
+    "información",
+    "informacion",
+    "caracteristicas",
+    "características",
+    "especificaciones",
+    "descripcion",
+    "descripción",
+    "hablame",
+    "contame",
+    "decime",
+    "dame",
+    "mostrame",
+    "buscame",
+    "buscar",
+    "encontrar",
+    "sobre el producto",
+    "sobre este producto",
+    "del producto",
+    "que es",
+    "qué es",
+    "como es",
+    "cómo es",
+    "como funciona",
+    "cómo funciona",
+    "para que sirve",
+    "para qué sirve",
+}
+
 COMMAND_ALIASES = {
     "precio": "price",
     "price": "price",
@@ -1098,6 +1131,7 @@ def extract_product_query(text: str) -> Optional[ProductQuery]:
     lowered = normalized.lower()
     has_price = any(keyword in lowered for keyword in PRICE_KEYWORDS)
     has_stock = any(keyword in lowered for keyword in STOCK_KEYWORDS)
+    has_product_info = any(keyword in lowered for keyword in PRODUCT_INFO_KEYWORDS)
     if "$" in raw:
         has_price = True
     if command == "price":
@@ -1114,7 +1148,7 @@ def extract_product_query(text: str) -> Optional[ProductQuery]:
     has_recommendation = any(term in RECOMMENDATION_TERMS for term in terms)
     stripped_terms = [term for term in terms if term not in SMALL_TALK_TERMS]
 
-    has_product_signal = has_price or has_stock or bool(sku_candidates) or command_signal
+    has_product_signal = has_price or has_stock or has_product_info or bool(sku_candidates) or command_signal
     if not has_product_signal:
         if has_recommendation:
             return None

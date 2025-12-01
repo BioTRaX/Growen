@@ -28,6 +28,8 @@ pip-wheel-metadata/
 *.key
 *.crt
 *.pfx
+# Carpeta de certificados y credenciales
+certs/
 
 # Logs y temporales
 *.log

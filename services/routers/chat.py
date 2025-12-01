@@ -227,7 +227,7 @@ async def chat_endpoint(
             # Guardar mensajes en historial
             try:
                 logger.info(f"Guardando mensaje user en session {chat_session_id[:8]}...")
-                await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent})
+                await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent.value if hasattr(intent, 'value') else str(intent)})
                 logger.info(f"Guardando mensaje assistant en session {chat_session_id[:8]}...")
                 await save_message(db, chat_session_id, "assistant", answer, metadata={"type": "product_answer"})
                 logger.info(f"Commit de mensajes para session {chat_session_id[:8]}...")
@@ -273,7 +273,7 @@ async def chat_endpoint(
         conversation_state["sales_flow"] = result.get("nuevo_estado")
         
         # Guardar mensajes en historial
-        await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent})
+        await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent.value if hasattr(intent, 'value') else str(intent)})
         await save_message(db, chat_session_id, "assistant", result["respuesta_para_usuario"], metadata={"type": "sales_conversation"})
         await db.commit()
         
@@ -305,7 +305,7 @@ async def chat_endpoint(
             reply = raw.strip()
         
         # Guardar mensajes en historial
-        await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent})
+        await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent.value if hasattr(intent, 'value') else str(intent)})
         await save_message(db, chat_session_id, "assistant", reply, metadata={"type": "chat_general"})
         await db.commit()
         
