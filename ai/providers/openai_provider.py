@@ -184,7 +184,8 @@ class OpenAIProvider(ILLMProvider):
                 temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
                 max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")),
             )
-        except Exception:
+        except Exception as e:
+            logging.warning("generate_async: Error en primera llamada OpenAI: %s: %s", type(e).__name__, e)
             return user_prompt
 
         choice = first.choices[0] if first.choices else None
@@ -368,10 +369,32 @@ class OpenAIProvider(ILLMProvider):
                     tool_name="get_product_info",
                     parameters=synthetic_params,
                 )
+                
+                # IMPORTANTE: Agregar la llamada sintética al assistant message
+                # para que OpenAI reconozca el tool_call_id correspondiente
+                synthetic_call_id = "call_auto_product"
+                synthetic_args = json.dumps(
+                    {"product_id": used_search_product_id} if used_search_product_id else {"sku": used_search_sku},
+                    ensure_ascii=False,
+                )
+                
+                # Buscar y actualizar el mensaje del assistant con el nuevo tool_call
+                for msg in messages:
+                    if msg.get("role") == "assistant" and "tool_calls" in msg:
+                        msg["tool_calls"].append({
+                            "id": synthetic_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": "get_product_info",
+                                "arguments": synthetic_args,
+                            }
+                        })
+                        break
+                
                 messages.append(
                     {
                         "role": "tool",
-                        "tool_call_id": "call_auto_product",
+                        "tool_call_id": synthetic_call_id,
                         "name": "get_product_info",
                         "content": json.dumps(synthetic_result, ensure_ascii=False),
                     }
@@ -393,7 +416,9 @@ class OpenAIProvider(ILLMProvider):
                 else ""
             )
             return answer.strip()
-        except Exception:
+        except Exception as e:
+            # Loguear el error para diagnóstico
+            logging.warning("generate_async: Error en followup OpenAI: %s: %s", type(e).__name__, e)
             # Fallback amigable
             return "No pude completar la operación con las herramientas disponibles. Probá nuevamente más tarde."
 

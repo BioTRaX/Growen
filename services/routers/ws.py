@@ -443,7 +443,7 @@ async def ws_chat(socket: WebSocket) -> None:
                         logger.error("Error inesperado en ws_chat: %s", exc)
                         await socket.send_json({"role": "system", "text": f"error: {exc}"})
                         continue
-                    reply = raw_reply.strip()
+                    reply = _strip_provider_prefix(raw_reply.strip())
                     await socket.send_json({"role": "assistant", "text": reply})
                     logger.info(
                         "ws_chat message",
