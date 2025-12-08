@@ -314,6 +314,52 @@ export async function updateProductSalePrice(
 }
 
 /**
+ * Resultado individual de actualización masiva
+ */
+export interface BatchRefreshMarketItem {
+  product_id: number
+  status: 'enqueued' | 'not_found' | 'error'
+  message: string
+  job_id?: string | null
+}
+
+/**
+ * Respuesta a actualización masiva de precios de mercado
+ */
+export interface BatchRefreshMarketResponse {
+  total_requested: number
+  enqueued: number
+  not_found: number
+  errors: number
+  results: BatchRefreshMarketItem[]
+}
+
+/**
+ * Inicia actualización masiva de precios de mercado para múltiples productos
+ * 
+ * El proceso encola tareas de scraping en segundo plano para cada producto.
+ * Retorna inmediatamente con status 202 Accepted y resumen de resultados.
+ * 
+ * @param productIds Lista de IDs de productos a actualizar (máximo 100)
+ * @returns Resumen de resultados con estado por producto
+ */
+export async function batchUpdateMarketPrices(
+  productIds: number[]
+): Promise<BatchRefreshMarketResponse> {
+  if (productIds.length === 0) {
+    throw new Error('Debe proporcionar al menos un producto')
+  }
+  if (productIds.length > 100) {
+    throw new Error('Máximo 100 productos por request')
+  }
+  
+  const response = await http.post('/market/products/batch-refresh', {
+    product_ids: productIds
+  })
+  return response.data
+}
+
+/**
  * Actualiza el valor de mercado de referencia de un producto
  * 
  * @param productId ID del producto

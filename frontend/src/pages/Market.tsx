@@ -9,7 +9,7 @@ import { useAuth } from '../auth/AuthContext'
 import { useToast } from '../components/ToastProvider'
 import { PATHS } from '../routes/paths'
 import { listCategories, Category } from '../services/categories'
-import { listMarketProducts, updateProductSalePrice, type MarketProductItem } from '../services/market'
+import { listMarketProducts, updateProductSalePrice, batchUpdateMarketPrices, type MarketProductItem } from '../services/market'
 import SupplierAutocomplete from '../components/supplier/SupplierAutocomplete'
 import MarketDetailModal from '../components/MarketDetailModal'
 import EditablePriceField from '../components/EditablePriceField'
@@ -39,6 +39,10 @@ export default function Market() {
   // Estado para modal de detalles
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null)
   const [selectedProductName, setSelectedProductName] = useState<string>('')
+
+  // Estado para selección múltiple
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [updating, setUpdating] = useState(false)
 
   // Cargar categorías al montar
   useEffect(() => {
@@ -116,6 +120,83 @@ export default function Market() {
     loadProducts()
   }
 
+  // Funciones de selección múltiple
+  function toggleSelect(id: number) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function clearSelection() {
+    setSelected(new Set())
+  }
+
+  function selectAllOnPage() {
+    setSelected(new Set(items.map((item) => item.product_id)))
+  }
+
+  function toggleSelectAllOnPage() {
+    if (selected.size === items.length && items.length > 0) {
+      clearSelection()
+    } else {
+      selectAllOnPage()
+    }
+  }
+
+  async function handleBatchUpdate() {
+    if (selected.size === 0) {
+      push({ kind: 'error', message: 'Debe seleccionar al menos un producto' })
+      return
+    }
+
+    const productIds = Array.from(selected)
+    
+    // Validar límite del backend
+    if (productIds.length > 100) {
+      push({ kind: 'error', message: 'Máximo 100 productos por actualización' })
+      return
+    }
+
+    setUpdating(true)
+    try {
+      const response = await batchUpdateMarketPrices(productIds)
+      
+      // Construir mensaje de resumen
+      const parts: string[] = []
+      parts.push(`${response.enqueued} producto${response.enqueued !== 1 ? 's' : ''} encolado${response.enqueued !== 1 ? 's' : ''}`)
+      if (response.not_found > 0) {
+        parts.push(`${response.not_found} no encontrado${response.not_found !== 1 ? 's' : ''}`)
+      }
+      if (response.errors > 0) {
+        parts.push(`${response.errors} con error${response.errors !== 1 ? 'es' : ''}`)
+      }
+      
+      push({
+        kind: 'success',
+        message: parts.join(', ')
+      })
+      
+      // Limpiar selección después de éxito
+      clearSelection()
+      
+      // Opcional: recargar productos después de un delay para ver actualizaciones
+      // (las tareas se procesan en background, puede tomar varios segundos)
+      setTimeout(() => {
+        loadProducts()
+      }, 2000)
+      
+    } catch (error: any) {
+      push({
+        kind: 'error',
+        message: error?.message || 'Error al iniciar actualización masiva'
+      })
+    } finally {
+      setUpdating(false)
+    }
+  }
+
   async function handleUpdateSalePrice(productId: number, newPrice: number) {
     try {
       await updateProductSalePrice(productId, newPrice)
@@ -180,15 +261,49 @@ export default function Market() {
     return 'price-in-market'
   }
 
+  /**
+   * Convierte texto en mayúsculas o con formato técnico a Title Case legible
+   * Ejemplos:
+   * - "PAR_0017_BAN" -> "Par 0017 Ban"
+   * - "FER_0025_ORG" -> "Fer 0025 Org"
+   * - "PRODUCTO NORMAL" -> "Producto Normal"
+   * - "producto normal" -> "Producto Normal"
+   */
+  function formatToTitleCase(text: string | null | undefined): string {
+    if (!text) return ''
+    
+    // Dividir por espacios o guiones bajos y convertir cada palabra a Title Case
+    return text
+      .split(/\s+|_+/)
+      .map(word => {
+        if (word.length === 0) return word
+        // Si la palabra es solo números, mantenerla tal cual
+        if (/^\d+$/.test(word)) return word
+        // Convertir a Title Case: primera letra mayúscula, resto minúsculas
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      })
+      .join(' ')
+  }
+
   return (
     <div className="panel p-4" style={{ margin: 16 }}>
       {/* Encabezado */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
         <h2 style={{ marginTop: 0, marginBottom: 0, flex: 1 }}>Mercado</h2>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn" onClick={() => push({ kind: 'info', message: 'Función de actualización masiva pendiente (Etapa 3)' })}>
-            Actualizar todos
+          <button 
+            className="btn" 
+            onClick={handleBatchUpdate}
+            disabled={selected.size === 0 || updating}
+            title={selected.size === 0 ? 'Seleccione productos para actualizar' : `Actualizar ${selected.size} producto${selected.size !== 1 ? 's' : ''}`}
+          >
+            {updating ? 'Actualizando...' : `Actualizar ${selected.size > 0 ? `(${selected.size})` : ''}`}
           </button>
+          {selected.size > 0 && (
+            <button className="btn-secondary" onClick={clearSelection}>
+              Limpiar selección
+            </button>
+          )}
           <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.products)}>
             Ir a Productos
           </button>
@@ -324,6 +439,14 @@ export default function Market() {
         <table className="table w-full">
           <thead>
             <tr>
+              <th style={{ textAlign: 'center', width: 40 }}>
+                <input
+                  type="checkbox"
+                  checked={items.length > 0 && selected.size === items.length}
+                  onChange={toggleSelectAllOnPage}
+                  title={items.length > 0 && selected.size === items.length ? 'Deseleccionar todos' : 'Seleccionar todos'}
+                />
+              </th>
               <th style={{ textAlign: 'left', minWidth: 250 }}>Nombre</th>
               <th style={{ textAlign: 'left', minWidth: 150 }}>SKU</th>
               <th style={{ textAlign: 'center', minWidth: 120 }}>Precio Venta (ARS)</th>
@@ -336,7 +459,7 @@ export default function Market() {
           <tbody>
             {items.length === 0 && !loading ? (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--text-secondary)' }}>
+                <td colSpan={8} style={{ textAlign: 'center', padding: 24, color: 'var(--text-secondary)' }}>
                   {hasActiveFilters() ? (
                     <div>
                       <p style={{ marginBottom: 8 }}>
@@ -347,7 +470,7 @@ export default function Market() {
                       </button>
                     </div>
                   ) : (
-                    'Endpoint /market/products pendiente de implementación (ver docs/MERCADO.md Etapa 2)'
+                    'No hay productos disponibles'
                   )}
                 </td>
               </tr>
@@ -368,7 +491,7 @@ export default function Market() {
                         href={`/productos/${product.product_id}`}
                         title={product.preferred_name}
                       >
-                        {product.preferred_name}
+                        {formatToTitleCase(product.preferred_name)}
                       </a>
                     </td>
 
@@ -501,6 +624,9 @@ export default function Market() {
         }
         .filter-badge button:hover {
           opacity: 1;
+        }
+        .row-selected {
+          background-color: var(--primary-light, rgba(59, 130, 246, 0.1));
         }
       `}</style>
     </div>

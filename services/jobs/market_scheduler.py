@@ -28,6 +28,7 @@ from typing import Optional, List
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
@@ -59,6 +60,15 @@ CRON_SCHEDULE = os.getenv("MARKET_CRON_SCHEDULE", "0 2 * * *")
 
 # Habilitar/deshabilitar scheduler
 SCHEDULER_ENABLED = os.getenv("MARKET_SCHEDULER_ENABLED", "false").lower() == "true"
+
+# Configuración dinámica (puede ser actualizada desde API)
+# Hora de inicio (formato HH:MM en GMT-3, Argentina)
+SCHEDULER_START_HOUR = os.getenv("MARKET_SCHEDULER_START_HOUR", "02:00")
+# Intervalo entre ejecuciones (en horas)
+SCHEDULER_INTERVAL_HOURS = int(os.getenv("MARKET_SCHEDULER_INTERVAL_HOURS", "24"))
+
+# Estado de ejecución actual (para detectar "Working")
+_is_running_job = False
 
 # Motor de BD para el scheduler
 engine = create_async_engine(DB_URL, future=True)
@@ -151,6 +161,8 @@ async def schedule_market_updates() -> None:
     
     Esta función es invocada por APScheduler según la configuración de cron.
     """
+    global _is_running_job
+    _is_running_job = True
     start_time = datetime.utcnow()
     logger.info("[MARKET SCHEDULER] Iniciando job de actualización automática de precios")
     
@@ -235,6 +247,11 @@ async def schedule_market_updates() -> None:
         raise
 
 
+def get_is_working() -> bool:
+    """Obtiene el estado de ejecución actual del job."""
+    return _is_running_job
+
+
 async def get_scheduler_status() -> dict:
     """
     Obtiene el estado actual del scheduler y estadísticas de productos.
@@ -279,9 +296,12 @@ async def get_scheduler_status() -> dict:
         return {
             "scheduler_enabled": SCHEDULER_ENABLED,
             "cron_schedule": CRON_SCHEDULE,
+            "start_hour": SCHEDULER_START_HOUR,
+            "interval_hours": SCHEDULER_INTERVAL_HOURS,
             "update_frequency_days": UPDATE_FREQUENCY_DAYS,
             "max_products_per_run": MAX_PRODUCTS_PER_RUN,
             "prioritize_mandatory": PRIORITIZE_MANDATORY,
+            "is_working": get_is_working(),
             "stats": {
                 "total_products_with_sources": total_products,
                 "never_updated": never_updated,
@@ -298,9 +318,51 @@ async def get_scheduler_status() -> dict:
 scheduler: Optional[AsyncIOScheduler] = None
 
 
-def create_scheduler() -> AsyncIOScheduler:
+def _create_trigger_from_config(start_hour: str, interval_hours: int):
+    """
+    Crea un trigger de APScheduler desde hora de inicio e intervalo.
+    
+    Args:
+        start_hour: Hora en formato HH:MM (GMT-3, Argentina)
+        interval_hours: Intervalo en horas (1-24)
+    
+    Returns:
+        Trigger de APScheduler (CronTrigger o IntervalTrigger)
+    """
+    try:
+        # Parsear hora (formato HH:MM)
+        hour_str, minute_str = start_hour.split(":")
+        hour = int(hour_str)
+        minute = int(minute_str)
+        
+        # Validar rango
+        if not (0 <= hour < 24 and 0 <= minute < 60):
+            raise ValueError(f"Hora inválida: {start_hour}")
+        
+        # Convertir GMT-3 a UTC (sumar 3 horas)
+        hour_utc = (hour + 3) % 24
+        
+        # Si el intervalo es 24 horas, usar CronTrigger diario
+        if interval_hours == 24:
+            return CronTrigger(hour=hour_utc, minute=minute)
+        # Si el intervalo es menor a 24, usar IntervalTrigger
+        elif 1 <= interval_hours < 24:
+            from datetime import timedelta
+            return IntervalTrigger(hours=interval_hours, start_date=datetime.utcnow().replace(hour=hour_utc, minute=minute, second=0, microsecond=0))
+        else:
+            raise ValueError(f"Intervalo inválido: {interval_hours} (debe ser 1-24)")
+    except Exception as e:
+        logger.error(f"[MARKET SCHEDULER] Error creando trigger: {e}, usando default")
+        return CronTrigger(hour=2, minute=0)
+
+
+def create_scheduler(start_hour: Optional[str] = None, interval_hours: Optional[int] = None) -> AsyncIOScheduler:
     """
     Crea y configura una instancia de APScheduler.
+    
+    Args:
+        start_hour: Hora de inicio (HH:MM en GMT-3). Si None, usa SCHEDULER_START_HOUR
+        interval_hours: Intervalo en horas. Si None, usa SCHEDULER_INTERVAL_HOURS
     
     Returns:
         Scheduler configurado pero no iniciado
@@ -315,29 +377,89 @@ def create_scheduler() -> AsyncIOScheduler:
     
     scheduler = AsyncIOScheduler(timezone="UTC")
     
+    # Usar parámetros o valores por defecto
+    effective_start_hour = start_hour or SCHEDULER_START_HOUR
+    effective_interval = interval_hours or SCHEDULER_INTERVAL_HOURS
+    
+    # Crear trigger desde hora e intervalo
+    trigger = _create_trigger_from_config(effective_start_hour, effective_interval)
+    
     # Agregar job de actualización de precios
     scheduler.add_job(
         schedule_market_updates,
-        trigger=CronTrigger.from_crontab(CRON_SCHEDULE),
+        trigger=trigger,
         id="market_price_update",
         name="Actualización automática de precios de mercado",
         replace_existing=True,
         misfire_grace_time=3600,  # 1 hora de gracia para misfires
     )
     
+    trigger_desc = f"inicio: {effective_start_hour} GMT-3, intervalo: {effective_interval}h"
     logger.info(
-        f"[MARKET SCHEDULER] Job configurado: '{CRON_SCHEDULE}' "
+        f"[MARKET SCHEDULER] Job configurado: {trigger_desc} "
         f"(cada {UPDATE_FREQUENCY_DAYS} días, máx {MAX_PRODUCTS_PER_RUN} productos)"
     )
     
     return scheduler
 
 
-def start_scheduler() -> None:
+def update_scheduler_config(start_hour: str, interval_hours: int) -> None:
+    """
+    Actualiza la configuración del scheduler (hora de inicio e intervalo).
+    
+    Si el scheduler está corriendo, lo reinicia con la nueva configuración.
+    
+    Args:
+        start_hour: Hora de inicio en formato HH:MM (GMT-3, Argentina)
+        interval_hours: Intervalo entre ejecuciones en horas (1-24)
+    """
+    global scheduler, SCHEDULER_START_HOUR, SCHEDULER_INTERVAL_HOURS
+    
+    # Validar formato de hora
+    try:
+        hour_str, minute_str = start_hour.split(":")
+        hour = int(hour_str)
+        minute = int(minute_str)
+        if not (0 <= hour < 24 and 0 <= minute < 60):
+            raise ValueError(f"Hora inválida: {start_hour}")
+    except Exception as e:
+        raise ValueError(f"Formato de hora inválido (debe ser HH:MM): {e}")
+    
+    # Validar intervalo
+    if not (1 <= interval_hours <= 24):
+        raise ValueError(f"Intervalo inválido: {interval_hours} (debe ser 1-24)")
+    
+    # Actualizar variables globales
+    SCHEDULER_START_HOUR = start_hour
+    SCHEDULER_INTERVAL_HOURS = interval_hours
+    
+    # Si el scheduler está corriendo, reiniciarlo con nueva configuración
+    was_running = False
+    if scheduler is not None and scheduler.running:
+        was_running = True
+        scheduler.shutdown(wait=False)
+        scheduler = None
+    
+    # Recrear scheduler con nueva configuración
+    scheduler = create_scheduler(start_hour, interval_hours)
+    
+    # Si estaba corriendo, iniciarlo de nuevo
+    if was_running:
+        scheduler.start()
+        logger.info(f"[MARKET SCHEDULER] Scheduler reiniciado con nueva configuración: {start_hour} GMT-3, cada {interval_hours}h")
+    else:
+        logger.info(f"[MARKET SCHEDULER] Configuración actualizada: {start_hour} GMT-3, cada {interval_hours}h")
+
+
+def start_scheduler(start_hour: Optional[str] = None, interval_hours: Optional[int] = None) -> None:
     """
     Inicia el scheduler si está habilitado por configuración.
     
     Esta función debe ser llamada al arrancar la aplicación.
+    
+    Args:
+        start_hour: Hora de inicio (override). Si None, usa SCHEDULER_START_HOUR
+        interval_hours: Intervalo en horas (override). Si None, usa SCHEDULER_INTERVAL_HOURS
     """
     if not SCHEDULER_ENABLED:
         logger.info("[MARKET SCHEDULER] Scheduler deshabilitado por configuración (MARKET_SCHEDULER_ENABLED=false)")
@@ -346,12 +468,14 @@ def start_scheduler() -> None:
     global scheduler
     
     if scheduler is None:
-        scheduler = create_scheduler()
+        scheduler = create_scheduler(start_hour, interval_hours)
     
     if not scheduler.running:
         scheduler.start()
         logger.info("[MARKET SCHEDULER] Scheduler iniciado correctamente")
-        logger.info(f"[MARKET SCHEDULER] Próxima ejecución: {scheduler.get_job('market_price_update').next_run_time}")
+        job = scheduler.get_job('market_price_update')
+        if job and job.next_run_time:
+            logger.info(f"[MARKET SCHEDULER] Próxima ejecución: {job.next_run_time}")
     else:
         logger.warning("[MARKET SCHEDULER] Scheduler ya estaba en ejecución")
 
@@ -405,8 +529,16 @@ async def run_manual_update(
             return {
                 "success": True,
                 "products_enqueued": 0,
+                "sources_total": 0,
+                "duration_seconds": 0.0,
                 "message": "No hay productos pendientes de actualización"
             }
+        
+        # Contar fuentes totales
+        sources_query = select(func.count()).select_from(MarketSource).where(
+            MarketSource.product_id.in_(product_ids)
+        )
+        sources_total = await session.scalar(sources_query) or 0
         
         enqueued = 0
         for product_id in product_ids:
@@ -426,6 +558,7 @@ async def run_manual_update(
         return {
             "success": True,
             "products_enqueued": enqueued,
+            "sources_total": sources_total,
             "duration_seconds": duration,
             "message": f"Se encolaron {enqueued} productos para actualización"
         }

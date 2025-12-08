@@ -8,7 +8,10 @@ import { useState, useEffect } from 'react'
 interface SchedulerStatus {
   running: boolean
   enabled: boolean
+  working: boolean
   cron_schedule: string
+  start_hour: string
+  interval_hours: number
   next_run_time: string | null
   update_frequency_days: number
   max_products_per_run: number
@@ -38,6 +41,9 @@ export default function SchedulerControl() {
   const [lastResult, setLastResult] = useState<ManualRunResult | null>(null)
   const [maxProducts, setMaxProducts] = useState<number>(50)
   const [daysThreshold, setDaysThreshold] = useState<number>(2)
+  const [startHour, setStartHour] = useState<string>('02:00')
+  const [intervalHours, setIntervalHours] = useState<number>(24)
+  const [configLoading, setConfigLoading] = useState(false)
 
   const fetchStatus = async () => {
     try {
@@ -47,6 +53,9 @@ export default function SchedulerControl() {
       }
       const data = await response.json()
       setStatus(data)
+      // Sincronizar estado local con configuración del servidor
+      if (data.start_hour) setStartHour(data.start_hour)
+      if (data.interval_hours) setIntervalHours(data.interval_hours)
       setError(null)
     } catch (err: any) {
       setError(err.message || 'Error al cargar estado')
@@ -125,6 +134,62 @@ export default function SchedulerControl() {
     }
   }
 
+  const handleToggle = async () => {
+    setActionLoading(true)
+    try {
+      const response = await fetch('/admin/scheduler/toggle', {
+        method: 'POST',
+        credentials: 'include',
+      })
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+      await fetchStatus()
+      setLastResult(null)
+    } catch (err: any) {
+      setError('Error al alternar scheduler: ' + err.message)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleUpdateConfig = async () => {
+    // Validar formato de hora
+    const hourRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
+    if (!hourRegex.test(startHour)) {
+      setError('Formato de hora inválido. Use HH:MM (ej: 02:00)')
+      return
+    }
+    
+    if (intervalHours < 1 || intervalHours > 24) {
+      setError('Intervalo debe estar entre 1 y 24 horas')
+      return
+    }
+
+    setConfigLoading(true)
+    try {
+      const response = await fetch('/admin/scheduler/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          start_hour: startHour,
+          interval_hours: intervalHours,
+        }),
+      })
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || `HTTP ${response.status}`)
+      }
+      await fetchStatus()
+      setError(null)
+    } catch (err: any) {
+      setError('Error al actualizar configuración: ' + err.message)
+    } finally {
+      setConfigLoading(false)
+    }
+  }
+
   const formatNextRun = (nextRun: string | null): string => {
     if (!nextRun) return 'No programado'
     const date = new Date(nextRun)
@@ -169,19 +234,55 @@ export default function SchedulerControl() {
       {/* Estado del Scheduler */}
       <div style={{ marginBottom: 24 }}>
         <h4>Estado</h4>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12 }}>
-          <span style={{
-            padding: '4px 12px',
-            borderRadius: 4,
-            backgroundColor: status.running ? 'var(--success)' : 'var(--muted)',
-            color: 'white',
-            fontWeight: 'bold',
-          }}>
-            {status.running ? '▶ Running' : '⏸ Stopped'}
-          </span>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+          {status.working ? (
+            <span style={{
+              padding: '4px 12px',
+              borderRadius: 4,
+              backgroundColor: '#f59e0b',
+              color: 'white',
+              fontWeight: 'bold',
+            }}>
+              ⚙️ Working
+            </span>
+          ) : status.running ? (
+            <span style={{
+              padding: '4px 12px',
+              borderRadius: 4,
+              backgroundColor: 'var(--success)',
+              color: 'white',
+              fontWeight: 'bold',
+            }}>
+              ▶ Running
+            </span>
+          ) : (
+            <span style={{
+              padding: '4px 12px',
+              borderRadius: 4,
+              backgroundColor: 'var(--muted)',
+              color: 'white',
+              fontWeight: 'bold',
+            }}>
+              ⏸ OFF
+            </span>
+          )}
           <span style={{ color: 'var(--muted)' }}>
             {status.enabled ? 'Habilitado' : 'Deshabilitado'}
           </span>
+        </div>
+        
+        {/* Toggle Switch */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={status.running}
+              onChange={handleToggle}
+              disabled={actionLoading || status.working}
+              style={{ width: 40, height: 20, cursor: 'pointer' }}
+            />
+            <span>Activar/Desactivar Scheduler</span>
+          </label>
         </div>
 
         <div style={{ marginBottom: 8 }}>
@@ -191,21 +292,7 @@ export default function SchedulerControl() {
           <strong>Próxima Ejecución:</strong> {formatNextRun(status.next_run_time)}
         </div>
 
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            className="btn-primary"
-            onClick={handleStart}
-            disabled={status.running || actionLoading}
-          >
-            ▶ Iniciar
-          </button>
-          <button
-            className="btn-secondary"
-            onClick={handleStop}
-            disabled={!status.running || actionLoading}
-          >
-            ⏸ Detener
-          </button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button
             className="btn"
             onClick={fetchStatus}
@@ -214,6 +301,52 @@ export default function SchedulerControl() {
             🔄 Refrescar
           </button>
         </div>
+      </div>
+
+      {/* Configuración */}
+      <div style={{ marginBottom: 24 }}>
+        <h4>Configuración</h4>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <div>
+            <label style={{ display: 'block', marginBottom: 4, fontSize: 14, fontWeight: 'bold' }}>
+              Hora de Inicio (GMT-3, Argentina)
+            </label>
+            <input
+              type="time"
+              value={startHour}
+              onChange={(e) => setStartHour(e.target.value)}
+              style={{ width: '100%', padding: 8, borderRadius: 4, border: '1px solid var(--border)' }}
+              disabled={configLoading}
+            />
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
+              Formato: HH:MM (ej: 02:00)
+            </div>
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: 4, fontSize: 14, fontWeight: 'bold' }}>
+              Intervalo (horas)
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="24"
+              value={intervalHours}
+              onChange={(e) => setIntervalHours(parseInt(e.target.value) || 24)}
+              style={{ width: '100%', padding: 8, borderRadius: 4, border: '1px solid var(--border)' }}
+              disabled={configLoading}
+            />
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
+              Rango: 1-24 horas
+            </div>
+          </div>
+        </div>
+        <button
+          className="btn-primary"
+          onClick={handleUpdateConfig}
+          disabled={configLoading || actionLoading}
+        >
+          {configLoading ? 'Guardando...' : 'Guardar Configuración'}
+        </button>
       </div>
 
       {/* Configuración Actual */}
