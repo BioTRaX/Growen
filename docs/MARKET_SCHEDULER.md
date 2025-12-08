@@ -120,7 +120,8 @@ MARKET_MAX_PRODUCTS_PER_RUN=50
 # Valores: true | false
 MARKET_PRIORITIZE_MANDATORY=true
 
-# Horario de ejecución (cron expression)
+# Horario de ejecución (cron expression) - DEPRECADO
+# Ahora se configura desde la UI usando hora de inicio e intervalo
 # Formato: "minuto hora día_mes mes día_semana"
 # Ejemplos:
 #   "0 2 * * *"     -> Todos los días a las 2:00 AM
@@ -128,6 +129,14 @@ MARKET_PRIORITIZE_MANDATORY=true
 #   "0 2 * * 0"     -> Domingos a las 2:00 AM
 #   "0 3 */2 * *"   -> Cada 2 días a las 3:00 AM
 MARKET_CRON_SCHEDULE="0 2 * * *"
+
+# Hora de inicio (formato HH:MM en GMT-3, Argentina)
+# Configurable desde la UI en /admin/scheduler
+MARKET_SCHEDULER_START_HOUR="02:00"
+
+# Intervalo entre ejecuciones (en horas, 1-24)
+# Configurable desde la UI en /admin/scheduler
+MARKET_SCHEDULER_INTERVAL_HOURS=24
 ```
 
 ### Configuración Recomendada por Entorno
@@ -283,18 +292,39 @@ crontab -e
      - **Argumentos:** `scripts\run_market_update.py`
      - **Iniciar en:** `C:\Proyectos\NiceGrow\Growen`
 
-### Opción 4: Ejecución Manual desde API
+### Opción 4: Panel de Control Web (Recomendado)
+
+Acceder a `http://localhost:5175/admin/scheduler` para:
+
+- **Ver estado**: OFF / Running / Working
+- **Toggle**: Activar/Desactivar scheduler con un switch
+- **Configurar**: Hora de inicio (GMT-3) e intervalo (horas)
+- **Ejecutar manualmente**: Forzar sincronización inmediata
+
+La configuración se persiste y se aplica automáticamente al reiniciar el scheduler.
+
+### Opción 5: Ejecución Manual desde API
 
 ```bash
 # Trigger manual con configuración por defecto
-curl -X POST http://localhost:8000/market/scheduler/trigger \
+curl -X POST http://localhost:8000/admin/scheduler/run-now \
   -H "Authorization: Bearer YOUR_TOKEN"
 
 # Con parámetros personalizados
-curl -X POST http://localhost:8000/market/scheduler/trigger \
+curl -X POST http://localhost:8000/admin/scheduler/run-now \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"max_products": 100, "days_threshold": 7}'
+
+# Actualizar configuración
+curl -X POST http://localhost:8000/admin/scheduler/config \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"start_hour": "03:00", "interval_hours": 12}'
+
+# Alternar estado
+curl -X POST http://localhost:8000/admin/scheduler/toggle \
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 ## Monitoreo y Logging
@@ -303,9 +333,12 @@ curl -X POST http://localhost:8000/market/scheduler/trigger \
 
 **Desde API:**
 ```bash
-curl http://localhost:8000/market/scheduler/status \
+curl http://localhost:8000/admin/scheduler/status \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
+
+**Desde Panel Web:**
+Acceder a `http://localhost:5175/admin/scheduler` - El estado se actualiza automáticamente cada 30 segundos.
 
 **Desde script:**
 ```bash
@@ -315,8 +348,13 @@ python scripts/run_market_update.py --status-only
 **Respuesta ejemplo:**
 ```json
 {
-  "scheduler_enabled": true,
+  "running": true,
+  "enabled": true,
+  "working": false,
   "cron_schedule": "0 2 * * *",
+  "start_hour": "02:00",
+  "interval_hours": 24,
+  "next_run_time": "2025-11-30T05:00:00Z",
   "update_frequency_days": 2,
   "max_products_per_run": 50,
   "prioritize_mandatory": true,
@@ -329,6 +367,11 @@ python scripts/run_market_update.py --status-only
   }
 }
 ```
+
+**Estados del scheduler:**
+- `OFF`: Scheduler detenido
+- `Running`: Scheduler activo, esperando próxima ejecución
+- `Working`: Scheduler ejecutando una tarea ahora mismo
 
 ### Logs del Scheduler
 

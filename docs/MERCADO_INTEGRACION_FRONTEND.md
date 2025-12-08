@@ -254,6 +254,8 @@ preferred_name = prod.sku_custom if prod.sku_custom else prod.name
 
 **Consistencia**: El frontend siempre recibe `preferred_name` ya computado, no necesita implementar esta lógica.
 
+**Formateo visual**: El frontend aplica formateo a Title Case al `preferred_name` antes de mostrarlo en la columna "Nombre" de la tabla. Esto convierte texto en mayúsculas (ej: "PAR_0017_BAN") a formato legible (ej: "Par 0017 Ban"). El SKU se muestra por separado en su propia columna sin formateo.
+
 ---
 
 ## 4. Flujo de Integración Completo
