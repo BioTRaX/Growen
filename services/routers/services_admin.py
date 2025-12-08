@@ -45,6 +45,7 @@ KNOWN_SERVICES = [
     "scheduler",
     "notifier",
     "market_worker",  # Worker de actualización de precios de mercado
+    "drive_sync_worker",  # Worker de sincronización Drive
 ]
 
 
@@ -342,15 +343,25 @@ async def pdf_import_ai_stats(db: AsyncSession = Depends(get_session)) -> Dict[s
 
 
 @router.post("/{name}/start", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
-async def start(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
-    """Inicia un servicio y registra logs/uptime."""
+async def start(name: str, mode: Optional[str] = Query(None, description="Modo de ejecución: 'docker' o 'local' (solo para drive_sync_worker)"), db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
+    """Inicia un servicio y registra logs/uptime.
+    
+    Args:
+        name: Nombre del servicio
+        mode: Modo de ejecución ('docker' o 'local'), solo aplica a drive_sync_worker
+    """
     if name not in KNOWN_SERVICES:
         raise HTTPException(status_code=404, detail="Servicio desconocido")
+    
+    # Validar modo solo para drive_sync_worker
+    if name == "drive_sync_worker" and mode and mode not in ("docker", "local"):
+        raise HTTPException(status_code=400, detail="Modo debe ser 'docker' o 'local'")
+    
     row = await _ensure_row(db, name)
     cid = _cid()
     t0 = time.perf_counter()
     try:
-        st = _start(name, correlation_id=cid)
+        st = _start(name, correlation_id=cid, mode=mode)
         dur = int((time.perf_counter() - t0) * 1000)
         row.status = st.status
         if st.ok:

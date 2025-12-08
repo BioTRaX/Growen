@@ -57,32 +57,66 @@ function Wait-DockerReady {
 }
 
 function Ensure-Redis {
-    param([string]$Name = 'growen-redis', [string]$Image = 'redis:7-alpine')
-    Write-Log "Ensuring Redis container '$Name' is running..."
-    $existing = docker ps -a --filter "name=^/$Name$" --format '{{.Names}}'
-    if (-not $existing) {
-        Write-Log 'Creating Redis container with restart=unless-stopped...'
-        docker run --name $Name --restart unless-stopped -p 6379:6379 -d $Image | Out-Null
-    } else {
-        Write-Log 'Container exists; enforcing restart policy and starting if stopped.'
-        docker update --restart unless-stopped $Name 1>$null 2>$null
-        $running = docker inspect -f '{{.State.Running}}' $Name
-        if ($running -ne 'true') { docker start $Name | Out-Null }
+    Write-Log 'Ensuring Redis service via docker-compose...'
+    $composeFile = Join-Path $root 'docker-compose.yml'
+    if (-not (Test-Path $composeFile)) {
+        Write-Log "ERROR: docker-compose.yml not found at $composeFile"
+        throw "docker-compose.yml not found"
     }
+    
+    # Verificar si existe un contenedor creado manualmente (sin docker-compose)
+    $existing = docker ps -a --filter "name=^/growen-redis$" --format '{{.Names}}' 2>$null
+    if ($existing) {
+        # Verificar si el contenedor fue creado por docker-compose
+        $labels = docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' growen-redis 2>$null
+        if (-not $labels) {
+            Write-Log 'WARNING: Found manually created Redis container (not from docker-compose).'
+            Write-Log 'Removing old container to migrate to docker-compose...'
+            docker stop growen-redis 2>$null | Out-Null
+            docker rm growen-redis 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Log 'ERROR: Could not remove old Redis container. Please remove it manually: docker rm -f growen-redis'
+                throw "Could not remove old Redis container"
+            }
+            Write-Log 'Old container removed. Proceeding with docker-compose...'
+        }
+    }
+    
+    # Usar docker compose para levantar Redis
+    Write-Log 'Starting Redis via docker compose up -d redis...'
+    $result = docker compose -f $composeFile up -d redis 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $errorStr = $result -join ' '
+        Write-Log "ERROR: Failed to start Redis via docker-compose: $errorStr"
+        throw "Failed to start Redis: $errorStr"
+    } else {
+        Write-Log 'Redis service started via docker compose.'
+    }
+    
     # Quick ping
     Write-Log 'Verifying Redis responds on localhost:6379...'
-    try {
-        # Simple TCP test
-        $socket = New-Object Net.Sockets.TcpClient
-        $iar = $socket.BeginConnect('127.0.0.1', 6379, $null, $null)
-        $ok = $iar.AsyncWaitHandle.WaitOne(3000, $false)
-        if ($ok -and $socket.Connected) {
-            Write-Log 'Redis is reachable.'
-        } else {
-            Write-Log 'Warning: Redis not reachable yet.'
+    $maxRetries = 10
+    $retry = 0
+    $connected = $false
+    while ($retry -lt $maxRetries -and -not $connected) {
+        try {
+            $socket = New-Object Net.Sockets.TcpClient
+            $iar = $socket.BeginConnect('127.0.0.1', 6379, $null, $null)
+            $ok = $iar.AsyncWaitHandle.WaitOne(1000, $false)
+            if ($ok -and $socket.Connected) {
+                $connected = $true
+                Write-Log 'Redis is reachable.'
+            }
+            $socket.Close()
+        } catch { }
+        if (-not $connected) {
+            $retry++
+            Start-Sleep -Milliseconds 500
         }
-        $socket.Close()
-    } catch { Write-Log "Warning: Redis check failed: $_" }
+    }
+    if (-not $connected) {
+        Write-Log 'WARNING: Redis not reachable after retries. It may still be starting.'
+    }
 }
 
 function Start-Worker {

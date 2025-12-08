@@ -38,7 +38,23 @@ export default defineConfig({
       '/purchases': { target: API_TARGET, changeOrigin: true },
       '/suppliers': { target: API_TARGET, changeOrigin: true },
       // Media estática (imágenes) durante dev
-      '/media': { target: API_TARGET, changeOrigin: true },
+      '/media': {
+        target: API_TARGET,
+        changeOrigin: true,
+        secure: false,
+        // Mantener la ruta completa (/media/... se mantiene en el backend)
+        rewrite: (path) => path,
+        // Configurar headers para CORS y cache
+        configure: (proxy, _options) => {
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            // Asegurar que las peticiones de media pasen correctamente
+            proxyReq.setHeader('Accept', '*/*');
+          });
+          proxy.on('error', (err, req, res) => {
+            console.error('[Vite Proxy] Error proxying media:', err.message);
+          });
+        },
+      },
     }
   }
 })

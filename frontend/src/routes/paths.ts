@@ -19,6 +19,7 @@ export const PATHS = {
   adminUsers: "/admin/usuarios",
   adminServices: "/admin/servicios",
   adminImages: "/admin/imagenes-productos",
+  adminDriveSync: "/admin/drive-sync",
   adminCatalogDiagnostics: "/admin/catalogos/diagnostico",
   adminBackups: "/admin/backups",
   adminScheduler: "/admin/scheduler",

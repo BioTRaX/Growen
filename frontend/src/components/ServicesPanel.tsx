@@ -13,6 +13,7 @@ const SERVICE_LABELS: Record<string, string> = {
   scheduler: 'Scheduler (03:00 AR)',
   notifier: 'Notificaciones (Telegram/Email)',
   market_worker: 'Worker Market (actualización precios)',
+  drive_sync_worker: 'Worker Drive Sync (sincronización Google Drive)',
 }
 
 export default function ServicesPanel() {
@@ -23,6 +24,7 @@ export default function ServicesPanel() {
   const streams = useMemo(() => new Map<string, EventSource>(), [])
   const [err, setErr] = useState<string | null>(null)
   const [health, setHealth] = useState<Record<string, { ok: boolean; hints?: string[] }>>({})
+  const [driveSyncMode, setDriveSyncMode] = useState<'docker' | 'local'>('docker')
 
   function Dot({ status }: { status: string }) {
     const color = status === 'running' ? '#22c55e' : (status === 'degraded' || status === 'starting') ? '#f59e0b' : '#ef4444'
@@ -82,7 +84,8 @@ export default function ServicesPanel() {
   async function doStart(name: string) {
     setBusy(name)
     try {
-      await startService(name)
+      const mode = name === 'drive_sync_worker' ? driveSyncMode : undefined
+      await startService(name, mode)
       await refresh()
       const tl = await tailServiceLogs(name, 50)
       setLogs((prev) => ({ ...prev, [name]: tl }))
@@ -162,11 +165,24 @@ export default function ServicesPanel() {
               uptime: {Math.max(0, Math.floor((s.uptime_s || 0))) }s{ (s as any).start_ms ? ` · inicio_ms: ${(s as any).start_ms}` : ''}
             </div>
           </div>
-          <div className="row" style={{ gap: 6 }}>
+          <div className="row" style={{ gap: 6, alignItems: 'center' }}>
               {s.status !== 'running' ? (
-                <button className="btn-primary" disabled={busy === s.name} onClick={() => doStart(s.name)}>
-                  {busy === s.name ? 'Iniciando...' : 'Iniciar'}
-                </button>
+                <>
+                  {s.name === 'drive_sync_worker' && (
+                    <select
+                      value={driveSyncMode}
+                      onChange={(e) => setDriveSyncMode(e.target.value as 'docker' | 'local')}
+                      disabled={busy === s.name}
+                      style={{ padding: '6px 12px', borderRadius: 4, border: '1px solid var(--border)', fontSize: 14, backgroundColor: 'var(--bg)', color: 'var(--text)' }}
+                    >
+                      <option value="docker">Docker</option>
+                      <option value="local">Local</option>
+                    </select>
+                  )}
+                  <button className="btn-primary" disabled={busy === s.name} onClick={() => doStart(s.name)}>
+                    {busy === s.name ? 'Iniciando...' : 'Iniciar'}
+                  </button>
+                </>
               ) : (
                 <button className="btn" disabled={busy === s.name} onClick={() => doStop(s.name)}>
                   {busy === s.name ? 'Deteniendo...' : 'Detener'}

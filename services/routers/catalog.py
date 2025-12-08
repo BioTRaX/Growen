@@ -257,13 +257,10 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
         import logging as _logging
         _logging.getLogger("growen").debug({"event": "create_product_minimal.start", "desired_sku": desired_sku, "strict": strict_flag})
 
+        # Crear producto con canonical_sku si el SKU es canónico
         prod = Product(sku_root=desired_sku, title=payload.title)
-        # Sólo intentar setear canonical_sku si la columna existe y el SKU es canónico
         if sku_is_canonical and has_canonical_col:
-            try:
-                setattr(prod, 'canonical_sku', desired_sku)  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            prod.canonical_sku = desired_sku
         session.add(prod)
         await session.flush()
         # Si el SKU elegido ya se usó (race o fallback previo) y estamos en modo no estricto, generar sufijo incremental
@@ -284,11 +281,10 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
                 raise HTTPException(status_code=409, detail={"code": "duplicate_sku", "message": "No se pudo generar SKU único"})
         if attempt_sku != desired_sku:
             desired_sku = attempt_sku
-            # Actualizar sku_root en stub si aplica
-            try:
-                prod.sku_root = desired_sku  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            # Actualizar sku_root y canonical_sku si aplica
+            prod.sku_root = desired_sku
+            if is_canonical_sku(desired_sku) and has_canonical_col:
+                prod.canonical_sku = desired_sku
         # Crear Variant con reintentos en caso de colisión de unicidad (modo no estricto)
         import random as _r, string as _s
         max_variant_retries = 6
@@ -304,10 +300,9 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
                 await session.flush()
                 if attempt_variant_sku != desired_sku:
                     desired_sku = attempt_variant_sku
-                    try:
-                        prod.sku_root = desired_sku  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
+                    prod.sku_root = desired_sku
+                    if is_canonical_sku(desired_sku) and has_canonical_col:
+                        prod.canonical_sku = desired_sku
                 break
             except IntegrityError as ie:  # collision
                 last_error = ie
@@ -376,7 +371,9 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
 
     try:
         await session.commit()
-        response = {"id": prod.id, "title": prod.title, "sku_root": prod.sku_root, "idempotent": False, "created": True}
+        # Priorizar canonical_sku en la respuesta
+        response_sku = prod.canonical_sku or prod.sku_root
+        response = {"id": prod.id, "title": prod.title, "sku_root": response_sku, "canonical_sku": prod.canonical_sku, "idempotent": False, "created": True}
     except IntegrityError:
         await session.rollback()
         if not strict_flag:
@@ -740,12 +737,20 @@ async def variants_lookup(
             "usage_instructions": None,
         }
 
-    # 2. Buscar por SKU interno (Product.sku_root) - fallback
+    # 2. Buscar por SKU canónico en Product (Product.canonical_sku) - preferido
     product = (
         await session.execute(
-            select(Product).where(func.lower(Product.sku_root) == sku_lower)
+            select(Product).where(func.lower(Product.canonical_sku) == sku_lower)
         )
     ).scalars().first()
+    
+    # 3. Si no se encontró, buscar por sku_root como fallback temporal
+    if not product:
+        product = (
+            await session.execute(
+                select(Product).where(func.lower(Product.sku_root) == sku_lower)
+            )
+        ).scalars().first()
 
     if product:
         return await _build_product_response(session, product)
@@ -1850,6 +1855,55 @@ class SortOrder(str, Enum):
     desc = "desc"
 
 
+def _get_image_url_for_browser(img: Image, versions: dict) -> str:
+    """Obtiene la URL de imagen compatible con navegadores.
+    
+    Prioriza versiones derivadas en WebP (preferir 'full', luego 'card', luego 'thumb')
+    si están disponibles, ya que son compatibles con todos los navegadores.
+    Si no hay versiones derivadas, devuelve el original.
+    
+    Args:
+        img: Objeto Image de la base de datos.
+        versions: Dict con versiones derivadas {kind: ImageVersion} para esta imagen.
+    
+    Returns:
+        URL normalizada (con forward slashes) para usar en el navegador.
+    """
+    # Detectar si el archivo original es HEIC/HEIF (no soportado por navegadores)
+    is_heic = False
+    if img.mime and img.mime.lower() in ("image/heic", "image/heif"):
+        is_heic = True
+    elif img.path:
+        path_lower = img.path.lower()
+        if path_lower.endswith(('.heic', '.heif')):
+            is_heic = True
+    elif img.url:
+        url_lower = img.url.lower()
+        if url_lower.endswith(('.heic', '.heif')):
+            is_heic = True
+    
+    # Si es HEIC/HEIF o si hay versiones derivadas disponibles, usar versión derivada
+    # (las versiones derivadas siempre son WebP, compatibles con navegadores)
+    if is_heic or versions:
+        # Preferir: full > card > thumb
+        for kind in ["full", "card", "thumb"]:
+            if kind in versions:
+                v = versions[kind]
+                if v.path:
+                    # Normalizar separadores para URL
+                    path_norm = v.path.replace('\\', '/')
+                    return f"/media/{path_norm}"
+    
+    # Fallback: usar URL original (normalizada)
+    if img.url:
+        return img.url.replace('\\', '/')
+    # Si no hay URL, construir desde path
+    if img.path:
+        path_norm = img.path.replace('\\', '/')
+        return f"/media/{path_norm}"
+    return img.url or ""
+
+
 async def _category_path(session: AsyncSession, category_id: int | None) -> str | None:
     if not category_id:
         return None
@@ -2844,6 +2898,25 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
             .order_by(Image.sort_order.asc().nulls_last(), Image.id.asc())
         )
     ).scalars().all()
+    
+    # Obtener versiones derivadas para imágenes HEIC/HEIF (los navegadores no soportan HEIC nativamente)
+    from db.models import ImageVersion
+    img_ids = [im.id for im in imgs]
+    versions = {}
+    if img_ids:
+        version_rows = (
+            await session.execute(
+                select(ImageVersion)
+                .where(
+                    ImageVersion.image_id.in_(img_ids),
+                    ImageVersion.kind.in_(["full", "card", "thumb"])
+                )
+            )
+        ).scalars().all()
+        for v in version_rows:
+            if v.image_id not in versions:
+                versions[v.image_id] = {}
+            versions[v.image_id][v.kind] = v
     # Resolver canónico (si existe) a partir de equivalencias del/los SupplierProduct asociados a este producto interno
     canonical_id = None
     canonical_sale = None
@@ -2930,7 +3003,7 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
         "images": [
             {
                 "id": im.id,
-                "url": im.url,
+                "url": _get_image_url_for_browser(im, versions.get(im.id, {})),
                 "alt_text": im.alt_text,
                 "title_text": im.title_text,
                 "is_primary": im.is_primary,

@@ -27,6 +27,7 @@ pytest>=8.1.0
 pytest-asyncio>=0.23
 python-dotenv>=1.0.0
 Pillow>=10.4.0
+pillow-heif>=0.13.0  # Soporte para HEIF/HEIC (formato iPhone)
 beautifulsoup4>=4.12.3
 clamd>=1.0.2
 dramatiq[redis]>=1.15.0

@@ -2,7 +2,7 @@
 setlocal ENABLEDELAYEDEXPANSION
 
 REM Script unificado para iniciar workers de Dramatiq
-REM Uso: start_worker_all.cmd [images|market|all]
+REM Uso: start_worker_all.cmd [images|market|drive_sync|all]
 REM Por defecto inicia todos los workers
 
 set "ROOT=%~dp0..\"
@@ -30,20 +30,26 @@ if /i "%MODE%"=="market" (
     goto :end
 )
 
+if /i "%MODE%"=="drive_sync" (
+    echo [WORKER] Starting drive_sync worker only...
+    call "%ROOT%scripts\start_worker_drive_sync.cmd"
+    goto :end
+)
+
 if /i "%MODE%"=="all" (
-    echo [WORKER] Starting combined worker (images + market queues)...
+    echo [WORKER] Starting combined worker (images + market + drive_sync queues)...
     set "LOG_FILE=%LOG_DIR%\worker_all.log"
     
     echo [WORKER] starting Dramatiq worker for all queues (broker: %REDIS_URL%) >> "!LOG_FILE!" 2>&1
     
-    REM Iniciar worker multi-queue: procesa tanto 'images' como 'market'
-    "%VENV%\python.exe" -m dramatiq services.jobs.images workers.market_scraping --processes 1 --threads 3 --queues images,market 1>>"!LOG_FILE!" 2>&1
+    REM Iniciar worker multi-queue: procesa 'images', 'market' y 'drive_sync'
+    "%VENV%\python.exe" -m dramatiq services.jobs.images workers.market_scraping services.jobs.drive_sync --processes 1 --threads 3 --queues images,market,drive_sync 1>>"!LOG_FILE!" 2>&1
     
     goto :end
 )
 
 echo [ERROR] Invalid mode: %MODE%
-echo [ERROR] Valid modes: images, market, all
+echo [ERROR] Valid modes: images, market, drive_sync, all
 exit /b 1
 
 :end

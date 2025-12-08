@@ -31,8 +31,9 @@ export async function serviceStatus(name: string): Promise<{ name: string; statu
   return r.data
 }
 
-export async function startService(name: string): Promise<{ name: string; status: string; ok: boolean; correlation_id: string; detail?: string }>{
-  const r = await http.post(`/admin/services/${encodeURIComponent(name)}/start`)
+export async function startService(name: string, mode?: 'docker' | 'local'): Promise<{ name: string; status: string; ok: boolean; correlation_id: string; detail?: string }>{
+  const params = mode ? { mode } : {}
+  const r = await http.post(`/admin/services/${encodeURIComponent(name)}/start`, null, { params })
   return r.data
 }
 

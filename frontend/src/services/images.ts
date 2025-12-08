@@ -71,3 +71,8 @@ export async function refreshSEO(productId: number, imageId: number): Promise<{ 
   return r.data
 }
 
+export async function generateWebP(productId: number, imageId: number): Promise<{ status: string; generated: string[]; message: string }> {
+  const r = await http.post(`/products/${productId}/images/${imageId}/generate-webp`)
+  return r.data
+}
+

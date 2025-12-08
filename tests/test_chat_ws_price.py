@@ -60,7 +60,8 @@ def test_ws_returns_product_answer_and_copy():
         msg = _receive_non_ping(ws)
         assert msg.get("role") == "assistant"
         assert msg.get("type") == "product_answer"
-        assert msg.get("intent") == "price"
+        # El intent puede ser "product_tool" (tool calling) o "price" (fallback legacy)
+        assert msg.get("intent") in ("product_tool", "price")
         payload = msg.get("data", {})
         results = payload.get("results", [])
         assert results, payload
