@@ -211,7 +211,7 @@ async def health_optional() -> Dict[str, Any]:
 
 @router.get("/dramatiq")
 async def health_dramatiq() -> Dict[str, Any]:
-    """Verifica broker Redis, tamaño de cola 'images' y presencia de workers."""
+    """Verifica broker Redis, tamaño de colas y presencia de workers."""
     if os.getenv("RUN_INLINE_JOBS", "0") == "1":
         return _status(False, detail="skipped: RUN_INLINE_JOBS=1")
     try:
@@ -221,16 +221,26 @@ async def health_dramatiq() -> Dict[str, Any]:
         client = redis.from_url(url, decode_responses=True)  # type: ignore[attr-defined]
         broker_ok = bool(client.ping())
         prefix = os.getenv("DRAMATIQ_REDIS_PREFIX", "dramatiq")
-        q_images = f"{prefix}:queue:images"
-        q_exists = bool(client.exists(q_images))
-        q_len = int(client.llen(q_images)) if q_exists else 0
+        
+        # Verificar múltiples colas
+        queues_info = {}
+        for queue_name in ["images", "market", "drive_sync"]:
+            q_name = f"{prefix}:queue:{queue_name}"
+            q_exists = bool(client.exists(q_name))
+            q_len = int(client.llen(q_name)) if q_exists else 0
+            queues_info[queue_name] = {"exists": q_exists, "size": q_len}
+        
         # Buscar workers registrados (heurística)
         worker_keys = list(client.scan_iter(f"{prefix}:worker*"))
         workers_count = len(worker_keys)
+        
+        # Verificar que haya al menos un worker activo
+        has_workers = workers_count >= 1
+        
         return {
-            "ok": broker_ok and (workers_count >= 1),
+            "ok": broker_ok and has_workers,
             "broker_ok": broker_ok,
-            "queues": {"images": {"exists": q_exists, "size": q_len}},
+            "queues": queues_info,
             "workers": {"count": workers_count, "keys": worker_keys[:10]},
         }
     except Exception as e:
@@ -296,15 +306,21 @@ async def health_summary(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
             client = redis.from_url(url, decode_responses=True)  # type: ignore[attr-defined]
             broker_ok = bool(client.ping())
             prefix = os.getenv("DRAMATIQ_REDIS_PREFIX", "dramatiq")
-            q_images = f"{prefix}:queue:images"
-            q_exists = bool(client.exists(q_images))
-            q_len = int(client.llen(q_images)) if q_exists else 0
+            
+            # Verificar múltiples colas
+            queues_info = {}
+            for queue_name in ["images", "market", "drive_sync"]:
+                q_name = f"{prefix}:queue:{queue_name}"
+                q_exists = bool(client.exists(q_name))
+                q_len = int(client.llen(q_name)) if q_exists else 0
+                queues_info[queue_name] = {"exists": q_exists, "size": q_len}
+            
             worker_keys = list(client.scan_iter(f"{prefix}:worker*"))
             workers_count = len(worker_keys)
             dramatiq_details = {
                 "ok": broker_ok and (workers_count >= 1),
                 "broker_ok": broker_ok,
-                "queues": {"images": {"exists": q_exists, "size": q_len}},
+                "queues": queues_info,
                 "workers": {"count": workers_count, "keys": worker_keys[:10]},
             }
         except Exception as e:

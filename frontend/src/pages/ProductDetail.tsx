@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import http from '../services/http'
-import { uploadProductImage, addImageFromUrl, setPrimary, lockImage, deleteImage, refreshSEO, removeBg, watermark } from '../services/images'
+import { uploadProductImage, addImageFromUrl, setPrimary, lockImage, deleteImage, refreshSEO, removeBg, watermark, generateWebP } from '../services/images'
 import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
 import { useAuth } from '../auth/AuthContext'
 import { getProductDetailStylePref, putProductDetailStylePref, ProductDetailStyle, updateSalePrice, updateSupplierBuyPrice } from '../services/productsEx'
@@ -525,6 +525,16 @@ export default function ProductDetail() {
           )}
           {primary && canEdit && (
             <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+              <button className="btn-secondary" onClick={async () => {
+                try {
+                  showToast('info', 'Generando versiones WebP...')
+                  const result = await generateWebP(pid, primary.id)
+                  showToast('success', result.message || 'Versiones WebP generadas exitosamente')
+                  await refresh()
+                } catch (e: any) {
+                  showToast('error', e?.response?.data?.detail || e?.message || 'Error al generar WebP')
+                }
+              }}>Generar WebP</button>
               {!primary.locked && <button className="btn-secondary" onClick={async () => { const ok = await ensureImageProcessing(); if (!ok) return; await watermark(pid, primary.id); refresh() }}>Watermark</button>}
               {!primary.locked && <button className="btn-secondary" onClick={async () => { const ok = await ensureImageProcessing(); if (!ok) return; await removeBg(pid, primary.id); refresh() }}>Quitar fondo</button>}
               <button className="btn-secondary" onClick={async () => { const ok = await ensureImageProcessing(); if (!ok) return; await refreshSEO(pid, primary.id); refresh() }}>SEO</button>
@@ -537,6 +547,16 @@ export default function ProductDetail() {
               <img src={im.url} alt={im.alt_text || ''} style={{ width: '100%', height: 190, objectFit: 'cover', borderRadius: 6 }} />
               {canEdit && (
                 <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                  <button className="btn-secondary" onClick={async () => {
+                    try {
+                      showToast('info', 'Generando versiones WebP...')
+                      const result = await generateWebP(pid, im.id)
+                      showToast('success', result.message || 'Versiones WebP generadas exitosamente')
+                      await refresh()
+                    } catch (e: any) {
+                      showToast('error', e?.response?.data?.detail || e?.message || 'Error al generar WebP')
+                    }
+                  }}>Generar WebP</button>
                   {!im.is_primary && <button className="btn-secondary" onClick={async () => { await setPrimary(pid, im.id); refresh() }}>Portada</button>}
                   <button className="btn-secondary" onClick={async () => { await lockImage(pid, im.id); refresh() }}>{im.locked ? 'Unlock' : 'Lock'}</button>
                   <button className="btn" onClick={async () => { await deleteImage(pid, im.id); refresh() }}>Borrar</button>

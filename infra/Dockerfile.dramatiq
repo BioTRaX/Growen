@@ -1,0 +1,81 @@
+# NG-HEADER: Nombre de archivo: Dockerfile.dramatiq
+# NG-HEADER: Ubicación: infra/Dockerfile.dramatiq
+# NG-HEADER: Descripción: Imagen multi-stage para worker Dramatiq de Drive Sync con Python 3.13-slim, usuario no root y healthcheck.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+###############################################
+# Etapa 1: Builder (compila dependencias)
+###############################################
+FROM python:3.13-slim-bookworm AS builder
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    VENV_PATH=/opt/venv
+
+# Paquetes necesarios para compilar dependencias
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    libffi-dev \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    shared-mime-info \
+    curl \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv "$VENV_PATH" && \
+    "$VENV_PATH/bin/pip" install --upgrade pip setuptools wheel
+
+WORKDIR /app
+COPY requirements.txt ./
+
+# Instalamos TODAS las dependencias (incluye dev/test). Futuro: separar requirements-prod.txt.
+RUN "$VENV_PATH/bin/pip" install -r requirements.txt
+
+# Copiamos código fuente (para posibles compilaciones post-install si hiciera falta)
+COPY . .
+
+###############################################
+# Etapa 2: Runtime (mínima superficie)
+###############################################
+FROM python:3.13-slim-bookworm AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    VENV_PATH=/opt/venv \
+    PATH=/opt/venv/bin:$PATH
+
+# Solo librerías de runtime necesarias para ejecutar (sin toolchain de compilación)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    shared-mime-info \
+    curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Creamos usuario no root
+RUN addgroup --system app && adduser --system --ingroup app --home /app app
+WORKDIR /app
+
+# Copiamos virtualenv ya construido
+COPY --from=builder ${VENV_PATH} ${VENV_PATH}
+
+# Copiamos solo el código (evitando capas innecesarias)
+COPY . .
+
+# Aseguramos permisos correctos
+RUN chown -R app:app /app
+USER app
+
+# Healthcheck: verificar conexión Redis
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import os; import redis; r=redis.from_url(os.getenv('REDIS_URL', 'redis://redis:6379/0')); r.ping()" || exit 1
+
+# Comando por defecto: worker de drive_sync
+CMD ["python", "-m", "dramatiq", "services.jobs.drive_sync", "--processes", "1", "--threads", "1", "--queues", "drive_sync"]
+

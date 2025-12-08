@@ -187,8 +187,8 @@ async def list_market_products(
         prod = row[0]  # CanonicalProduct
         alert_count = row[1] if len(row) > 1 else 0  # alert_count
         
-        # preferred_name: siempre usar el nombre descriptivo (campo name)
-        preferred_name = prod.name
+        # preferred_name: usar sku_custom si existe, sino usar name
+        preferred_name = prod.sku_custom if prod.sku_custom else prod.name
         
         # SKU: priorizar sku_custom, luego ng_sku, finalmente el ID
         product_sku = prod.sku_custom or prod.ng_sku or f"ID-{prod.id}"
@@ -382,8 +382,8 @@ async def get_product_sources(
     market_price_min_val = min(prices) if prices else None
     market_price_max_val = max(prices) if prices else None
     
-    # Usar siempre el nombre descriptivo del producto
-    product_name = product.name
+    # Usar sku_custom si existe, sino usar name
+    product_name = product.sku_custom if product.sku_custom else product.name
     
     return ProductSourcesResponse(
         product_id=product.id,
@@ -477,8 +477,8 @@ async def update_product_sale_price(
     await db.commit()
     await db.refresh(product)
     
-    # Usar nombre descriptivo del producto
-    product_name = product.name
+    # Usar sku_custom si existe, sino usar name
+    product_name = product.sku_custom if product.sku_custom else product.name
     
     return UpdateSalePriceResponse(
         product_id=product.id,

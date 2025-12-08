@@ -61,7 +61,7 @@ async def test_find_products_by_name_tool_direct(monkeypatch):
             return self
         async def __aexit__(self, *exc):
             return False
-        async def get(self, url):
+        async def get(self, url, headers=None, **kwargs):
             return await fake_get(url)
     monkeypatch.setattr("httpx.AsyncClient", DummyClient)
     res = await t.find_products_by_name(query="sustrato growmix", user_role="viewer")

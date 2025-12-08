@@ -447,6 +447,141 @@ async def seo_refresh(pid: int, iid: int, db: AsyncSession = Depends(get_session
     return data
 
 
+@router.post(
+    "/{pid}/images/{iid}/generate-webp",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def generate_webp_derivatives(
+    pid: int,
+    iid: int,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+):
+    """Genera versiones derivadas WebP (thumb, card, full) desde el archivo raw de una imagen.
+    
+    Requiere que el archivo raw exista físicamente. Regenera las versiones derivadas
+    incluso si ya existen en la base de datos.
+    """
+    prod = await db.get(Product, pid)
+    img = await db.get(Image, iid)
+    if not prod or not img or img.product_id != pid:
+        raise HTTPException(status_code=404, detail="Imagen o producto no encontrado")
+    
+    if not img.path:
+        raise HTTPException(status_code=400, detail="Imagen sin archivo local registrado")
+    
+    root = get_media_root()
+    orig_path = root / img.path
+    
+    if not orig_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Archivo raw no encontrado en: {orig_path}"
+        )
+    
+    try:
+        await _audit(db, "generate_webp_start", "images", iid, {"product_id": pid}, sess, request)
+    except Exception:
+        pass
+    
+    # Ensure product slug exists for naming
+    if not prod.slug:
+        import re
+        base = (prod.title or f"prod-{pid}").lower()
+        base = re.sub(r"[^a-z0-9\s-]", "", base)
+        base = re.sub(r"[\s_-]+", "-", base).strip("-")
+        prod.slug = base[:200]
+        db.add(prod)
+        await db.flush()
+    
+    # Delete existing derivative versions in DB (we'll regenerate them)
+    existing_versions = (
+        await db.execute(
+            select(ImageVersion).where(
+                ImageVersion.image_id == iid,
+                ImageVersion.kind.in_(["thumb", "card", "full"])
+            )
+        )
+    ).scalars().all()
+    
+    for v in existing_versions:
+        await db.delete(v)
+    
+    await db.flush()
+    
+    # Generate derivatives
+    out_dir = root / "Productos" / str(pid) / "derived"
+    base_name = "-".join([p for p in [prod.slug or None, prod.sku_root or None] if p]) or f"prod-{pid}"
+    
+    try:
+        proc = to_square_webp_set(orig_path, out_dir, base_name)
+        
+        # Create ImageVersion records
+        generated = []
+        for kind, pth, px in (
+            ("thumb", proc.thumb, 256),
+            ("card", proc.card, 800),
+            ("full", proc.full, 1600),
+        ):
+            if not pth.exists():
+                continue
+            
+            relv = str(pth.relative_to(root)).replace('\\', '/')
+            size_bytes = pth.stat().st_size
+            
+            db.add(ImageVersion(
+                image_id=iid,
+                kind=kind,
+                path=relv,
+                width=px,
+                height=px,
+                mime="image/webp",
+                size_bytes=size_bytes,
+            ))
+            generated.append(kind)
+        
+        await db.commit()
+        
+        try:
+            await _audit(
+                db,
+                "generate_webp_success",
+                "images",
+                iid,
+                {"product_id": pid, "generated": generated},
+                sess,
+                request
+            )
+        except Exception:
+            pass
+        
+        return {
+            "status": "ok",
+            "generated": generated,
+            "message": f"Versiones WebP generadas: {', '.join(generated)}"
+        }
+        
+    except Exception as e:
+        await db.rollback()
+        try:
+            await _audit(
+                db,
+                "generate_webp_error",
+                "images",
+                iid,
+                {"product_id": pid, "error": str(e)},
+                sess,
+                request
+            )
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al generar versiones WebP: {str(e)}"
+        )
+
+
 @router.get(
     "/images/review",
     dependencies=[Depends(require_roles("colaborador", "admin"))],

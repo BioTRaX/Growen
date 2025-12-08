@@ -319,11 +319,12 @@ async def test_database_indexes_exist(db: AsyncSession):
     print("="*70)
     
     # Obtener información de índices desde el inspector
-    inspector = inspect(db.bind)
+    # Para AsyncEngine, necesitamos usar run_sync
+    from sqlalchemy import inspect as sync_inspect
     
     print("\n[1/3] Verificando índices en tabla 'canonical_products'...")
     product_indexes = await db.run_sync(
-        lambda conn: inspector.get_indexes('canonical_products')
+        lambda conn: sync_inspect(conn).get_indexes('canonical_products')
     )
     
     print(f"  → Índices encontrados: {len(product_indexes)}")
@@ -344,7 +345,7 @@ async def test_database_indexes_exist(db: AsyncSession):
     
     print("\n[2/3] Verificando índices en tabla 'market_sources'...")
     source_indexes = await db.run_sync(
-        lambda conn: inspector.get_indexes('market_sources')
+        lambda conn: sync_inspect(conn).get_indexes('market_sources')
     )
     
     print(f"  → Índices encontrados: {len(source_indexes)}")

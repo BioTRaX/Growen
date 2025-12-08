@@ -239,7 +239,7 @@ async def chat_endpoint(
             
             # Retornar respuesta del LLM
             clear_memory(memory_key)
-            return ChatOut(text=answer, type="product_answer", intent="price")
+            return ChatOut(text=answer, type="product_answer", intent="product_tool")
                 
         except Exception as e:
             # Si falla el LLM, usar fallback local

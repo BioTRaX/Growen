@@ -636,6 +636,34 @@ call :log "[INFO] Levantando contenedor de base de datos (docker compose up -d d
 docker compose up -d db >> "%LOG_FILE%" 2>&1
 endlocal & exit /b 0
 
+:docker_start_redis
+setlocal EnableDelayedExpansion
+where docker >NUL 2>&1
+if errorlevel 1 ( endlocal & exit /b 1 )
+REM Verificar si existe contenedor creado manualmente (sin docker-compose)
+for /f "tokens=*" %%C in ('docker ps -a --filter "name=^/growen-redis$" --format "{{.Names}}" 2^>^&1') do set "__EXISTS=%%C"
+if defined __EXISTS (
+  REM Verificar si fue creado por docker-compose (tiene label)
+  for /f "tokens=*" %%L in ('docker inspect -f "{{index .Config.Labels \"com.docker.compose.project\"}}" growen-redis 2^>^&1') do set "__LABEL=%%L"
+  if not defined __LABEL (
+    call :log "[WARN] Contenedor Redis creado manualmente detectado. Eliminando para migrar a docker-compose..."
+    docker stop growen-redis >> "%LOG_FILE%" 2>&1
+    docker rm growen-redis >> "%LOG_FILE%" 2>&1
+    if errorlevel 1 (
+      call :log "[ERROR] No se pudo eliminar contenedor Redis antiguo. Ejecuta manualmente: docker rm -f growen-redis"
+      endlocal & exit /b 1
+    )
+    call :log "[INFO] Contenedor antiguo eliminado. Procediendo con docker-compose..."
+  )
+)
+call :log "[INFO] Levantando servicio Redis (docker compose up -d redis)..."
+docker compose up -d redis >> "%LOG_FILE%" 2>&1
+if errorlevel 1 (
+  call :log "[ERROR] No se pudo iniciar Redis via docker-compose."
+  endlocal & exit /b 1
+)
+endlocal & exit /b 0
+
 :restart_docker_gui
 REM Reinicia solo la GUI de Docker Desktop (no toca el servicio/engine)
 setlocal EnableDelayedExpansion

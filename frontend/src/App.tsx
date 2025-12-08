@@ -34,6 +34,7 @@ const AdminLayout = lazy(() => import('./pages/admin/AdminLayout'))
 const AdminUsers = lazy(() => import('./pages/admin/UsersPage'))
 const AdminServices = lazy(() => import('./pages/admin/ServicesPage'))
 const AdminImages = lazy(() => import('./pages/admin/ImagesCrawlerPage'))
+const AdminDriveSync = lazy(() => import('./pages/admin/DriveSyncPage'))
 const AdminBackups = lazy(() => import('./pages/admin/BackupsPage'))
 const AdminScheduler = lazy(() => import('./components/admin/SchedulerControl'))
 const AdminKnowledge = lazy(() => import('./pages/admin/KnowledgePage'))
@@ -181,6 +182,7 @@ export default function App() {
           >
             <Route path="servicios" element={<AdminServices />} />
             <Route path="imagenes-productos" element={<AdminImages />} />
+            <Route path="drive-sync" element={<AdminDriveSync />} />
             <Route path="backups" element={<AdminBackups />} />
             <Route path="catalogos/diagnostico" element={<CatalogDiagnosticsPage />} />
             <Route path="scheduler" element={<AdminScheduler />} />

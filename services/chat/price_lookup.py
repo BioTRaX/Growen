@@ -519,7 +519,11 @@ async def _variant_skus_for_product(
     except OperationalError:
         rows = []
     skus = [sku for sku in rows if sku]
-    if not skus and product.sku_root:
+    # Priorizar canonical_sku sobre sku_root
+    if not skus and product.canonical_sku:
+        skus = [product.canonical_sku]
+    elif not skus and product.sku_root:
+        # Fallback temporal: usar sku_root solo si no hay canonical_sku
         skus = [product.sku_root]
     variant_cache[product.id] = skus
     return skus
@@ -798,6 +802,8 @@ async def _fallback_entry_from_product(
             match_reason=match_reason,
         )
     stock_status = _stock_status(stock_qty)
+    # Priorizar canonical_sku sobre sku_root
+    sku_value = product.canonical_sku or product.sku_root
     return ProductEntry(
         name=product.title,
         price=None,
@@ -809,7 +815,7 @@ async def _fallback_entry_from_product(
         canonical_id=None,
         supplier_item_id=None,
         product_id=product.id,
-        sku=product.sku_root,
+        sku=sku_value,
         variant_skus=variant_skus,
         score=score,
         match_reason=match_reason,
@@ -868,6 +874,7 @@ async def _collect_internal_sku_matches(
     canonical_bundle_cache: Dict[int, CanonicalBundle],
     errors: List[str],
 ) -> List[ProductEntry]:
+    """Busca productos por SKU interno, priorizando canonical_sku sobre sku_root."""
     out: List[ProductEntry] = []
     if not query.sku_candidates:
         return out
@@ -875,13 +882,23 @@ async def _collect_internal_sku_matches(
         candidate = sku.strip().lower()
         if not candidate:
             continue
+        # Buscar primero por canonical_sku (formato canónico XXX_####_YYY)
         stmt = (
             select(Product, SupplierProduct, Supplier)
             .outerjoin(SupplierProduct, SupplierProduct.internal_product_id == Product.id)
             .outerjoin(Supplier, Supplier.id == SupplierProduct.supplier_id)
-            .where(func.lower(Product.sku_root) == candidate)
+            .where(func.lower(Product.canonical_sku) == candidate)
         )
         rows = (await session.execute(stmt)).all()
+        # Si no se encontró por canonical_sku, buscar por sku_root como fallback temporal
+        if not rows:
+            stmt = (
+                select(Product, SupplierProduct, Supplier)
+                .outerjoin(SupplierProduct, SupplierProduct.internal_product_id == Product.id)
+                .outerjoin(Supplier, Supplier.id == SupplierProduct.supplier_id)
+                .where(func.lower(Product.sku_root) == candidate)
+            )
+            rows = (await session.execute(stmt)).all()
         for product, supplier_product, supplier in rows:
             if supplier_product:
                 entry = await _build_supplier_entry(
@@ -1148,11 +1165,13 @@ def extract_product_query(text: str) -> Optional[ProductQuery]:
     has_recommendation = any(term in RECOMMENDATION_TERMS for term in terms)
     stripped_terms = [term for term in terms if term not in SMALL_TALK_TERMS]
 
+    # Verificar si es smalltalk ANTES de establecer has_price por defecto
+    if all_smalltalk:
+        return None
+    
     has_product_signal = has_price or has_stock or has_product_info or bool(sku_candidates) or command_signal
     if not has_product_signal:
         if has_recommendation:
-            return None
-        if all_smalltalk:
             return None
         if not stripped_terms:
             return None

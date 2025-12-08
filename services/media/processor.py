@@ -10,6 +10,14 @@ from typing import Literal, Optional
 
 from PIL import Image, ImageOps, ImageEnhance
 
+# Registrar soporte para HEIF/HEIC si pillow-heif está instalado
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:
+    # pillow-heif no está instalado, HEIF/HEIC no se podrán procesar
+    pass
+
 try:
     from rembg import remove as rembg_remove  # type: ignore
 except Exception:  # pragma: no cover - optional import

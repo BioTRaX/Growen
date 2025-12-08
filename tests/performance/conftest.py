@@ -34,8 +34,7 @@ async def db(db_session: AsyncSession) -> AsyncSession:
 async def test_category(db: AsyncSession) -> Category:
     """Crea categoría de prueba para productos de performance."""
     category = Category(
-        name="Categoría Test Performance",
-        description="Para tests de performance"
+        name="Categoría Test Performance"
     )
     db.add(category)
     await db.commit()

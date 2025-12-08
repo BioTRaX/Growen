@@ -2122,9 +2122,14 @@ async def export_sales_csv(
 async def catalog_search(q: str = Query(..., min_length=1), limit: int = Query(15, ge=1, le=100), db: AsyncSession = Depends(get_session)):
     term = q.strip()
     like = f"%{term}%"
-    # Estrategia: priorizar productos con stock > 0 y término en título o sku_root.
+    # Estrategia: priorizar productos con stock > 0 y término en título o canonical_sku (fallback a sku_root).
+    # Buscar primero por canonical_sku, luego por sku_root como fallback temporal
     stmt = select(Product).where(
-        or_(Product.title.ilike(like), Product.sku_root.ilike(like))
+        or_(
+            Product.title.ilike(like),
+            Product.canonical_sku.ilike(like),
+            Product.sku_root.ilike(like)
+        )
     )
     rows = (await db.execute(stmt)).scalars().all()
     scored = []
@@ -2151,7 +2156,7 @@ async def catalog_search(q: str = Query(..., min_length=1), limit: int = Query(1
             "product_id": p.id,
             "canonical": True,  # Placeholder (futuro: distinguir canónico)
             "title": p.title,
-            "sku": p.sku_root,
+            "sku": p.canonical_sku or p.sku_root,  # Priorizar canonical_sku
             "price": price,
             "stock": p.stock,
             "score": s,

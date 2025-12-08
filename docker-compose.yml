@@ -49,6 +49,13 @@ services:
       - ./logs:/app/logs
       # Carpeta de documentos de conocimiento para RAG
       - ./Conocimientos:/app/Conocimientos
+    # Configurar logging de Docker para escribir en logs/
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{.Name}}"
   frontend:
     build:
       context: frontend
@@ -70,10 +77,48 @@ services:
     image: alpine:3.19
     command: ["sh","-c","sleep infinity"]
     profiles: ["optional"]
+  redis:
+    image: redis:7-alpine
+    container_name: growen-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
   dramatiq:
-    image: alpine:3.19
-    command: ["sh","-c","sleep infinity"]
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.dramatiq
+    container_name: growen-dramatiq
+    env_file: .env
+    environment:
+      # Importante: dentro del contenedor usar el servicio 'db:5432' y 'redis:6379'
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      GOOGLE_APPLICATION_CREDENTIALS: /app/certs/growen-drive.json
+    depends_on:
+      - db
+      - redis
+    volumes:
+      # Consolidar logs del worker en la carpeta del host
+      - ./logs:/app/logs
+      # Carpeta de certificados (solo lectura para credenciales)
+      - ./certs:/app/certs:ro
+    restart: unless-stopped
     profiles: ["optional"]
+    # Configurar logging de Docker para escribir en logs/
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{.Name}}"
   scheduler:
     image: alpine:3.19
     command: ["sh","-c","sleep infinity"]
@@ -116,3 +161,4 @@ services:
     restart: unless-stopped
 volumes:
   pgdata:
+  redis_data:

@@ -137,5 +137,52 @@ POST /catalog/products
 3. Documentación (`CANONICAL_SKU.md`, `README.md`) actualizada ante cualquier ajuste de formato/flags.
 4. Auditoría (`audit_schema.py`) extendida si se agregan nuevos constraints o índices.
 
+## Refactorización a SKU Canónico Único (2025-12-03)
+
+**Objetivo**: Usar exclusivamente el formato canónico `XXX_####_YYY` para todos los SKUs internos, excepto el SKU de proveedor (`supplier_sku` en `SupplierProduct.supplier_product_id`).
+
+### Cambios Realizados
+
+1. **`services/ingest/upsert.py`**:
+   - Refactorizado `_generate_sku` para generar SKUs canónicos cuando hay categoría disponible
+   - Nueva función `_generate_sku_async` que prioriza generación canónica
+   - Los SKUs no canónicos (EAN-xxx, SUP-xxx) están deprecados y requieren categoría para migración
+
+2. **Búsquedas actualizadas para priorizar `canonical_sku`**:
+   - `services/chat/price_lookup.py`: Búsquedas por SKU ahora priorizan `canonical_sku`
+   - `services/routers/catalog.py`: Endpoint `variants/lookup` busca primero por `canonical_sku`
+   - `services/routers/sales.py`: Búsqueda de catálogo incluye `canonical_sku` en la consulta
+   - `workers/drive_sync.py`: Ya priorizaba `canonical_sku` (sin cambios)
+
+3. **Creación de productos**:
+   - `services/routers/catalog.py`: `create_product_minimal` ahora establece `canonical_sku` cuando el SKU es canónico
+   - Respuestas de API incluyen `canonical_sku` cuando está disponible
+
+4. **Migración de datos (2025-12-03)**:
+   - Migración `c308b8798a79_migrate_to_canonical_sku_only` ejecutada
+   - Migró productos existentes con `sku_root` canónico a `canonical_sku`
+   - Generó SKUs canónicos para productos con categoría que no tenían `canonical_sku`
+   - Resultado: 91 productos migrados/generados, 1 producto sin categoría pendiente
+
+### Excepciones Permitidas
+
+- **SKU de proveedor**: `SupplierProduct.supplier_product_id` puede tener cualquier formato (es el SKU del proveedor, no interno)
+- **SKUs legacy**: Se mantienen fallbacks temporales a `sku_root` para compatibilidad durante la migración
+
+### Estado Actual
+
+- ✅ Código refactorizado para usar `canonical_sku` como formato principal
+- ✅ Migración de datos ejecutada (91 productos con SKU canónico)
+- ⚠️ 1 producto sin `canonical_sku` (requiere categoría para generarlo)
+- ⚠️ `canonical_sku` sigue siendo nullable (se puede hacer NOT NULL después de completar migración)
+
+### Próximos Pasos
+
+1. ✅ ~~Migrar productos existentes sin `canonical_sku` al formato canónico~~ (Completado)
+2. Asignar categorías a productos sin `canonical_sku` y regenerar SKUs
+3. Hacer `canonical_sku` obligatorio (NOT NULL) una vez completada la migración
+4. Deprecar completamente `sku_root` una vez completada la migración
+5. Actualizar endpoint `create_product` (no minimal) para generar SKUs canónicos
+
 ---
-Actualizado: 2025-09-27
+Actualizado: 2025-09-27 (refactorización 2025-12-03)

@@ -21,6 +21,7 @@ from db.models import (
     SupplierPriceHistory,
     SupplierProduct,
 )
+from db.sku_utils import is_canonical_sku
 
 
 async def upsert_rows(
@@ -29,11 +30,15 @@ async def upsert_rows(
     supplier_name: str,
     dry_run: bool = True,
 ) -> dict[str, int]:
-    """Crea o actualiza registros en la base."""
+    """Crea o actualiza registros en la base.
+    
+    NOTA: Esta función está deprecada para uso con SKUs no canónicos.
+    Para productos nuevos, usar endpoints que generen SKUs canónicos (XXX_####_YYY).
+    """
     created = 0
     updated = 0
     for row in rows:
-        sku = _generate_sku(row, supplier_name)
+        sku = await _generate_sku_async(row, supplier_name, session)
         title = row.get("title", "")
         price = row.get("price")
         stmt = select(Variant).where(Variant.sku == sku)
@@ -47,7 +52,11 @@ async def upsert_rows(
         if dry_run:
             created += 1
             continue
+        # Intentar usar canonical_sku si el SKU es canónico
+        canonical_sku = sku if is_canonical_sku(sku) else None
         product = Product(sku_root=sku, title=title)
+        if canonical_sku:
+            product.canonical_sku = canonical_sku
         session.add(product)
         await session.flush()
         variant = Variant(product_id=product.id, sku=sku, price=price)
@@ -63,13 +72,75 @@ async def upsert_rows(
     return {"created": created, "updated": updated}
 
 
-def _generate_sku(row: dict[str, Any], supplier_name: str) -> str:
+async def _generate_sku_async(
+    row: dict[str, Any], 
+    supplier_name: str, 
+    session: AsyncSession
+) -> str:
+    """Genera SKU canónico cuando sea posible, o valida SKU existente.
+    
+    Prioridad:
+    1. Si viene `sku` en el row: validar que sea canónico (XXX_####_YYY)
+    2. Si viene `category_name`: generar SKU canónico automáticamente
+    3. Si no hay categoría ni SKU válido: lanzar error (requiere migración)
+    
+    NOTA: Los SKUs no canónicos (EAN-xxx, SUP-xxx) están deprecados.
+    """
     sku = row.get("sku")
     if sku:
-        return str(sku).strip().upper()
+        sku_clean = str(sku).strip().upper()
+        # Si ya es canónico, usarlo directamente
+        if is_canonical_sku(sku_clean):
+            return sku_clean
+        # Si no es canónico pero tiene formato legacy, intentar generar canónico
+        # si hay categoría disponible
+        category_name = row.get("category_name") or row.get("category_level_1")
+        if category_name:
+            from db.sku_generator import generate_canonical_sku
+            subcategory_name = row.get("subcategory_name") or row.get("category_level_2")
+            try:
+                return await generate_canonical_sku(session, category_name, subcategory_name or category_name)
+            except Exception:
+                # Si falla la generación, usar el SKU original (compatibilidad temporal)
+                pass
+        # Si no hay categoría, rechazar SKU no canónico
+        raise ValueError(
+            f"SKU no canónico '{sku_clean}' requiere categoría para generar formato canónico. "
+            f"Formato esperado: XXX_####_YYY (ej: FLO_0001_FER)"
+        )
+    
+    # Si no viene SKU, intentar generar desde categoría
+    category_name = row.get("category_name") or row.get("category_level_1")
+    if category_name:
+        from db.sku_generator import generate_canonical_sku
+        subcategory_name = row.get("subcategory_name") or row.get("category_level_2")
+        return await generate_canonical_sku(session, category_name, subcategory_name or category_name)
+    
+    # Fallback: error (no se generan más SKUs no canónicos)
+    raise ValueError(
+        f"No se puede generar SKU: falta 'sku' canónico o 'category_name'. "
+        f"Formato requerido: XXX_####_YYY (ej: FLO_0001_FER)"
+    )
+
+
+def _generate_sku(row: dict[str, Any], supplier_name: str) -> str:
+    """DEPRECADO: Usar _generate_sku_async en su lugar.
+    
+    Esta función genera SKUs no canónicos y está deprecada.
+    Mantenida solo para compatibilidad temporal.
+    """
+    sku = row.get("sku")
+    if sku:
+        sku_clean = str(sku).strip().upper()
+        if is_canonical_sku(sku_clean):
+            return sku_clean
+        # Si no es canónico, retornar tal cual (compatibilidad temporal)
+        return sku_clean
     barcode = row.get("barcode")
     if barcode:
+        # DEPRECADO: EAN-xxx no es formato canónico
         return f"EAN-{barcode}".upper()
+    # DEPRECADO: SUP-xxx no es formato canónico
     base = f"{supplier_name}-{row.get('title','')}-{row.get('variant_value','')}"
     return "SUP-" + hashlib.sha1(base.encode()).hexdigest()[:8].upper()
 
@@ -101,7 +172,26 @@ async def upsert_supplier_rows(
     await session.flush()
     for row in rows_list:
         spid = str(row.get("supplier_product_id"))
-        sku = row.get("sku") or "SP-" + hashlib.sha1(spid.encode()).hexdigest()[:8].upper()
+        # Intentar generar SKU canónico si hay categoría
+        sku = None
+        if row.get("sku"):
+            sku_clean = str(row.get("sku")).strip().upper()
+            if is_canonical_sku(sku_clean):
+                sku = sku_clean
+        if not sku:
+            category_name = row.get("category_name") or row.get("category_level_1")
+            if category_name:
+                from db.sku_generator import generate_canonical_sku
+                subcategory_name = row.get("subcategory_name") or row.get("category_level_2")
+                try:
+                    sku = await generate_canonical_sku(session, category_name, subcategory_name or category_name)
+                except Exception:
+                    pass
+        # Fallback temporal: usar supplier_product_id como SKU de proveedor (no canónico)
+        # NOTA: supplier_product_id es el SKU del proveedor, no el SKU interno canónico
+        if not sku:
+            # DEPRECADO: Este formato no es canónico, pero se mantiene para compatibilidad
+            sku = "SP-" + hashlib.sha1(spid.encode()).hexdigest()[:8].upper()
         title = row.get("title", "")
         purchase_price = row.get("purchase_price")
         sale_price = row.get("sale_price")
@@ -153,10 +243,28 @@ async def upsert_supplier_rows(
         )
 
         # producto interno
-        stmt = select(Variant).where(Variant.sku == sku)
-        variant = await session.scalar(stmt)
+        # Buscar por canonical_sku primero si el SKU es canónico
+        variant = None
+        if is_canonical_sku(sku):
+            # Buscar producto por canonical_sku
+            product_by_canonical = await session.scalar(
+                select(Product).where(Product.canonical_sku == sku)
+            )
+            if product_by_canonical:
+                # Buscar variant asociado
+                variant = await session.scalar(
+                    select(Variant).where(Variant.product_id == product_by_canonical.id).limit(1)
+                )
+        # Si no se encontró por canonical_sku, buscar por Variant.sku
         if not variant:
+            stmt = select(Variant).where(Variant.sku == sku)
+            variant = await session.scalar(stmt)
+        if not variant:
+            # Crear producto con canonical_sku si aplica
+            canonical_sku = sku if is_canonical_sku(sku) else None
             product = Product(sku_root=sku, title=title, status="draft")
+            if canonical_sku:
+                product.canonical_sku = canonical_sku
             session.add(product)
             await session.flush()
             variant = Variant(product_id=product.id, sku=sku, price=sale_price)

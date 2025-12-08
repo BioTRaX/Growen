@@ -58,6 +58,7 @@ from .routers import (
     reports,
     market,
     alerts,
+    drive_sync,
 )
 from services.auth import require_csrf  # para override condicional en dev
 from services.routers import bug_report  # router para reportes de bugs
@@ -363,6 +364,9 @@ app.include_router(imports.router)
 app.include_router(canonical_products.canonical_router)
 app.include_router(canonical_products.equivalences_router)
 app.include_router(products_ex.router)
+# images.router debe estar ANTES que products_stock.router para evitar conflictos de rutas
+# porque ambos comparten el prefijo /products y las rutas más específicas deben evaluarse primero
+app.include_router(images.router)
 app.include_router(products_stock.router)
 app.include_router(purchases.router)
 app.include_router(customers.router)
@@ -372,7 +376,7 @@ app.include_router(market.router)
 app.include_router(alerts.router)
 app.include_router(media.router)
 app.include_router(image_jobs.router)
-app.include_router(images.router)
+app.include_router(drive_sync.router)
 app.include_router(health.router)
 app.include_router(services_admin.router)
 app.include_router(backups_admin.router)

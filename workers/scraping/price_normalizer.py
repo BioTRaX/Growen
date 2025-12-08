@@ -121,9 +121,16 @@ def clean_price_text(price_text: str) -> str:
     # NUEVO: Primero intentar extraer un precio válido con regex
     # Esto maneja casos como "$13.000En ofertaPrecio de lista$16.600Ahorra22%"
     # Buscar patrones: número con separadores (. o ,) después de $ u otros símbolos
+    # También incluir números sin separadores (ej: "$ 1299")
     price_patterns = [
-        r'(?:US\$|U\$S|AR\$|R\$|\$|€|£|¥|ARS|USD|EUR|BRL|GBP|JPY|CNY)?\s?([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)',
-        r'([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)'
+        # Patrón para números con separadores de miles (formato europeo o americano)
+        r'(?:US\$|U\$S|AR\$|R\$|\$|€|£|¥|ARS|USD|EUR|BRL|GBP|JPY|CNY)?\s?([\d]{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?)',
+        # Patrón para números con separadores opcionales (incluye números sin separadores)
+        r'(?:US\$|U\$S|AR\$|R\$|\$|€|£|¥|ARS|USD|EUR|BRL|GBP|JPY|CNY)?\s?([\d]+(?:[.,]\d+)?)',
+        # Patrón genérico con separadores
+        r'([\d]{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?)',
+        # Patrón genérico sin separadores obligatorios
+        r'([\d]+(?:[.,]\d+)?)'
     ]
     
     for pattern in price_patterns:
@@ -229,8 +236,14 @@ def normalize_decimal_separators(clean_text: str, currency: str) -> str:
         parts = clean_text.split(".")
         if len(parts) == 2 and len(parts[1]) == 2:
             # Formato decimal americano: 1250.00
-            # Ya está en formato correcto
-            pass
+            # Si la moneda usa coma como decimal (ARS/EUR), esto es incorrecto
+            if uses_comma_as_decimal:
+                # En ARS/EUR, no debería haber punto con 2 decimales
+                # Tratar como separador de miles: 1.250.00 → 125000
+                clean_text = clean_text.replace(".", "")
+            else:
+                # En USD, ya está en formato correcto
+                pass
         elif len(parts) == 2 and len(parts[1]) == 3:
             # Formato miles europeo: 1.250 → verificar contexto
             if uses_comma_as_decimal:
@@ -239,6 +252,15 @@ def normalize_decimal_separators(clean_text: str, currency: str) -> str:
             else:
                 # En USD, punto con 3 dígitos después es raro (decimal mal formateado)
                 # Asumir que está correcto
+                pass
+        elif len(parts) == 2 and len(parts[1]) == 1:
+            # Punto con 1 dígito: puede ser decimal truncado
+            if uses_comma_as_decimal:
+                # En ARS/EUR, no debería haber punto decimal
+                # Tratar como separador de miles
+                clean_text = clean_text.replace(".", "")
+            else:
+                # En USD, es decimal truncado: 1.2 = 1.2
                 pass
         else:
             # Múltiples puntos: separador de miles europeo (ej: 1.000.000)

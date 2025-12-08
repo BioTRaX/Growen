@@ -187,10 +187,25 @@ O a través del endpoint de la API (disponible solo para administradores en ento
 
 ### Workers en Segundo Plano (Dramatiq + Redis)
 
-Growen usa **Dramatiq** con **Redis** como broker para procesar tareas asíncronas en segundo plano sin bloquear la API. Existen dos colas principales:
+Growen usa **Dramatiq** con **Redis** como broker para procesar tareas asíncronas en segundo plano sin bloquear la API. Existen tres colas principales:
 
 - **Cola `images`**: procesamiento de imágenes (descarga, conversión, thumbnails)
 - **Cola `market`**: scraping de precios de mercado con Playwright/requests
+- **Cola `drive_sync`**: sincronización de imágenes desde Google Drive
+
+#### Iniciar Redis
+
+**Redis se gestiona exclusivamente a través de `docker-compose.yml`:**
+
+```bash
+# Iniciar Redis
+docker compose up -d redis
+
+# Verificar estado
+docker ps --filter "name=growen-redis"
+```
+
+**Nota:** Los scripts (`start.bat`, `start_stack.ps1`) migran automáticamente contenedores Redis creados manualmente (con `docker run`) a docker-compose. Si encuentras conflictos de nombre, los scripts eliminarán el contenedor antiguo y crearán uno nuevo con la configuración correcta de volúmenes.
 
 #### Iniciar Workers
 
@@ -201,16 +216,20 @@ scripts\start_worker_images.cmd
 
 # Worker de mercado (cola market)
 scripts\start_worker_market.cmd
+
+# Worker de sincronización Drive (cola drive_sync)
+scripts\start_worker_drive_sync.cmd
 ```
 
 **Opción 2 - Worker unificado** (recomendado para desarrollo):
 ```bash
-# Procesa ambas colas (images + market) con 3 threads
+# Procesa todas las colas (images + market + drive_sync) con 3 threads
 scripts\start_worker_all.cmd
 
 # O especificar cola específica
 scripts\start_worker_all.cmd images
 scripts\start_worker_all.cmd market
+scripts\start_worker_all.cmd drive_sync
 ```
 
 **Opción 3 - Modo desarrollo sin Redis** (sin persistencia):
@@ -229,6 +248,7 @@ python services/main.py
 
 - `logs/worker_images.log`: worker de imágenes
 - `logs/worker_market.log`: worker de mercado
+- `logs/worker_drive_sync.log`: worker de sincronización Drive
 - `logs/worker_all.log`: worker unificado
 
 #### Monitoreo
@@ -241,7 +261,9 @@ curl http://localhost:8000/health/dramatiq
 curl http://localhost:8000/health/summary
 ```
 
-Para más detalles sobre el scraping de mercado, ver [docs/API_MARKET.md](./docs/API_MARKET.md).
+Para más detalles sobre:
+- Scraping de mercado: ver [docs/API_MARKET.md](./docs/API_MARKET.md)
+- Sincronización Drive: ver [docs/GOOGLE_DRIVE_SYNC.md](./docs/GOOGLE_DRIVE_SYNC.md) y [docs/DRIVE_SYNC_DRAMATIQ.md](./docs/DRIVE_SYNC_DRAMATIQ.md)
 
 ## Instalación local
 
