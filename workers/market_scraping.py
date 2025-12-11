@@ -40,8 +40,9 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSe
 
 async def scrape_market_source(
     source: MarketSource,
-    product_name: Optional[str] = None
-) -> tuple[Optional[Decimal], Optional[str], Optional[str]]:
+    product_name: Optional[str] = None,
+    db: Optional[AsyncSession] = None
+) -> tuple[Optional[Decimal], Optional[str], Optional[str], bool]:
     """
     Ejecuta scraping de una fuente de precio de mercado con manejo robusto de errores.
     
@@ -49,15 +50,20 @@ async def scrape_market_source(
     - type='static': usa requests + BeautifulSoup
     - type='dynamic': usa Playwright
     
+    Si el scraping estático falla, automáticamente intenta con dynamic (fallback).
+    Si el fallback funciona, actualiza el source_type en la BD.
+    
     Args:
         source: Fuente de mercado a scrapear
         product_name: Nombre del producto (para logging contextual)
+        db: Sesión de base de datos (opcional, necesario para actualizar source_type)
         
     Returns:
-        Tuple (precio encontrado, código de moneda, error si ocurrió)
+        Tuple (precio encontrado, código de moneda, error si ocurrió, usado_fallback)
         - precio: Decimal con el valor o None
         - moneda: Código ISO 4217 (ej: "ARS", "USD") o None
         - error: String con descripción del error o None
+        - usado_fallback: bool indicando si se usó fallback de static a dynamic
         
     Nota:
         Esta función nunca lanza excepciones, siempre retorna un resultado
@@ -77,6 +83,7 @@ async def scrape_market_source(
         
         if source_type == "static":
             # Scraping de páginas estáticas con requests + BeautifulSoup
+            static_error = None
             try:
                 logger.debug(f"[scraping] Usando scraper estático para {source_label}")
                 price, currency = scrape_static_price(source.url, timeout=15)
@@ -86,36 +93,108 @@ async def scrape_market_source(
                         f"[scraping] ✓ Precio extraído exitosamente de {source_label}: "
                         f"{price} {currency}"
                     )
-                    return price, currency, None
+                    return price, currency, None, False
                 else:
-                    error_msg = "Precio no encontrado en la página"
+                    static_error = "Precio no encontrado en la página"
+                    logger.warning(
+                        f"[scraping] ⚠ {static_error} - {source_label} - {product_label}"
+                    )
+                    
+            except NetworkError as e:
+                static_error = f"Error de red: {str(e)}"
+                logger.error(
+                    f"[scraping] ✗ {static_error} - {source_label} - {product_label}",
+                    exc_info=False
+                )
+                
+            except PriceNotFoundError as e:
+                static_error = f"Precio no encontrado: {str(e)}"
+                logger.warning(
+                    f"[scraping] ⚠ {static_error} - {source_label} - {product_label}"
+                )
+                
+            except Exception as e:
+                static_error = f"Error inesperado en scraping estático: {type(e).__name__}: {str(e)}"
+                logger.error(
+                    f"[scraping] ✗ {static_error} - {source_label} - {product_label}",
+                    exc_info=True  # Include full traceback for unexpected errors
+                )
+            
+            # Si el scraping estático falló, intentar con dynamic como fallback
+            if static_error:
+                logger.info(
+                    f"[scraping] 🔄 Scraping estático falló, intentando con dynamic como fallback - {source_label}"
+                )
+                
+                try:
+                    from workers.scraping.dynamic_scraper import (
+                        scrape_dynamic_price,
+                        BrowserLaunchError,
+                        PageLoadError,
+                        SelectorNotFoundError,
+                        DynamicScrapingError,
+                    )
+                    
+                    # Intentar con scraper dinámico (usar versión async directamente)
+                    result = await scrape_dynamic_price(source.url, timeout=15000)
+                    price = result.get("price")
+                    currency = result.get("currency", "ARS")
+                    
+                    # Convertir price a Decimal si es necesario
+                    if price is not None and not isinstance(price, Decimal):
+                        price = Decimal(str(price))
+                    
+                    if price is not None:
+                        logger.info(
+                            f"[scraping] ✓ Precio extraído exitosamente con fallback dynamic de {source_label}: "
+                            f"{price} {currency}"
+                        )
+                        
+                        # Actualizar source_type en BD si se proporcionó sesión
+                        if db is not None:
+                            try:
+                                # Refrescar el objeto source para asegurar que está sincronizado con la BD
+                                await db.refresh(source)
+                                source.source_type = "dynamic"
+                                await db.commit()
+                                logger.info(
+                                    f"[scraping] ✓ source_type actualizado a 'dynamic' para {source_label}"
+                                )
+                            except Exception as db_error:
+                                # Hacer rollback si hay error
+                                try:
+                                    await db.rollback()
+                                except Exception:
+                                    pass
+                                logger.warning(
+                                    f"[scraping] ⚠ No se pudo actualizar source_type en BD: {db_error}"
+                                )
+                        
+                        return price, currency, None, True  # True = usado_fallback
+                    else:
+                        error_msg = f"Fallback dynamic también falló: Precio no encontrado"
+                        logger.warning(
+                            f"[scraping] ⚠ {error_msg} - {source_label} - {product_label}"
+                        )
+                        return None, None, static_error, False
+                        
+                except (BrowserLaunchError, PageLoadError, SelectorNotFoundError, DynamicScrapingError) as e:
+                    error_msg = f"Fallback dynamic falló: {str(e)}"
                     logger.warning(
                         f"[scraping] ⚠ {error_msg} - {source_label} - {product_label}"
                     )
-                    return None, None, error_msg
+                    return None, None, static_error, False
                     
-            except NetworkError as e:
-                error_msg = f"Error de red: {str(e)}"
-                logger.error(
-                    f"[scraping] ✗ {error_msg} - {source_label} - {product_label}",
-                    exc_info=False
-                )
-                return None, None, error_msg
-                
-            except PriceNotFoundError as e:
-                error_msg = f"Precio no encontrado: {str(e)}"
-                logger.warning(
-                    f"[scraping] ⚠ {error_msg} - {source_label} - {product_label}"
-                )
-                return None, None, error_msg
-                
-            except Exception as e:
-                error_msg = f"Error inesperado en scraping estático: {type(e).__name__}: {str(e)}"
-                logger.error(
-                    f"[scraping] ✗ {error_msg} - {source_label} - {product_label}",
-                    exc_info=True  # Include full traceback for unexpected errors
-                )
-                return None, None, error_msg
+                except Exception as e:
+                    error_msg = f"Error inesperado en fallback dynamic: {type(e).__name__}: {str(e)}"
+                    logger.error(
+                        f"[scraping] ✗ {error_msg} - {source_label} - {product_label}",
+                        exc_info=True
+                    )
+                    return None, None, static_error, False
+            
+            # Si llegamos aquí, static falló pero no se pudo hacer fallback
+            return None, None, static_error, False
         
         elif source_type == "dynamic":
             # Scraping dinámico con Playwright para páginas con JavaScript
@@ -123,28 +202,34 @@ async def scrape_market_source(
                 logger.debug(f"[scraping] Usando scraper dinámico (Playwright) para {source_label}")
                 
                 from workers.scraping.dynamic_scraper import (
-                    scrape_dynamic_price_sync,
+                    scrape_dynamic_price,
                     BrowserLaunchError,
                     PageLoadError,
                     SelectorNotFoundError,
                     DynamicScrapingError,
                 )
                 
-                # Usar wrapper sincrónico (worker es sync, pero internamente usa async)
-                price, currency = scrape_dynamic_price_sync(source.url, timeout=15000)
+                # Usar la versión async directamente (no sync)
+                result = await scrape_dynamic_price(source.url, timeout=15000)
+                price = result.get("price")
+                currency = result.get("currency", "ARS")
+                
+                # Convertir price a Decimal si es necesario
+                if price is not None and not isinstance(price, Decimal):
+                    price = Decimal(str(price))
                 
                 if price is not None:
                     logger.info(
                         f"[scraping] ✓ Precio extraído exitosamente con Playwright de {source_label}: "
                         f"{price} {currency}"
                     )
-                    return price, currency, None
+                    return price, currency, None, False
                 else:
                     error_msg = "Precio no encontrado en página dinámica"
                     logger.warning(
                         f"[scraping] ⚠ {error_msg} - {source_label} - {product_label}"
                     )
-                    return None, None, error_msg
+                    return None, None, error_msg, False
                     
             except BrowserLaunchError as e:
                 error_msg = f"Error lanzando navegador Playwright: {str(e)}"
@@ -152,7 +237,7 @@ async def scrape_market_source(
                     f"[scraping] ✗ {error_msg} - {source_label} - {product_label}",
                     exc_info=False
                 )
-                return None, None, error_msg
+                return None, None, error_msg, False
                 
             except PageLoadError as e:
                 error_msg = f"Error cargando página dinámica: {str(e)}"
@@ -160,14 +245,14 @@ async def scrape_market_source(
                     f"[scraping] ✗ {error_msg} - {source_label} - {product_label}",
                     exc_info=False
                 )
-                return None, None, error_msg
+                return None, None, error_msg, False
                 
             except SelectorNotFoundError as e:
                 error_msg = f"Selector no encontrado en página: {str(e)}"
                 logger.warning(
                     f"[scraping] ⚠ {error_msg} - {source_label} - {product_label}"
                 )
-                return None, None, error_msg
+                return None, None, error_msg, False
                 
             except DynamicScrapingError as e:
                 error_msg = f"Error en scraping dinámico: {str(e)}"
@@ -175,7 +260,7 @@ async def scrape_market_source(
                     f"[scraping] ✗ {error_msg} - {source_label} - {product_label}",
                     exc_info=False
                 )
-                return None, None, error_msg
+                return None, None, error_msg, False
                 
             except Exception as e:
                 error_msg = f"Error inesperado en scraping dinámico: {type(e).__name__}: {str(e)}"
@@ -183,14 +268,14 @@ async def scrape_market_source(
                     f"[scraping] ✗ {error_msg} - {source_label} - {product_label}",
                     exc_info=True  # Include full traceback
                 )
-                return None, None, error_msg
+                return None, None, error_msg, False
         
         else:
             error_msg = f"Tipo de fuente desconocido: {source_type}"
             logger.error(
                 f"[scraping] ✗ {error_msg} - {source_label} - {product_label}"
             )
-            return None, None, error_msg
+            return None, None, error_msg, False
         
     except Exception as e:
         # Captura de último recurso para errores no previstos
@@ -199,7 +284,7 @@ async def scrape_market_source(
             f"[scraping] ✗✗✗ {error_msg} - {source_label} - {product_label}",
             exc_info=True
         )
-        return None, None, error_msg
+        return None, None, error_msg, False
 
 
 async def update_market_prices_for_product(product_id: int, db: AsyncSession) -> Dict[str, Any]:
@@ -303,7 +388,8 @@ async def update_market_prices_for_product(product_id: int, db: AsyncSession) ->
                 )
                 
                 # Ejecutar scraping (nunca lanza excepciones)
-                price, currency, error = await scrape_market_source(source, product_name)
+                # Pasar db para permitir actualización de source_type si se usa fallback
+                price, currency, error, usado_fallback = await scrape_market_source(source, product_name, db)
                 
                 # Actualizar timestamp de última revisión SIEMPRE (éxito o fallo)
                 source.last_checked_at = datetime.utcnow()
@@ -314,10 +400,16 @@ async def update_market_prices_for_product(product_id: int, db: AsyncSession) ->
                     successful_prices.append(float(price))
                     sources_updated += 1
                     
-                    logger.info(
-                        f"[scraping] [{idx}/{sources_total}] ✓ Fuente '{source.source_name}' "
-                        f"actualizada exitosamente: {price} {currency}"
-                    )
+                    if usado_fallback:
+                        logger.info(
+                            f"[scraping] [{idx}/{sources_total}] ✓ Fuente '{source.source_name}' "
+                            f"actualizada exitosamente con fallback dynamic: {price} {currency}"
+                        )
+                    else:
+                        logger.info(
+                            f"[scraping] [{idx}/{sources_total}] ✓ Fuente '{source.source_name}' "
+                            f"actualizada exitosamente: {price} {currency}"
+                        )
                 else:
                     # Fallo: registrar error
                     sources_failed += 1
@@ -334,7 +426,17 @@ async def update_market_prices_for_product(product_id: int, db: AsyncSession) ->
                     )
                 
                 # Commit después de cada fuente para persistir cambios parciales
-                await db.commit()
+                try:
+                    await db.commit()
+                except Exception as commit_error:
+                    # Si hay error en commit, hacer rollback y continuar
+                    logger.warning(
+                        f"[scraping] [{idx}/{sources_total}] Error en commit, haciendo rollback: {commit_error}"
+                    )
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
                 
             except Exception as e:
                 # Captura de errores inesperados en el loop
@@ -362,7 +464,10 @@ async def update_market_prices_for_product(product_id: int, db: AsyncSession) ->
                     logger.error(
                         f"[scraping] Error al hacer commit después de fallo: {commit_error}"
                     )
-                    await db.rollback()
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
         
         # 4. Calcular market_price_reference (promedio de precios obtenidos)
         market_price_ref = None

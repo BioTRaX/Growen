@@ -757,6 +757,224 @@ python -m dramatiq services.jobs.images workers.market_scraping --processes 1 --
 ```
 
 **Opción 3 - Modo desarrollo sin Redis**:
+
+---
+
+### POST /market/products/batch-refresh
+
+Inicia el proceso asíncrono de actualización de precios de mercado (scraping) para múltiples productos en un solo request.
+
+**Roles permitidos**: `admin`, `colaborador`
+
+**Descripción**:
+Encola tareas de scraping en segundo plano para actualizar los precios de todas las fuentes de mercado asociadas a cada producto seleccionado. El endpoint retorna inmediatamente con status `202 Accepted` mientras los workers procesan las fuentes en background.
+
+Este endpoint es útil para actualizar múltiples productos seleccionados desde la UI del módulo Mercado, evitando múltiples requests individuales.
+
+**Límites**:
+- Mínimo: 1 producto
+- Máximo: 100 productos por request
+
+El proceso del worker para cada producto es idéntico al endpoint individual (`POST /market/products/{product_id}/refresh-market`).
+
+**⚠️ Importante**: El scraping puede demorar varios segundos por producto. La UI debe mostrar un indicador de carga y refrescar los datos periódicamente.
+
+#### Request Body
+
+```json
+{
+  "product_ids": [123, 456, 789]
+}
+```
+
+#### Campos del Request
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `product_ids` | array[int] | Sí | Lista de IDs de productos canónicos a actualizar (1-100 items) |
+
+#### Respuesta Exitosa (202 Accepted)
+
+```json
+{
+  "total_requested": 3,
+  "enqueued": 2,
+  "not_found": 1,
+  "errors": 0,
+  "results": [
+    {
+      "product_id": 123,
+      "status": "enqueued",
+      "message": "Actualización de precios iniciada para producto 123",
+      "job_id": "abc123-def456"
+    },
+    {
+      "product_id": 456,
+      "status": "enqueued",
+      "message": "Actualización de precios iniciada para producto 456",
+      "job_id": "xyz789-abc123"
+    },
+    {
+      "product_id": 789,
+      "status": "not_found",
+      "message": "Producto 789 no encontrado",
+      "job_id": null
+    }
+  ]
+}
+```
+
+#### Campos de Respuesta
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `total_requested` | int | Total de productos solicitados |
+| `enqueued` | int | Productos encolados exitosamente |
+| `not_found` | int | Productos no encontrados en la base de datos |
+| `errors` | int | Productos con error al encolar (excepciones inesperadas) |
+| `results` | array[BatchRefreshMarketItem] | Resultados detallados por producto |
+
+#### BatchRefreshMarketItem
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `product_id` | int | ID del producto procesado |
+| `status` | string | Estado: `"enqueued"`, `"not_found"`, o `"error"` |
+| `message` | string | Mensaje descriptivo del resultado |
+| `job_id` | string\|null | ID del job en Dramatiq (solo si status es "enqueued") |
+
+#### Errores
+
+| Código | Descripción | Ejemplo de Respuesta |
+|--------|-------------|----------------------|
+| 401 | Usuario no autenticado | `{"detail": "Not authenticated"}` |
+| 403 | Usuario sin permisos (requiere admin/colaborador) | `{"detail": "Forbidden"}` |
+| 422 | Lista vacía o excede límite máximo | `{"detail": "Máximo 100 productos por request"}` |
+| 502 | Servicio de scraping no disponible | `{"detail": "Servicio de actualización de precios no disponible"}` |
+| 500 | Error interno del servidor | `{"detail": "Error interno al iniciar actualización de precios"}` |
+
+#### Ejemplos de Uso
+
+**Actualización masiva exitosa**:
+```bash
+POST /market/products/batch-refresh
+Content-Type: application/json
+
+{
+  "product_ids": [123, 456, 789]
+}
+
+# Response 202 Accepted
+{
+  "total_requested": 3,
+  "enqueued": 3,
+  "not_found": 0,
+  "errors": 0,
+  "results": [
+    {
+      "product_id": 123,
+      "status": "enqueued",
+      "message": "Actualización de precios iniciada para producto 123",
+      "job_id": "abc123-def456"
+    },
+    {
+      "product_id": 456,
+      "status": "enqueued",
+      "message": "Actualización de precios iniciada para producto 456",
+      "job_id": "xyz789-abc123"
+    },
+    {
+      "product_id": 789,
+      "status": "enqueued",
+      "message": "Actualización de precios iniciada para producto 789",
+      "job_id": "def456-ghi789"
+    }
+  ]
+}
+```
+
+**Algunos productos no encontrados**:
+```bash
+POST /market/products/batch-refresh
+
+{
+  "product_ids": [123, 999999, 456]
+}
+
+# Response 202 Accepted
+{
+  "total_requested": 3,
+  "enqueued": 2,
+  "not_found": 1,
+  "errors": 0,
+  "results": [
+    {
+      "product_id": 123,
+      "status": "enqueued",
+      "message": "Actualización de precios iniciada para producto 123",
+      "job_id": "abc123-def456"
+    },
+    {
+      "product_id": 999999,
+      "status": "not_found",
+      "message": "Producto 999999 no encontrado",
+      "job_id": null
+    },
+    {
+      "product_id": 456,
+      "status": "enqueued",
+      "message": "Actualización de precios iniciada para producto 456",
+      "job_id": "xyz789-abc123"
+    }
+  ]
+}
+```
+
+**Error: Lista vacía**:
+```bash
+POST /market/products/batch-refresh
+
+{
+  "product_ids": []
+}
+
+# Response 422 Unprocessable Entity
+{
+  "detail": "Debe proporcionar al menos un producto"
+}
+```
+
+**Error: Excede límite máximo**:
+```bash
+POST /market/products/batch-refresh
+
+{
+  "product_ids": [1, 2, 3, ..., 101]  # 101 productos
+}
+
+# Response 422 Unprocessable Entity
+{
+  "detail": "Máximo 100 productos por request"
+}
+```
+
+#### Comportamiento del Worker
+
+Cada producto válido se encola como una tarea independiente en Dramatiq. El comportamiento del worker es idéntico al endpoint individual (`POST /market/products/{product_id}/refresh-market`).
+
+**Worker**: `workers.market_scraping.refresh_market_prices_task`  
+**Cola Dramatiq**: `market`
+
+Las tareas se procesan en paralelo según la configuración del worker (número de threads/procesos).
+
+#### Notas de Implementación
+
+- **Tolerancia a fallos parciales**: Si un producto falla al encolar, los demás continúan procesándose
+- **Validación temprana**: Se valida existencia de cada producto antes de encolar
+- **Logging detallado**: Se registra cada producto procesado con su resultado
+- **Idempotencia**: Enviar el mismo producto múltiples veces encola múltiples tareas (comportamiento esperado para re-scraping)
+
+---
 ```bash
 # Usar StubBroker (cola en memoria, sin persistencia)
 set RUN_INLINE_JOBS=1
