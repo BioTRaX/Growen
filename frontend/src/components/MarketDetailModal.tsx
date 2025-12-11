@@ -534,8 +534,25 @@ function SourceCard({ source, onDelete, onEdit, deleting, formatPrice, formatDat
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
             <strong style={{ fontSize: 16 }}>{source.source_name}</strong>
+            {source.source_type === 'dynamic' && (
+              <span 
+                style={{ 
+                  fontSize: 11, 
+                  padding: '2px 6px', 
+                  background: '#3b82f6', 
+                  color: 'white', 
+                  borderRadius: 4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4
+                }}
+                title="Esta fuente usa scraping dinámico (JavaScript requerido)"
+              >
+                ⚡ Dynamic
+              </span>
+            )}
             {freshness === 'fresh' && (
               <span style={{ fontSize: 11, padding: '2px 6px', background: '#22c55e', color: 'white', borderRadius: 4 }}>
                 Actualizado

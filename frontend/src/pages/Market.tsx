@@ -484,6 +484,15 @@ export default function Market() {
                 
                 return (
                   <tr key={product.product_id}>
+                    {/* Checkbox de selección */}
+                    <td style={{ textAlign: 'center', width: 40 }}>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(product.product_id)}
+                        onChange={() => toggleSelect(product.product_id)}
+                        title={selected.has(product.product_id) ? 'Deseleccionar' : 'Seleccionar'}
+                      />
+                    </td>
                     {/* Nombre del producto */}
                     <td style={{ textAlign: 'left' }}>
                       <a 
