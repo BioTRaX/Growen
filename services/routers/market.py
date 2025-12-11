@@ -187,8 +187,9 @@ async def list_market_products(
         prod = row[0]  # CanonicalProduct
         alert_count = row[1] if len(row) > 1 else 0  # alert_count
         
-        # preferred_name: usar sku_custom si existe, sino usar name
-        preferred_name = prod.sku_custom if prod.sku_custom else prod.name
+        # preferred_name: priorizar name (nombre descriptivo) sobre sku_custom (identificador técnico)
+        # El name es el nombre canónico del producto, más legible para usuarios
+        preferred_name = prod.name if prod.name else (prod.sku_custom or f"Producto {prod.id}")
         
         # SKU: priorizar sku_custom, luego ng_sku, finalmente el ID
         product_sku = prod.sku_custom or prod.ng_sku or f"ID-{prod.id}"
@@ -365,6 +366,8 @@ async def get_product_sources(
             last_price=float(source.last_price) if source.last_price else None,
             last_checked_at=source.last_checked_at.isoformat() if source.last_checked_at else None,
             is_mandatory=source.is_mandatory,
+            source_type=source.source_type,
+            currency=source.currency,
             created_at=source.created_at.isoformat(),
             updated_at=source.updated_at.isoformat(),
         )
@@ -382,8 +385,8 @@ async def get_product_sources(
     market_price_min_val = min(prices) if prices else None
     market_price_max_val = max(prices) if prices else None
     
-    # Usar sku_custom si existe, sino usar name
-    product_name = product.sku_custom if product.sku_custom else product.name
+    # preferred_name: priorizar name (nombre descriptivo) sobre sku_custom (identificador técnico)
+    product_name = product.name if product.name else (product.sku_custom or f"Producto {product.id}")
     
     return ProductSourcesResponse(
         product_id=product.id,
@@ -477,8 +480,8 @@ async def update_product_sale_price(
     await db.commit()
     await db.refresh(product)
     
-    # Usar sku_custom si existe, sino usar name
-    product_name = product.sku_custom if product.sku_custom else product.name
+    # preferred_name: priorizar name (nombre descriptivo) sobre sku_custom (identificador técnico)
+    product_name = product.name if product.name else (product.sku_custom or f"Producto {product.id}")
     
     return UpdateSalePriceResponse(
         product_id=product.id,
@@ -579,8 +582,8 @@ async def update_product_market_reference(
     await db.commit()
     await db.refresh(product)
     
-    # 5. Calcular nombre preferido
-    preferred_name = product.sku_custom if product.sku_custom else product.name
+    # 5. Calcular nombre preferido: priorizar name (nombre descriptivo) sobre sku_custom (identificador técnico)
+    preferred_name = product.name if product.name else (product.sku_custom or f"Producto {product.id}")
     
     return UpdateMarketReferenceResponse(
         product_id=product.id,
@@ -1136,6 +1139,16 @@ class UpdateMarketSourceRequest(BaseModel):
     url: Optional[str] = Field(None, description="Nueva URL de la fuente")
     last_price: Optional[float] = Field(None, description="Nuevo último precio detectado")
     is_mandatory: Optional[bool] = Field(None, description="Si es fuente obligatoria")
+    currency: Optional[str] = Field(None, description="Moneda del precio (ARS, USD, etc.)", max_length=10)
+    source_type: Optional[str] = Field(None, description="Tipo de fuente: 'static' (HTML estático) o 'dynamic' (requiere JavaScript)")
+    
+    @field_validator('source_type')
+    @classmethod
+    def validate_source_type(cls, v: Optional[str]) -> Optional[str]:
+        """Valida que source_type sea 'static' o 'dynamic'"""
+        if v is not None and v not in ['static', 'dynamic']:
+            raise ValueError("source_type debe ser 'static' o 'dynamic'")
+        return v
 
 
 @router.patch(
@@ -1151,6 +1164,8 @@ class UpdateMarketSourceRequest(BaseModel):
     - url: URL de la fuente
     - last_price: Último precio detectado manualmente
     - is_mandatory: Si es fuente obligatoria para cálculo de precio promedio
+    - currency: Moneda del precio (ARS, USD, etc.)
+    - source_type: Tipo de scraping ('static' para HTML estático, 'dynamic' para páginas con JavaScript)
     
     Solo se actualizan los campos enviados (partial update).
     
@@ -1216,6 +1231,12 @@ async def update_market_source(
     
     if request.is_mandatory is not None:
         source.is_mandatory = request.is_mandatory
+    
+    if request.currency is not None:
+        source.currency = request.currency
+    
+    if request.source_type is not None:
+        source.source_type = request.source_type
     
     # 4. Guardar cambios
     await db.commit()

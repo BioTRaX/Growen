@@ -49,7 +49,24 @@ export default function SchedulerControl() {
     try {
       const response = await fetch('/admin/scheduler/status', { credentials: 'include' })
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        // Manejo específico de errores HTTP
+        if (response.status === 403) {
+          throw new Error('No tienes permisos de administrador para acceder al scheduler. Se requiere rol "admin".')
+        } else if (response.status === 404) {
+          throw new Error('Endpoint no encontrado. Verifica que el backend esté corriendo y que el router esté registrado.')
+        } else if (response.status >= 500) {
+          throw new Error(`Error del servidor (${response.status}). Verifica los logs del backend.`)
+        } else {
+          const errorText = await response.text()
+          let errorMessage = `HTTP ${response.status}: ${response.statusText}`
+          try {
+            const errorData = JSON.parse(errorText)
+            if (errorData.detail) errorMessage = errorData.detail
+          } catch {
+            if (errorText) errorMessage = errorText
+          }
+          throw new Error(errorMessage)
+        }
       }
       const data = await response.json()
       setStatus(data)
@@ -58,7 +75,12 @@ export default function SchedulerControl() {
       if (data.interval_hours) setIntervalHours(data.interval_hours)
       setError(null)
     } catch (err: any) {
-      setError(err.message || 'Error al cargar estado')
+      // Detectar errores de red
+      if (err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError')) {
+        setError('Error de conexión. Verifica que el backend esté corriendo y accesible.')
+      } else {
+        setError(err.message || 'Error al cargar estado del scheduler')
+      }
     } finally {
       setLoading(false)
     }
@@ -216,7 +238,41 @@ export default function SchedulerControl() {
     return (
       <div className="card" style={{ padding: 12 }}>
         <h3>Scheduler de Actualización de Mercado</h3>
-        <p style={{ color: 'red' }}>Error: No se pudo cargar el estado del scheduler</p>
+        {error && (
+          <div style={{ 
+            padding: 12, 
+            marginBottom: 12, 
+            backgroundColor: 'var(--danger)', 
+            color: 'white', 
+            borderRadius: 4 
+          }}>
+            <strong>Error:</strong> {error}
+          </div>
+        )}
+        {!error && (
+          <p style={{ color: 'var(--muted)' }}>Cargando estado del scheduler...</p>
+        )}
+        <div style={{ marginTop: 12 }}>
+          <button 
+            className="btn-primary" 
+            onClick={fetchStatus}
+            disabled={loading}
+          >
+            🔄 Reintentar
+          </button>
+        </div>
+        {error && error.includes('permisos') && (
+          <div style={{ 
+            marginTop: 12, 
+            padding: 12, 
+            backgroundColor: 'var(--bg-secondary)', 
+            borderRadius: 4,
+            fontSize: 14 
+          }}>
+            <strong>Nota:</strong> El panel de scheduler requiere rol de administrador. 
+            Si necesitas acceso, contacta a un administrador del sistema.
+          </div>
+        )}
       </div>
     )
   }

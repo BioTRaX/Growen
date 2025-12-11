@@ -122,6 +122,8 @@ export interface MarketSource {
   last_price: number | null
   last_checked_at: string | null
   is_mandatory: boolean
+  source_type: string | null
+  currency: string | null
   created_at: string
   updated_at: string
 }
