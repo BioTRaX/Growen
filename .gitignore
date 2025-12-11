@@ -103,3 +103,6 @@ Imagenes/
 
 # Carpeta de desarrollo y pruebas locales
 Devs/
+
+# Carpeta de conocimientos (documentos PDF que no deben estar en el repositorio)
+Conocimientos/
