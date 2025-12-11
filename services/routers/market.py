@@ -187,8 +187,9 @@ async def list_market_products(
         prod = row[0]  # CanonicalProduct
         alert_count = row[1] if len(row) > 1 else 0  # alert_count
         
-        # preferred_name: usar sku_custom si existe, sino usar name
-        preferred_name = prod.sku_custom if prod.sku_custom else prod.name
+        # preferred_name: priorizar name (nombre descriptivo) sobre sku_custom (identificador técnico)
+        # El name es el nombre canónico del producto, más legible para usuarios
+        preferred_name = prod.name if prod.name else (prod.sku_custom or f"Producto {prod.id}")
         
         # SKU: priorizar sku_custom, luego ng_sku, finalmente el ID
         product_sku = prod.sku_custom or prod.ng_sku or f"ID-{prod.id}"
@@ -365,6 +366,8 @@ async def get_product_sources(
             last_price=float(source.last_price) if source.last_price else None,
             last_checked_at=source.last_checked_at.isoformat() if source.last_checked_at else None,
             is_mandatory=source.is_mandatory,
+            source_type=source.source_type,
+            currency=source.currency,
             created_at=source.created_at.isoformat(),
             updated_at=source.updated_at.isoformat(),
         )
@@ -382,8 +385,8 @@ async def get_product_sources(
     market_price_min_val = min(prices) if prices else None
     market_price_max_val = max(prices) if prices else None
     
-    # Usar sku_custom si existe, sino usar name
-    product_name = product.sku_custom if product.sku_custom else product.name
+    # preferred_name: priorizar name (nombre descriptivo) sobre sku_custom (identificador técnico)
+    product_name = product.name if product.name else (product.sku_custom or f"Producto {product.id}")
     
     return ProductSourcesResponse(
         product_id=product.id,
@@ -477,8 +480,8 @@ async def update_product_sale_price(
     await db.commit()
     await db.refresh(product)
     
-    # Usar sku_custom si existe, sino usar name
-    product_name = product.sku_custom if product.sku_custom else product.name
+    # preferred_name: priorizar name (nombre descriptivo) sobre sku_custom (identificador técnico)
+    product_name = product.name if product.name else (product.sku_custom or f"Producto {product.id}")
     
     return UpdateSalePriceResponse(
         product_id=product.id,
@@ -579,8 +582,8 @@ async def update_product_market_reference(
     await db.commit()
     await db.refresh(product)
     
-    # 5. Calcular nombre preferido
-    preferred_name = product.sku_custom if product.sku_custom else product.name
+    # 5. Calcular nombre preferido: priorizar name (nombre descriptivo) sobre sku_custom (identificador técnico)
+    preferred_name = product.name if product.name else (product.sku_custom or f"Producto {product.id}")
     
     return UpdateMarketReferenceResponse(
         product_id=product.id,
@@ -694,6 +697,167 @@ async def refresh_market_prices(
             status_code=500,
             detail="Error interno al iniciar actualización de precios"
         )
+
+
+# ==================== POST /products/batch-refresh ====================
+
+class BatchRefreshMarketRequest(BaseModel):
+    """Request para actualización masiva de precios de mercado"""
+    product_ids: list[int] = Field(description="Lista de IDs de productos a actualizar", min_length=1, max_length=100)
+
+
+class BatchRefreshMarketItem(BaseModel):
+    """Resultado individual de actualización en batch"""
+    product_id: int = Field(description="ID del producto")
+    status: str = Field(description="Estado: 'enqueued', 'not_found', 'error'")
+    message: str = Field(description="Mensaje descriptivo")
+    job_id: Optional[str] = Field(None, description="ID del job encolado (si disponible)")
+
+
+class BatchRefreshMarketResponse(BaseModel):
+    """Respuesta a actualización masiva de precios de mercado"""
+    total_requested: int = Field(description="Total de productos solicitados")
+    enqueued: int = Field(description="Productos encolados exitosamente")
+    not_found: int = Field(description="Productos no encontrados")
+    errors: int = Field(description="Productos con error al encolar")
+    results: list[BatchRefreshMarketItem] = Field(description="Resultados detallados por producto")
+
+
+@router.post(
+    "/products/batch-refresh",
+    response_model=BatchRefreshMarketResponse,
+    status_code=202,
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+    summary="Actualización masiva de precios de mercado",
+    description="""
+    Inicia el proceso asíncrono de scraping de precios de mercado para múltiples productos.
+    
+    El proceso:
+    1. Valida que cada producto exista
+    2. Encola una tarea de scraping en segundo plano para cada producto válido
+    3. Retorna inmediatamente con status 202 Accepted y resumen de resultados
+    4. Los workers procesan cada fuente de precio de cada producto
+    5. Actualiza los precios en la base de datos
+    
+    La actualización puede demorar varios segundos dependiendo de la cantidad de productos,
+    fuentes y la latencia de los sitios externos. La UI debe mostrar un indicador de carga
+    y refrescar los datos periódicamente.
+    
+    Límites:
+    - Mínimo: 1 producto
+    - Máximo: 100 productos por request
+    
+    Roles permitidos: admin, colaborador
+    """,
+)
+async def batch_refresh_market_prices(
+    request: BatchRefreshMarketRequest,
+    db: AsyncSession = Depends(get_session),
+):
+    """
+    Dispara actualización asíncrona de precios de mercado para múltiples productos.
+    
+    Args:
+        request: Request con lista de IDs de productos
+        db: Sesión de base de datos
+        
+    Returns:
+        BatchRefreshMarketResponse con resumen de resultados
+        
+    Raises:
+        HTTPException 422: Lista vacía o excede límite máximo
+        HTTPException 502: Error al comunicarse con el servicio de scraping
+        HTTPException 500: Error interno del servidor
+    """
+    product_ids = request.product_ids
+    
+    # Validar límites
+    if len(product_ids) == 0:
+        raise HTTPException(
+            status_code=422,
+            detail="Debe proporcionar al menos un producto"
+        )
+    
+    if len(product_ids) > 100:
+        raise HTTPException(
+            status_code=422,
+            detail="Máximo 100 productos por request"
+        )
+    
+    # Importar la tarea del worker
+    try:
+        from workers.market_scraping import refresh_market_prices_task
+    except ImportError as e:
+        logger.error(f"[batch_refresh_market] Error importando worker: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail="Servicio de actualización de precios no disponible"
+        )
+    
+    # Contadores
+    enqueued = 0
+    not_found = 0
+    errors = 0
+    results = []
+    
+    # Procesar cada producto
+    for product_id in product_ids:
+        try:
+            # 1. Verificar que el producto existe
+            query_product = select(CanonicalProduct).where(CanonicalProduct.id == product_id)
+            result = await db.execute(query_product)
+            product = result.scalar_one_or_none()
+            
+            if not product:
+                logger.warning(f"[batch_refresh_market] Producto {product_id} no encontrado")
+                not_found += 1
+                results.append(BatchRefreshMarketItem(
+                    product_id=product_id,
+                    status="not_found",
+                    message=f"Producto {product_id} no encontrado",
+                    job_id=None
+                ))
+                continue
+            
+            # 2. Encolar tarea de scraping
+            logger.info(f"[batch_refresh_market] Encolando tarea para producto {product_id}")
+            message = refresh_market_prices_task.send(product_id)
+            job_id = message.message_id if hasattr(message, 'message_id') else None
+            
+            enqueued += 1
+            results.append(BatchRefreshMarketItem(
+                product_id=product_id,
+                status="enqueued",
+                message=f"Actualización de precios iniciada para producto {product_id}",
+                job_id=job_id
+            ))
+            logger.info(f"[batch_refresh_market] Tarea encolada exitosamente para producto {product_id}, job_id={job_id}")
+            
+        except Exception as e:
+            # Error inesperado al encolar este producto
+            logger.error(
+                f"[batch_refresh_market] Error inesperado al encolar tarea para producto {product_id}: {str(e)}",
+                exc_info=True
+            )
+            errors += 1
+            results.append(BatchRefreshMarketItem(
+                product_id=product_id,
+                status="error",
+                message=f"Error al iniciar actualización: {str(e)}",
+                job_id=None
+            ))
+    
+    logger.info(
+        f"[batch_refresh_market] Resumen: {enqueued} encolados, {not_found} no encontrados, {errors} errores"
+    )
+    
+    return BatchRefreshMarketResponse(
+        total_requested=len(product_ids),
+        enqueued=enqueued,
+        not_found=not_found,
+        errors=errors,
+        results=results
+    )
 
 
 # ==================== POST /products/{id}/sources ====================
@@ -975,6 +1139,16 @@ class UpdateMarketSourceRequest(BaseModel):
     url: Optional[str] = Field(None, description="Nueva URL de la fuente")
     last_price: Optional[float] = Field(None, description="Nuevo último precio detectado")
     is_mandatory: Optional[bool] = Field(None, description="Si es fuente obligatoria")
+    currency: Optional[str] = Field(None, description="Moneda del precio (ARS, USD, etc.)", max_length=10)
+    source_type: Optional[str] = Field(None, description="Tipo de fuente: 'static' (HTML estático) o 'dynamic' (requiere JavaScript)")
+    
+    @field_validator('source_type')
+    @classmethod
+    def validate_source_type(cls, v: Optional[str]) -> Optional[str]:
+        """Valida que source_type sea 'static' o 'dynamic'"""
+        if v is not None and v not in ['static', 'dynamic']:
+            raise ValueError("source_type debe ser 'static' o 'dynamic'")
+        return v
 
 
 @router.patch(
@@ -990,6 +1164,8 @@ class UpdateMarketSourceRequest(BaseModel):
     - url: URL de la fuente
     - last_price: Último precio detectado manualmente
     - is_mandatory: Si es fuente obligatoria para cálculo de precio promedio
+    - currency: Moneda del precio (ARS, USD, etc.)
+    - source_type: Tipo de scraping ('static' para HTML estático, 'dynamic' para páginas con JavaScript)
     
     Solo se actualizan los campos enviados (partial update).
     
@@ -1055,6 +1231,12 @@ async def update_market_source(
     
     if request.is_mandatory is not None:
         source.is_mandatory = request.is_mandatory
+    
+    if request.currency is not None:
+        source.currency = request.currency
+    
+    if request.source_type is not None:
+        source.source_type = request.source_type
     
     # 4. Guardar cambios
     await db.commit()
