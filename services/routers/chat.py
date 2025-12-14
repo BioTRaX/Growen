@@ -203,8 +203,34 @@ async def chat_endpoint(
     if product_query or intent == UserIntent.CONSULTA_PRECIO:
         # Flujo principal: usar run_async con el LLM (OpenAI + tool calling)
         try:
-            # Construir prompt con historial conversacional
-            prompt_with_history = f"{history_context}\n\nUsuario: {user_text}" if history_context else user_text
+            # Buscar contexto relevante en Knowledge Base (RAG)
+            rag_context = ""
+            try:
+                from services.rag.search import get_rag_search_service
+                rag_service = get_rag_search_service()
+                rag_context = await rag_service.search_and_format_context(
+                    query=user_text,
+                    session=db,
+                    top_k=3,
+                    min_similarity=0.5
+                )
+                if rag_context:
+                    logger.info(f"RAG: Encontrado contexto para '{user_text[:50]}...'")
+            except Exception as e:
+                logger.debug(f"RAG search falló (continuando sin contexto): {e}")
+            
+            # Construir prompt con historial conversacional + contexto RAG
+            prompt_parts = []
+            if history_context:
+                prompt_parts.append(history_context)
+            if rag_context:
+                prompt_parts.append(
+                    "Contexto relevante de documentación interna:\n"
+                    f"{rag_context}\n"
+                    "Usa esta información para enriquecer tu respuesta cuando sea relevante."
+                )
+            prompt_parts.append(f"Usuario: {user_text}")
+            prompt_with_history = "\n\n".join(prompt_parts)
             
             # Obtener el schema de herramientas para consulta de productos
             # El provider OpenAI construye el schema basado en el rol del usuario
@@ -224,12 +250,43 @@ async def chat_endpoint(
             if ":" in answer and answer.split(":")[0] in ("openai", "ollama"):
                 answer = answer.split(":", 1)[1].strip()
             
-            # Guardar mensajes en historial
+            # Guardar mensajes en historial (con metadata de tools si está disponible)
             try:
                 logger.info(f"Guardando mensaje user en session {chat_session_id[:8]}...")
-                await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent.value if hasattr(intent, 'value') else str(intent)})
+                await save_message(
+                    db, 
+                    chat_session_id, 
+                    "user", 
+                    user_text, 
+                    metadata={
+                        "intent": intent.value if hasattr(intent, 'value') else str(intent),
+                        "used_rag": bool(rag_context),
+                    }
+                )
+                
+                # Intentar obtener información de tools usadas desde el provider
+                tools_metadata = {}
+                try:
+                    if hasattr(provider, '_last_tool_calls'):
+                        tools_metadata = {
+                            "tools_used": provider._last_tool_calls,
+                            "tools_count": len(provider._last_tool_calls) if provider._last_tool_calls else 0,
+                        }
+                except Exception:
+                    pass
+                
                 logger.info(f"Guardando mensaje assistant en session {chat_session_id[:8]}...")
-                await save_message(db, chat_session_id, "assistant", answer, metadata={"type": "product_answer"})
+                await save_message(
+                    db, 
+                    chat_session_id, 
+                    "assistant", 
+                    answer, 
+                    metadata={
+                        "type": "product_answer",
+                        "used_rag": bool(rag_context),
+                        **tools_metadata,
+                    }
+                )
                 logger.info(f"Commit de mensajes para session {chat_session_id[:8]}...")
                 await db.commit()
                 logger.info(f"✓ Mensajes guardados exitosamente para session {chat_session_id[:8]}")
@@ -284,8 +341,34 @@ async def chat_endpoint(
         # Usar run_async para chat general, pasando el contexto del usuario
         # El chatbot puede necesitar saber si habla con Admin/Colaborador vs Cliente
         
-        # Construir prompt con historial conversacional
-        prompt_with_history = f"{history_context}\n\nUsuario: {user_text}" if history_context else user_text
+        # Buscar contexto relevante en Knowledge Base (RAG) para chat general
+        rag_context = ""
+        try:
+            from services.rag.search import get_rag_search_service
+            rag_service = get_rag_search_service()
+            rag_context = await rag_service.search_and_format_context(
+                query=user_text,
+                session=db,
+                top_k=3,
+                min_similarity=0.5
+            )
+            if rag_context:
+                logger.info(f"RAG: Encontrado contexto para chat general '{user_text[:50]}...'")
+        except Exception as e:
+            logger.debug(f"RAG search falló (continuando sin contexto): {e}")
+        
+        # Construir prompt con historial conversacional + contexto RAG
+        prompt_parts = []
+        if history_context:
+            prompt_parts.append(history_context)
+        if rag_context:
+            prompt_parts.append(
+                "Contexto relevante de documentación interna:\n"
+                f"{rag_context}\n"
+                "Usa esta información para enriquecer tu respuesta cuando sea relevante."
+            )
+        prompt_parts.append(f"Usuario: {user_text}")
+        prompt_with_history = "\n\n".join(prompt_parts) if prompt_parts else user_text
         
         raw = await ai_router.run_async(
             task=Task.SHORT_ANSWER.value,

@@ -10,6 +10,7 @@ import http from './http'
  */
 export interface MarketProductItem {
   product_id: number
+  internal_product_id: number | null
   preferred_name: string
   product_sku: string
   sale_price: number | null
@@ -17,6 +18,8 @@ export interface MarketProductItem {
   market_price_min: number | null
   market_price_max: number | null
   last_market_update: string | null
+  has_active_alerts: boolean
+  active_alerts_count: number
   category_id: number | null
   category_name: string | null
   supplier_id: number | null
