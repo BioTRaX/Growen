@@ -42,6 +42,8 @@ class OpenAIProvider(ILLMProvider):
         if self.timeout > 300:  # si viene en ms convertir aproximado
             # heurística: si es >300 asumimos ms
             self.timeout = self.timeout / 1000.0
+        # Guardar tool calls para logging
+        self._last_tool_calls: List[Dict[str, Any]] = []
 
     def supports(self, task: str) -> bool:  # pragma: no cover - simple set membership
         # Ampliamos soporte para SHORT_ANSWER para que el chat WebSocket pueda
@@ -322,6 +324,18 @@ class OpenAIProvider(ILLMProvider):
                             parameters=params,
                         )
 
+            # Guardar tool call para logging
+            self._last_tool_calls.append({
+                "tool_name": fn_name,
+                "parameters": fn_args,
+                "success": not isinstance(tool_result, dict) or not tool_result.get("error"),
+                "result_summary": {
+                    "items_count": len(tool_result.get("items", [])) if isinstance(tool_result, dict) else 0,
+                    "product_id": tool_result.get("product_id") if isinstance(tool_result, dict) else None,
+                    "sku": tool_result.get("sku") if isinstance(tool_result, dict) else None,
+                } if isinstance(tool_result, dict) else {},
+            })
+            
             # DEBUG: Log del resultado de la tool antes de inyectarlo en mensajes
             tool_result_json = json.dumps(tool_result, ensure_ascii=False)
             logging.debug(
@@ -445,8 +459,12 @@ class OpenAIProvider(ILLMProvider):
                 "function": {
                     "name": "find_products_by_name",
                     "description": (
-                        "Use this tool to search for products when the user provides a partial or complete product name "
-                        "(e.g., 'feeding', 'tierra', 'LED lamp', 'fertilizante 1kg'). "
+                        "Use this tool to search for products by name, category, characteristics, or attributes. "
+                        "Examples: 'feeding', 'tierra', 'LED lamp', 'fertilizante 1kg', 'rico en nitrógeno', 'etapa vegetativo', 'para crecimiento'. "
+                        "The search also matches product descriptions, so you can search by: "
+                        "- Product characteristics (e.g., 'nitrógeno', 'vegetativo', 'floración') "
+                        "- Product categories (e.g., 'fertilizante', 'sustrato', 'maceta') "
+                        "- Product names (partial or complete) "
                         "Returns a list of matching products with: product_id, name, sku (canonical format XXX_####_YYY), stock, and price. "
                         "Always use this tool FIRST to find products. "
                         "Use the returned product_id or sku with get_product_info for detailed information. "
@@ -458,8 +476,13 @@ class OpenAIProvider(ILLMProvider):
                             "query": {
                                 "type": "string",
                                 "description": (
-                                    "The search text provided by the user. Can be a partial product name, "
-                                    "full product name, product category, or size (e.g., 'feeding 125g', 'sustrato', 'maceta 10L')."
+                                    "The search text. Can be: "
+                                    "- Product name (partial or complete): 'Top Crop Veg', 'feeding 125g' "
+                                    "- Category: 'fertilizante', 'sustrato', 'maceta' "
+                                    "- Characteristics: 'nitrógeno', 'vegetativo', 'floración', 'rico en N' "
+                                    "- Stage/phase: 'etapa vegetativo', 'para crecimiento', 'floración' "
+                                    "The search matches product names, descriptions, and related terms. "
+                                    "For characteristics, use key terms like 'nitrógeno', 'vegetativo', 'floración'."
                                 )
                             },
                         },
@@ -657,6 +680,10 @@ class OpenAIProvider(ILLMProvider):
         # Procesar secuencialmente cada tool_call (hasta 2 pasos búsqueda→info)
         tool_results_for_model: List[Dict[str, Any]] = []
         used_search_sku: str | None = None
+        used_search_product_id: int | None = None
+        # Reiniciar lista de tool calls para esta generación
+        self._last_tool_calls = []
+        
         for idx, call in enumerate(tool_calls[:3]):  # límite prudente MVP
             fn_name = call.function.name
             try:

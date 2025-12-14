@@ -125,7 +125,7 @@ export function SupplierAutocomplete({
     <div
       ref={containerRef}
       className={className}
-      style={{ position: 'relative', width: '100%' }}
+      style={{ position: 'relative', width: '100%', display: 'flex', flexDirection: 'column' }}
     >
       <input
         ref={inputRef}

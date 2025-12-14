@@ -504,15 +504,21 @@ class _CatalogSearchItem(_PydModel):
     dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))],
 )
 async def catalog_search(
-    q: str = Query("", description="Texto a buscar en título/SKU"),
+    q: str = Query("", description="Texto a buscar en título/SKU/descripción"),
     limit: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
 ):
     """Búsqueda rápida para POS y chatbot.
 
     Busca productos con su información canónica vinculada.
+    Busca en: título, SKU, descripción HTML, y términos relacionados.
     Devuelve SKU canónico (formato XXX_####_YYY) preferentemente sobre el interno.
     Prioriza productos con stock>0.
+    
+    Términos especiales reconocidos:
+    - "vegetativo", "veg", "crecimiento" → busca en descripción
+    - "nitrógeno", "N", "nitrogeno" → busca en descripción
+    - "floración", "flora", "flor" → busca en descripción
     """
     term = (q or "").strip()
     
@@ -546,18 +552,43 @@ async def catalog_search(
         ).all()
     else:
         like = f"%{term}%"
-        # Buscar en título del producto o nombre canónico o SKU canónico
+        # Normalizar término para búsquedas relacionadas
+        term_lower = term.lower()
+        related_terms = []
+        
+        # Mapeo de términos relacionados para búsqueda mejorada
+        if any(t in term_lower for t in ["vegetativo", "veg", "crecimiento", "vegetacion"]):
+            related_terms.extend(["vegetativo", "veg", "crecimiento", "vegetacion", "vegetativa"])
+        if any(t in term_lower for t in ["nitrogeno", "nitrógeno", "n "]):
+            related_terms.extend(["nitrogeno", "nitrógeno", "n ", "nitrogen"])
+        if any(t in term_lower for t in ["floracion", "floración", "flor", "flora"]):
+            related_terms.extend(["floracion", "floración", "flor", "flora"])
+        
+        # Construir condiciones de búsqueda
+        conditions = [
+            Product.title.ilike(like),
+            CanonicalProduct.name.ilike(like),
+            CanonicalProduct.sku_custom.ilike(like),
+            CanonicalProduct.ng_sku.ilike(like),
+        ]
+        
+        # Agregar búsqueda en descripción HTML si existe
+        conditions.append(Product.description_html.ilike(like))
+        
+        # Agregar términos relacionados
+        for rel_term in related_terms:
+            rel_like = f"%{rel_term}%"
+            conditions.extend([
+                Product.title.ilike(rel_like),
+                Product.description_html.ilike(rel_like),
+                CanonicalProduct.name.ilike(rel_like),
+            ])
+        
+        # Buscar en título, nombre canónico, SKU y descripción
         rows = (
             await session.execute(
                 base_query
-                .where(
-                    or_(
-                        Product.title.ilike(like),
-                        CanonicalProduct.name.ilike(like),
-                        CanonicalProduct.sku_custom.ilike(like),
-                        CanonicalProduct.ng_sku.ilike(like),
-                    )
-                )
+                .where(or_(*conditions))
                 .order_by(Product.stock.desc().nullslast(), Product.title.asc())
                 .limit(limit * 2)  # Extra para deduplicar
             )

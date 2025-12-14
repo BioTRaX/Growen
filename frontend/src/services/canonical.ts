@@ -63,6 +63,13 @@ export async function listOffersByCanonical(
   return res.json()
 }
 
+export async function deleteCanonicalProduct(
+  id: number,
+): Promise<{ status: string; id: number }> {
+  const res = await http.delete(`/canonical-products/${id}`)
+  return res.data
+}
+
 export async function getNextSeq(category_id: number | null | undefined): Promise<number> {
   const params = new URLSearchParams()
   if (category_id) params.set('category_id', String(category_id))

@@ -4,12 +4,13 @@
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useToast } from '../components/ToastProvider'
 import { PATHS } from '../routes/paths'
 import { listCategories, Category } from '../services/categories'
 import { listMarketProducts, updateProductSalePrice, batchUpdateMarketPrices, type MarketProductItem } from '../services/market'
+import { deleteCanonicalProduct } from '../services/canonical'
 import SupplierAutocomplete from '../components/supplier/SupplierAutocomplete'
 import MarketDetailModal from '../components/MarketDetailModal'
 import EditablePriceField from '../components/EditablePriceField'
@@ -39,6 +40,9 @@ export default function Market() {
   // Estado para modal de detalles
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null)
   const [selectedProductName, setSelectedProductName] = useState<string>('')
+  
+  // Estado para confirmación de eliminación
+  const [deletingProductId, setDeletingProductId] = useState<number | null>(null)
 
   // Estado para selección múltiple
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -118,6 +122,30 @@ export default function Market() {
   function handlePricesUpdated() {
     // Recargar la lista de productos para reflejar nuevos precios
     loadProducts()
+  }
+
+  async function handleDeleteProduct(productId: number, productName: string) {
+    if (!confirm(`¿Estás seguro de eliminar el producto "${productName}" (ID: ${productId})?\n\nEsta acción es permanente y eliminará el producto canónico y todas sus fuentes de mercado asociadas.`)) {
+      return
+    }
+    
+    try {
+      setDeletingProductId(productId)
+      await deleteCanonicalProduct(productId)
+      push({
+        kind: 'success',
+        message: `Producto "${productName}" eliminado correctamente`,
+      })
+      // Recargar la lista
+      await loadProducts()
+    } catch (error: any) {
+      push({
+        kind: 'error',
+        message: error?.response?.data?.detail || error?.message || 'Error al eliminar el producto',
+      })
+    } finally {
+      setDeletingProductId(null)
+    }
   }
 
   // Funciones de selección múltiple
@@ -323,14 +351,15 @@ export default function Market() {
 
       {/* Filtros */}
       <div style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          {/* Filtro por nombre/SKU */}
-          <div style={{ flex: 1, minWidth: 200 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16, marginBottom: 8, alignItems: 'flex-end' }}>
+          {/* Filtro por nombre/SKU - Izquierda */}
+          <div style={{ minWidth: 200, justifySelf: 'flex-start' }}>
             <label style={{ display: 'block', fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>
               Buscar producto
             </label>
             <input
-              className="input w-full"
+              className="input"
+              style={{ width: 'fit-content', minWidth: 'auto' }}
               placeholder="Nombre o SKU..."
               value={q}
               onChange={(e) => { setQ(e.target.value); resetAndSearch() }}
@@ -338,13 +367,12 @@ export default function Market() {
             />
           </div>
           
-          {/* Filtro por proveedor */}
-          <div style={{ minWidth: 200 }}>
+          {/* Filtro por proveedor - Centro */}
+          <div style={{ minWidth: 200, justifySelf: 'center' }}>
             <label style={{ display: 'block', fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>
               Proveedor
             </label>
             <SupplierAutocomplete
-              className="input"
               value={supplierSel}
               onChange={(item) => { 
                 setSupplierSel(item)
@@ -355,8 +383,8 @@ export default function Market() {
             />
           </div>
           
-          {/* Filtro por categoría */}
-          <div style={{ minWidth: 150 }}>
+          {/* Filtro por categoría - Derecha */}
+          <div style={{ minWidth: 150, justifySelf: 'flex-end' }}>
             <label style={{ display: 'block', fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>
               Categoría
             </label>
@@ -372,19 +400,20 @@ export default function Market() {
               ))}
             </select>
           </div>
+        </div>
 
-          {/* Botón limpiar filtros */}
-          {hasActiveFilters() && (
+        {/* Botón limpiar filtros - Debajo de los filtros */}
+        {hasActiveFilters() && (
+          <div style={{ marginTop: 8 }}>
             <button 
               className="btn-secondary" 
               onClick={clearAllFilters}
               title="Limpiar todos los filtros"
-              style={{ alignSelf: 'flex-end' }}
             >
               🗑️ Limpiar filtros
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Indicador de filtros activos */}
         {hasActiveFilters() && (
@@ -495,13 +524,24 @@ export default function Market() {
                     </td>
                     {/* Nombre del producto */}
                     <td style={{ textAlign: 'left' }}>
-                      <a 
-                        className="truncate product-title" 
-                        href={`/productos/${product.product_id}`}
-                        title={product.preferred_name}
-                      >
-                        {formatToTitleCase(product.preferred_name)}
-                      </a>
+                      {product.internal_product_id ? (
+                        <Link 
+                          className="truncate product-title" 
+                          to={`/productos/${product.internal_product_id}`}
+                          state={{ from: '/mercado' }}
+                          title={product.preferred_name}
+                        >
+                          {formatToTitleCase(product.preferred_name)}
+                        </Link>
+                      ) : (
+                        <span 
+                          className="truncate" 
+                          style={{ color: 'var(--text-secondary)', cursor: 'not-allowed' }}
+                          title="No hay Product interno asociado - No se puede ver el detalle"
+                        >
+                          {formatToTitleCase(product.preferred_name)}
+                        </span>
+                      )}
                     </td>
 
                     {/* SKU del producto */}
@@ -547,14 +587,32 @@ export default function Market() {
 
                     {/* Acciones */}
                     <td className="text-center">
-                      <button
-                        className="btn-secondary"
-                        onClick={() => handleOpenDetail(product.product_id, product.preferred_name)}
-                        title="Ver detalles del mercado"
-                        style={{ padding: '4px 8px', fontSize: 14 }}
-                      >
-                        👁️ Ver
-                      </button>
+                      <div style={{ display: 'flex', gap: 4, justifyContent: 'center', alignItems: 'center' }}>
+                        <button
+                          className="btn-secondary"
+                          onClick={() => handleOpenDetail(product.product_id, product.preferred_name)}
+                          title="Ver detalles del mercado"
+                          style={{ padding: '4px 8px', fontSize: 14 }}
+                        >
+                          👁️ Ver
+                        </button>
+                        {canEdit && product.internal_product_id === null && (
+                          <button
+                            className="btn-secondary"
+                            onClick={() => handleDeleteProduct(product.product_id, product.preferred_name)}
+                            disabled={deletingProductId === product.product_id}
+                            title="Eliminar producto canónico (sin Product interno asociado)"
+                            style={{ 
+                              padding: '4px 8px', 
+                              fontSize: 14,
+                              color: '#ef4444',
+                              borderColor: '#ef4444'
+                            }}
+                          >
+                            {deletingProductId === product.product_id ? '⏳' : '🗑️'}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )

@@ -2,14 +2,14 @@
 // NG-HEADER: Ubicación: frontend/src/pages/ProductDetail.tsx
 // NG-HEADER: Descripción: Ficha de producto con galería, estilo y acciones (Minimal Dark + upload Admin)
 // NG-HEADER: Lineamientos: Ver AGENTS.md
-import { useEffect, useMemo, useState, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import http from '../services/http'
 import { uploadProductImage, addImageFromUrl, setPrimary, lockImage, deleteImage, refreshSEO, removeBg, watermark, generateWebP } from '../services/images'
 import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
 import { useAuth } from '../auth/AuthContext'
 import { getProductDetailStylePref, putProductDetailStylePref, ProductDetailStyle, updateSalePrice, updateSupplierBuyPrice } from '../services/productsEx'
-import { listProductVariants, linkSupplierProduct, ProductVariantItem, patchProduct, updateVariantSku } from '../services/products'
+import { listProductVariants, linkSupplierProduct, ProductVariantItem, patchProduct, updateVariantSku, deleteProducts } from '../services/products'
 import { listCategories, Category } from '../services/categories'
 import SupplierAutocomplete from '../components/supplier/SupplierAutocomplete'
 import type { SupplierSearchItem } from '../services/suppliers'
@@ -67,9 +67,23 @@ export default function ProductDetail() {
   const { id } = useParams()
   const pid = Number(id)
   const nav = useNavigate()
+  const location = useLocation()
+  const previousPath = useRef<string | null>(null)
   const { state, refreshMe, hydrated } = useAuth()
   const isAdmin = state.role === 'admin'
   const canEdit = isAdmin || state.role === 'colaborador'
+  
+  // Guardar la ruta anterior cuando el componente se monta
+  useEffect(() => {
+    if (location.state?.from) {
+      previousPath.current = location.state.from
+      sessionStorage.setItem('previousPath', location.state.from)
+    } else {
+      // Intentar obtener del sessionStorage o usar una ruta por defecto
+      const from = sessionStorage.getItem('previousPath') || '/mercado'
+      previousPath.current = from
+    }
+  }, [location.state])
 
   const [prod, setProd] = useState<Prod | null>(null)
   const [desc, setDesc] = useState('')
@@ -111,6 +125,7 @@ export default function ProductDetail() {
   const [srcOpen, setSrcOpen] = useState(false)
   const [srcLoading, setSrcLoading] = useState(false)
   const [srcText, setSrcText] = useState<string>('')
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const theme = useMemo(() => ({
     bg: styleVariant === 'minimalDark' ? '#0b0f14' : '#0d1117',
     card: styleVariant === 'minimalDark' ? 'rgba(17,24,39,0.7)' : '#111827',
@@ -310,36 +325,63 @@ export default function ProductDetail() {
 
   // Eliminar producto
   const handleDelete = async () => {
-    console.log('handleDelete llamado', { pid, prod })
-    if (!pid || !prod) {
-      console.warn('handleDelete: salida temprana', { pid, prod })
+    if (!pid || isNaN(pid)) {
+      showToast('error', 'ID de producto inválido')
       return
     }
     
-    const productName = prod.canonical_name || prod.title || `producto ${pid}`
-    console.log('handleDelete: nombre del producto', productName)
-    
-    if (!window.confirm(`¿Estás seguro de eliminar "${productName}"?\n\nEsta acción es PERMANENTE y eliminará:\n• El producto\n• Todas sus imágenes\n• Relaciones con proveedores\n• Variantes asociadas\n\n¿Deseas continuar?`)) {
-      console.log('handleDelete: usuario canceló')
+    // Abrir modal de confirmación
+    setDeleteConfirmOpen(true)
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!pid || isNaN(pid)) {
+      showToast('error', 'ID de producto inválido')
+      setDeleteConfirmOpen(false)
       return
     }
 
-    console.log('handleDelete: usuario confirmó, iniciando eliminación')
+    // Usar nombre del producto si existe, sino usar pid
+    const productName = prod?.canonical_name || prod?.title || `producto ${pid}`
+    
+    setDeleteConfirmOpen(false)
     try {
       setLoading(true)
-      console.log('handleDelete: enviando DELETE', { url: '/catalog/products', data: { ids: [pid] } })
-      await http.delete('/catalog/products', { data: { ids: [pid] } })
-      console.log('handleDelete: eliminación exitosa')
-      showToast('success', `Producto "${productName}" eliminado`)
-      // Redirigir a la lista de productos después de 1 segundo
-      setTimeout(() => nav('/productos'), 1000)
+      const result = await deleteProducts([pid])
+      
+      // Determinar si se eliminó exitosamente
+      const wasDeleted = result.deleted && result.deleted.length > 0 && result.deleted.includes(pid)
+      
+      if (wasDeleted) {
+        showToast('success', `Producto "${productName}" eliminado`)
+        // Redirigir a la página anterior después de 1 segundo
+        setTimeout(() => {
+          const targetPath = previousPath.current || '/mercado'
+          nav(targetPath, { replace: true })
+        }, 1000)
+      } else if (result.blocked_stock && result.blocked_stock.length > 0 && result.blocked_stock.includes(pid)) {
+        showToast('error', 'No se puede eliminar: el producto tiene stock')
+      } else if (result.blocked_refs && result.blocked_refs.length > 0 && result.blocked_refs.includes(pid)) {
+        showToast('error', 'No se puede eliminar: el producto está referenciado en compras')
+      } else {
+        // Si no está en ninguna lista, puede ser que no existe o que no se pudo eliminar por otra razón
+        // Pero igual redirigimos porque el usuario intentó eliminarlo
+        showToast('warning', 'El producto no pudo ser eliminado o no existe')
+        setTimeout(() => {
+          const targetPath = previousPath.current || '/mercado'
+          nav(targetPath, { replace: true })
+        }, 1500)
+      }
     } catch (e: any) {
       console.error('handleDelete: error en eliminación', e)
       const msg = e?.response?.data?.detail || e?.message || 'Error al eliminar producto'
       showToast('error', String(msg))
+      setTimeout(() => {
+        const targetPath = previousPath.current || '/mercado'
+        nav(targetPath, { replace: true })
+      }, 1500)
     } finally {
       setLoading(false)
-      console.log('handleDelete: finalizó')
     }
   }
 
@@ -497,10 +539,9 @@ export default function ProductDetail() {
             onClick={(e) => {
               e.preventDefault()
               e.stopPropagation()
-              console.log('CLICK EN BOTÓN ELIMINAR DETECTADO')
-              handleDelete()
+              handleDelete() // Abre el modal
             }}
-            disabled={loading || !prod?.id}
+            disabled={loading || !pid || isNaN(pid)}
             style={{ 
               borderColor: '#ef4444', 
               color: '#ef4444',
@@ -952,6 +993,49 @@ export default function ProductDetail() {
                   setLinkBusy(false)
                 }
               }}>{linkBusy ? 'Guardando...' : 'Guardar'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de confirmación de eliminación */}
+      {deleteConfirmOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div className="panel" style={{ padding: 24, minWidth: 440, maxWidth: '90vw', background: theme.card, border: `1px solid ${theme.border}`, borderRadius: theme.radius }}>
+            <h3 style={{ marginTop: 0, color: theme.title }}>Confirmar eliminación</h3>
+            <p style={{ fontSize: 14, color: theme.text, lineHeight: 1.6 }}>
+              ¿Estás seguro de eliminar <strong>{prod?.canonical_name || prod?.title || `producto ${pid}`}</strong>?
+            </p>
+            <p style={{ fontSize: 13, color: theme.text, opacity: 0.8, marginTop: 12 }}>
+              Esta acción es <strong>PERMANENTE</strong> y eliminará:
+            </p>
+            <ul style={{ fontSize: 13, color: theme.text, opacity: 0.9, marginTop: 8, paddingLeft: 20 }}>
+              <li>El producto</li>
+              <li>Todas sus imágenes</li>
+              <li>Relaciones con proveedores</li>
+              <li>Variantes asociadas</li>
+            </ul>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 24 }}>
+              <button 
+                className="btn-secondary" 
+                onClick={() => setDeleteConfirmOpen(false)}
+                disabled={loading}
+                style={{ borderColor: theme.border, color: theme.text }}
+              >
+                Cancelar
+              </button>
+              <button
+                className="btn"
+                onClick={handleConfirmDelete}
+                disabled={loading}
+                style={{ 
+                  borderColor: '#ef4444', 
+                  color: '#ef4444',
+                  fontWeight: 600
+                }}
+              >
+                {loading ? 'Eliminando...' : 'Eliminar'}
+              </button>
             </div>
           </div>
         </div>

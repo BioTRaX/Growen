@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 import logging
 import traceback
 
-from db.models import CanonicalProduct, Category, ProductEquivalence, SupplierProduct, MarketSource, MarketAlert
+from db.models import CanonicalProduct, Category, ProductEquivalence, SupplierProduct, MarketSource, MarketAlert, Product
 from db.session import get_session
 from services.auth import require_roles, require_csrf
 
@@ -31,7 +31,8 @@ router = APIRouter(prefix="/market", tags=["market"])
 # Schemas de respuesta
 class MarketProductItem(BaseModel):
     """Item de producto para la lista del módulo Mercado"""
-    product_id: int = Field(description="ID del producto canónico")
+    product_id: int = Field(description="ID del producto canónico (CanonicalProduct.id) para usar en endpoints de Market")
+    internal_product_id: Optional[int] = Field(None, description="ID del producto interno (Product.id) para usar en rutas /productos/:id")
     preferred_name: str = Field(description="Nombre descriptivo del producto")
     product_sku: str = Field(description="SKU del producto (sku_custom, ng_sku o ID)")
     sale_price: Optional[float] = Field(None, description="Precio de venta actual")
@@ -123,6 +124,7 @@ async def list_market_products(
         selectinload(CanonicalProduct.category),
         selectinload(CanonicalProduct.subcategory),
         selectinload(CanonicalProduct.equivalences).selectinload(ProductEquivalence.supplier),
+        selectinload(CanonicalProduct.equivalences).selectinload(ProductEquivalence.supplier_product),
     )
     
     # Filtros
@@ -203,12 +205,13 @@ async def list_market_products(
             category_name_val = prod.subcategory.name
             category_id_val = prod.subcategory_id
         
-        # Obtener proveedor principal (primera equivalencia)
+        # Obtener proveedor principal (primera equivalencia) y Product interno
         # TODO: Mejorar lógica para determinar "proveedor principal" cuando haya múltiples
         supplier_id_val = None
         supplier_name_val = None
+        internal_product_id = None
         
-        # Cargar equivalencias para obtener proveedor
+        # Cargar equivalencias para obtener proveedor y Product interno
         if hasattr(prod, 'equivalences') and prod.equivalences:
             first_eq = prod.equivalences[0]
             if hasattr(first_eq, 'supplier_id'):
@@ -216,6 +219,23 @@ async def list_market_products(
                 # Cargar nombre del proveedor si está disponible
                 if hasattr(first_eq, 'supplier') and first_eq.supplier:
                     supplier_name_val = first_eq.supplier.name
+            
+            # Obtener Product interno desde SupplierProduct de la primera equivalencia
+            if hasattr(first_eq, 'supplier_product') and first_eq.supplier_product:
+                sp = first_eq.supplier_product
+                if hasattr(sp, 'internal_product_id') and sp.internal_product_id:
+                    internal_product_id = sp.internal_product_id
+        
+        # Si no encontramos Product interno desde equivalencias precargadas, buscar directamente
+        if internal_product_id is None:
+            product_query = (
+                select(Product.id)
+                .join(SupplierProduct, SupplierProduct.internal_product_id == Product.id)
+                .join(ProductEquivalence, ProductEquivalence.supplier_product_id == SupplierProduct.id)
+                .where(ProductEquivalence.canonical_product_id == prod.id)
+                .limit(1)
+            )
+            internal_product_id = await db.scalar(product_query)
         
         # Calcular market_price_min, market_price_max desde market_sources
         market_price_min_val = None
@@ -245,6 +265,7 @@ async def list_market_products(
         
         item = MarketProductItem(
             product_id=prod.id,
+            internal_product_id=internal_product_id,
             preferred_name=preferred_name,
             product_sku=product_sku,
             sale_price=float(prod.sale_price) if prod.sale_price else None,

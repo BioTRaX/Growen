@@ -247,6 +247,66 @@ async def update_canonical_product(
     }
 
 
+@canonical_router.delete(
+    "/{canonical_id}",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+)
+async def delete_canonical_product(
+    canonical_id: int,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+) -> dict:
+    """Elimina un producto canónico.
+    
+    Se eliminan automáticamente (CASCADE):
+    - MarketSource relacionadas
+    - MarketAlert relacionadas
+    - MarketPriceHistory relacionadas
+    
+    Se eliminan manualmente:
+    - ProductEquivalence relacionadas (no tienen CASCADE)
+    """
+    cp = await session.get(CanonicalProduct, canonical_id)
+    if not cp:
+        raise HTTPException(status_code=404, detail="Canonical product not found")
+    
+    # Guardar datos para auditoría antes de eliminar
+    cp_name = cp.name
+    cp_sku = cp.sku_custom or cp.ng_sku
+    
+    # Eliminar ProductEquivalence relacionadas (no tienen CASCADE)
+    equivalences = await session.execute(
+        select(ProductEquivalence).where(ProductEquivalence.canonical_product_id == canonical_id)
+    )
+    eq_list = equivalences.scalars().all()
+    for eq in eq_list:
+        await session.delete(eq)
+    
+    # Eliminar el CanonicalProduct (MarketSource, MarketAlert, MarketPriceHistory se eliminan por CASCADE)
+    await session.delete(cp)
+    await session.commit()
+    
+    # Auditoría
+    _cid = request.headers.get("x-correlation-id") or request.headers.get("x-request-id") if request else None
+    await _audit(
+        session,
+        action="delete",
+        table="canonical_products",
+        entity_id=canonical_id,
+        meta={
+            "name": cp_name,
+            "sku": cp_sku,
+            "equivalences_deleted": len(eq_list),
+            **({"cid": _cid} if _cid else {})
+        },
+        sess=sess,
+        request=request
+    )
+    
+    return {"status": "deleted", "id": canonical_id}
+
+
 class EquivalenceCreate(BaseModel):
     supplier_id: int
     supplier_product_id: int
