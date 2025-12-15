@@ -52,6 +52,11 @@ export async function tailServiceLogs(name: string, tail = 200): Promise<Service
   return r.data.items
 }
 
+export async function deleteServiceLogs(name: string): Promise<{ name: string; deleted_count: number; ok: boolean; message: string }> {
+  const r = await http.delete(`/admin/services/${encodeURIComponent(name)}/logs`)
+  return r.data
+}
+
 export async function healthService(name: string): Promise<{ ok: boolean; service: string; deps?: any; hints?: string[]; error?: string; version?: string }>{
   const r = await http.get(`/health/service/${encodeURIComponent(name)}`)
   return r.data

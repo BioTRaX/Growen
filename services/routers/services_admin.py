@@ -46,6 +46,7 @@ KNOWN_SERVICES = [
     "notifier",
     "market_worker",  # Worker de actualización de precios de mercado
     "drive_sync_worker",  # Worker de sincronización Drive
+    "telegram_polling_worker",  # Worker de Long Polling para Telegram Bot
 ]
 
 
@@ -480,6 +481,70 @@ async def stream_logs(name: str, db: AsyncSession = Depends(get_session), last_i
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
+@router.delete("/{name}/logs", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
+async def delete_service_logs(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
+    """Elimina todos los logs (ServiceLog) de un servicio.
+    
+    Solo se permite cuando el servicio está detenido para evitar conflictos.
+    """
+    if name not in KNOWN_SERVICES:
+        raise HTTPException(status_code=404, detail="Servicio desconocido")
+    
+    # Verificar que el servicio esté detenido
+    row = await _ensure_row(db, name)
+    if row.status == "running":
+        raise HTTPException(
+            status_code=400, 
+            detail="No se pueden eliminar logs mientras el servicio está corriendo. Detener el servicio primero."
+        )
+    
+    # Eliminar todos los ServiceLog del servicio
+    from sqlalchemy import delete
+    cid = _cid()
+    try:
+        result = await db.execute(delete(ServiceLog).where(ServiceLog.service == name))
+        deleted_count = result.rowcount or 0
+        await db.commit()
+        
+        # Registrar la acción de limpieza
+        db.add(ServiceLog(
+            service=name,
+            correlation_id=cid,
+            action="delete_logs",
+            host=socket.gethostname(),
+            pid=None,
+            duration_ms=None,
+            ok=True,
+            level="INFO",
+            error=None,
+            payload={"deleted_count": deleted_count}
+        ))
+        await db.commit()
+        
+        return {
+            "name": name,
+            "deleted_count": deleted_count,
+            "ok": True,
+            "message": f"Se eliminaron {deleted_count} logs del servicio {name}"
+        }
+    except Exception as e:
+        await db.rollback()
+        db.add(ServiceLog(
+            service=name,
+            correlation_id=cid,
+            action="delete_logs",
+            host=socket.gethostname(),
+            pid=None,
+            duration_ms=None,
+            ok=False,
+            level="ERROR",
+            error=str(e),
+            payload={}
+        ))
+        await db.commit()
+        raise HTTPException(status_code=500, detail=f"Error eliminando logs: {e}")
+
+
 @router.get("/{name}/deps/check", dependencies=[Depends(require_roles("admin", "colaborador"))])
 async def deps_check(name: str) -> Dict[str, Any]:
     """Chequea dependencias de sistema/paquetes según el servicio."""
@@ -528,6 +593,24 @@ async def deps_check(name: str) -> Dict[str, Any]:
             __import__("rembg")
         except Exception:
             hints.append("pip install rembg (opcional)")
+    elif name == "telegram_polling_worker":
+        # Verificar que TELEGRAM_BOT_TOKEN esté configurado
+        telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        if not telegram_token:
+            ok = False
+            missing.append("TELEGRAM_BOT_TOKEN")
+            hints.append("Configurar TELEGRAM_BOT_TOKEN en .env (obtener de @BotFather)")
+        # Verificar que TELEGRAM_ENABLED esté habilitado
+        telegram_enabled = os.getenv("TELEGRAM_ENABLED", "0").lower() in ("1", "true", "yes")
+        if not telegram_enabled:
+            hints.append("Configurar TELEGRAM_ENABLED=1 en .env para habilitar")
+        # Verificar dependencias Python
+        try:
+            import httpx
+        except ImportError:
+            ok = False
+            missing.append("httpx")
+            hints.append("pip install httpx")
     else:
         return {"ok": False, "missing": [], "detail": ["servicio desconocido"]}
     return {"ok": ok, "missing": missing, "hints": hints}

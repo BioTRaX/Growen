@@ -151,6 +151,12 @@ async def get_product_info(sku: str = None, product_id: int = None, user_role: s
                 "stock": data.get("stock"),
             }
             
+            # Incluir tags si están disponibles
+            tags = data.get("tags")
+            if tags and isinstance(tags, list):
+                result["tags"] = tags
+                logger.debug("get_product_info: Incluyendo tags: %s", tags)
+            
             # Incluir descripción y especificaciones si están disponibles
             description = data.get("description")
             if description:
@@ -339,19 +345,25 @@ async def find_products_by_name(query: str, user_role: str) -> Dict[str, Any]:
             sku = prod.get("sku")  # SKU canónico (formato XXX_####_YYY)
             stock = prod.get("stock")
             price = prod.get("price") or prod.get("sale_price")
+            tags = prod.get("tags", [])  # Tags del producto (ej: ["#Organico", "#Floracion"])
             
             # Solo incluir si tiene SKU canónico (no mostrar SKUs internos)
             # El SKU canónico tiene formato XXX_####_YYY
             if not sku or not product_id:
                 continue
             
-            items.append({
+            item = {
                 "product_id": product_id,
                 "name": name,
                 "sku": sku,
                 "stock": stock,
                 "price": price,
-            })
+            }
+            # Incluir tags si están disponibles
+            if tags:
+                item["tags"] = tags
+            
+            items.append(item)
         
         return {"items": items, "count": len(items), "query": query}
 
