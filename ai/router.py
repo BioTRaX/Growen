@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 
 from agent_core.config import Settings
-from .persona import SYSTEM_PROMPT
+from .persona import SYSTEM_PROMPT, get_persona_prompt
 from .policy import choose
 import os
 from .providers.ollama_provider import OllamaProvider
@@ -80,6 +80,7 @@ class AIRouter:
         prompt: str,
         user_context: dict | None = None,
         tools_schema: list | None = None,
+        images: list[str] | None = None,  # NUEVO: Lista de imágenes (Base64 data URLs o URLs públicas)
     ) -> str:
         """Ejecuta generación asíncrona con soporte de herramientas y contexto de usuario.
 
@@ -114,7 +115,15 @@ class AIRouter:
             )
         """
         provider = self.get_provider(task)
-        full_prompt = f"{SYSTEM_PROMPT}\n\n{prompt}"
+        
+        # Determinar persona según rol e intención
+        user_role = user_context.get("role", "guest") if user_context else "guest"
+        intent = user_context.get("intent", "") if user_context else ""
+        user_text = prompt.split("\n")[-1] if "\n" in prompt else prompt  # Extraer texto del usuario del prompt
+        has_image = bool(images and len(images) > 0)  # Detectar si hay imágenes
+        
+        persona_mode, system_prompt = get_persona_prompt(user_role, intent, user_text, has_image=has_image)
+        full_prompt = f"{system_prompt}\n\n{prompt}"
 
         # Intentar usar generate_async (preferido)
         try:
@@ -122,6 +131,7 @@ class AIRouter:
                 prompt=full_prompt,
                 tools_schema=tools_schema,
                 user_context=user_context,
+                images=images,  # Pasar imágenes al provider
             )
             
             # Manejar respuesta según el proveedor

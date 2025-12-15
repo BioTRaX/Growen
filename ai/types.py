@@ -13,3 +13,4 @@ class Task(str, Enum):
     CONTENT = "content.generation"
     SEO = "seo.product_desc"
     REASONING = "reasoning.heavy"
+    DIAGNOSIS_VISION = "diagnosis.vision"  # Diagnóstico de plantas con análisis de imágenes

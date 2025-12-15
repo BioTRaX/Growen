@@ -55,6 +55,7 @@ class OpenAIProvider(ILLMProvider):
             Task.SEO.value,
             Task.REASONING.value,
             Task.SHORT_ANSWER.value,
+            Task.DIAGNOSIS_VISION.value,  # NUEVO: Soporte para diagnóstico con visión
         }
 
     def _split_prompt(self, prompt: str) -> tuple[str, str]:
@@ -108,6 +109,7 @@ class OpenAIProvider(ILLMProvider):
         prompt: str,
         tools_schema: list | None = None,
         user_context: dict | None = None,
+        images: list[str] | None = None,  # NUEVO: Lista de imágenes (Base64 data URLs o URLs públicas)
     ) -> str:
         """Genera respuesta asíncrona con soporte unificado de herramientas.
 
@@ -146,10 +148,38 @@ class OpenAIProvider(ILLMProvider):
         user_role = user_context.get("role", "guest") if user_context else "guest"
 
         # Construir mensajes iniciales
-        messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
+        # Si hay imágenes, usar formato content array para visión
+        if images and len(images) > 0:
+            user_content: List[Dict[str, Any]] = [
+                {"type": "text", "text": user_prompt}
+            ]
+            # Agregar cada imagen al contenido
+            for img in images:
+                if img.startswith("data:image/"):
+                    # Base64 data URL
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": img}
+                    })
+                elif img.startswith("http://") or img.startswith("https://"):
+                    # URL pública
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": img}
+                    })
+            
+            messages: List[Dict[str, Any]] = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ]
+            # Usar modelo con visión si hay imágenes
+            vision_model = os.getenv("OPENAI_VISION_MODEL", "gpt-4o")
+        else:
+            messages: List[Dict[str, Any]] = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            vision_model = None  # Usar modelo por defecto
 
         client = OpenAI(api_key=self.api_key)
 
@@ -161,8 +191,10 @@ class OpenAIProvider(ILLMProvider):
                     "Esquema de salida EXACTO:" in user_prompt
                     or "Esquema de salida esperado:" in user_prompt
                 )
+                # Usar modelo con visión si hay imágenes, sino el modelo por defecto
+                model_to_use = vision_model or self.model
                 resp = client.chat.completions.create(
-                    model=self.model,
+                    model=model_to_use,
                     messages=messages,
                     temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
                     max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")),
@@ -178,8 +210,10 @@ class OpenAIProvider(ILLMProvider):
 
         # Caso 2: Con tools → tool calling
         try:
+            # Usar modelo con visión si hay imágenes, sino el modelo por defecto
+            model_to_use = vision_model or self.model
             first = client.chat.completions.create(
-                model=self.model,
+                model=model_to_use,
                 messages=messages,
                 tools=tools_schema,
                 tool_choice="auto",
@@ -465,7 +499,8 @@ class OpenAIProvider(ILLMProvider):
                         "- Product characteristics (e.g., 'nitrógeno', 'vegetativo', 'floración') "
                         "- Product categories (e.g., 'fertilizante', 'sustrato', 'maceta') "
                         "- Product names (partial or complete) "
-                        "Returns a list of matching products with: product_id, name, sku (canonical format XXX_####_YYY), stock, and price. "
+                        "Returns a list of matching products with: product_id, name, sku (canonical format XXX_####_YYY), stock, price, and tags (e.g., #Organico, #Mineral, #Floracion). "
+                        "Tags help identify product characteristics: use them to filter or highlight products that match user requirements. "
                         "Always use this tool FIRST to find products. "
                         "Use the returned product_id or sku with get_product_info for detailed information. "
                         "IMPORTANT: Only show SKU codes in format XXX_####_YYY to users (canonical SKUs)."
@@ -496,7 +531,8 @@ class OpenAIProvider(ILLMProvider):
                     "name": "get_product_info",
                     "description": (
                         "Use this tool to get detailed information about a specific product. "
-                        "Returns: product name, sale price, stock availability, sku, and product description. "
+                        "Returns: product name, sale price, stock availability, sku, product description, and tags (e.g., #Organico, #Mineral, #Floracion). "
+                        "Tags help identify product characteristics: use them to match user requirements (e.g., if user asks for 'organic', look for #Organico tag). "
                         "You can use EITHER product_id (preferred) OR sku to identify the product. "
                         "The product_id or sku must be obtained from find_products_by_name results. "
                         "Do NOT guess or invent IDs or SKU codes."

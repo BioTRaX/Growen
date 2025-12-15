@@ -733,6 +733,49 @@ COOKIE_SECURE=false
 COOKIE_DOMAIN=
 ```
 
+### Variables de Telegram (Bot y Notificaciones)
+
+**⚠️ OBLIGATORIO para funcionalidad de Telegram:**
+
+```env
+# Token del bot obtenido de @BotFather en Telegram
+TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+
+# Habilitar integración de Telegram (1, true o yes)
+TELEGRAM_ENABLED=1
+
+# Chat ID numérico por defecto para notificaciones
+# Obtener escribiendo al bot y consultando:
+# https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates
+TELEGRAM_DEFAULT_CHAT_ID=123456789
+```
+
+**Opcionales (para webhook en producción):**
+
+```env
+# Token secreto para proteger el endpoint del webhook
+TELEGRAM_WEBHOOK_TOKEN=token_secreto_dificil_de_adivinar
+
+# Secret opcional para validar el header X-Telegram-Bot-Api-Secret-Token
+TELEGRAM_WEBHOOK_SECRET=secret_opcional
+```
+
+**Opcionales (para polling en desarrollo local):**
+
+```env
+# Timeout en segundos para long polling (default: 30)
+TELEGRAM_POLLING_TIMEOUT=30
+
+# Delay en segundos entre reintentos en caso de error (default: 5)
+TELEGRAM_POLLING_RETRY_DELAY=5
+```
+
+**Notas:**
+- `TELEGRAM_BOT_TOKEN` es **obligatorio** para que funcione el chatbot y las notificaciones.
+- Si `TELEGRAM_ENABLED=0` (o no está definido), toda la funcionalidad de Telegram se desactiva.
+- Para obtener el `TELEGRAM_BOT_TOKEN`: crear un bot con [@BotFather](https://t.me/BotFather) en Telegram.
+- Para obtener el `TELEGRAM_DEFAULT_CHAT_ID`: escribir al bot y consultar `getUpdates` con el token.
+
 `SECRET_KEY` y las credenciales iniciales (`ADMIN_USER` y `ADMIN_PASS`, definidas en `.env`) deben reemplazarse por valores robustos en producción.
 En entornos de desarrollo se usarán valores de prueba si se dejan en los placeholders, pero conviene ajustarlos igualmente.
 Mantener estas claves fuera del control de versiones y rotarlas periódicamente.
@@ -1058,6 +1101,35 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `IMPORT_OCR_TIMEOUT`: Timeout en segundos para el proceso de OCR (por defecto `180`).
 - `IMPORT_PDF_TEXT_MIN_CHARS`: Mínimo de caracteres de texto a extraer de un PDF para considerarlo válido sin OCR (por defecto `100`).
 - `IMPORT_ALLOW_EMPTY_DRAFT`: Si es `true` (default), al importar un PDF sin líneas detectables, se crea una compra en `BORRADOR` vacía. Si es `false`, se devuelve un error `422`.
+
+### Variables de Telegram (Bot y Notificaciones)
+
+**⚠️ OBLIGATORIO para funcionalidad de Telegram (chatbot y notificaciones):**
+
+- `TELEGRAM_BOT_TOKEN`: Token del bot obtenido de [@BotFather](https://t.me/BotFather) en Telegram. Formato: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`. **Sin este token, el chatbot y las notificaciones no funcionarán.**
+- `TELEGRAM_ENABLED`: Habilitar integración de Telegram. Valores: `1`, `true` o `yes` para habilitar; `0`, `false` o `no` (o no definido) para deshabilitar.
+- `TELEGRAM_DEFAULT_CHAT_ID`: Chat ID numérico por defecto para notificaciones. Obtener escribiendo al bot y consultando `https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates`.
+
+**Opcionales (para webhook en producción):**
+
+- `TELEGRAM_WEBHOOK_TOKEN`: Token secreto para proteger el endpoint del webhook. Elegir una cadena difícil de adivinar (recomendado: generar con `python -c "import secrets; print(secrets.token_urlsafe(32))"`).
+- `TELEGRAM_WEBHOOK_SECRET`: Secret opcional para validar el header `X-Telegram-Bot-Api-Secret-Token`. Si se define, el webhook validará este header además del path token.
+
+**Opcionales (para polling en desarrollo local):**
+
+- `TELEGRAM_POLLING_TIMEOUT`: Timeout en segundos para long polling (por defecto `30`).
+- `TELEGRAM_POLLING_RETRY_DELAY`: Delay en segundos entre reintentos en caso de error (por defecto `5`).
+
+**Cómo obtener el Token del Bot:**
+1. Abrir Telegram y buscar [@BotFather](https://t.me/BotFather).
+2. Enviar el comando `/newbot`.
+3. Seguir las instrucciones para darle un nombre y username al bot.
+4. BotFather te dará un token que debes copiar y pegar en `TELEGRAM_BOT_TOKEN`.
+
+**Cómo obtener el Chat ID:**
+1. Escribir un mensaje a tu bot (puede ser cualquier mensaje).
+2. Consultar: `https://api.telegram.org/bot<TU_TOKEN>/getUpdates`.
+3. Buscar en la respuesta el campo `chat.id` del mensaje que enviaste.
 
 ## Endpoints de diagnóstico
 

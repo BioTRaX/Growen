@@ -3,7 +3,7 @@
 // NG-HEADER: Descripción: Panel simple de control de servicios on-demand
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useMemo, useState } from 'react'
-import { listServices, startService, stopService, tailServiceLogs, panicStop, healthService, setAutoStart, openLogsStream, ServiceItem, ServiceLogItem, checkDeps, installDeps } from '../services/servicesAdmin'
+import { listServices, startService, stopService, tailServiceLogs, deleteServiceLogs, panicStop, healthService, setAutoStart, openLogsStream, ServiceItem, ServiceLogItem, checkDeps, installDeps } from '../services/servicesAdmin'
 
 const SERVICE_LABELS: Record<string, string> = {
   pdf_import: 'Importador PDF (OCR)',
@@ -14,6 +14,7 @@ const SERVICE_LABELS: Record<string, string> = {
   notifier: 'Notificaciones (Telegram/Email)',
   market_worker: 'Worker Market (actualización precios)',
   drive_sync_worker: 'Worker Drive Sync (sincronización Google Drive)',
+  telegram_polling_worker: 'Worker Telegram Polling (chatbot)',
 }
 
 export default function ServicesPanel() {
@@ -181,6 +182,29 @@ export default function ServicesPanel() {
                   )}
                   <button className="btn-primary" disabled={busy === s.name} onClick={() => doStart(s.name)}>
                     {busy === s.name ? 'Iniciando...' : 'Iniciar'}
+                  </button>
+                  <button 
+                    className="btn" 
+                    disabled={busy === s.name} 
+                    onClick={async () => {
+                      if (!window.confirm(`¿Eliminar todos los logs del servicio ${SERVICE_LABELS[s.name] || s.name}?`)) return
+                      setBusy(s.name)
+                      try {
+                        const result = await deleteServiceLogs(s.name)
+                        alert(result.message || `Se eliminaron ${result.deleted_count} logs`)
+                        await refresh()
+                        // Limpiar logs del estado local
+                        setLogs((prev) => ({ ...prev, [s.name]: [] }))
+                      } catch (e: any) {
+                        setErr(e?.response?.data?.detail || `No se pudieron eliminar los logs de ${s.name}`)
+                      } finally {
+                        setBusy(null)
+                      }
+                    }}
+                    style={{ backgroundColor: '#7f1d1d', color: '#fff', borderColor: '#991b1b' }}
+                    title="Eliminar todos los logs del servicio (solo cuando está detenido)"
+                  >
+                    Eliminar logs
                   </button>
                 </>
               ) : (

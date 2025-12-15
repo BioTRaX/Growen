@@ -15,6 +15,7 @@ class UserIntent(Enum):
     VENTA_CONVERSACIONAL = "VENTA_CONVERSACIONAL"
     CONSULTA_PRECIO = "CONSULTA_PRECIO"
     CHAT_GENERAL = "CHAT_GENERAL"
+    DIAGNOSTICO = "DIAGNOSTICO"  # NUEVO: Consulta diagnóstica de plantas
     UNKNOWN = "UNKNOWN"
 
 
@@ -25,6 +26,7 @@ Choose one of the following intents. Respond with ONLY the intent name and nothi
 Available Intents:
 - VENTA_CONVERSACIONAL: The user wants to create, start, or continue registering a sale. Keywords: "vende", "registra", "factura", "anota una venta", "quiero vender".
 - CONSULTA_PRECIO: The user is asking for the price or stock of a product. Keywords: "cuánto cuesta", "precio", "valor", "stock", "hay de".
+- DIAGNOSTICO: The user is asking for plant diagnosis, describing plant problems, or sending images of plants. Keywords: "hojas amarillas", "plaga", "carencia", "qué le pasa", "diagnóstico", "problema", "enfermedad", "hongos", "insectos", "se muere", "se seca".
 - CHAT_GENERAL: This is a general conversation, a greeting, a question not related to other intents, or a follow-up response to a question from the assistant.
 
 User message: "{user_text}"

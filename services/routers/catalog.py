@@ -22,6 +22,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+import logging
 
 from db.models import (
     Category,
@@ -45,6 +46,8 @@ from ai.router import AIRouter
 from ai.providers.openai_provider import OpenAIProvider
 from ai.types import Task
 from services.auth import require_csrf, require_roles, current_session, SessionData
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["catalog"])
 
@@ -598,6 +601,27 @@ async def catalog_search(
     seen_ids: set[int] = set()
     items: list[dict] = []
     
+    # Obtener todos los product_ids únicos para consultar tags en batch
+    product_ids = {row.id for row in rows}
+    tags_map: dict[int, list[str]] = {}
+    if product_ids:
+        try:
+            from db.models import Tag, ProductTag
+            tag_result = (
+                await session.execute(
+                    select(ProductTag.product_id, Tag.name)
+                    .join(Tag, ProductTag.tag_id == Tag.id)
+                    .where(ProductTag.product_id.in_(product_ids))
+                )
+            ).all()
+            for product_id, tag_name in tag_result:
+                if product_id not in tags_map:
+                    tags_map[product_id] = []
+                tags_map[product_id].append(f"#{tag_name}")
+        except Exception:
+            # Si falla la consulta de tags, continuar sin tags
+            pass
+    
     for row in rows:
         if row.id in seen_ids:
             continue
@@ -609,6 +633,8 @@ async def catalog_search(
         preferred_name = stylize_product_name(row.canonical_name or row.title) or row.title
         # Precio de venta desde canónico
         sale_price = float(row.sale_price) if row.sale_price else None
+        # Tags del producto
+        tags = tags_map.get(row.id, [])
         
         items.append({
             "id": row.id,
@@ -617,12 +643,137 @@ async def catalog_search(
             "stock": int(row.stock or 0),
             "price": sale_price,
             "has_description": bool(row.description_html),
+            "tags": tags,  # Lista de tags formateados como ["#Organico", "#Floracion"]
         })
     
     # Orden: productos con stock primero; luego por nombre
     items.sort(key=lambda it: (0 if (it.get("stock") or 0) > 0 else 1, (it.get("title") or "")))
     
     return items[:limit]
+
+
+@router.get(
+    "/catalog/search_by_tags",
+    dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))],
+)
+async def catalog_search_by_tags(
+    tags: str = Query(..., description="Tags separados por coma (ej: 'Organico,Floracion')"),
+    limit: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+):
+    """Búsqueda de productos por tags.
+    
+    Busca productos que tengan todos los tags especificados.
+    Devuelve productos con su información canónica y tags asociados.
+    """
+    # Parsear tags
+    tag_names = [t.strip() for t in tags.split(",") if t.strip()]
+    if not tag_names:
+        raise HTTPException(status_code=400, detail="Se requiere al menos un tag")
+    
+    # Normalizar nombres de tags (remover # si existe)
+    tag_names = [t.lstrip("#") for t in tag_names]
+    
+    try:
+        from db.models import Tag, ProductTag
+        
+        # Buscar productos que tengan todos los tags especificados
+        # Usar subquery para cada tag y hacer intersección
+        base_query = (
+            select(
+                Product.id,
+                Product.title,
+                Product.stock,
+                Product.description_html,
+                CanonicalProduct.id.label("canonical_id"),
+                CanonicalProduct.name.label("canonical_name"),
+                CanonicalProduct.sku_custom.label("canonical_sku"),
+                CanonicalProduct.ng_sku,
+                CanonicalProduct.sale_price,
+            )
+            .join(SupplierProduct, SupplierProduct.internal_product_id == Product.id, isouter=True)
+            .join(ProductEquivalence, ProductEquivalence.supplier_product_id == SupplierProduct.id, isouter=True)
+            .join(CanonicalProduct, CanonicalProduct.id == ProductEquivalence.canonical_product_id, isouter=True)
+        )
+        
+        # Construir condición: productos que tengan todos los tags
+        # Usar subquery para cada tag
+        tag_conditions = []
+        for tag_name in tag_names:
+            tag_subquery = (
+                select(ProductTag.product_id)
+                .join(Tag, ProductTag.tag_id == Tag.id)
+                .where(func.lower(Tag.name) == tag_name.lower())
+            )
+            tag_conditions.append(Product.id.in_(tag_subquery))
+        
+        # Productos que cumplen todas las condiciones (AND)
+        if len(tag_conditions) == 1:
+            final_condition = tag_conditions[0]
+        else:
+            from sqlalchemy import and_
+            final_condition = and_(*tag_conditions)
+        
+        rows = (
+            await session.execute(
+                base_query
+                .where(final_condition)
+                .order_by(Product.stock.desc().nullslast(), Product.title.asc())
+                .limit(limit * 2)  # Extra para deduplicar
+            )
+        ).all()
+        
+        # Deduplicar y obtener tags
+        seen_ids: set[int] = set()
+        items: list[dict] = []
+        
+        product_ids = {row.id for row in rows}
+        tags_map: dict[int, list[str]] = {}
+        if product_ids:
+            tag_result = (
+                await session.execute(
+                    select(ProductTag.product_id, Tag.name)
+                    .join(Tag, ProductTag.tag_id == Tag.id)
+                    .where(ProductTag.product_id.in_(product_ids))
+                )
+            ).all()
+            for product_id, tag_name in tag_result:
+                if product_id not in tags_map:
+                    tags_map[product_id] = []
+                tags_map[product_id].append(f"#{tag_name}")
+        
+        for row in rows:
+            if row.id in seen_ids:
+                continue
+            seen_ids.add(row.id)
+            
+            preferred_sku = row.canonical_sku or row.ng_sku
+            preferred_name = stylize_product_name(row.canonical_name or row.title) or row.title
+            sale_price = float(row.sale_price) if row.sale_price else None
+            product_tags = tags_map.get(row.id, [])
+            
+            items.append({
+                "id": row.id,
+                "title": preferred_name,
+                "sku": preferred_sku,
+                "stock": int(row.stock or 0),
+                "price": sale_price,
+                "has_description": bool(row.description_html),
+                "tags": product_tags,
+            })
+        
+        # Ordenar: productos con stock primero
+        items.sort(key=lambda it: (0 if (it.get("stock") or 0) > 0 else 1, (it.get("title") or "")))
+        
+        return {
+            "items": items[:limit],
+            "count": len(items[:limit]),
+            "tags": tag_names,
+        }
+        
+    except Exception as e:
+        logger.error(f"Error en búsqueda por tags: {e}")
+        raise HTTPException(status_code=500, detail=f"Error al buscar productos por tags: {e}")
 
 
 # ------------------------------- Helper: Build Product Response -------------------------------
@@ -677,6 +828,22 @@ async def _build_product_response(session: AsyncSession, product: Product) -> di
         if variant and (variant.promo_price or variant.price):
             sale_price = float(variant.promo_price or variant.price)
 
+    # Obtener tags del producto
+    tags = []
+    try:
+        from db.models import Tag, ProductTag
+        tag_result = (
+            await session.execute(
+                select(Tag.name)
+                .join(ProductTag, ProductTag.tag_id == Tag.id)
+                .where(ProductTag.product_id == product.id)
+            )
+        ).scalars().all()
+        tags = [f"#{tag}" for tag in tag_result] if tag_result else []
+    except Exception:
+        # Si falla la consulta de tags, continuar sin tags
+        tags = []
+
     return {
         "product_id": product.id,
         "sku": canonical_sku,  # SKU canónico (puede ser None si no hay)
@@ -686,6 +853,7 @@ async def _build_product_response(session: AsyncSession, product: Product) -> di
         "description": getattr(product, 'description_html', None),
         "technical_specs": getattr(product, 'technical_specs', None),
         "usage_instructions": getattr(product, 'usage_instructions', None),
+        "tags": tags,  # Lista de tags formateados como ["#Organico", "#Floracion"]
     }
 
 

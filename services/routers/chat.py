@@ -112,6 +112,8 @@ class ChatIn(BaseModel):
     """Modelo del cuerpo recibido en ``POST /chat``."""
 
     text: constr(min_length=1, max_length=2000)  # type: ignore[name-defined]
+    image_file_id: Optional[str] = None  # File ID de Telegram (opcional)
+    image_url: Optional[str] = None  # URL pública de imagen (opcional, alternativa a file_id)
 
 
 class ChatOut(BaseModel):
@@ -155,7 +157,11 @@ async def chat_endpoint(
     history_context = await get_recent_history(db, chat_session_id, limit=6)
 
     # 1. Clasificar la intención del usuario
-    intent = await classify_intent(ai_router, user_text)
+    # Si hay imagen, forzar intención DIAGNOSTICO
+    if payload.image_file_id or payload.image_url:
+        intent = UserIntent.DIAGNOSTICO
+    else:
+        intent = await classify_intent(ai_router, user_text)
 
     # 2. Obtener o inicializar la memoria de la conversación (robusto ante sesión ausente)
     try:
@@ -318,7 +324,85 @@ async def chat_endpoint(
             logger.exception("chat.local_price_fallback_error")
             return ChatOut(text="Error resolviendo información de producto.", type="error", intent=UserIntent.CONSULTA_PRECIO.value)
 
-    # 5. Ventas conversacionales (si no aplicó consulta de producto)
+    # 5. Diagnóstico de plantas (Modo Cultivador)
+    if intent == UserIntent.DIAGNOSTICO:
+        try:
+            from services.chat.cultivator import diagnose_plant
+            
+            # Obtener historial reciente para contexto
+            conversation_history = await get_recent_history(db, chat_session_id, limit=10)
+            
+            # Llamar a diagnose_plant
+            diagnosis_result = await diagnose_plant(
+                user_input=user_text,
+                image_file_id=payload.image_file_id,
+                image_url=payload.image_url,
+                conversation_history=conversation_history,
+                session=db,
+                user_role=user_role,
+            )
+            
+            # Construir respuesta con diagnóstico y productos recomendados
+            response_parts = [diagnosis_result["diagnosis"]]
+            
+            # Si hay pregunta de seguimiento, agregarla
+            if diagnosis_result.get("follow_up_question"):
+                response_parts.append(f"\n\n{diagnosis_result['follow_up_question']}")
+            
+            # Si hay productos recomendados, agregarlos
+            products = diagnosis_result.get("products", {})
+            if any(products.values()):  # Si hay productos en alguna gama
+                response_parts.append("\n\n**Productos recomendados:**")
+                
+                for tier_name, tier_products in [
+                    ("Gama Baja", products.get("low", [])),
+                    ("Gama Media", products.get("medium", [])),
+                    ("Gama Alta", products.get("high", [])),
+                ]:
+                    if tier_products:
+                        response_parts.append(f"\n**{tier_name}:**")
+                        for prod in tier_products[:3]:  # Máximo 3 por gama
+                            price_str = f" - ${prod.get('price', 'N/A')}" if prod.get('price') else ""
+                            stock_str = f" (Stock: {prod.get('stock', 0)})" if prod.get('stock', 0) > 0 else " (Sin stock)"
+                            tags_str = f" {', '.join(prod.get('tags', []))}" if prod.get('tags') else ""
+                            response_parts.append(f"- {prod.get('title', 'N/A')}{price_str}{stock_str}{tags_str}")
+            
+            answer = "\n".join(response_parts)
+            
+            # Guardar mensajes en historial
+            await save_message(
+                db, 
+                chat_session_id, 
+                "user", 
+                user_text, 
+                metadata={
+                    "intent": intent.value if hasattr(intent, 'value') else str(intent),
+                    "has_image": bool(payload.image_file_id or payload.image_url),
+                    "image_file_id": payload.image_file_id,
+                    "image_url": payload.image_url,
+                }
+            )
+            await save_message(
+                db, 
+                chat_session_id, 
+                "assistant", 
+                answer, 
+                metadata={
+                    "type": "diagnosis",
+                    "confidence": diagnosis_result.get("confidence", 0.7),
+                    "has_rag_context": bool(diagnosis_result.get("rag_context")),
+                }
+            )
+            await db.commit()
+            
+            return ChatOut(text=answer, type="diagnosis", intent=UserIntent.DIAGNOSTICO.value)
+            
+        except Exception as e:
+            logger.error(f"Error en diagnóstico de plantas: {e}", exc_info=True)
+            # Fallback a chat general si falla el diagnóstico
+            pass  # Continuar al flujo de chat general
+    
+    # 6. Ventas conversacionales (si no aplicó consulta de producto ni diagnóstico)
     if intent == UserIntent.VENTA_CONVERSACIONAL:
         sales_state = conversation_state.get("sales_flow", None)
         entrada_para_venta = user_text
@@ -336,7 +420,7 @@ async def chat_endpoint(
         
         return ChatOut(text=result["respuesta_para_usuario"], intent=UserIntent.VENTA_CONVERSACIONAL.value)
 
-    # 6. Fallback: Chat general con contexto de usuario
+    # 7. Fallback: Chat general con contexto de usuario
     else:
         # Usar run_async para chat general, pasando el contexto del usuario
         # El chatbot puede necesitar saber si habla con Admin/Colaborador vs Cliente

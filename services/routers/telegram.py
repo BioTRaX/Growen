@@ -7,16 +7,12 @@
 from __future__ import annotations
 
 import os
+import logging
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, Request, HTTPException
 
-from agent_core.config import settings as core_settings
-from ai.router import AIRouter
-from ai.types import Task
 from services.notifications.telegram import send_message as tg_send
-from services.chat.price_lookup import (
-    extract_product_query,  # Solo extractor, lógica detallada DEPRECATED
-)
+from services.chat.telegram_handler import handle_telegram_message
 from sqlalchemy.ext.asyncio import AsyncSession
 from db.session import get_session
 from fastapi import Depends
@@ -47,37 +43,38 @@ async def telegram_webhook(token: str, request: Request, db: AsyncSession = Depe
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # Extraer chat_id y texto
+    # Extraer chat_id, texto e imagen
     message = payload.get("message") or payload.get("edited_message") or {}
     chat = (message.get("chat") or {})
     chat_id = chat.get("id")
     text = message.get("text") or ""
-    if not chat_id or not text:
+    
+    # Extraer file_id de foto (si existe)
+    image_file_id = None
+    photo = message.get("photo")
+    if photo and isinstance(photo, list) and len(photo) > 0:
+        # Usar la foto más grande (última en la lista)
+        image_file_id = photo[-1].get("file_id")
+        # Si no hay texto pero hay foto, usar texto por defecto para diagnóstico
+        if not text:
+            text = "¿Qué le pasa a mi planta?"
+    
+    if not chat_id or (not text and not image_file_id):
         return {"ok": True}  # silencioso para otras actualizaciones
 
-    # 1) Intento controlado: consulta de precio
-    product_query = extract_product_query(text)
-    if product_query:
-        ai_router = AIRouter(core_settings)
-        provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
-        chat_with_tools = getattr(provider, "chat_with_tools", None)
-        if callable(chat_with_tools):
-            try:
-                answer = await chat_with_tools(prompt=text, user_role="anon")
-                await tg_send(answer, chat_id=str(chat_id))
-                return {"ok": True}
-            except Exception:
-                await tg_send("Error consultando el producto.", chat_id=str(chat_id))
-                return {"ok": True}
-        await tg_send("Tool-calling no disponible actualmente.", chat_id=str(chat_id))
-        return {"ok": True}
-
-    # 2) Fallback al router de IA con el mismo prompt/persona del chat HTTP
-    ai_router = AIRouter(core_settings)
-    raw = ai_router.run(Task.SHORT_ANSWER.value, text)
-    if "\n\n" in raw:
-        reply = raw.split("\n\n")[-1].strip()
-    else:
-        reply = raw.strip()
-    await tg_send(reply, chat_id=str(chat_id))
+    # Procesar mensaje usando el handler compartido
+    logger = logging.getLogger(__name__)
+    try:
+        answer = await handle_telegram_message(
+            text=text, 
+            chat_id=str(chat_id), 
+            db=db,
+            image_file_id=image_file_id,  # Pasar file_id si existe
+        )
+        await tg_send(answer, chat_id=str(chat_id))
+    except Exception as e:
+        # Log del error pero no exponer detalles al usuario
+        logger.error(f"Error procesando mensaje de Telegram: {e}", exc_info=True)
+        await tg_send("Disculpá, hubo un error procesando tu mensaje. Probá más tarde.", chat_id=str(chat_id))
+    
     return {"ok": True}
