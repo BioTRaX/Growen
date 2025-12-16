@@ -17,6 +17,7 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 - Frontend: La ficha de producto vuelve a mostrar la "Descripción enriquecida" con vista previa HTML sanitizada para todos los roles (scripts/iframes/eventos inline se eliminan). Los usuarios con permisos de edición mantienen el textarea y pueden guardar via `PATCH /catalog/products/{id}`.
 - Frontend/Backend: El detalle `/productos/:id` se habilitó en modo lectura para el rol `guest` (ProtectedRoute + endpoint `GET /catalog/products/{id}` aceptan invitados). Los invitados ven nombre, precio y descripción, mientras que las acciones siguen restringidas a colaborador/admin.
 - Chatbot: El WebSocket `/ws` ahora comparte la misma memoria conversacional que el endpoint HTTP, inyectando el historial reciente en los prompts y persistiendo cada intercambio en `chat_messages`.
+- Chatbot - Sesiones Persistentes: Implementado sistema de sesiones persistentes (`ChatSession`) que permite mantener contexto conversacional por usuario y auditar conversaciones desde Dashboard Admin. Los mensajes ahora se relacionan con sesiones vía ForeignKey, y el handler de Telegram crea/actualiza sesiones automáticamente. Ver `docs/CHAT_MEMORY_PLAN.md`.
 
 
 - Backend: FastAPI + SQLAlchemy (async) para gestión de compras (borradores, validación, confirmación), adjuntos (PDF remito), logs y auditoría.
@@ -68,6 +69,46 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 - **Etapa 3**: Conciencia de Roles y Seguridad — Integración con SSO/MFA (Keycloak/Authentik), token firmado (HMAC/JWT) con claims de rol, y control de acceso granular en tools según el usuario autenticado.
 - **Etapa 4**: Modo Desarrollador — Indexación del repositorio local, acceso controlado al código fuente, gateway de lectura/escritura confinada a `PR/`, y memoria conversacional a largo plazo.
 - **Etapa 5**: Business Intelligence — Text-to-SQL para consultas de finanzas, stock, ventas y análisis de tendencias; dashboards conversacionales.
+
+### Memoria y Aprendizaje — Sesiones Persistentes (Fase 1 y 2)
+
+- **Estado**: ✅ COMPLETADA (Fase 1 y 2)
+- **Objetivo**: Evolucionar de un sistema stateless a sesiones persistentes que permitan mantener contexto conversacional y auditar conversaciones para RLHF.
+
+**Fase 1 - Base de Datos y API (Completada)**:
+  - ✅ Modelo `ChatSession` creado en `db/models.py` con campos: `session_id` (PK), `user_identifier`, `status` (new/reviewed/archived), `tags`, `admin_notes`, timestamps.
+  - ✅ Modelo `ChatMessage` actualizado para usar ForeignKey hacia `ChatSession` (antes era String sin relación).
+  - ✅ Migración `20250126_add_chat_sessions_table_and_fk` que:
+    - Crea tabla `chat_sessions` con índices necesarios.
+    - Migra mensajes existentes agrupándolos por `session_id` y creando sesiones correspondientes.
+    - Convierte `chat_messages.session_id` a ForeignKey con `CASCADE`.
+  - ✅ Router `services/routers/admin_chat.py` con endpoints:
+    - `GET /admin/chats`: Lista sesiones (paginado, filtros por status).
+    - `GET /admin/chats/{session_id}`: Detalle completo de sesión + mensajes.
+    - `PATCH /admin/chats/{session_id}`: Actualizar estado, notas o tags.
+  - ✅ Servicio `services/chat/history.py` actualizado:
+    - `get_or_create_session()`: Obtiene o crea sesión automáticamente.
+    - `save_message()`: Guarda mensaje y actualiza `last_message_at` de la sesión.
+
+**Fase 2 - Integración y Frontend (Completada)**:
+  - ✅ Handler Telegram (`services/chat/telegram_handler.py`) actualizado:
+    - Usa `session_id = f"telegram:{chat_id}"` para identificar sesiones.
+    - Guarda mensajes de usuario y asistente usando `save_message()`.
+    - Recupera historial conversacional antes de procesar.
+  - ✅ Página frontend `frontend/src/pages/admin/ChatInbox.tsx`:
+    - Layout de 2 columnas: lista de conversaciones (izq) y vista de chat + panel de acciones (der).
+    - Filtros por status, paginación, vista de mensajes en formato burbujas.
+    - Panel de acciones para cambiar status (new/reviewed/archived) y agregar notas administrativas.
+  - ✅ Servicio HTTP `frontend/src/services/chats.ts` con funciones para consumir endpoints admin.
+  - ✅ Routing frontend actualizado (`paths.ts`, `App.tsx`, `AdminLayout.tsx`) con ruta `/admin/chats` y botón "Chat Dashboard".
+
+**Próximas Fases (RLHF)**:
+  - Fase 3: Etiquetado automático (análisis de sentimiento, detección de intents problemáticos).
+  - Fase 4: Feedback humano estructurado (marcar respuestas como buena/mala, notas estructuradas).
+  - Fase 5: Aprendizaje iterativo (pipeline que procesa feedback y ajusta prompts, métricas de calidad).
+
+**Documentación**:
+  - ✅ `docs/CHAT_MEMORY_PLAN.md`: Arquitectura completa, flujos de creación/actualización, próximas fases.
 
 ### Capa MCP Servers (estado)
 

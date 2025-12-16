@@ -47,9 +47,13 @@ Desde octubre 2025 el intent de consulta de productos (precio/stock) migra del m
 - El WebSocket expone la misma estructura (`type`, `intent`, `data`, `took_ms`).
 
 ## Memoria y follow-ups
-- Cuando la consulta devuelve múltiples coincidencias (fallback local), se guarda un estado efímero (`services/chat/memory.py`) por `session_id`/IP.
+- **Sesiones Persistentes**: El sistema ahora mantiene sesiones persistentes (`ChatSession`) que agrupan mensajes y mantienen contexto conversacional. Las sesiones se crean automáticamente al guardar el primer mensaje y se identifican por `session_id` (ej: "telegram:12345" para Telegram, "web:abc123" para web). Ver `docs/CHAT_MEMORY_PLAN.md` para arquitectura completa.
+- Cada mensaje se guarda en `chat_messages` relacionado con su sesión vía ForeignKey, permitiendo recuperar historial completo y mantener contexto entre intercambios.
+- El historial reciente (últimos 6 mensajes) se inyecta automáticamente en los prompts para mantener continuidad conversacional.
+- Cuando la consulta devuelve múltiples coincidencias (fallback local), se guarda un estado efímero (`services/chat/memory.py`) por `session_id`/IP para manejar aclaraciones.
 - Mensajes breves como `si`, `dale` o `stock` confirman la lista anterior sin repetir la query original.
 - Si el usuario responde con algo ambiguo, el bot pide aclaracion (`clarify_prompt`) en lugar de adivinar.
+- **Dashboard Admin**: Los administradores pueden revisar todas las conversaciones desde `/admin/chats`, filtrar por status (new/reviewed/archived), agregar notas y cambiar estados para RLHF (Reinforcement Learning from Human Feedback).
 
 ## Logs y metricas
 - `log_product_lookup` persiste cada consulta en `AuditLog` (`action=chat.product_lookup`) incluyendo query, filtros detectados y resultados.

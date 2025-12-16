@@ -24,6 +24,8 @@ export const PATHS = {
   adminBackups: "/admin/backups",
   adminScheduler: "/admin/scheduler",
   adminKnowledge: "/admin/cerebro",
+  adminChats: "/admin/chats",
+  adminDashboard: "/admin/dashboard",
   // legacy alias
   imagesAdmin: "/admin/imagenes",
 } as const;

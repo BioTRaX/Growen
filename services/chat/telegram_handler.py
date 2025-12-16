@@ -13,6 +13,7 @@ from agent_core.config import settings as core_settings
 from ai.router import AIRouter
 from ai.types import Task
 from services.chat.price_lookup import extract_product_query
+from services.chat.history import save_message, get_recent_history
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,16 @@ async def handle_telegram_message(
     
     user_role = "anon"  # Usuarios de Telegram no tienen autenticación
     
+    # Construir session_id estable para Telegram
+    telegram_session_id = f"telegram:{chat_id}"
+    
+    # Recuperar historial reciente para contexto
+    try:
+        history_context = await get_recent_history(db, telegram_session_id, limit=6)
+    except Exception as e:
+        logger.debug(f"Error recuperando historial para Telegram: {e}")
+        history_context = ""
+    
     # Si hay imagen, usar flujo de diagnóstico
     if image_file_id:
         try:
@@ -60,10 +71,25 @@ async def handle_telegram_message(
             diagnosis_result = await diagnose_plant(
                 user_input=user_text,
                 image_file_id=image_file_id,
-                conversation_history=None,  # Telegram no tiene historial persistente aún
+                conversation_history=history_context if history_context else None,
                 session=db,
                 user_role=user_role,
             )
+            
+            # Guardar mensaje del usuario y respuesta
+            try:
+                await save_message(
+                    db, telegram_session_id, "user", user_text,
+                    metadata={"intent": "diagnostico", "image_file_id": image_file_id}
+                )
+                await save_message(
+                    db, telegram_session_id, "assistant", diagnosis_result["diagnosis"],
+                    metadata={"type": "diagnostico"}
+                )
+                await db.commit()
+            except Exception as e:
+                logger.error(f"Error guardando mensajes de Telegram: {e}", exc_info=True)
+                await db.rollback()
             
             # Construir respuesta
             response_parts = [diagnosis_result["diagnosis"]]
@@ -119,8 +145,10 @@ async def handle_telegram_message(
             except Exception as e:
                 logger.debug(f"RAG search falló (continuando sin contexto): {e}")
             
-            # Construir prompt con contexto RAG si está disponible
+            # Construir prompt con historial conversacional + contexto RAG si está disponible
             prompt_parts = []
+            if history_context:
+                prompt_parts.append(history_context)
             if rag_context:
                 prompt_parts.append(
                     "Contexto relevante de documentación interna:\n"
@@ -148,6 +176,21 @@ async def handle_telegram_message(
             if ":" in answer and answer.split(":")[0] in ("openai", "ollama"):
                 answer = answer.split(":", 1)[1].strip()
             
+            # Guardar mensaje del usuario y respuesta
+            try:
+                await save_message(
+                    db, telegram_session_id, "user", user_text,
+                    metadata={"intent": "product_lookup"}
+                )
+                await save_message(
+                    db, telegram_session_id, "assistant", answer,
+                    metadata={"type": "product_answer"}
+                )
+                await db.commit()
+            except Exception as e:
+                logger.error(f"Error guardando mensajes de Telegram: {e}", exc_info=True)
+                await db.rollback()
+            
             return answer
             
         except Exception as e:
@@ -172,8 +215,10 @@ async def handle_telegram_message(
         except Exception as e:
             logger.debug(f"RAG search falló (continuando sin contexto): {e}")
         
-        # Construir prompt con contexto RAG si está disponible
+        # Construir prompt con historial conversacional + contexto RAG si está disponible
         prompt_parts = []
+        if history_context:
+            prompt_parts.append(history_context)
         if rag_context:
             prompt_parts.append(
                 "Contexto relevante de documentación interna:\n"
@@ -199,6 +244,21 @@ async def handle_telegram_message(
             reply = raw.split("\n\n")[-1].strip()
         else:
             reply = raw.strip()
+        
+        # Guardar mensaje del usuario y respuesta
+        try:
+            await save_message(
+                db, telegram_session_id, "user", user_text,
+                metadata={"intent": "chat_general"}
+            )
+            await save_message(
+                db, telegram_session_id, "assistant", reply,
+                metadata={"type": "chat_general"}
+            )
+            await db.commit()
+        except Exception as e:
+            logger.error(f"Error guardando mensajes de Telegram: {e}", exc_info=True)
+            await db.rollback()
         
         return reply
         
