@@ -53,6 +53,7 @@ from .routers import (
     health,
     services_admin,
     backups_admin,
+    admin_chat,
     customers,
     sales,
     reports,
@@ -380,6 +381,7 @@ app.include_router(drive_sync.router)
 app.include_router(health.router)
 app.include_router(services_admin.router)
 app.include_router(backups_admin.router)
+app.include_router(admin_chat.router)  # Admin chat sessions
 app.include_router(admin_scheduler.router)  # Admin scheduler control
 from services.routers import knowledge as knowledge_admin  # Knowledge Base admin
 app.include_router(knowledge_admin.router)

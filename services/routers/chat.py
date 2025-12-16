@@ -140,18 +140,30 @@ async def chat_endpoint(
     user_role = session_data.role
 
     # 0. Generar session_id estable para historial conversacional
+    # Formato: "web:{session_id}" para identificar sesiones web
     # Usar session.id si existe, sino construir con host+user_agent (fallback para guests)
     try:
-        chat_session_id = session_data.session.id if getattr(session_data, "session", None) else None
+        base_session_id = session_data.session.id if getattr(session_data, "session", None) else None
     except Exception:
-        chat_session_id = None
+        base_session_id = None
     
-    if not chat_session_id:
+    if not base_session_id:
         # Fallback: generar ID basado en IP + user agent (menos robusto pero funcional para MVP)
         host = request.client.host if request.client else "unknown"
         user_agent = request.headers.get("user-agent", "unknown")
         import hashlib
-        chat_session_id = hashlib.md5(f"{host}_{user_agent}".encode()).hexdigest()[:16]
+        base_session_id = hashlib.md5(f"{host}_{user_agent}".encode()).hexdigest()[:16]
+    
+    # Agregar prefijo "web:" para identificar sesiones web
+    chat_session_id = f"web:{base_session_id}"
+    
+    # Extraer user_identifier para guardar en sesión
+    user_identifier = None
+    if hasattr(session_data, 'user') and session_data.user:
+        user_identifier = getattr(session_data.user, 'identifier', None) or getattr(session_data.user, 'email', None)
+    if not user_identifier:
+        # Fallback: extraer del session_id (después del prefijo "web:")
+        user_identifier = base_session_id
     
     # 0.1 Recuperar historial reciente para memoria conversacional
     history_context = await get_recent_history(db, chat_session_id, limit=6)
@@ -267,7 +279,8 @@ async def chat_endpoint(
                     metadata={
                         "intent": intent.value if hasattr(intent, 'value') else str(intent),
                         "used_rag": bool(rag_context),
-                    }
+                    },
+                    user_identifier=user_identifier
                 )
                 
                 # Intentar obtener información de tools usadas desde el provider
@@ -291,7 +304,8 @@ async def chat_endpoint(
                         "type": "product_answer",
                         "used_rag": bool(rag_context),
                         **tools_metadata,
-                    }
+                    },
+                    user_identifier=user_identifier
                 )
                 logger.info(f"Commit de mensajes para session {chat_session_id[:8]}...")
                 await db.commit()
@@ -380,7 +394,8 @@ async def chat_endpoint(
                     "has_image": bool(payload.image_file_id or payload.image_url),
                     "image_file_id": payload.image_file_id,
                     "image_url": payload.image_url,
-                }
+                },
+                user_identifier=user_identifier
             )
             await save_message(
                 db, 
@@ -391,7 +406,8 @@ async def chat_endpoint(
                     "type": "diagnosis",
                     "confidence": diagnosis_result.get("confidence", 0.7),
                     "has_rag_context": bool(diagnosis_result.get("rag_context")),
-                }
+                },
+                user_identifier=user_identifier
             )
             await db.commit()
             
@@ -414,8 +430,8 @@ async def chat_endpoint(
         conversation_state["sales_flow"] = result.get("nuevo_estado")
         
         # Guardar mensajes en historial
-        await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent.value if hasattr(intent, 'value') else str(intent)})
-        await save_message(db, chat_session_id, "assistant", result["respuesta_para_usuario"], metadata={"type": "sales_conversation"})
+        await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent.value if hasattr(intent, 'value') else str(intent)}, user_identifier=user_identifier)
+        await save_message(db, chat_session_id, "assistant", result["respuesta_para_usuario"], metadata={"type": "sales_conversation"}, user_identifier=user_identifier)
         await db.commit()
         
         return ChatOut(text=result["respuesta_para_usuario"], intent=UserIntent.VENTA_CONVERSACIONAL.value)
@@ -472,8 +488,8 @@ async def chat_endpoint(
             reply = raw.strip()
         
         # Guardar mensajes en historial
-        await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent.value if hasattr(intent, 'value') else str(intent)})
-        await save_message(db, chat_session_id, "assistant", reply, metadata={"type": "chat_general"})
+        await save_message(db, chat_session_id, "user", user_text, metadata={"intent": intent.value if hasattr(intent, 'value') else str(intent)}, user_identifier=user_identifier)
+        await save_message(db, chat_session_id, "assistant", reply, metadata={"type": "chat_general"}, user_identifier=user_identifier)
         await db.commit()
         
         return ChatOut(text=reply, intent=UserIntent.CHAT_GENERAL.value)

@@ -1094,6 +1094,36 @@ class KnowledgeChunk(Base):
     source: Mapped["KnowledgeSource"] = relationship(back_populates="chunks")
 
 
+class ChatSession(Base):
+    """Sesión de chat persistente para mantener contexto conversacional."""
+    __tablename__ = "chat_sessions"
+    __table_args__ = (
+        Index("ix_chat_sessions_user", "user_identifier"),
+        Index("ix_chat_sessions_status", "status"),
+        Index("ix_chat_sessions_last_message", "last_message_at"),
+        Index("ix_chat_sessions_created", "created_at"),
+        CheckConstraint(
+            "status IN ('new','reviewed','archived')",
+            name="ck_chat_sessions_status"
+        ),
+    )
+
+    session_id: Mapped[str] = mapped_column(String(100), primary_key=True)  # Ej: "telegram:12345"
+    user_identifier: Mapped[str] = mapped_column(String(100), nullable=False)  # ID externo del usuario
+    status: Mapped[str] = mapped_column(String(20), default="new")  # 'new', 'reviewed', 'archived'
+    tags: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
+    admin_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    messages: Mapped[list["ChatMessage"]] = relationship(
+        back_populates="session", 
+        cascade="all, delete-orphan", 
+        order_by="ChatMessage.created_at"
+    )
+
+
 class ChatMessage(Base):
     """Representa un mensaje en una conversación de chat (historial)."""
     __tablename__ = "chat_messages"
@@ -1103,8 +1133,10 @@ class ChatMessage(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    session_id: Mapped[str] = mapped_column(String(100), nullable=False)  # UUID o identificador de sesión
+    session_id: Mapped[str] = mapped_column(ForeignKey("chat_sessions.session_id", ondelete="CASCADE"), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)  # "user", "assistant", "tool", "system"
     content: Mapped[str] = mapped_column(Text, nullable=False)  # Contenido del mensaje
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     meta: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')  # Ej: {"tool_name": "...", "tokens": 123}
+
+    session: Mapped["ChatSession"] = relationship(back_populates="messages")

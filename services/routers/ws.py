@@ -95,11 +95,21 @@ async def _persist_chat_history(
     assistant_text: str,
     intent: str,
     response_type: str,
+    user_identifier: Optional[str] = None,
 ) -> None:
     """Guarda el intercambio en la tabla chat_messages."""
     try:
-        await save_message(db_session, session_id, "user", user_text, metadata={"intent": intent})
-        await save_message(db_session, session_id, "assistant", assistant_text, metadata={"type": response_type})
+        # Extraer user_identifier del session_id si no se proporciona
+        if not user_identifier:
+            if session_id.startswith("web:"):
+                user_identifier = session_id[4:]
+            elif session_id.startswith("telegram:"):
+                user_identifier = session_id[9:]
+            else:
+                user_identifier = session_id
+        
+        await save_message(db_session, session_id, "user", user_text, metadata={"intent": intent}, user_identifier=user_identifier)
+        await save_message(db_session, session_id, "assistant", assistant_text, metadata={"type": response_type}, user_identifier=user_identifier)
         await db_session.commit()
     except Exception:
         logger.exception("ws.chat_history_save_error")
@@ -163,10 +173,21 @@ async def ws_chat(socket: WebSocket) -> None:
     host = getattr(socket.client, "host", "unknown")
     user_agent = socket.headers.get("user-agent", "unknown")
     if sid:
-        chat_session_id = sid
+        # Agregar prefijo "web:" para identificar sesiones web
+        chat_session_id = f"web:{sid}"
     else:
+        # Fallback: generar ID basado en IP + user agent
         raw = f"{host}_{user_agent}"
-        chat_session_id = hashlib.md5(raw.encode()).hexdigest()[:16]
+        hash_id = hashlib.md5(raw.encode()).hexdigest()[:16]
+        chat_session_id = f"web:{hash_id}"
+    
+    # Extraer user_identifier para guardar en sesión
+    user_identifier = None
+    if sess and hasattr(sess, 'user') and sess.user:
+        user_identifier = getattr(sess.user, 'identifier', None) or getattr(sess.user, 'email', None)
+    if not user_identifier:
+        # Fallback: extraer del session_id (después del prefijo "web:")
+        user_identifier = chat_session_id[4:] if chat_session_id.startswith("web:") else chat_session_id
 
     await socket.accept()
     correlation_header = socket.headers.get("x-correlation-id") or socket.headers.get("x-request-id")
@@ -240,6 +261,7 @@ async def ws_chat(socket: WebSocket) -> None:
                                 answer,
                                 intent="product_tool",
                                 response_type="product_answer",
+                                user_identifier=user_identifier,
                             )
                             clear_memory(memory_key)
                             continue
@@ -257,6 +279,7 @@ async def ws_chat(socket: WebSocket) -> None:
                                 "Error consultando información de producto.",
                                 intent="product_tool_error",
                                 response_type="error",
+                                user_identifier=user_identifier,
                             )
                             continue
                     # Fallback local sin tools: usar resolver interno (compat WS/tests)
@@ -279,6 +302,7 @@ async def ws_chat(socket: WebSocket) -> None:
                             text,
                             intent=result.intent or "product_fallback",
                             response_type="product_answer",
+                            user_identifier=user_identifier,
                         )
                         clear_memory(memory_key)
                     except Exception:
@@ -296,6 +320,7 @@ async def ws_chat(socket: WebSocket) -> None:
                             error_text,
                             intent="product_fallback_error",
                             response_type="error",
+                            user_identifier=user_identifier,
                         )
                     continue
 
@@ -420,6 +445,7 @@ async def ws_chat(socket: WebSocket) -> None:
                             full,
                             intent="general",
                             response_type="assistant_stream",
+                            user_identifier=user_identifier,
                         )
                     except Exception as exc:  # pragma: no cover
                         logger.error("Error streaming ws_chat: %s", exc)

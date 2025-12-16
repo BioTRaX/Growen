@@ -38,6 +38,8 @@ const AdminDriveSync = lazy(() => import('./pages/admin/DriveSyncPage'))
 const AdminBackups = lazy(() => import('./pages/admin/BackupsPage'))
 const AdminScheduler = lazy(() => import('./components/admin/SchedulerControl'))
 const AdminKnowledge = lazy(() => import('./pages/admin/KnowledgePage'))
+const AdminChats = lazy(() => import('./pages/admin/ChatInbox'))
+const AdminDashboard = lazy(() => import('./pages/admin/DashboardStats'))
 const CatalogDiagnosticsPage = lazy(() => import('./pages/CatalogDiagnosticsPage'))
 
 export default function App() {
@@ -187,6 +189,8 @@ export default function App() {
             <Route path="catalogos/diagnostico" element={<CatalogDiagnosticsPage />} />
             <Route path="scheduler" element={<AdminScheduler />} />
             <Route path="cerebro" element={<AdminKnowledge />} />
+            <Route path="dashboard" element={<AdminDashboard />} />
+            <Route path="chats" element={<AdminChats />} />
             {/* Users only for admins */}
             <Route
               path="usuarios"
