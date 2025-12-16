@@ -483,9 +483,10 @@ async def stream_logs(name: str, db: AsyncSession = Depends(get_session), last_i
 
 @router.delete("/{name}/logs", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def delete_service_logs(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
-    """Elimina todos los logs (ServiceLog) de un servicio.
+    """Elimina todos los logs (ServiceLog) de un servicio y archivos de log físicos si aplica.
     
     Solo se permite cuando el servicio está detenido para evitar conflictos.
+    Para telegram_polling_worker, también elimina el archivo worker_telegram_polling.log.
     """
     if name not in KNOWN_SERVICES:
         raise HTTPException(status_code=404, detail="Servicio desconocido")
@@ -500,48 +501,59 @@ async def delete_service_logs(name: str, db: AsyncSession = Depends(get_session)
     
     # Eliminar todos los ServiceLog del servicio
     from sqlalchemy import delete
+    from pathlib import Path
     cid = _cid()
+    file_deleted = False
+    file_error = None
+    
     try:
         result = await db.execute(delete(ServiceLog).where(ServiceLog.service == name))
         deleted_count = result.rowcount or 0
         await db.commit()
         
-        # Registrar la acción de limpieza
-        db.add(ServiceLog(
-            service=name,
-            correlation_id=cid,
-            action="delete_logs",
-            host=socket.gethostname(),
-            pid=None,
-            duration_ms=None,
-            ok=True,
-            level="INFO",
-            error=None,
-            payload={"deleted_count": deleted_count}
-        ))
-        await db.commit()
+        # Eliminar archivo físico de log si es telegram_polling_worker
+        if name == "telegram_polling_worker":
+            try:
+                log_file_path = Path(__file__).resolve().parent.parent / "logs" / "worker_telegram_polling.log"
+                if log_file_path.exists():
+                    # Intentar eliminar el archivo
+                    try:
+                        log_file_path.unlink()
+                        file_deleted = True
+                    except PermissionError:
+                        # Si el archivo está abierto, intentar truncarlo
+                        try:
+                            with open(log_file_path, 'w', encoding='utf-8') as f:
+                                f.truncate(0)
+                            file_deleted = True
+                        except Exception as truncate_err:
+                            file_error = f"No se pudo eliminar/truncar archivo: {truncate_err}"
+                    except Exception as file_err:
+                        file_error = f"Error eliminando archivo: {file_err}"
+            except Exception as e:
+                file_error = f"Error accediendo archivo: {e}"
+        
+        # No registrar log de eliminación ya que acabamos de eliminar todos los logs
+        # (y 'delete_logs' no está en la lista de acciones permitidas del constraint)
+        # Si necesitamos auditoría, se puede agregar a otra tabla o crear migración para extender el constraint
+        
+        message = f"Se eliminaron {deleted_count} logs del servicio {name}"
+        if name == "telegram_polling_worker":
+            if file_deleted:
+                message += " y se eliminó el archivo de log físico"
+            elif file_error:
+                message += f" (advertencia: {file_error})"
         
         return {
             "name": name,
             "deleted_count": deleted_count,
             "ok": True,
-            "message": f"Se eliminaron {deleted_count} logs del servicio {name}"
+            "message": message
         }
     except Exception as e:
         await db.rollback()
-        db.add(ServiceLog(
-            service=name,
-            correlation_id=cid,
-            action="delete_logs",
-            host=socket.gethostname(),
-            pid=None,
-            duration_ms=None,
-            ok=False,
-            level="ERROR",
-            error=str(e),
-            payload={}
-        ))
-        await db.commit()
+        # No registrar log de error ya que 'delete_logs' no está en las acciones permitidas
+        # y además acabamos de intentar eliminar todos los logs
         raise HTTPException(status_code=500, detail=f"Error eliminando logs: {e}")
 
 
