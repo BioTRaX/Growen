@@ -186,7 +186,9 @@ export default function ServicesPanel() {
                   <button 
                     className="btn" 
                     disabled={busy === s.name} 
-                    onClick={async () => {
+                    onClick={async (e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
                       if (!window.confirm(`¿Eliminar todos los logs del servicio ${SERVICE_LABELS[s.name] || s.name}?`)) return
                       setBusy(s.name)
                       try {

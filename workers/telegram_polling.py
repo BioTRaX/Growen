@@ -23,6 +23,7 @@ import os
 import sys
 import logging
 import asyncio
+import re
 from typing import Any, Dict, Optional
 
 # FIX: Windows ProactorEventLoop no soporta psycopg async
@@ -47,6 +48,37 @@ ROOT = Path(__file__).resolve().parent.parent
 LOGS_DIR = ROOT / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
 
+
+class TokenMaskingFilter(logging.Filter):
+    """Filtro que enmascara tokens de Telegram en los logs."""
+    
+    # Patrón para detectar tokens de Telegram en URLs: bot<ID>:<TOKEN>
+    # Ejemplo: bot8483738256:AAEM18ir0qNRUQtHFAUp2t0MFiIlQX_Tcrk
+    TELEGRAM_TOKEN_PATTERN = re.compile(
+        r'(bot\d+):([A-Za-z0-9_-]+)',
+        re.IGNORECASE
+    )
+    
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Filtra y enmascara tokens en el mensaje de log."""
+        if hasattr(record, 'msg') and record.msg:
+            # Convertir mensaje a string si no lo es
+            msg = str(record.msg)
+            # Reemplazar tokens: bot<ID>:<TOKEN> -> bot<ID>:***MASKED***
+            msg = self.TELEGRAM_TOKEN_PATTERN.sub(r'\1:***MASKED***', msg)
+            record.msg = msg
+            
+            # También enmascarar en args si existen
+            if hasattr(record, 'args') and record.args:
+                args = list(record.args)
+                for i, arg in enumerate(args):
+                    if isinstance(arg, str):
+                        args[i] = self.TELEGRAM_TOKEN_PATTERN.sub(r'\1:***MASKED***', arg)
+                record.args = tuple(args)
+        
+        return True
+
+
 # Configuración de logging
 # Usar nivel INFO por defecto, pero permitir override con LOG_LEVEL
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -63,12 +95,30 @@ except (PermissionError, OSError) as e:
     print(f"Warning: No se pudo abrir archivo de log {log_file_path}: {e}")
     print("Continuando solo con logging a consola...")
 
+# Crear filtro de enmascaramiento de tokens
+token_filter = TokenMaskingFilter()
+
+# Aplicar filtro a todos los handlers
+for handler in log_handlers:
+    handler.addFilter(token_filter)
+
 logging.basicConfig(
     level=getattr(logging, log_level, logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=log_handlers
 )
 logger = logging.getLogger(__name__)
+
+# Reducir verbosidad de httpx/httpcore (solo WARNING y superior)
+# Esto evita que se logueen automáticamente las URLs con tokens
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+# Aplicar filtro también al root logger para capturar cualquier log que escape
+root_logger = logging.getLogger()
+for handler in root_logger.handlers:
+    if not any(isinstance(f, TokenMaskingFilter) for f in handler.filters):
+        handler.addFilter(token_filter)
 
 # Configuración de base de datos - usar settings como en db/session.py
 DB_URL = os.getenv("DB_URL") or settings.db_url
@@ -249,7 +299,8 @@ async def run_polling() -> None:
     logger.info("Eliminando webhook existente...")
     webhook_deleted = await delete_webhook(TELEGRAM_BOT_TOKEN)
     if webhook_deleted:
-        logger.info("✓ Webhook eliminado exitosamente")
+        # No duplicar el mensaje (ya se loguea en delete_webhook)
+        pass
     else:
         logger.warning("⚠ No se pudo eliminar el webhook. Continuando de todas formas...")
     
