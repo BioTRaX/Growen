@@ -70,8 +70,6 @@ async def create_test_product_with_sources(
             source_name=f"Fuente Test {source_idx + 1}",
             url=f"https://httpbin.org/delay/0?product={index}&source={source_idx}",
             source_type="static",
-            selector_type="json",
-            price_selector="$.headers.X-Test-Price",
             is_mandatory=source_idx == 0,  # Primera fuente es obligatoria
         )
         db.add(source)

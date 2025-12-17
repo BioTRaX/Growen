@@ -17,6 +17,7 @@ Comportamiento:
 - El payload incluye campos auxiliares: `canonical_product_id`, `canonical_sale_price`, `canonical_name`, `canonical_sku` y `first_variant_sku`.
 - Nota: el campo `name` corresponde al título interno del producto.
 - Nuevo: `preferred_name` (canónico primero) para centralizar la preferencia canónica en el backend. La UI puede usar este campo directamente.
+- Nuevo: `tags`: array de objetos `{ id: number, name: string }` con los tags asignados al producto.
 
 Ejemplo:
 `GET /products?type=canonical&stock=gt:0&page=1&page_size=50`
@@ -43,6 +44,9 @@ Campos técnicos expuestos (editables vía PATCH):
 - `weight_kg`: número (kg) o null
 - `height_cm`, `width_cm`, `depth_cm`: números (cm) o null
 - `market_price_reference`: número (moneda, referencia de mercado) o null
+
+Tags:
+- `tags`: array de objetos `{ id: number, name: string }` con los tags asignados al producto.
 
 ---
 
@@ -197,3 +201,108 @@ Respuesta:
 
 Uso típico:
 - La UI usa `next_seq` para previsualizar un SKU con la regla `XXX_####_YYY` (derivada de nombres de categoría/subcategoría). La generación y validación final ocurre en el backend al crear/editar el canónico.
+
+---
+
+## Endpoints de Tags
+
+### GET /tags
+Lista todos los tags existentes, opcionalmente filtrados por búsqueda.
+
+Query parameters:
+- `q` (opcional): búsqueda por nombre (parcial, case-insensitive)
+
+Respuesta:
+```json
+[
+  { "id": 1, "name": "Orgánico" },
+  { "id": 2, "name": "Floración" }
+]
+```
+
+Requiere rol: `cliente`, `proveedor`, `colaborador` o `admin`.
+
+---
+
+### POST /tags
+Crea un nuevo tag. Si ya existe un tag con el mismo nombre, retorna el existente.
+
+Cuerpo:
+```json
+{ "name": "Orgánico" }
+```
+
+Respuesta:
+```json
+{ "id": 1, "name": "Orgánico" }
+```
+
+Requiere CSRF y rol: `colaborador` o `admin`.
+
+---
+
+### POST /tags/products/{product_id}/tags
+Asigna tags a un producto. Crea los tags si no existen.
+
+Cuerpo:
+```json
+{ "tag_names": ["Orgánico", "Floración"] }
+```
+
+Respuesta:
+```json
+{
+  "product_id": 123,
+  "assigned_tags": ["Orgánico", "Floración"],
+  "new_assignments": ["Orgánico"]  // Tags que se crearon o asignaron por primera vez
+}
+```
+
+Requiere CSRF y rol: `colaborador` o `admin`.
+
+---
+
+### DELETE /tags/products/{product_id}/tags/{tag_id}
+Desvincula un tag de un producto.
+
+Respuesta:
+```json
+{
+  "product_id": 123,
+  "tag_id": 1,
+  "removed": true
+}
+```
+
+Requiere CSRF y rol: `colaborador` o `admin`.
+
+---
+
+### POST /tags/products/bulk-tags
+Asigna tags a múltiples productos a la vez.
+
+Cuerpo:
+```json
+{
+  "product_ids": [1, 2, 3],
+  "tag_names": ["Orgánico", "Floración"]
+}
+```
+
+Respuesta:
+```json
+{
+  "product_ids": [1, 2, 3],
+  "tag_names": ["Orgánico", "Floración"],
+  "tags_assigned": 2,
+  "new_relations_created": 5,
+  "existing_relations_skipped": 1
+}
+```
+
+Requiere CSRF y rol: `colaborador` o `admin`.
+
+Notas:
+- Si un tag no existe, se crea automáticamente.
+- Si un producto ya tiene un tag asignado, se omite (no se duplica).
+- Si algún producto no existe, se retorna 404 con la lista de IDs faltantes.

@@ -21,6 +21,7 @@ import BulkSalePriceModal from './BulkSalePriceModal'
 import ActivityPanel from './ActivityPanel'
 import PriceEditModal from './PriceEditModal'
 import DiagnosticsDrawer from './DiagnosticsDrawer'
+import TagManagementModal from './TagManagementModal'
 import { useProductsTablePrefs } from '../lib/useTablePrefs'
 import { formatARS, parseDecimalInput } from '../lib/format'
 import { useAuth } from '../auth/AuthContext'
@@ -63,6 +64,7 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
   const [createCanonicalCtx, setCreateCanonicalCtx] = useState<null | { initialName: string; supplierProductId: number; supplierId: number }>(null)
   const [selected, setSelected] = useState<number[]>([])
   const [showBulk, setShowBulk] = useState(false)
+  const [showTagsModal, setShowTagsModal] = useState(false)
   const [activityFor, setActivityFor] = useState<number | null>(null)
   const [editingPriceFor, setEditingPriceFor] = useState<{ productId: number; canonicalId?: number | null; sale?: number | null } | null>(null)
   const [showColsCfg, setShowColsCfg] = useState(false)
@@ -678,6 +680,14 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
             Editar precios ({selected.length})
           </button>
         )}
+        {!!selected.length && canEdit && (
+          <button
+            className="btn"
+            onClick={() => setShowTagsModal(true)}
+          >
+            Gestionar Tags ({selected.length})
+          </button>
+        )}
         {
           <button
             className="btn"
@@ -964,6 +974,18 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
           supplierId={equivData.supplierId}
           supplierProductId={equivData.supplierProductId}
           onClose={() => setEquivData(null)}
+        />
+      )}
+      {showTagsModal && (
+        <TagManagementModal
+          open={showTagsModal}
+          onClose={() => setShowTagsModal(false)}
+          productIds={selected}
+          onSuccess={() => {
+            setShowTagsModal(false)
+            setReloadTick(t => t + 1)
+            setSelected([])
+          }}
         />
       )}
       {showBulk && (

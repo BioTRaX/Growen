@@ -72,6 +72,78 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _infer_conversation_state(history_context: str, current_user_text: str) -> dict:
+    """
+    Infiere el estado de la conversación desde el historial para la máquina de estados.
+    
+    Analiza el historial reciente y el texto actual para determinar:
+    - current_mode: OBSERVER, CULTIVATOR, o SALESMAN
+    - diagnosis_complete: Si el diagnóstico ya está completo
+    - needs_product: Si se identificó necesidad de producto
+    
+    Args:
+        history_context: Historial formateado (string con formato "H: Usuario: ...")
+        current_user_text: Texto actual del usuario
+        
+    Returns:
+        Dict con el estado inferido de la conversación
+    """
+    state = {
+        "current_mode": None,
+        "diagnosis_complete": False,
+        "needs_product": False,
+    }
+    
+    if not history_context:
+        # Sin historial, empezar como OBSERVER
+        return state
+    
+    history_lower = history_context.lower()
+    user_text_lower = current_user_text.lower()
+    
+    # Detectar si hay diagnóstico en curso
+    diagnostic_keywords = [
+        "hojas amarillas", "plaga", "carencia", "problema", "diagnóstico",
+        "enfermedad", "hongos", "se muere", "se seca", "manchas",
+    ]
+    has_diagnostic = any(kw in history_lower or kw in user_text_lower for kw in diagnostic_keywords)
+    
+    # Detectar si hay consulta de producto/precio
+    product_keywords = [
+        "precio", "cuánto cuesta", "producto", "fertilizante", "necesito",
+        "quiero comprar", "tienes", "stock", "disponible",
+    ]
+    has_product_query = any(kw in history_lower or kw in user_text_lower for kw in product_keywords)
+    
+    # Detectar si el diagnóstico está completo (hay recomendación de producto o solución)
+    solution_keywords = [
+        "recomiendo", "te recomiendo", "tengo", "producto", "solución",
+        "calmag", "fertilizante", "corrector",
+    ]
+    has_solution = any(kw in history_lower for kw in solution_keywords)
+    
+    # Determinar modo actual
+    if has_diagnostic:
+        if has_solution or has_product_query:
+            # Diagnóstico completo, pasar a SALESMAN
+            state["current_mode"] = "SALESMAN"
+            state["diagnosis_complete"] = True
+            state["needs_product"] = True
+        else:
+            # Diagnóstico en curso
+            state["current_mode"] = "CULTIVATOR"
+            state["diagnosis_complete"] = False
+    elif has_product_query:
+        # Consulta directa de producto
+        state["current_mode"] = "SALESMAN"
+        state["needs_product"] = True
+    else:
+        # Default: OBSERVER
+        state["current_mode"] = "OBSERVER"
+    
+    return state
+
+
 class ProductEntryOut(BaseModel):
     name: str
     price: Optional[float] = None
@@ -167,6 +239,9 @@ async def chat_endpoint(
     
     # 0.1 Recuperar historial reciente para memoria conversacional
     history_context = await get_recent_history(db, chat_session_id, limit=6)
+    
+    # 0.2 Inferir estado de conversación desde el historial para máquina de estados
+    conversation_state = _infer_conversation_state(history_context, user_text)
 
     # 1. Clasificar la intención del usuario
     # Si hay imagen, forzar intención DIAGNOSTICO
@@ -183,9 +258,8 @@ async def chat_endpoint(
     host = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
     memory_key = build_memory_key(session_id=sid, role=user_role, host=host, user_agent=user_agent)
-    # Nota: la memoria estructurada (MemoryState) no es compatible con el flujo de ventas conversacionales actual.
-    # Para evitar errores de tipo, usamos un dict local transitorio cuando corresponde.
-    conversation_state: Dict[str, Any] = {}
+    # Nota: conversation_state ya está definido arriba (línea 244) con el estado inferido de la máquina de estados
+    # Para ventas conversacionales, agregamos sales_flow al estado existente
 
     # 3. Primero, gestionar flujo de aclaración si hay memoria pendiente
     memory_state = get_memory(memory_key)
@@ -260,7 +334,11 @@ async def chat_endpoint(
             answer = await ai_router.run_async(
                 task=Task.SHORT_ANSWER.value,
                 prompt=prompt_with_history,
-                user_context={"role": user_role, "intent": "product_lookup"},
+                user_context={
+                    "role": user_role, 
+                    "intent": "product_lookup",
+                    "conversation_state": conversation_state
+                },
                 tools_schema=tools_schema,
             )
             
@@ -441,6 +519,11 @@ async def chat_endpoint(
         # Usar run_async para chat general, pasando el contexto del usuario
         # El chatbot puede necesitar saber si habla con Admin/Colaborador vs Cliente
         
+        # Usar el estado de conversación ya inferido arriba (línea 244)
+        # Si no existe (por alguna razón), inferirlo de nuevo
+        if not conversation_state or conversation_state.get("current_mode") is None:
+            conversation_state = _infer_conversation_state(history_context, user_text)
+        
         # Buscar contexto relevante en Knowledge Base (RAG) para chat general
         rag_context = ""
         try:
@@ -473,7 +556,11 @@ async def chat_endpoint(
         raw = await ai_router.run_async(
             task=Task.SHORT_ANSWER.value,
             prompt=prompt_with_history,
-            user_context={"role": user_role, "intent": "chat_general"},
+            user_context={
+                "role": user_role, 
+                "intent": "chat_general",
+                "conversation_state": conversation_state
+            },
         )
         
         # Limpiar prefijo técnico si existe

@@ -359,12 +359,14 @@ app.include_router(ws.router)
 from services.routers import catalogs as catalogs_router  # import after logger setup
 from services.routers import products_stock  # nuevo router historial stock
 from services.routers import admin_scheduler  # router admin scheduler
+from services.routers import tags  # router de tags
 app.include_router(catalogs_router.router)
 app.include_router(catalog.router)
 app.include_router(imports.router)
 app.include_router(canonical_products.canonical_router)
 app.include_router(canonical_products.equivalences_router)
 app.include_router(products_ex.router)
+app.include_router(tags.router, prefix="/tags", tags=["tags"])
 # images.router debe estar ANTES que products_stock.router para evitar conflictos de rutas
 # porque ambos comparten el prefijo /products y las rutas más específicas deben evaluarse primero
 app.include_router(images.router)

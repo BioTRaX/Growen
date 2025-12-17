@@ -14,6 +14,7 @@ import { listCategories, Category } from '../services/categories'
 import SupplierAutocomplete from '../components/supplier/SupplierAutocomplete'
 import type { SupplierSearchItem } from '../services/suppliers'
 import { showToast } from '../components/Toast'
+import TagManagementModal from '../components/TagManagementModal'
 
 type Prod = {
   id: number
@@ -37,6 +38,7 @@ type Prod = {
   depth_cm?: number | null
   market_price_reference?: number | null
   enrichment_sources_url?: string | null
+  tags?: Array<{ id: number; name: string }>
 }
 
 const FALLBACK_DESC_HTML = '<p>Sin descripción</p>'
@@ -126,6 +128,7 @@ export default function ProductDetail() {
   const [srcLoading, setSrcLoading] = useState(false)
   const [srcText, setSrcText] = useState<string>('')
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [tagsModalOpen, setTagsModalOpen] = useState(false)
   const theme = useMemo(() => ({
     bg: styleVariant === 'minimalDark' ? '#0b0f14' : '#0d1117',
     card: styleVariant === 'minimalDark' ? 'rgba(17,24,39,0.7)' : '#111827',
@@ -689,6 +692,45 @@ export default function ProductDetail() {
             </div>
           ) : null}
         </div>
+        {/* Tags */}
+        <div style={{ marginTop: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ opacity: 0.7, fontSize: 14 }}>Tags:</span>
+            {prod?.tags && prod.tags.length > 0 ? (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {prod.tags.map(tag => (
+                  <span
+                    key={tag.id}
+                    style={{
+                      padding: '4px 10px',
+                      background: theme.accentGreen + '20',
+                      border: `1px solid ${theme.accentGreen}`,
+                      borderRadius: 6,
+                      fontSize: 12,
+                    }}
+                  >
+                    {tag.name}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <span style={{ opacity: 0.5, fontSize: 13 }}>Sin tags</span>
+            )}
+            {canEdit && (
+              <button
+                className="btn-secondary"
+                onClick={() => setTagsModalOpen(true)}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: 12,
+                  minWidth: 'auto',
+                }}
+              >
+                {prod?.tags && Array.isArray(prod.tags) && prod.tags.length > 0 ? '✎ Editar' : '+ Agregar tags'}
+              </button>
+            )}
+          </div>
+        </div>
         {/* Selector de categoría */}
         <div className="row" style={{ gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ fontWeight: 600 }}>Categoría</div>
@@ -1039,6 +1081,21 @@ export default function ProductDetail() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal de gestión de tags */}
+      {tagsModalOpen && pid && (
+        <TagManagementModal
+          open={tagsModalOpen}
+          onClose={() => setTagsModalOpen(false)}
+          productIds={[pid]}
+          currentTags={prod?.tags}
+          onSuccess={async () => {
+            await refresh()
+            setTagsModalOpen(false)
+          }}
+          theme={theme}
+        />
       )}
     </div>
   )
