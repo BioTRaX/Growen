@@ -47,6 +47,9 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
+# Configurar encoding para Python
+$env:PYTHONIOENCODING = "utf-8"
+
 Write-Host ""
 Write-Host "=== Ejecutando Test con UTF-8 ===" -ForegroundColor Cyan
 Write-Host "Test: $TestPath" -ForegroundColor Blue

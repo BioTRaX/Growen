@@ -591,15 +591,48 @@ async def list_review(status: str = "pending", db: AsyncSession = Depends(get_se
         select(ImageReview, Image).join(Image, Image.id == ImageReview.image_id).where(ImageReview.status == status)
     )
     rows = res.all()
-    return [
-        {
+    
+    # Get all image IDs to fetch their versions in one query
+    image_ids = [img.id for _, img in rows]
+    if not image_ids:
+        return []
+    
+    # Fetch derived versions for all images
+    versions_res = await db.execute(
+        select(ImageVersion).where(
+            ImageVersion.image_id.in_(image_ids),
+            ImageVersion.kind.in_(["thumb", "card", "full"])
+        )
+    )
+    all_versions = versions_res.scalars().all()
+    
+    # Group versions by image_id
+    versions_by_img: dict[int, dict[str, ImageVersion]] = {}
+    for v in all_versions:
+        if v.image_id not in versions_by_img:
+            versions_by_img[v.image_id] = {}
+        versions_by_img[v.image_id][v.kind] = v
+    
+    result = []
+    for rev, img in rows:
+        # Determine best URL: prefer derived versions (thumb first for preview), then original
+        url = img.url
+        img_versions = versions_by_img.get(img.id, {})
+        # For preview, prefer thumb > card > full (smaller is better for list view)
+        for kind in ["thumb", "card", "full"]:
+            if kind in img_versions and img_versions[kind].path:
+                path_norm = img_versions[kind].path.replace('\\', '/')
+                url = f"/media/{path_norm}"
+                break
+        
+        result.append({
             "image_id": img.id,
             "product_id": img.product_id,
             "status": rev.status,
-            "path": img.path,
-        }
-        for rev, img in rows
-    ]
+            "url": url,
+        })
+    
+    return result
 
 
 @router.post(

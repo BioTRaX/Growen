@@ -46,8 +46,9 @@ async def test_category(db: AsyncSession) -> Category:
 async def test_supplier(db: AsyncSession) -> Supplier:
     """Crea proveedor de prueba para performance."""
     supplier = Supplier(
+        slug="test-perf-supplier",
         name="Proveedor Test Performance",
-        email="test.perf@example.com"
+        contact_email="test.perf@example.com"
     )
     db.add(supplier)
     await db.commit()

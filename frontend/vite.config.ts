@@ -13,6 +13,7 @@ const API_TARGET = process.env.VITE_API_URL || 'http://127.0.0.1:8000'
 
 export default defineConfig({
   plugins: [react()],
+  base: '/',
   define: {
     'import.meta.env.VITE_API_URL': JSON.stringify(API_TARGET),
   },

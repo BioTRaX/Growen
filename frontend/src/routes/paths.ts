@@ -14,11 +14,13 @@ export const PATHS = {
   // Clientes y Ventas
   customers: "/clientes",
   sales: "/ventas",
+  // Imágenes de productos (independiente, accessible para admin y colaborador)
+  imagesProducts: "/imagenes-productos",
   // Admin
   admin: "/admin",
   adminUsers: "/admin/usuarios",
   adminServices: "/admin/servicios",
-  adminImages: "/admin/imagenes-productos",
+  adminImages: "/admin/imagenes-productos", // Legacy redirect to /imagenes-productos
   adminDriveSync: "/admin/drive-sync",
   adminCatalogDiagnostics: "/admin/catalogos/diagnostico",
   adminBackups: "/admin/backups",
