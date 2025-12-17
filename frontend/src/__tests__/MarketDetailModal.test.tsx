@@ -20,6 +20,8 @@ const mockMandatorySource: MarketSource = {
   last_price: 1450,
   last_checked_at: '2025-11-10T10:00:00Z',
   is_mandatory: true,
+  source_type: 'static',
+  currency: 'ARS',
   created_at: '2025-11-01T00:00:00Z',
   updated_at: '2025-11-10T10:00:00Z',
 }
@@ -32,6 +34,8 @@ const mockAdditionalSource: MarketSource = {
   last_price: 1380,
   last_checked_at: '2025-11-09T15:00:00Z',
   is_mandatory: false,
+  source_type: 'static',
+  currency: 'ARS',
   created_at: '2025-11-01T00:00:00Z',
   updated_at: '2025-11-09T15:00:00Z',
 }
@@ -469,6 +473,8 @@ describe('MarketDetailModal', () => {
               last_price: 1420,
               last_checked_at: null,
               is_mandatory: false,
+              source_type: 'static',
+              currency: 'ARS',
               created_at: '2025-11-12T00:00:00Z',
               updated_at: '2025-11-12T00:00:00Z',
             },

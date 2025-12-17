@@ -259,8 +259,10 @@ export async function addProductSource(
     last_price: response.data.last_price,
     last_checked_at: response.data.last_checked_at,
     is_mandatory: response.data.is_mandatory,
+    source_type: response.data.source_type ?? 'static',
+    currency: response.data.currency ?? 'ARS',
     created_at: response.data.created_at,
-    updated_at: response.data.created_at, // Backend solo retorna created_at
+    updated_at: response.data.updated_at ?? response.data.created_at,
   }
 }
 

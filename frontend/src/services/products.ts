@@ -32,6 +32,7 @@ export interface ProductItem {
   supplier_item_id?: number | null
   canonical_sku?: string | null
   first_variant_sku?: string | null
+  tags?: Array<{ id: number; name: string }>
 }
 
 export interface ProductSearchResponse {

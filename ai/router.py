@@ -121,8 +121,15 @@ class AIRouter:
         intent = user_context.get("intent", "") if user_context else ""
         user_text = prompt.split("\n")[-1] if "\n" in prompt else prompt  # Extraer texto del usuario del prompt
         has_image = bool(images and len(images) > 0)  # Detectar si hay imágenes
+        conversation_state = user_context.get("conversation_state") if user_context else None  # Estado de conversación para máquina de estados
         
-        persona_mode, system_prompt = get_persona_prompt(user_role, intent, user_text, has_image=has_image)
+        persona_mode, system_prompt = get_persona_prompt(
+            user_role, 
+            intent, 
+            user_text, 
+            has_image=has_image,
+            conversation_state=conversation_state
+        )
         full_prompt = f"{system_prompt}\n\n{prompt}"
 
         # Intentar usar generate_async (preferido)

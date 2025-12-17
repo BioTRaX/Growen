@@ -16,6 +16,7 @@ import * as marketServices from '../services/market'
 const mockProducts: MarketProductItem[] = [
   {
     product_id: 1,
+    internal_product_id: 1,
     preferred_name: 'Micelio Dorado',
     product_sku: 'HON_0001_MIC',
     sale_price: 1500,
@@ -23,6 +24,8 @@ const mockProducts: MarketProductItem[] = [
     market_price_min: 1400,
     market_price_max: 1800,
     last_market_update: '2025-11-10T10:00:00Z',
+    has_active_alerts: false,
+    active_alerts_count: 0,
     category_id: 1,
     category_name: 'Hongos',
     supplier_id: 10,
@@ -30,6 +33,7 @@ const mockProducts: MarketProductItem[] = [
   },
   {
     product_id: 2,
+    internal_product_id: 2,
     preferred_name: 'Maceta 5L',
     product_sku: 'CUL_0002_MAC',
     sale_price: 300,
@@ -37,6 +41,8 @@ const mockProducts: MarketProductItem[] = [
     market_price_min: 280,
     market_price_max: 400,
     last_market_update: '2025-11-09T15:30:00Z',
+    has_active_alerts: false,
+    active_alerts_count: 0,
     category_id: 2,
     category_name: 'Cultivo',
     supplier_id: 11,
@@ -44,6 +50,7 @@ const mockProducts: MarketProductItem[] = [
   },
   {
     product_id: 3,
+    internal_product_id: 3,
     preferred_name: 'Sustrato Premium 20kg',
     product_sku: 'CUL_0003_SUS',
     sale_price: 850,
@@ -51,6 +58,8 @@ const mockProducts: MarketProductItem[] = [
     market_price_min: 750,
     market_price_max: 900,
     last_market_update: '2025-11-11T08:00:00Z',
+    has_active_alerts: false,
+    active_alerts_count: 0,
     category_id: 2,
     category_name: 'Cultivo',
     supplier_id: 10,

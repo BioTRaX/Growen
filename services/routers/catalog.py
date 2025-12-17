@@ -2243,6 +2243,23 @@ async def list_products(
         for pid, sku in vs:
             if pid not in skus_by_product:
                 skus_by_product[pid] = sku
+    
+    # Prefetch tags por producto para evitar N+1
+    from db.models import Tag, ProductTag
+    tags_by_product: dict[int, list[dict]] = {}
+    if product_ids:
+        tag_rows = (
+            await session.execute(
+                select(ProductTag.product_id, Tag.id, Tag.name)
+                .join(Tag, ProductTag.tag_id == Tag.id)
+                .where(ProductTag.product_id.in_(product_ids))
+                .order_by(ProductTag.product_id.asc(), Tag.name.asc())
+            )
+        ).all()
+        for pid, tag_id, tag_name in tag_rows:
+            if pid not in tags_by_product:
+                tags_by_product[pid] = []
+            tags_by_product[pid].append({"id": tag_id, "name": tag_name})
 
     items = []
     for sp_obj, p_obj, s_obj, eq_obj, cp_obj in rows:
@@ -2283,6 +2300,8 @@ async def list_products(
                 # Etapa 1: Datos estructurados de enriquecimiento
                 "technical_specs": getattr(p_obj, 'technical_specs', None),
                 "usage_instructions": getattr(p_obj, 'usage_instructions', None),
+                # Tags del producto
+                "tags": tags_by_product.get(p_obj.id, []),
             }
         )
 
@@ -3176,6 +3195,18 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
     # Precio de venta final: priorizar canónico, luego proveedor
     sale_price = canonical_sale if canonical_sale is not None else supplier_sale_price
 
+    # Obtener tags del producto
+    from db.models import Tag, ProductTag
+    tag_rows = (
+        await session.execute(
+            select(Tag.id, Tag.name)
+            .join(ProductTag, ProductTag.tag_id == Tag.id)
+            .where(ProductTag.product_id == product_id)
+            .order_by(Tag.name.asc())
+        )
+    ).all()
+    tags = [{"id": tag_id, "name": tag_name} for tag_id, tag_name in tag_rows]
+
     return {
         "id": prod.id,
         "title": stylize_product_name(prod.title),
@@ -3211,6 +3242,7 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
             }
             for im in imgs
         ],
+        "tags": tags,
     }
 
 
