@@ -44,179 +44,188 @@ const CatalogDiagnosticsPage = lazy(() => import('./pages/CatalogDiagnosticsPage
 
 export default function App() {
   return (
-  <BrowserRouter>
+    <BrowserRouter>
       <AuthProvider>
         <ThemeProvider>
-        <ToastProvider>
-        <InjectToastStyles />
-  <ErrorBoundary>
-  <Suspense fallback={<div style={{padding:12}}>Cargando módulos… (si tarda, revisá consola)</div>}>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route
-            path="/guest"
-            element={
-              <ProtectedRoute roles={["guest", "cliente", "proveedor", "colaborador", "admin"]}>
-                <Dashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path={PATHS.home}
-            element={
-              <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
-                <Dashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path={PATHS.stock}
-            element={
-              <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
-                <Stock />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path={PATHS.market}
-            element={
-              <ProtectedRoute roles={["colaborador", "admin"]}>
-                <Market />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path={PATHS.products}
-            element={
-              <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
-                <Productos />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path={PATHS.suppliers}
-            element={
-              <ProtectedRoute roles={["colaborador", "admin"]}>
-                <SuppliersPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path={PATHS.customers}
-            element={
-              <ProtectedRoute roles={["colaborador", "admin"]}>
-                <CustomersPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path={PATHS.sales}
-            element={
-              <ProtectedRoute roles={["colaborador", "admin"]}>
-                <SalesPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/ventas/:id"
-            element={
-              <ProtectedRoute roles={["colaborador", "admin"]}>
-                <SaleDetail />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/clientes/:id"
-            element={
-              <ProtectedRoute roles={["colaborador", "admin"]}>
-                <CustomerDetail />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/proveedores/:id"
-            element={
-              <ProtectedRoute roles={["colaborador", "admin"]}>
-                <SupplierDetailPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/productos/:id"
-            element={
-              <ProtectedRoute roles={["guest", "cliente", "proveedor", "colaborador", "admin"]}>
-                <ProductDetail />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path={PATHS.purchases}
-            element={
-              <ProtectedRoute roles={["colaborador", "admin"]}>
-                <Purchases />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path={PATHS.purchasesNew}
-            element={
-              <ProtectedRoute roles={["colaborador", "admin"]}>
-                <PurchaseNew />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/compras/:id"
-            element={
-              <ProtectedRoute roles={["colaborador", "admin"]}>
-                <PurchaseDetail />
-              </ProtectedRoute>
-            }
-          />
-          {/* New Admin router with nested sections and role guards */}
-          <Route
-            path={PATHS.admin}
-            element={
-              <ProtectedRoute roles={["colaborador", "admin"]}>
-                <AdminLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route path="servicios" element={<AdminServices />} />
-            <Route path="imagenes-productos" element={<AdminImages />} />
-            <Route path="drive-sync" element={<AdminDriveSync />} />
-            <Route path="backups" element={<AdminBackups />} />
-            <Route path="catalogos/diagnostico" element={<CatalogDiagnosticsPage />} />
-            <Route path="scheduler" element={<AdminScheduler />} />
-            <Route path="cerebro" element={<AdminKnowledge />} />
-            <Route path="dashboard" element={<AdminDashboard />} />
-            <Route path="chats" element={<AdminChats />} />
-            {/* Users only for admins */}
-            <Route
-              path="usuarios"
-              element={
-                <ProtectedRoute roles={["admin"]}>
-                  <AdminUsers />
-                </ProtectedRoute>
-              }
-            />
-          </Route>
-          {/* Legacy fallbacks */}
-          <Route
-            path={PATHS.imagesAdmin}
-            element={
-              <ProtectedRoute roles={["colaborador", "admin"]}>
-                <Navigate to={PATHS.adminImages} replace />
-              </ProtectedRoute>
-            }
-          />
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
-  </Suspense>
-  </ErrorBoundary>
-  {/* Botón flotante global para reportes */}
-  <BugReportButton />
-        </ToastProvider>
+          <ToastProvider>
+            <InjectToastStyles />
+            <ErrorBoundary>
+              <Suspense fallback={<div style={{ padding: 12 }}>Cargando módulos… (si tarda, revisá consola)</div>}>
+                <Routes>
+                  <Route path="/login" element={<Login />} />
+                  <Route
+                    path="/guest"
+                    element={
+                      <ProtectedRoute roles={["guest", "cliente", "proveedor", "colaborador", "admin"]}>
+                        <Dashboard />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path={PATHS.home}
+                    element={
+                      <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
+                        <Dashboard />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path={PATHS.stock}
+                    element={
+                      <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
+                        <Stock />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path={PATHS.market}
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <Market />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path={PATHS.products}
+                    element={
+                      <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
+                        <Productos />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path={PATHS.suppliers}
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <SuppliersPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path={PATHS.customers}
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <CustomersPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path={PATHS.sales}
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <SalesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/ventas/:id"
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <SaleDetail />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/clientes/:id"
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <CustomerDetail />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/proveedores/:id"
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <SupplierDetailPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/productos/:id"
+                    element={
+                      <ProtectedRoute roles={["guest", "cliente", "proveedor", "colaborador", "admin"]}>
+                        <ProductDetail />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path={PATHS.purchases}
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <Purchases />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path={PATHS.purchasesNew}
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <PurchaseNew />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/compras/:id"
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <PurchaseDetail />
+                      </ProtectedRoute>
+                    }
+                  />
+                  {/* Imágenes de productos - sección independiente accesible para admin y colaborador */}
+                  <Route
+                    path={PATHS.imagesProducts}
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <ImagesAdminPanel />
+                      </ProtectedRoute>
+                    }
+                  />
+                  {/* New Admin router with nested sections and role guards */}
+                  <Route
+                    path={PATHS.admin}
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <AdminLayout />
+                      </ProtectedRoute>
+                    }
+                  >
+                    <Route path="servicios" element={<AdminServices />} />
+                    <Route path="imagenes-productos" element={<Navigate to={PATHS.imagesProducts} replace />} />
+                    <Route path="drive-sync" element={<AdminDriveSync />} />
+                    <Route path="backups" element={<AdminBackups />} />
+                    <Route path="catalogos/diagnostico" element={<CatalogDiagnosticsPage />} />
+                    <Route path="scheduler" element={<AdminScheduler />} />
+                    <Route path="cerebro" element={<AdminKnowledge />} />
+                    <Route path="dashboard" element={<AdminDashboard />} />
+                    <Route path="chats" element={<AdminChats />} />
+                    {/* Users only for admins */}
+                    <Route
+                      path="usuarios"
+                      element={
+                        <ProtectedRoute roles={["admin"]}>
+                          <AdminUsers />
+                        </ProtectedRoute>
+                      }
+                    />
+                  </Route>
+                  {/* Legacy fallbacks */}
+                  <Route
+                    path={PATHS.imagesAdmin}
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <Navigate to={PATHS.imagesProducts} replace />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route path="*" element={<Navigate to="/login" replace />} />
+                </Routes>
+              </Suspense>
+            </ErrorBoundary>
+            {/* Botón flotante global para reportes */}
+            <BugReportButton />
+          </ToastProvider>
         </ThemeProvider>
       </AuthProvider>
     </BrowserRouter>

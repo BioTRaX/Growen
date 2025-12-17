@@ -53,8 +53,7 @@ async def large_product_dataset(
     categories = [test_category]
     for i in range(4):
         cat = Category(
-            name=f"Categoría SQL Test {i+2}",
-            description=f"Categoría {i+2} para tests SQL"
+            name=f"Categoría SQL Test {i+2}"
         )
         db.add(cat)
         categories.append(cat)
