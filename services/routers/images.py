@@ -17,7 +17,7 @@ from db.session import get_session
 from services.auth import require_roles, require_csrf, current_session, SessionData
 from services.media import get_media_root, save_upload
 from services.media.downloader import download_product_image, DownloadError, _clamav_scan
-from services.media.processor import to_square_webp_set, apply_watermark, remove_bg
+from services.media.processor import to_square_webp_set, apply_watermark, remove_bg, rotate_image, crop_square
 from services.media.seo import gen_alt_title
 try:
     from PIL import Image as PILImage
@@ -45,6 +45,225 @@ async def _audit(db: AsyncSession, action: str, table: str, entity_id: int | Non
 class FromUrlIn(BaseModel):
     url: str
     generate_derivatives: bool = True
+
+
+class RenameIn(BaseModel):
+    """Payload for renaming image alt/title text."""
+    alt_text: Optional[str] = None
+    title_text: Optional[str] = None
+
+
+def _format_size(size_bytes: int | None) -> str:
+    """Format bytes to human readable string."""
+    if size_bytes is None:
+        return "?"
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.2f} MB"
+
+
+@router.get(
+    "/{pid}/images",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+)
+async def list_product_images(
+    pid: int,
+    db: AsyncSession = Depends(get_session),
+):
+    """Lista todas las imágenes de un producto con metadatos completos.
+    
+    Incluye dimensiones, peso, formato, versiones derivadas (thumb/card/full),
+    y estado de imagen primaria.
+    """
+    # Verify product exists
+    prod = await db.get(Product, pid)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    
+    # Get all active images for product
+    imgs_result = await db.execute(
+        select(Image)
+        .where(Image.product_id == pid, Image.active == True)
+        .order_by(Image.is_primary.desc(), Image.sort_order.asc().nulls_last(), Image.id.asc())
+    )
+    images = imgs_result.scalars().all()
+    
+    if not images:
+        return {
+            "product_id": pid,
+            "product_name": prod.title,
+            "images": [],
+            "total": 0
+        }
+    
+    # Get all versions for these images
+    image_ids = [img.id for img in images]
+    versions_result = await db.execute(
+        select(ImageVersion)
+        .where(ImageVersion.image_id.in_(image_ids))
+    )
+    versions = versions_result.scalars().all()
+    
+    # Group versions by image_id
+    versions_by_img: dict[int, dict] = {}
+    for v in versions:
+        if v.image_id not in versions_by_img:
+            versions_by_img[v.image_id] = {}
+        path_norm = (v.path or "").replace('\\', '/')
+        versions_by_img[v.image_id][v.kind] = {
+            "path": f"/media/{path_norm}" if path_norm else None,
+            "width": v.width,
+            "height": v.height,
+            "size_bytes": v.size_bytes,
+            "size_human": _format_size(v.size_bytes),
+            "mime": v.mime,
+        }
+    
+    # Build response
+    items = []
+    for img in images:
+        img_versions = versions_by_img.get(img.id, {})
+        
+        # Build display URL (prefer derived WebP for preview)
+        display_url = img.url
+        for kind in ["card", "thumb", "full"]:
+            if kind in img_versions and img_versions[kind].get("path"):
+                display_url = img_versions[kind]["path"]
+                break
+        
+        items.append({
+            "id": img.id,
+            "url": img.url,
+            "display_url": display_url,
+            "path": (img.path or "").replace('\\', '/'),
+            "mime": img.mime,
+            "width": img.width,
+            "height": img.height,
+            "bytes": img.bytes,
+            "size_human": _format_size(img.bytes),
+            "is_primary": img.is_primary,
+            "locked": img.locked,
+            "alt_text": getattr(img, 'alt_text', None),
+            "title_text": getattr(img, 'title_text', None),
+            "checksum_sha256": img.checksum_sha256,
+            "created_at": img.created_at.isoformat() if img.created_at else None,
+            "updated_at": img.updated_at.isoformat() if img.updated_at else None,
+            "versions": img_versions,
+            "has_webp": any(k in img_versions for k in ["thumb", "card", "full"]),
+        })
+    
+    return {
+        "product_id": pid,
+        "product_name": prod.title,
+        "canonical_sku": getattr(prod, 'canonical_sku', None) or prod.sku_root,
+        "images": items,
+        "total": len(items)
+    }
+
+
+@router.post(
+    "/{pid}/images/{img_id}/set-primary",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def set_primary_image(
+    pid: int,
+    img_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+):
+    """Establece una imagen como la principal del producto."""
+    img = await db.get(Image, img_id)
+    if not img or img.product_id != pid:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    
+    # Reset all others to non-primary
+    await db.execute(
+        update(Image).where(Image.product_id == pid).values(is_primary=False)
+    )
+    # Set this one as primary
+    img.is_primary = True
+    
+    await _audit(db, "set_primary", "images", img_id, {"product_id": pid}, sess, request)
+    await db.commit()
+    
+    return {"success": True, "image_id": img_id}
+
+
+@router.delete(
+    "/{pid}/images/{img_id}",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def delete_image(
+    pid: int,
+    img_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+):
+    """Elimina una imagen (soft delete - marca como inactive)."""
+    img = await db.get(Image, img_id)
+    if not img or img.product_id != pid:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    
+    if img.locked:
+        raise HTTPException(status_code=403, detail="Imagen bloqueada, no se puede eliminar")
+    
+    img.active = False
+    img.is_primary = False
+    
+    # If this was primary, set another as primary
+    next_primary = await db.scalar(
+        select(Image).where(
+            Image.product_id == pid,
+            Image.active == True,
+            Image.id != img_id
+        ).order_by(Image.sort_order.asc().nulls_last(), Image.id.asc()).limit(1)
+    )
+    if next_primary:
+        next_primary.is_primary = True
+    
+    await _audit(db, "delete_image", "images", img_id, {"product_id": pid}, sess, request)
+    await db.commit()
+    
+    return {"success": True, "deleted_id": img_id}
+
+
+@router.put(
+    "/{pid}/images/{img_id}/rename",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def rename_image(
+    pid: int,
+    img_id: int,
+    payload: RenameIn,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+):
+    """Actualiza el alt_text y/o title_text de una imagen."""
+    img = await db.get(Image, img_id)
+    if not img or img.product_id != pid:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    
+    old_values = {"alt_text": getattr(img, 'alt_text', None), "title_text": getattr(img, 'title_text', None)}
+    
+    if payload.alt_text is not None:
+        img.alt_text = payload.alt_text[:300] if payload.alt_text else None
+    if payload.title_text is not None:
+        img.title_text = payload.title_text[:300] if payload.title_text else None
+    
+    await _audit(db, "rename_image", "images", img_id, {
+        "product_id": pid,
+        "old": old_values,
+        "new": {"alt_text": getattr(img, 'alt_text', None), "title_text": getattr(img, 'title_text', None)}
+    }, sess, request)
+    await db.commit()
+    
+    return {"success": True, "image_id": img_id, "alt_text": getattr(img, 'alt_text', None), "title_text": getattr(img, 'title_text', None)}
 
 
 @router.post(
@@ -580,6 +799,142 @@ async def generate_webp_derivatives(
             status_code=500,
             detail=f"Error al generar versiones WebP: {str(e)}"
         )
+
+
+class RotateIn(BaseModel):
+    degrees: int = 90  # 90, 180, 270
+
+
+@router.post(
+    "/{pid}/images/{iid}/rotate",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def rotate_image_endpoint(
+    pid: int,
+    iid: int,
+    payload: RotateIn,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+):
+    """Rota una imagen 90, 180 o 270 grados en sentido horario."""
+    img = await db.get(Image, iid)
+    if not img or img.product_id != pid:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    
+    if img.locked:
+        raise HTTPException(status_code=403, detail="Imagen bloqueada")
+    
+    root = get_media_root()
+    # Normalize path for Windows
+    img_path = (img.path or "").replace('\\', '/')
+    source = root / img_path
+    
+    if not source.exists():
+        raise HTTPException(status_code=404, detail=f"Archivo de imagen no encontrado: {img_path}")
+    
+    # Validate degrees
+    degrees = payload.degrees % 360
+    if degrees not in (90, 180, 270):
+        raise HTTPException(status_code=400, detail="Solo se permiten rotaciones de 90, 180 o 270 grados")
+    
+    try:
+        # Rotar imagen in place
+        with PILImage.open(source) as im:
+            # Pillow rota en sentido antihorario, así que invertimos
+            rotated = im.rotate(-degrees, expand=True)
+            # Save to a temp file first, then replace
+            from tempfile import NamedTemporaryFile
+            suffix = source.suffix or '.jpg'
+            with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp_path = Path(tmp.name)
+            rotated.save(tmp_path)
+        
+        # Replace original with rotated version
+        import shutil
+        shutil.move(str(tmp_path), str(source))
+        
+        # Actualizar dimensiones en DB
+        with PILImage.open(source) as im:
+            img.width, img.height = im.size
+        
+        await _audit(db, "rotate_image", "images", iid, {
+            "product_id": pid,
+            "degrees": degrees,
+        }, sess, request)
+        await db.commit()
+        
+        return {"success": True, "degrees": degrees, "width": img.width, "height": img.height}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al rotar imagen: {str(e)}")
+
+
+@router.post(
+    "/{pid}/images/{iid}/crop-square",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def crop_image_endpoint(
+    pid: int,
+    iid: int,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+):
+    """Recorta una imagen a cuadrado centrado."""
+    img = await db.get(Image, iid)
+    if not img or img.product_id != pid:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    
+    if img.locked:
+        raise HTTPException(status_code=403, detail="Imagen bloqueada")
+    
+    root = get_media_root()
+    # Normalize path for Windows
+    img_path = (img.path or "").replace('\\', '/')
+    source = root / img_path
+    
+    if not source.exists():
+        raise HTTPException(status_code=404, detail=f"Archivo de imagen no encontrado: {img_path}")
+    
+    try:
+        # Recortar imagen in place
+        with PILImage.open(source) as im:
+            w, h = im.size
+            size = min(w, h)
+            
+            # Calcular coordenadas del crop centrado
+            left = (w - size) // 2
+            top = (h - size) // 2
+            right = left + size
+            bottom = top + size
+            
+            cropped = im.crop((left, top, right, bottom))
+            
+            # Save to temp file first
+            from tempfile import NamedTemporaryFile
+            suffix = source.suffix or '.jpg'
+            with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp_path = Path(tmp.name)
+            cropped.save(tmp_path)
+        
+        # Replace original with cropped version
+        import shutil
+        shutil.move(str(tmp_path), str(source))
+        
+        # Actualizar dimensiones en DB
+        with PILImage.open(source) as im:
+            img.width, img.height = im.size
+            img.bytes = source.stat().st_size
+        
+        await _audit(db, "crop_image", "images", iid, {
+            "product_id": pid,
+            "new_size": img.width,
+        }, sess, request)
+        await db.commit()
+        
+        return {"success": True, "width": img.width, "height": img.height}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al recortar imagen: {str(e)}")
 
 
 @router.get(

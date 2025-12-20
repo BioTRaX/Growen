@@ -100,6 +100,7 @@ scripts/*.local.ps1
 
 # Media (archivos subidos y derivados)
 Imagenes/
+Productos/
 
 # Carpeta de desarrollo y pruebas locales
 Devs/

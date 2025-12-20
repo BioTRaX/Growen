@@ -6,6 +6,7 @@ export const PATHS = {
   home: "/",
   products: "/productos",
   productDetail: (id: number | string) => `/productos/${id}`,
+  productImages: (id: number | string) => `/productos/${id}/imagen`,
   stock: "/stock",
   market: "/mercado",
   suppliers: "/proveedores",

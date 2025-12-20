@@ -4,13 +4,15 @@
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 import { useEffect, useState, useRef } from 'react'
 import http from '../services/http'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { PATHS } from '../routes/paths'
 import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
 
 type TabType = 'crawler' | 'procesado'
 
 export default function ImagesAdminPanel({ embedded = false }: { embedded?: boolean }) {
+  const navigate = useNavigate()
+
   // Tab state
   const [activeTab, setActiveTab] = useState<TabType>('crawler')
 
@@ -341,7 +343,7 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
                 onKeyDown={(e) => { if (e.key === 'Enter') loadProducts() }}
                 style={{ flex: 1, minWidth: 200 }}
               />
-              <button className="btn" onClick={loadProducts} disabled={loadingProducts}>
+              <button className="btn" onClick={() => loadProducts()} disabled={loadingProducts}>
                 {loadingProducts ? 'Buscando...' : '🔍 Buscar'}
               </button>
               <div style={{ borderLeft: '1px solid var(--border, #333)', height: 32, margin: '0 8px' }} />
@@ -393,7 +395,7 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
                         checked={products.length > 0 && selectedProducts.size === products.length}
                         onChange={(e) => {
                           if (e.target.checked) {
-                            setSelectedProducts(new Set(products.map(p => p.id)))
+                            setSelectedProducts(new Set(products.map(p => p.product_id)))
                           } else {
                             setSelectedProducts(new Set())
                           }
@@ -416,23 +418,26 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
                     </td></tr>
                   ) : (
                     products.map((p) => (
-                      <tr key={p.id} style={{ background: selectedProducts.has(p.id) ? 'rgba(34, 197, 94, 0.1)' : undefined }}>
-                        <td>
+                      <tr key={p.product_id} style={{ background: selectedProducts.has(p.product_id) ? 'rgba(34, 197, 94, 0.1)' : undefined }}>
+                        <td onClick={e => e.stopPropagation()}>
                           <input
                             type="checkbox"
-                            checked={selectedProducts.has(p.id)}
+                            checked={selectedProducts.has(p.product_id)}
                             onChange={(e) => {
                               const next = new Set(selectedProducts)
                               if (e.target.checked) {
-                                next.add(p.id)
+                                next.add(p.product_id)
                               } else {
-                                next.delete(p.id)
+                                next.delete(p.product_id)
                               }
                               setSelectedProducts(next)
                             }}
                           />
                         </td>
-                        <td>
+                        <td
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => navigate(PATHS.productImages(p.product_id))}
+                        >
                           {p.image_url ? (
                             <img
                               src={p.image_url}
@@ -452,10 +457,13 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
                             }}>📷</div>
                           )}
                         </td>
-                        <td>
-                          <div style={{ fontWeight: 500 }}>{p.title}</div>
+                        <td
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => navigate(PATHS.productImages(p.product_id))}
+                        >
+                          <div style={{ fontWeight: 500 }}>{p.preferred_name || p.name}</div>
                           <div className="text-sm" style={{ opacity: 0.6, marginTop: 2 }}>
-                            ID: {p.id}
+                            ID: {p.product_id}
                           </div>
                         </td>
                         <td>
@@ -486,7 +494,10 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
                             ))}
                           </div>
                         </td>
-                        <td style={{ textAlign: 'center' }}>
+                        <td
+                          style={{ textAlign: 'center', cursor: 'pointer' }}
+                          onClick={() => navigate(PATHS.productImages(p.product_id))}
+                        >
                           {p.images_count || 0}
                         </td>
                       </tr>
@@ -531,7 +542,7 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
       if (productsSearch.trim()) {
         params.q = productsSearch.trim()
       }
-      const r = await http.get('/catalog/products', { params })
+      const r = await http.get('/products', { params })
       setProducts(r.data.items || [])
       setProductsTotal(r.data.total || 0)
     } catch (e) {
@@ -553,7 +564,7 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
       setBatchProgress({ current: i + 1, total: ids.length, action: 'Generando WebP' })
       try {
         // Get product images
-        const prod = products.find(p => p.id === productId)
+        const prod = products.find(p => p.product_id === productId)
         if (prod && prod.primary_image_id) {
           await http.post(`/products/${productId}/images/${prod.primary_image_id}/generate-webp`)
           successCount++
@@ -580,7 +591,7 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
       const productId = ids[i]
       setBatchProgress({ current: i + 1, total: ids.length, action: 'Aplicando Watermark' })
       try {
-        const prod = products.find(p => p.id === productId)
+        const prod = products.find(p => p.product_id === productId)
         if (prod && prod.primary_image_id) {
           await http.post(`/products/${productId}/images/${prod.primary_image_id}/process/watermark`, {})
           successCount++
