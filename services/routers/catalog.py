@@ -2172,12 +2172,16 @@ async def list_products(
     if category_id is not None:
         stmt = stmt.where(p.category_id == category_id)
     if q:
-        # Búsqueda por nombre interno, título del proveedor y también por nombre canónico
+        # Búsqueda por nombre interno, título del proveedor, nombre canónico y SKU
         stmt = stmt.where(
             or_(
                 p.title.ilike(f"%{q}%"),
                 sp.title.ilike(f"%{q}%"),
                 cp.name.ilike(f"%{q}%"),
+                p.canonical_sku.ilike(f"%{q}%"),
+                p.sku_root.ilike(f"%{q}%"),
+                cp.ng_sku.ilike(f"%{q}%"),
+                cp.sku_custom.ilike(f"%{q}%"),
             )
         )
     # Stock filter: 'gt:0' or 'eq:0'
@@ -2265,17 +2269,17 @@ async def list_products(
     images_by_product: dict[int, dict] = {}
     if product_ids:
         from db.models import Image, ImageVersion
-        # Get image counts and first active image per product
+        # Get image counts and first active image per product (prioritize is_primary)
         img_rows = (
             await session.execute(
-                select(Image.product_id, Image.id, Image.url, Image.path)
+                select(Image.product_id, Image.id, Image.url, Image.path, Image.is_primary)
                 .where(Image.product_id.in_(product_ids), Image.active == True)
-                .order_by(Image.product_id.asc(), Image.sort_order.asc().nulls_last(), Image.id.asc())
+                .order_by(Image.product_id.asc(), Image.is_primary.desc().nulls_last(), Image.sort_order.asc().nulls_last(), Image.id.asc())
             )
         ).all()
         
         # Group by product_id
-        for pid, img_id, img_url, img_path in img_rows:
+        for pid, img_id, img_url, img_path, is_primary in img_rows:
             if pid not in images_by_product:
                 images_by_product[pid] = {"count": 0, "primary_id": img_id, "url": img_url, "path": img_path}
             images_by_product[pid]["count"] += 1

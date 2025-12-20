@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import io
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +18,7 @@ from db.session import get_session
 from services.auth import require_roles, require_csrf, current_session, SessionData
 from services.media import get_media_root, save_upload
 from services.media.downloader import download_product_image, DownloadError, _clamav_scan
-from services.media.processor import to_square_webp_set, apply_watermark, remove_bg, rotate_image, crop_square
+from services.media.processor import to_square_webp_set, apply_watermark, remove_bg, rotate_image, crop_square, apply_logo
 from services.media.seo import gen_alt_title
 try:
     from PIL import Image as PILImage
@@ -643,6 +644,122 @@ async def process_watermark(
     return {"status": "ok", "path": rel}
 
 
+class LogoIn(BaseModel):
+    position: Optional[str] = "br"  # tl, tr, bl, br, center
+    scale: Optional[float] = 20.0   # Porcentaje del ancho de imagen (1-50)
+    opacity: Optional[float] = 0.9  # Opacidad del logo (0.0-1.0)
+
+
+@router.post(
+    "/{pid}/images/{iid}/process/logo",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def process_logo(
+    pid: int,
+    iid: int,
+    request: Request,
+    payload: LogoIn,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+):
+    """Aplica un logo PNG transparente sobre la imagen.
+    
+    El logo se configura via LOGO_OVERLAY_PATH o por defecto en /media/Logos/logo.png
+    La imagen se modifica in-place y se regeneran las derivadas WebP.
+    """
+    img = await db.get(Image, iid)
+    if not img or img.product_id != pid:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    if not img.path:
+        raise HTTPException(status_code=400, detail="Imagen sin archivo local")
+    
+    root = get_media_root()
+    src = root / img.path
+    
+    # Normalizar path para Windows
+    src = Path(os.path.normpath(str(src)))
+    
+    if not src.exists():
+        raise HTTPException(status_code=404, detail="Archivo de imagen no encontrado")
+    
+    # Buscar logo
+    logo_env = os.getenv("LOGO_OVERLAY_PATH") or os.getenv("WATERMARK_LOGO")
+    logo = Path(logo_env) if logo_env else (root / "Logos" / "logo.png")
+    
+    if not logo.exists():
+        raise HTTPException(status_code=400, detail="Logo no encontrado. Subí un logo a /media/Logos/logo.png")
+    
+    try:
+        # Aplicar logo in-place
+        apply_logo(
+            src,
+            logo,
+            position=payload.position or "br",
+            scale_percent=payload.scale or 20.0,
+            opacity=payload.opacity or 0.9,
+            in_place=True,
+        )
+        
+        # Actualizar dimensiones en DB
+        with PILImage.open(src) as im:
+            img.width, img.height = im.size
+            img.bytes = src.stat().st_size
+        
+        # Regenerar derivadas WebP
+        prod = await db.get(Product, pid)
+        if prod:
+            base_name = "-".join([p for p in [prod.slug or None, prod.sku_root or None] if p]) or f"prod-{pid}"
+            out_dir = root / "Productos" / str(pid) / "derived"
+            
+            try:
+                # Eliminar versiones derivadas existentes
+                existing = (await db.execute(
+                    select(ImageVersion).where(
+                        ImageVersion.image_id == iid,
+                        ImageVersion.kind.in_(["thumb", "card", "full"])
+                    )
+                )).scalars().all()
+                for v in existing:
+                    await db.delete(v)
+                await db.flush()
+                
+                # Generar nuevas
+                proc = to_square_webp_set(src, out_dir, base_name)
+                for kind, pth, px in (
+                    ("thumb", proc.thumb, 256),
+                    ("card", proc.card, 800),
+                    ("full", proc.full, 1600),
+                ):
+                    if pth.exists():
+                        relv = str(pth.relative_to(root)).replace('\\', '/')
+                        db.add(ImageVersion(
+                            image_id=iid,
+                            kind=kind,
+                            path=relv,
+                            width=px,
+                            height=px,
+                            mime="image/webp",
+                            size_bytes=pth.stat().st_size,
+                        ))
+            except Exception as deriv_err:
+                await _audit(db, "logo_derive_error", "images", iid, {
+                    "product_id": pid,
+                    "error": str(deriv_err)
+                }, sess, request)
+        
+        await _audit(db, "apply_logo", "images", iid, {
+            "product_id": pid,
+            "position": payload.position,
+            "scale": payload.scale,
+            "opacity": payload.opacity,
+        }, sess, request)
+        await db.commit()
+        
+        return {"success": True, "width": img.width, "height": img.height}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al aplicar logo: {str(e)}")
+
+
 @router.post(
     "/{pid}/images/{iid}/seo/refresh",
     dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
@@ -857,6 +974,51 @@ async def rotate_image_endpoint(
         # Actualizar dimensiones en DB
         with PILImage.open(source) as im:
             img.width, img.height = im.size
+            img.bytes = source.stat().st_size
+        
+        # Regenerar versiones derivadas WebP (thumb, card, full)
+        prod = await db.get(Product, pid)
+        if prod:
+            root = get_media_root()
+            base_name = "-".join([p for p in [prod.slug or None, prod.sku_root or None] if p]) or f"prod-{pid}"
+            out_dir = root / "Productos" / str(pid) / "derived"
+            
+            try:
+                # Eliminar versiones derivadas existentes en DB
+                existing = (await db.execute(
+                    select(ImageVersion).where(
+                        ImageVersion.image_id == iid,
+                        ImageVersion.kind.in_(["thumb", "card", "full"])
+                    )
+                )).scalars().all()
+                for v in existing:
+                    await db.delete(v)
+                await db.flush()
+                
+                # Generar nuevas derivadas
+                proc = to_square_webp_set(source, out_dir, base_name)
+                for kind, pth, px in (
+                    ("thumb", proc.thumb, 256),
+                    ("card", proc.card, 800),
+                    ("full", proc.full, 1600),
+                ):
+                    if pth.exists():
+                        relv = str(pth.relative_to(root)).replace('\\', '/')
+                        db.add(ImageVersion(
+                            image_id=iid,
+                            kind=kind,
+                            path=relv,
+                            width=px,
+                            height=px,
+                            mime="image/webp",
+                            size_bytes=pth.stat().st_size,
+                        ))
+            except Exception as deriv_err:
+                # Log but don't fail - rotation worked, derivatives are optional
+                await _audit(db, "rotate_derive_error", "images", iid, {
+                    "product_id": pid,
+                    "error": str(deriv_err)
+                }, sess, request)
         
         await _audit(db, "rotate_image", "images", iid, {
             "product_id": pid,
@@ -877,16 +1039,25 @@ async def crop_image_endpoint(
     pid: int,
     iid: int,
     request: Request,
+    margin_percent: float = 0,  # % to trim from each side before square crop
     db: AsyncSession = Depends(get_session),
     sess: SessionData = Depends(current_session),
 ):
-    """Recorta una imagen a cuadrado centrado."""
+    """Recorta una imagen a cuadrado centrado.
+    
+    Args:
+        margin_percent: Porcentaje a recortar de cada lado (0-40). Por ejemplo,
+            margin_percent=10 recorta 10% de cada lado antes de hacer el cuadrado.
+    """
     img = await db.get(Image, iid)
     if not img or img.product_id != pid:
         raise HTTPException(status_code=404, detail="Imagen no encontrada")
     
     if img.locked:
         raise HTTPException(status_code=403, detail="Imagen bloqueada")
+    
+    # Validar margin
+    margin_percent = max(0, min(40, margin_percent))  # Limitar a 0-40%
     
     root = get_media_root()
     # Normalize path for Windows
@@ -900,6 +1071,15 @@ async def crop_image_endpoint(
         # Recortar imagen in place
         with PILImage.open(source) as im:
             w, h = im.size
+            
+            # Aplicar margen primero (recorta de cada lado)
+            if margin_percent > 0:
+                margin_x = int(w * margin_percent / 100)
+                margin_y = int(h * margin_percent / 100)
+                im = im.crop((margin_x, margin_y, w - margin_x, h - margin_y))
+                w, h = im.size
+            
+            # Ahora hacer el cuadrado centrado
             size = min(w, h)
             
             # Calcular coordenadas del crop centrado
@@ -926,6 +1106,50 @@ async def crop_image_endpoint(
             img.width, img.height = im.size
             img.bytes = source.stat().st_size
         
+        # Regenerar versiones derivadas WebP (thumb, card, full)
+        prod = await db.get(Product, pid)
+        if prod:
+            root = get_media_root()
+            base_name = "-".join([p for p in [prod.slug or None, prod.sku_root or None] if p]) or f"prod-{pid}"
+            out_dir = root / "Productos" / str(pid) / "derived"
+            
+            try:
+                # Eliminar versiones derivadas existentes en DB
+                existing = (await db.execute(
+                    select(ImageVersion).where(
+                        ImageVersion.image_id == iid,
+                        ImageVersion.kind.in_(["thumb", "card", "full"])
+                    )
+                )).scalars().all()
+                for v in existing:
+                    await db.delete(v)
+                await db.flush()
+                
+                # Generar nuevas derivadas
+                proc = to_square_webp_set(source, out_dir, base_name)
+                for kind, pth, px in (
+                    ("thumb", proc.thumb, 256),
+                    ("card", proc.card, 800),
+                    ("full", proc.full, 1600),
+                ):
+                    if pth.exists():
+                        relv = str(pth.relative_to(root)).replace('\\', '/')
+                        db.add(ImageVersion(
+                            image_id=iid,
+                            kind=kind,
+                            path=relv,
+                            width=px,
+                            height=px,
+                            mime="image/webp",
+                            size_bytes=pth.stat().st_size,
+                        ))
+            except Exception as deriv_err:
+                # Log but don't fail - crop worked, derivatives are optional
+                await _audit(db, "crop_derive_error", "images", iid, {
+                    "product_id": pid,
+                    "error": str(deriv_err)
+                }, sess, request)
+        
         await _audit(db, "crop_image", "images", iid, {
             "product_id": pid,
             "new_size": img.width,
@@ -933,6 +1157,151 @@ async def crop_image_endpoint(
         await db.commit()
         
         return {"success": True, "width": img.width, "height": img.height}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al recortar imagen: {str(e)}")
+
+
+class CropIn(BaseModel):
+    """Coordenadas de recorte como porcentaje (0-100) del tamaño de imagen."""
+    x: float  # % desde la izquierda
+    y: float  # % desde arriba
+    width: float  # % del ancho
+    height: float  # % del alto
+
+
+@router.post(
+    "/{pid}/images/{iid}/crop-custom",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def crop_custom_endpoint(
+    pid: int,
+    iid: int,
+    request: Request,
+    payload: CropIn,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+):
+    """Recorta una imagen usando coordenadas personalizadas.
+    
+    Las coordenadas son porcentajes (0-100) relativos al tamaño de la imagen:
+    - x: posición horizontal del borde izquierdo del recorte
+    - y: posición vertical del borde superior del recorte
+    - width: ancho del área de recorte
+    - height: alto del área de recorte
+    """
+    img = await db.get(Image, iid)
+    if not img or img.product_id != pid:
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    
+    if img.locked:
+        raise HTTPException(status_code=403, detail="Imagen bloqueada")
+    
+    # Validar coordenadas
+    if not (0 <= payload.x <= 100 and 0 <= payload.y <= 100):
+        raise HTTPException(status_code=400, detail="Coordenadas x/y deben estar entre 0 y 100")
+    if not (0 < payload.width <= 100 and 0 < payload.height <= 100):
+        raise HTTPException(status_code=400, detail="Dimensiones deben ser mayores a 0 y menores o iguales a 100")
+    if payload.x + payload.width > 100:
+        raise HTTPException(status_code=400, detail="El recorte excede el ancho de la imagen")
+    if payload.y + payload.height > 100:
+        raise HTTPException(status_code=400, detail="El recorte excede el alto de la imagen")
+    
+    root = get_media_root()
+    img_path = (img.path or "").replace('\\', '/')
+    source = root / img_path
+    source = Path(os.path.normpath(str(source)))
+    
+    if not source.exists():
+        raise HTTPException(status_code=404, detail=f"Archivo de imagen no encontrado: {img_path}")
+    
+    try:
+        with PILImage.open(source) as im:
+            w, h = im.size
+            
+            # Convertir porcentajes a píxeles
+            left = int(w * payload.x / 100)
+            top = int(h * payload.y / 100)
+            crop_width = int(w * payload.width / 100)
+            crop_height = int(h * payload.height / 100)
+            right = left + crop_width
+            bottom = top + crop_height
+            
+            # Asegurar que no exceda límites
+            right = min(right, w)
+            bottom = min(bottom, h)
+            
+            cropped = im.crop((left, top, right, bottom))
+            
+            # Save to temp file first
+            from tempfile import NamedTemporaryFile
+            suffix = source.suffix or '.jpg'
+            with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp_path = Path(tmp.name)
+            cropped.save(tmp_path)
+        
+        # Replace original
+        import shutil
+        shutil.move(str(tmp_path), str(source))
+        
+        # Actualizar dimensiones en DB
+        with PILImage.open(source) as im:
+            img.width, img.height = im.size
+            img.bytes = source.stat().st_size
+        
+        # Regenerar derivadas WebP
+        prod = await db.get(Product, pid)
+        if prod:
+            base_name = "-".join([p for p in [prod.slug or None, prod.sku_root or None] if p]) or f"prod-{pid}"
+            out_dir = root / "Productos" / str(pid) / "derived"
+            
+            try:
+                existing = (await db.execute(
+                    select(ImageVersion).where(
+                        ImageVersion.image_id == iid,
+                        ImageVersion.kind.in_(["thumb", "card", "full"])
+                    )
+                )).scalars().all()
+                for v in existing:
+                    await db.delete(v)
+                await db.flush()
+                
+                proc = to_square_webp_set(source, out_dir, base_name)
+                for kind, pth, px in (
+                    ("thumb", proc.thumb, 256),
+                    ("card", proc.card, 800),
+                    ("full", proc.full, 1600),
+                ):
+                    if pth.exists():
+                        relv = str(pth.relative_to(root)).replace('\\', '/')
+                        db.add(ImageVersion(
+                            image_id=iid,
+                            kind=kind,
+                            path=relv,
+                            width=px,
+                            height=px,
+                            mime="image/webp",
+                            size_bytes=pth.stat().st_size,
+                        ))
+            except Exception as deriv_err:
+                await _audit(db, "crop_derive_error", "images", iid, {
+                    "product_id": pid,
+                    "error": str(deriv_err)
+                }, sess, request)
+        
+        await _audit(db, "crop_custom", "images", iid, {
+            "product_id": pid,
+            "x": payload.x,
+            "y": payload.y,
+            "width": payload.width,
+            "height": payload.height,
+            "new_width": img.width,
+            "new_height": img.height,
+        }, sess, request)
+        await db.commit()
+        
+        return {"success": True, "width": img.width, "height": img.height}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al recortar imagen: {str(e)}")
 
@@ -1033,3 +1402,90 @@ async def reject(iid: int, payload: RejectIn, request: Request, db: AsyncSession
     await _audit(db, "review_reject", "images", iid, {"note": payload.note, "soft_delete": payload.soft_delete}, sess, request)
     await db.commit()
     return {"status": "ok"}
+
+
+# ============================================================================
+# Admin Images Router - Logo management
+# ============================================================================
+admin_images_router = APIRouter(prefix="/admin/images", tags=["admin-images"])
+
+
+@admin_images_router.post(
+    "/logo/upload",
+    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+)
+async def upload_logo(
+    request: Request,
+    file: UploadFile = File(...),
+    sess: SessionData = Depends(current_session),
+):
+    """Sube un logo PNG para usar en overlay de imágenes.
+    
+    El logo se guarda en /media/Logos/logo.png y será usado
+    por la función de aplicar logo a las imágenes de productos.
+    """
+    # Validate file type
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="El archivo debe ser una imagen")
+    
+    # Prefer PNG for transparency support
+    if "png" not in (file.content_type or "").lower() and "png" not in (file.filename or "").lower():
+        raise HTTPException(status_code=400, detail="Se recomienda usar formato PNG para preservar transparencia")
+    
+    root = get_media_root()
+    logos_dir = root / "Logos"
+    logos_dir.mkdir(parents=True, exist_ok=True)
+    
+    logo_path = logos_dir / "logo.png"
+    
+    # Save uploaded file
+    content = await file.read()
+    
+    # Validate it's a valid image
+    try:
+        with PILImage.open(io.BytesIO(content)) as img:
+            # Convert to RGBA if needed for transparency
+            if img.mode != "RGBA":
+                img = img.convert("RGBA")
+            # Save as PNG
+            img.save(logo_path, format="PNG")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error al procesar imagen: {str(e)}")
+    
+    return {
+        "success": True,
+        "path": str(logo_path.relative_to(root)),
+        "message": "Logo subido correctamente"
+    }
+
+
+@admin_images_router.get(
+    "/logo",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+)
+async def get_logo_info():
+    """Obtiene información del logo actual."""
+    root = get_media_root()
+    logo_path = root / "Logos" / "logo.png"
+    
+    if not logo_path.exists():
+        return {
+            "exists": False,
+            "path": None,
+            "url": None,
+        }
+    
+    try:
+        with PILImage.open(logo_path) as img:
+            width, height = img.size
+    except Exception:
+        width, height = None, None
+    
+    return {
+        "exists": True,
+        "path": "Logos/logo.png",
+        "url": "/media/Logos/logo.png",
+        "width": width,
+        "height": height,
+        "size_bytes": logo_path.stat().st_size,
+    }

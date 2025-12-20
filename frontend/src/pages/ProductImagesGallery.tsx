@@ -2,10 +2,12 @@
 // NG-HEADER: Ubicación: frontend/src/pages/ProductImagesGallery.tsx
 // NG-HEADER: Descripción: Galería de imágenes de un producto con metadatos y acciones.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import http from '../services/http'
 import { PATHS } from '../routes/paths'
+import ReactCrop, { type Crop, type PixelCrop } from 'react-image-crop'
+import 'react-image-crop/dist/ReactCrop.css'
 
 interface ImageVersion {
     path: string | null
@@ -96,6 +98,62 @@ export default function ProductImagesGallery() {
 
     // State for delete confirmation
     const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
+    // State for crop confirmation (used for quick square crop)
+    const [confirmCropId, setConfirmCropId] = useState<number | null>(null)
+
+    // State for interactive visual crop
+    const [cropMode, setCropMode] = useState(false)
+    const [crop, setCrop] = useState<Crop>()
+    const [completedCrop, setCompletedCrop] = useState<PixelCrop>()
+    const imgRef = useRef<HTMLImageElement>(null)
+
+    // State for configurable square crop margin
+    const [cropMargin, setCropMargin] = useState(0) // 0-40% to trim from each side
+
+    async function handleApplyCrop() {
+        if (!id || !selectedImage || !completedCrop || !imgRef.current) return
+
+        // Convert pixel crop to percentage
+        const imgWidth = imgRef.current.naturalWidth
+        const imgHeight = imgRef.current.naturalHeight
+
+        if (imgWidth === 0 || imgHeight === 0) {
+            alert('Error: no se pudo obtener el tamaño de la imagen')
+            return
+        }
+
+        const cropData = {
+            x: (completedCrop.x / imgRef.current.width) * 100,
+            y: (completedCrop.y / imgRef.current.height) * 100,
+            width: (completedCrop.width / imgRef.current.width) * 100,
+            height: (completedCrop.height / imgRef.current.height) * 100,
+        }
+
+        setProcessing(selectedImage.id)
+        try {
+            await http.post(`/products/${id}/images/${selectedImage.id}/crop-custom`, cropData)
+            setCacheBuster(Date.now())
+            setCropMode(false)
+            setCrop(undefined)
+            setCompletedCrop(undefined)
+            await loadImages()
+            // Refresh selected image
+            const res = await http.get(`/products/${id}/images`)
+            const updated = res.data.images.find((img: ProductImage) => img.id === selectedImage.id)
+            if (updated) setSelectedImage(updated)
+            alert('Recorte aplicado')
+        } catch (e: any) {
+            alert(e.response?.data?.detail || 'Error al recortar imagen')
+        } finally {
+            setProcessing(null)
+        }
+    }
+
+    function cancelCrop() {
+        setCropMode(false)
+        setCrop(undefined)
+        setCompletedCrop(undefined)
+    }
 
     async function handleDelete(imgId: number) {
         if (!id) return
@@ -137,7 +195,9 @@ export default function ProductImagesGallery() {
         if (!id) return
         setProcessing(imgId)
         try {
-            await http.post(`/products/${id}/images/${imgId}/crop-square`)
+            await http.post(`/products/${id}/images/${imgId}/crop-square`, null, {
+                params: { margin_percent: cropMargin }
+            })
             // Update cache buster to force browser reload
             setCacheBuster(Date.now())
             await loadImages()
@@ -182,12 +242,86 @@ export default function ProductImagesGallery() {
         }
     }
 
-    function handleDownload(img: ProductImage) {
-        // Download the original image
-        const link = document.createElement('a')
-        link.href = img.url
-        link.download = img.path.split('/').pop() || 'image'
-        link.click()
+    async function handleLogo(imgId: number) {
+        if (!id) return
+        setProcessing(imgId)
+        try {
+            await http.post(`/products/${id}/images/${imgId}/process/logo`, {
+                position: 'br',
+                scale: 30,
+                opacity: 0.9,
+            })
+            // Update cache buster to force browser reload
+            setCacheBuster(Date.now())
+            await loadImages()
+            // Refresh selected image if it's the same
+            if (selectedImage && selectedImage.id === imgId) {
+                const res = await http.get(`/products/${id}/images`)
+                const updated = res.data.images.find((img: ProductImage) => img.id === imgId)
+                if (updated) setSelectedImage(updated)
+            }
+            alert('Logo aplicado')
+        } catch (e: any) {
+            alert(e.response?.data?.detail || 'Error al aplicar logo')
+        } finally {
+            setProcessing(null)
+        }
+    }
+
+    async function handleDownload(img: ProductImage) {
+        // Download the WebP derivative (display_url) with SKU as filename
+        try {
+            // Use display_url (WebP derivative) if available, otherwise fall back to url
+            const downloadUrl = img.display_url || img.url
+
+            // Fetch the image as blob to force custom filename
+            const response = await fetch(downloadUrl)
+            const blob = await response.blob()
+
+            // Determine extension - prefer webp if it's a WebP file
+            let ext = 'webp'
+            if (downloadUrl.includes('.webp')) {
+                ext = 'webp'
+            } else if (downloadUrl.includes('.jpg') || downloadUrl.includes('.jpeg')) {
+                ext = 'jpg'
+            } else if (downloadUrl.includes('.png')) {
+                ext = 'png'
+            }
+
+            // Debug: log what we have
+            console.log('Download debug:', {
+                canonical_sku: data?.canonical_sku,
+                product_name: data?.product_name,
+                downloadUrl,
+                ext
+            })
+
+            // Use canonical_sku if available, otherwise use product name or fallback
+            let baseName = 'image'
+            if (data?.canonical_sku && data.canonical_sku.trim()) {
+                baseName = data.canonical_sku.trim()
+            } else if (data?.product_name && data.product_name.trim()) {
+                // Clean product name for filename (remove special chars)
+                baseName = data.product_name.trim().replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50)
+            } else {
+                baseName = `image-${img.id}`
+            }
+            const filename = `${baseName}.${ext}`
+            console.log('Download filename:', filename)
+
+            // Create blob URL and trigger download
+            const blobUrl = URL.createObjectURL(blob)
+            const link = document.createElement('a')
+            link.href = blobUrl
+            link.download = filename
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
+            URL.revokeObjectURL(blobUrl)
+        } catch (e) {
+            console.error('Download error:', e)
+            alert('Error al descargar imagen')
+        }
     }
 
     if (loading) {
@@ -359,24 +493,64 @@ export default function ProductImagesGallery() {
                     >
                         {/* Image Preview */}
                         <div style={{ flex: 1, minWidth: 300 }}>
-                            <img
-                                src={addCacheBuster(selectedImage.display_url || selectedImage.url)}
-                                alt={selectedImage.alt_text || 'Imagen'}
-                                style={{
-                                    width: '100%',
-                                    maxHeight: 500,
-                                    objectFit: 'contain',
-                                    borderRadius: 8,
-                                    background: '#111'
-                                }}
-                                onError={(e) => {
-                                    // Fall back to url if display_url fails
-                                    const target = e.target as HTMLImageElement
-                                    if (target.src !== selectedImage.url && selectedImage.url) {
-                                        target.src = selectedImage.url
-                                    }
-                                }}
-                            />
+                            {cropMode ? (
+                                <ReactCrop
+                                    crop={crop}
+                                    onChange={(c) => setCrop(c)}
+                                    onComplete={(c) => setCompletedCrop(c)}
+                                    style={{ maxHeight: 500, background: '#111', borderRadius: 8 }}
+                                >
+                                    <img
+                                        ref={imgRef}
+                                        src={addCacheBuster(selectedImage.display_url || selectedImage.url)}
+                                        alt={selectedImage.alt_text || 'Imagen'}
+                                        style={{
+                                            maxWidth: '100%',
+                                            maxHeight: 500,
+                                            objectFit: 'contain',
+                                        }}
+                                    />
+                                </ReactCrop>
+                            ) : (
+                                <img
+                                    src={addCacheBuster(selectedImage.display_url || selectedImage.url)}
+                                    alt={selectedImage.alt_text || 'Imagen'}
+                                    style={{
+                                        width: '100%',
+                                        maxHeight: 500,
+                                        objectFit: 'contain',
+                                        borderRadius: 8,
+                                        background: '#111'
+                                    }}
+                                    onError={(e) => {
+                                        // Fall back to url if display_url fails
+                                        const target = e.target as HTMLImageElement
+                                        if (target.src !== selectedImage.url && selectedImage.url) {
+                                            target.src = selectedImage.url
+                                        }
+                                    }}
+                                />
+                            )}
+
+                            {/* Crop action buttons - shown when in crop mode */}
+                            {cropMode && (
+                                <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'center' }}>
+                                    <button
+                                        className="btn-primary btn-lg"
+                                        onClick={handleApplyCrop}
+                                        disabled={!completedCrop || processing === selectedImage.id}
+                                    >
+                                        ✓ Aplicar Recorte
+                                    </button>
+                                    <button
+                                        className="btn btn-lg"
+                                        onClick={cancelCrop}
+                                        disabled={processing === selectedImage.id}
+                                    >
+                                        Cancelar
+                                    </button>
+                                </div>
+                            )}
                         </div>
 
                         {/* Metadata & Actions */}
@@ -450,13 +624,59 @@ export default function ProductImagesGallery() {
                                         ↻ +90°
                                     </button>
                                 </div>
-                                <button
-                                    className="btn btn-sm"
-                                    onClick={() => handleCropSquare(selectedImage.id)}
-                                    disabled={processing === selectedImage.id}
-                                >
-                                    ✂️ Recortar Cuadrado
-                                </button>
+                                {/* Crop buttons */}
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                    <button
+                                        className="btn btn-sm"
+                                        onClick={() => setCropMode(true)}
+                                        disabled={processing === selectedImage.id || cropMode}
+                                        title="Recortar área personalizada"
+                                    >
+                                        ✂️ Recortar
+                                    </button>
+                                    {confirmCropId === selectedImage.id ? (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <label style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                                                    Margen: {cropMargin}%
+                                                </label>
+                                                <input
+                                                    type="range"
+                                                    min={0}
+                                                    max={40}
+                                                    step={5}
+                                                    value={cropMargin}
+                                                    onChange={(e) => setCropMargin(Number(e.target.value))}
+                                                    style={{ flex: 1, minWidth: 80 }}
+                                                />
+                                            </div>
+                                            <div style={{ display: 'flex', gap: 8 }}>
+                                                <button
+                                                    className="btn btn-sm btn-primary"
+                                                    onClick={() => { handleCropSquare(selectedImage.id); setConfirmCropId(null) }}
+                                                    disabled={processing === selectedImage.id}
+                                                >
+                                                    ✓ Aplicar
+                                                </button>
+                                                <button
+                                                    className="btn btn-sm"
+                                                    onClick={() => setConfirmCropId(null)}
+                                                >
+                                                    ✕
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <button
+                                            className="btn btn-sm"
+                                            onClick={() => setConfirmCropId(selectedImage.id)}
+                                            disabled={processing === selectedImage.id}
+                                            title="Recortar automático a cuadrado centrado"
+                                        >
+                                            ⬜ Cuadrado
+                                        </button>
+                                    )}
+                                </div>
                                 <button
                                     className="btn btn-sm"
                                     onClick={() => handleGenerateWebP(selectedImage.id)}
@@ -470,6 +690,13 @@ export default function ProductImagesGallery() {
                                     disabled={processing === selectedImage.id}
                                 >
                                     💧 Marca de Agua
+                                </button>
+                                <button
+                                    className="btn btn-sm"
+                                    onClick={() => handleLogo(selectedImage.id)}
+                                    disabled={processing === selectedImage.id}
+                                >
+                                    🏷️ Aplicar Logo
                                 </button>
                             </div>
 

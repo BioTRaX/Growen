@@ -30,10 +30,10 @@ RUN python -m venv "$VENV_PATH" && \
     "$VENV_PATH/bin/pip" install --upgrade pip setuptools wheel
 
 WORKDIR /app
-COPY requirements.txt ./
+COPY requirements-base.txt requirements-ml.txt requirements-pdf.txt ./
 
-# Instalamos TODAS las dependencias (incluye dev/test). Futuro: separar requirements-prod.txt.
-RUN "$VENV_PATH/bin/pip" install -r requirements.txt
+# Instalamos dependencias de producción (sin dev/test)
+RUN "$VENV_PATH/bin/pip" install -r requirements-base.txt -r requirements-ml.txt -r requirements-pdf.txt
 
 # Copiamos código fuente (para posibles compilaciones post-install si hiciera falta)
 COPY . .
