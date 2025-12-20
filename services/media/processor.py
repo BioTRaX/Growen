@@ -188,3 +188,93 @@ def crop_square(source: Path, dest_dir: Path | None = None) -> Path:
         
         cropped.save(out_path)
         return out_path
+
+
+def apply_logo(
+    img_path: Path,
+    logo_path: Path,
+    position: str = "br",
+    scale_percent: float = 20.0,
+    opacity: float = 0.9,
+    margin_percent: float = 2.0,
+    in_place: bool = True,
+) -> Path:
+    """Aplica un logo PNG transparente sobre una imagen.
+    
+    Args:
+        img_path: Ruta de la imagen base
+        logo_path: Ruta del logo PNG con transparencia
+        position: Posición del logo (tl, tr, bl, br, center)
+        scale_percent: Tamaño del logo como porcentaje del ancho de imagen (1-50)
+        opacity: Opacidad del logo (0.0-1.0)
+        margin_percent: Margen desde el borde como porcentaje
+        in_place: Si es True, sobrescribe la imagen original
+    
+    Returns:
+        Path al archivo con logo aplicado
+    """
+    with Image.open(img_path) as base_original:
+        # Keep original mode for final save
+        original_mode = base_original.mode
+        
+        # Work in RGBA for compositing
+        base = base_original.convert("RGBA")
+        
+        with Image.open(logo_path) as logo:
+            logo = logo.convert("RGBA")
+            
+            # Scale logo to specified percentage of image width
+            scale_percent = max(1.0, min(50.0, scale_percent))
+            target_width = int(base.width * (scale_percent / 100.0))
+            if target_width < 10:
+                target_width = 10
+            ratio = target_width / logo.width
+            new_height = int(logo.height * ratio)
+            if new_height < 1:
+                new_height = 1
+            logo = logo.resize((target_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Apply opacity
+            if opacity < 1.0:
+                alpha = logo.split()[3]
+                alpha = ImageEnhance.Brightness(alpha).enhance(max(0.0, min(1.0, opacity)))
+                logo.putalpha(alpha)
+            
+            # Calculate position
+            margin = int(base.width * (margin_percent / 100.0))
+            
+            if position == "tl":
+                x, y = margin, margin
+            elif position == "tr":
+                x, y = base.width - logo.width - margin, margin
+            elif position == "bl":
+                x, y = margin, base.height - logo.height - margin
+            elif position == "center":
+                x = (base.width - logo.width) // 2
+                y = (base.height - logo.height) // 2
+            else:  # br (default)
+                x, y = base.width - logo.width - margin, base.height - logo.height - margin
+            
+            # Paste logo with its alpha channel as mask (preserves transparency)
+            base.paste(logo, (x, y), logo)
+        
+        # Determine output path
+        if in_place:
+            # Save over original (convert to RGB if source wasn't RGBA)
+            out_path = img_path
+            # Detect original format (default to JPEG if no extension)
+            suffix = (img_path.suffix or "").lower()
+            if suffix in ('.jpg', '.jpeg'):
+                base.convert("RGB").save(out_path, format="JPEG", quality=95)
+            elif suffix == '.png':
+                base.save(out_path, format="PNG")
+            elif suffix == '.webp':
+                base.save(out_path, format="WEBP", quality=90)
+            else:
+                # No extension or unknown - default to JPEG
+                base.convert("RGB").save(out_path, format="JPEG", quality=95)
+        else:
+            out_path = img_path.parent / f"{img_path.stem}-logo{img_path.suffix or '.jpg'}"
+            base.convert("RGB").save(out_path, format="JPEG", quality=95)
+        
+        return out_path

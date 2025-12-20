@@ -1,0 +1,50 @@
+# NG-HEADER: Nombre de archivo: requirements-base.txt
+# NG-HEADER: Ubicación: requirements-base.txt
+# NG-HEADER: Descripción: Dependencias core compartidas por todos los servicios Python.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+# Core API Framework
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.1
+pydantic-settings>=2.2.1
+python-multipart>=0.0.9
+
+# Database
+sqlalchemy>=2.0.29
+alembic>=1.13.1
+psycopg[binary]>=3.1.18
+aiosqlite>=0.20.0
+
+# Auth & Security
+passlib[argon2]>=1.7.4
+python-jose[cryptography]>=3.3.0
+email-validator>=2.1.0
+slowapi>=0.1.9
+
+# HTTP clients
+httpx>=0.27,<0.29
+requests>=2.31.0
+websockets>=12.0
+tenacity>=8.2.3
+
+# CLI & Utils
+typer>=0.12.3
+python-dotenv>=1.0.0
+python-magic>=0.4.27; platform_system != 'Windows'
+python-magic-bin>=0.4.14; platform_system == 'Windows'
+rapidfuzz>=3.9.0
+
+# Data processing
+pandas>=2.2.2
+openpyxl>=3.1.2
+
+# LLM
+openai>=1.40.0
+
+# RAG
+pgvector>=0.3.8
+langchain-text-splitters>=0.3.0
+tiktoken>=0.8.0
+
+# Notion integration
+notion-client>=2.2.1

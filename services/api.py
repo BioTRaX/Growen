@@ -370,6 +370,7 @@ app.include_router(tags.router, prefix="/tags", tags=["tags"])
 # images.router debe estar ANTES que products_stock.router para evitar conflictos de rutas
 # porque ambos comparten el prefijo /products y las rutas más específicas deben evaluarse primero
 app.include_router(images.router)
+app.include_router(images.admin_images_router)  # Logo management endpoints
 app.include_router(products_stock.router)
 app.include_router(purchases.router)
 app.include_router(customers.router)

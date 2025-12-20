@@ -42,6 +42,12 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
   const [loadingProducts, setLoadingProducts] = useState(false)
   const [processingBatch, setProcessingBatch] = useState(false)
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; action: string } | null>(null)
+  const [cacheTs, setCacheTs] = useState(Date.now()) // Cache buster for images
+
+  // Logo state
+  const [logoInfo, setLogoInfo] = useState<{ exists: boolean; url: string | null; width: number | null; height: number | null } | null>(null)
+  const [uploadingLogo, setUploadingLogo] = useState(false)
+  const logoInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     refresh()
@@ -82,6 +88,48 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
     await http.put('/admin/image-jobs/settings', form)
     await refresh()
   }
+
+  async function loadLogoInfo() {
+    try {
+      const r = await http.get('/admin/images/logo')
+      setLogoInfo(r.data)
+    } catch (e) {
+      console.warn('Logo info error', e)
+    }
+  }
+
+  async function handleUploadLogo(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // Validate PNG
+    if (!file.name.toLowerCase().endsWith('.png')) {
+      alert('Por favor selecciona un archivo PNG (para preservar transparencia)')
+      return
+    }
+
+    setUploadingLogo(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      await http.post('/admin/images/logo/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      await loadLogoInfo()
+      alert('Logo subido correctamente')
+    } catch (e: any) {
+      alert(e.response?.data?.detail || 'Error al subir logo')
+    } finally {
+      setUploadingLogo(false)
+      // Reset input
+      if (logoInputRef.current) logoInputRef.current.value = ''
+    }
+  }
+
+  // Load logo info on mount
+  useEffect(() => {
+    loadLogoInfo()
+  }, [])
 
   async function ensurePlaywright(): Promise<boolean> {
     try {
@@ -364,6 +412,45 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
               >
                 💧 Watermark
               </button>
+              <button
+                className="btn"
+                disabled={selectedProducts.size === 0 || processingBatch}
+                onClick={handleBatchLogo}
+              >
+                🏷️ Logo
+              </button>
+
+              {/* Logo Config Separator */}
+              <div style={{ borderLeft: '1px solid var(--border, #333)', height: 32, margin: '0 8px' }} />
+
+              {/* Logo Preview & Upload */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {logoInfo?.exists ? (
+                  <img
+                    src={`${logoInfo.url}?t=${cacheTs}`}
+                    alt="Logo"
+                    style={{ height: 32, width: 'auto', borderRadius: 4, background: '#222' }}
+                    title={`${logoInfo.width}×${logoInfo.height}px`}
+                  />
+                ) : (
+                  <span style={{ fontSize: 12, opacity: 0.6 }}>Sin logo</span>
+                )}
+                <input
+                  ref={logoInputRef}
+                  type="file"
+                  accept=".png,image/png"
+                  onChange={handleUploadLogo}
+                  style={{ display: 'none' }}
+                />
+                <button
+                  className="btn btn-sm"
+                  onClick={() => logoInputRef.current?.click()}
+                  disabled={uploadingLogo}
+                  title="Subir logo PNG (recomendado con transparencia)"
+                >
+                  {uploadingLogo ? '⏳' : '📤'} {logoInfo?.exists ? 'Cambiar' : 'Subir'} Logo
+                </button>
+              </div>
             </div>
             {batchProgress && (
               <div style={{ marginTop: 12 }}>
@@ -440,7 +527,7 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
                         >
                           {p.image_url ? (
                             <img
-                              src={p.image_url}
+                              src={`${p.image_url}${p.image_url.includes('?') ? '&' : '?'}t=${cacheTs}`}
                               style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 6 }}
                               alt={p.title}
                             />
@@ -545,6 +632,7 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
       const r = await http.get('/products', { params })
       setProducts(r.data.items || [])
       setProductsTotal(r.data.total || 0)
+      setCacheTs(Date.now()) // Force image refresh
     } catch (e) {
       console.warn('loadProducts error', e)
     } finally {
@@ -604,6 +692,37 @@ export default function ImagesAdminPanel({ embedded = false }: { embedded?: bool
     setBatchProgress(null)
     setProcessingBatch(false)
     alert(`Watermark aplicado a ${successCount}/${ids.length} productos`)
+    loadProducts()
+  }
+
+  async function handleBatchLogo() {
+    if (selectedProducts.size === 0) return
+    setProcessingBatch(true)
+    const ids = Array.from(selectedProducts)
+    setBatchProgress({ current: 0, total: ids.length, action: 'Aplicando Logo' })
+
+    let successCount = 0
+    for (let i = 0; i < ids.length; i++) {
+      const productId = ids[i]
+      setBatchProgress({ current: i + 1, total: ids.length, action: 'Aplicando Logo' })
+      try {
+        const prod = products.find(p => p.product_id === productId)
+        if (prod && prod.primary_image_id) {
+          await http.post(`/products/${productId}/images/${prod.primary_image_id}/process/logo`, {
+            position: 'br',
+            scale: 30,
+            opacity: 0.9,
+          })
+          successCount++
+        }
+      } catch (e) {
+        console.warn('Logo error for product', productId, e)
+      }
+    }
+
+    setBatchProgress(null)
+    setProcessingBatch(false)
+    alert(`Logo aplicado a ${successCount}/${ids.length} productos`)
     loadProducts()
   }
 }

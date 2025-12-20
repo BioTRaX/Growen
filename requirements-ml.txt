@@ -1,0 +1,16 @@
+# NG-HEADER: Nombre de archivo: requirements-ml.txt
+# NG-HEADER: Ubicación: requirements-ml.txt
+# NG-HEADER: Descripción: Dependencias ML/AI pesadas (rembg, onnxruntime, opencv). Solo para servicios que lo necesitan.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+#
+# ADVERTENCIA: Este archivo agrega ~1-2GB a la imagen Docker.
+# Solo incluir si el servicio necesita procesamiento de imágenes con ML.
+
+# Background removal (requiere onnxruntime)
+rembg>=2.0.57
+
+# ML Runtime (requerido por rembg)
+onnxruntime>=1.22.1
+
+# Computer Vision
+opencv-python-headless

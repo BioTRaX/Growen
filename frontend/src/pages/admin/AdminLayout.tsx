@@ -20,27 +20,31 @@ export default function AdminLayout() {
   // If landing on /admin without section, redirect to last or services
   useEffect(() => {
     if (loc.pathname === PATHS.admin) {
-      const last = localStorage.getItem('lastAdminTab') || PATHS.adminServices
-      if (last !== PATHS.admin) nav(last, { replace: true })
+      let last = localStorage.getItem('lastAdminTab')
+      // Only use lastAdminTab if it's within /admin/ (not /imagenes-productos which is outside)
+      if (!last || !last.startsWith(PATHS.admin + '/')) {
+        last = PATHS.adminServices
+      }
+      nav(last, { replace: true })
     }
   }, [loc.pathname, nav])
 
   // Notificar una vez por día si corrió el autobackup en el último arranque
   useEffect(() => {
     const key = 'notified-auto-backup'
-    const today = new Date().toISOString().slice(0,10)
+    const today = new Date().toISOString().slice(0, 10)
     const stamp = localStorage.getItem(key)
     if (stamp === today) return
-    ;(async () => {
-      try {
-        const r = await http.get('/admin/backups/last-auto')
-        const meta = r.data?.meta
-        if (meta && meta.action === 'run' && meta.ok) {
-          push({ kind: 'success', title: 'Backup diario', message: 'Se creó un backup automático al iniciar la app.' })
-          localStorage.setItem(key, today)
-        }
-      } catch {}
-    })()
+      ; (async () => {
+        try {
+          const r = await http.get('/admin/backups/last-auto')
+          const meta = r.data?.meta
+          if (meta && meta.action === 'run' && meta.ok) {
+            push({ kind: 'success', title: 'Backup diario', message: 'Se creó un backup automático al iniciar la app.' })
+            localStorage.setItem(key, today)
+          }
+        } catch { }
+      })()
   }, [push])
 
   const goBack = () => {
@@ -65,9 +69,9 @@ export default function AdminLayout() {
       <div className="row" style={{ gap: 8, marginTop: 8, marginBottom: 12 }}>
         <NavLink to={PATHS.adminServices} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Servicios</NavLink>
         <NavLink to={PATHS.adminUsers} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Usuarios</NavLink>
-  <NavLink to={PATHS.adminImages} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Imágenes de productos</NavLink>
-  <NavLink to={PATHS.adminDriveSync} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Drive Sync</NavLink>
-  <NavLink to={PATHS.adminBackups} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Backups</NavLink>
+        <NavLink to={PATHS.adminImages} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Imágenes de productos</NavLink>
+        <NavLink to={PATHS.adminDriveSync} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Drive Sync</NavLink>
+        <NavLink to={PATHS.adminBackups} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Backups</NavLink>
         <NavLink to={PATHS.adminScheduler} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Scheduler</NavLink>
         <NavLink to={PATHS.adminKnowledge} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Cerebro</NavLink>
         <NavLink to={PATHS.adminDashboard} className="btn" style={({ isActive }) => ({ borderColor: isActive ? 'var(--primary)' : undefined, color: isActive ? 'var(--primary)' : undefined, textDecoration: 'none' })}>Dashboard</NavLink>

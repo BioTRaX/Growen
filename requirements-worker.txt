@@ -1,0 +1,22 @@
+# NG-HEADER: Nombre de archivo: requirements-worker.txt
+# NG-HEADER: Ubicación: requirements-worker.txt
+# NG-HEADER: Descripción: Dependencias para Dramatiq worker (drive_sync). Ligero, sin ML ni PDF.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+# Include base dependencies
+-r requirements-base.txt
+
+# Task Queue
+dramatiq[redis]>=1.15.0
+
+# Image processing (básico, sin ML)
+Pillow>=10.4.0
+pillow-heif>=0.13.0
+
+# Google APIs (Drive integration)
+google-api-python-client>=2.0.0
+google-auth>=2.0.0
+
+# Scheduler
+apscheduler>=3.10.4
+psutil>=7.1.0

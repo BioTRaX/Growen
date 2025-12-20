@@ -1,0 +1,106 @@
+# NG-HEADER: Nombre de archivo: .dockerignore
+# NG-HEADER: Ubicación: .dockerignore
+# NG-HEADER: Descripción: Excluye archivos innecesarios del contexto de build de Docker para reducir tamaño.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+# Git
+.git
+.github
+.gitignore
+
+# Frontend (tiene su propio build)
+frontend
+node_modules
+
+# Entornos locales Python
+.venv
+venv
+env
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info
+dist
+build
+.eggs
+pip-wheel-metadata
+
+# Cache y testing
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.cache
+pytestdebug.log
+
+# IDE
+.vscode
+.idea
+.cursor
+*.iml
+
+# Logs y datos temporales
+logs
+*.log
+*.log.*
+tmp
+temp
+*.tmp
+*.bak
+*.old
+*.orig
+*.swp
+.DS_Store
+
+# Datos y backups
+backups
+Devs
+data
+catalogos
+ImagenesTest
+Conocimientos
+Imagenes
+Productos
+
+# Documentación (excepto AGENTS.md necesario para contexto)
+docs
+*.md
+!AGENTS.md
+!README.md
+
+# Tests (no necesarios en runtime de producción)
+tests
+
+# Binarios grandes locales
+ghostscript.exe
+*.exe
+
+# Certificados y credenciales (se montan como volumen)
+certs
+*.pem
+*.key
+*.crt
+*.pfx
+
+# Archivos de configuración local
+.env
+.env.*
+!.env.example
+
+# Scripts de desarrollo
+scripts/*.local.ps1
+
+# Archivos de ejemplo/datos
+*.csv
+*.xlsx
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+
+# Docker específico
+docker-compose.override.yml
+.docker
+**/.docker
