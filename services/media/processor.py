@@ -122,3 +122,69 @@ def remove_bg(source: Path, dest_dir: Path | None = None) -> Path:
             out_path = dest_dir / (source.stem + "-nobg.png")
         out.save(out_path)
         return out_path
+
+
+def rotate_image(source: Path, degrees: int, dest_dir: Path | None = None) -> Path:
+    """Rota una imagen en 90, 180 o 270 grados.
+    
+    Args:
+        source: Ruta del archivo fuente
+        degrees: Grados de rotación (90, 180, 270 o -90, -180, -270)
+        dest_dir: Directorio destino opcional
+    
+    Returns:
+        Path al archivo rotado
+    """
+    # Normalizar grados
+    degrees = degrees % 360
+    if degrees not in (90, 180, 270):
+        raise ValueError("Solo se permiten rotaciones de 90, 180 o 270 grados")
+    
+    with Image.open(source) as im:
+        # Pillow rota en sentido antihorario, así que invertimos
+        rotated = im.rotate(-degrees, expand=True)
+        
+        if dest_dir is None:
+            out_path = source.parent / f"{source.stem}-rot{degrees}{source.suffix}"
+        else:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            out_path = dest_dir / f"{source.stem}-rot{degrees}{source.suffix}"
+        
+        # Mantener formato original
+        rotated.save(out_path)
+        return out_path
+
+
+def crop_square(source: Path, dest_dir: Path | None = None) -> Path:
+    """Recorta una imagen a cuadrado centrado.
+    
+    Toma el centro de la imagen y genera un cuadrado del tamaño
+    del lado menor.
+    
+    Args:
+        source: Ruta del archivo fuente  
+        dest_dir: Directorio destino opcional
+    
+    Returns:
+        Path al archivo recortado
+    """
+    with Image.open(source) as im:
+        w, h = im.size
+        size = min(w, h)
+        
+        # Calcular coordenadas del crop centrado
+        left = (w - size) // 2
+        top = (h - size) // 2
+        right = left + size
+        bottom = top + size
+        
+        cropped = im.crop((left, top, right, bottom))
+        
+        if dest_dir is None:
+            out_path = source.parent / f"{source.stem}-sq{source.suffix}"
+        else:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            out_path = dest_dir / f"{source.stem}-sq{source.suffix}"
+        
+        cropped.save(out_path)
+        return out_path

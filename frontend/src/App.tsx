@@ -15,6 +15,7 @@ const Stock = lazy(() => import('./pages/Stock'))
 const Market = lazy(() => import('./pages/Market'))
 const Productos = lazy(() => import('./pages/Productos'))
 const ProductDetail = lazy(() => import('./pages/ProductDetail'))
+const ProductImagesGallery = lazy(() => import('./pages/ProductImagesGallery'))
 const Purchases = lazy(() => import('./pages/Purchases'))
 const PurchaseNew = lazy(() => import('./pages/PurchaseNew'))
 const PurchaseDetail = lazy(() => import('./pages/PurchaseDetail'))
@@ -146,6 +147,14 @@ export default function App() {
                     element={
                       <ProtectedRoute roles={["guest", "cliente", "proveedor", "colaborador", "admin"]}>
                         <ProductDetail />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/productos/:id/imagen"
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <ProductImagesGallery />
                       </ProtectedRoute>
                     }
                   />

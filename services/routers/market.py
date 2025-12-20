@@ -189,9 +189,9 @@ async def list_market_products(
         prod = row[0]  # CanonicalProduct
         alert_count = row[1] if len(row) > 1 else 0  # alert_count
         
-        # preferred_name: priorizar name (nombre descriptivo) sobre sku_custom (identificador técnico)
-        # El name es el nombre canónico del producto, más legible para usuarios
-        preferred_name = prod.name if prod.name else (prod.sku_custom or f"Producto {prod.id}")
+        # preferred_name: priorizar sku_custom (identificador personalizado) sobre name cuando existe
+        # Esto permite identificar productos con su SKU personalizado en la UI
+        preferred_name = prod.sku_custom if prod.sku_custom else (prod.name or f"Producto {prod.id}")
         
         # SKU: priorizar sku_custom, luego ng_sku, finalmente el ID
         product_sku = prod.sku_custom or prod.ng_sku or f"ID-{prod.id}"
@@ -406,8 +406,8 @@ async def get_product_sources(
     market_price_min_val = min(prices) if prices else None
     market_price_max_val = max(prices) if prices else None
     
-    # preferred_name: priorizar name (nombre descriptivo) sobre sku_custom (identificador técnico)
-    product_name = product.name if product.name else (product.sku_custom or f"Producto {product.id}")
+    # preferred_name: priorizar sku_custom sobre name cuando existe
+    product_name = product.sku_custom if product.sku_custom else (product.name or f"Producto {product.id}")
     
     return ProductSourcesResponse(
         product_id=product.id,
@@ -501,8 +501,8 @@ async def update_product_sale_price(
     await db.commit()
     await db.refresh(product)
     
-    # preferred_name: priorizar name (nombre descriptivo) sobre sku_custom (identificador técnico)
-    product_name = product.name if product.name else (product.sku_custom or f"Producto {product.id}")
+    # preferred_name: priorizar sku_custom sobre name cuando existe
+    product_name = product.sku_custom if product.sku_custom else (product.name or f"Producto {product.id}")
     
     return UpdateSalePriceResponse(
         product_id=product.id,
@@ -603,8 +603,8 @@ async def update_product_market_reference(
     await db.commit()
     await db.refresh(product)
     
-    # 5. Calcular nombre preferido: priorizar name (nombre descriptivo) sobre sku_custom (identificador técnico)
-    preferred_name = product.name if product.name else (product.sku_custom or f"Producto {product.id}")
+    # 5. Calcular nombre preferido: priorizar sku_custom sobre name cuando existe
+    preferred_name = product.sku_custom if product.sku_custom else (product.name or f"Producto {product.id}")
     
     return UpdateMarketReferenceResponse(
         product_id=product.id,

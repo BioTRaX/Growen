@@ -2261,6 +2261,50 @@ async def list_products(
                 tags_by_product[pid] = []
             tags_by_product[pid].append({"id": tag_id, "name": tag_name})
 
+    # Prefetch images count and primary image URL per product
+    images_by_product: dict[int, dict] = {}
+    if product_ids:
+        from db.models import Image, ImageVersion
+        # Get image counts and first active image per product
+        img_rows = (
+            await session.execute(
+                select(Image.product_id, Image.id, Image.url, Image.path)
+                .where(Image.product_id.in_(product_ids), Image.active == True)
+                .order_by(Image.product_id.asc(), Image.sort_order.asc().nulls_last(), Image.id.asc())
+            )
+        ).all()
+        
+        # Group by product_id
+        for pid, img_id, img_url, img_path in img_rows:
+            if pid not in images_by_product:
+                images_by_product[pid] = {"count": 0, "primary_id": img_id, "url": img_url, "path": img_path}
+            images_by_product[pid]["count"] += 1
+        
+        # Try to get WebP versions for primary images (prefer thumb for list view)
+        primary_ids = [v["primary_id"] for v in images_by_product.values() if v.get("primary_id")]
+        if primary_ids:
+            version_rows = (
+                await session.execute(
+                    select(ImageVersion.image_id, ImageVersion.kind, ImageVersion.path)
+                    .where(ImageVersion.image_id.in_(primary_ids), ImageVersion.kind.in_(["thumb", "card", "full"]))
+                )
+            ).all()
+            versions_by_img: dict[int, dict] = {}
+            for img_id, kind, path in version_rows:
+                if img_id not in versions_by_img:
+                    versions_by_img[img_id] = {}
+                versions_by_img[img_id][kind] = path
+            
+            # Update URLs to use derived versions
+            for pid, img_data in images_by_product.items():
+                primary_id = img_data.get("primary_id")
+                if primary_id and primary_id in versions_by_img:
+                    for kind in ["thumb", "card", "full"]:
+                        if kind in versions_by_img[primary_id] and versions_by_img[primary_id][kind]:
+                            path_norm = versions_by_img[primary_id][kind].replace('\\', '/')
+                            img_data["url"] = f"/media/{path_norm}"
+                            break
+
     items = []
     for sp_obj, p_obj, s_obj, eq_obj, cp_obj in rows:
         cat_path = await _category_path(session, p_obj.category_id)
@@ -2302,6 +2346,10 @@ async def list_products(
                 "usage_instructions": getattr(p_obj, 'usage_instructions', None),
                 # Tags del producto
                 "tags": tags_by_product.get(p_obj.id, []),
+                # Images info
+                "image_url": images_by_product.get(p_obj.id, {}).get("url"),
+                "images_count": images_by_product.get(p_obj.id, {}).get("count", 0),
+                "primary_image_id": images_by_product.get(p_obj.id, {}).get("primary_id"),
             }
         )
 
