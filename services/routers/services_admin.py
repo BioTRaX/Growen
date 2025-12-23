@@ -575,18 +575,40 @@ async def deps_check(name: str) -> Dict[str, Any]:
         # chromium presence is best-effort; encourage install
         hints.append("Si falta Chromium: python -m playwright install chromium")
     elif name == "pdf_import":
-        # Check common external tools (with Windows fallback paths)
-        tesseract = shutil.which("tesseract")
-        if not tesseract:
-            for p in [
-                r"C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
-                r"C:\\Program Files (x86)\\Tesseract-OCR\\tesseract.exe",
-            ]:
-                if os.path.exists(p):
-                    tesseract = p
-                    break
-        qpdf = shutil.which("qpdf")
-        gs = shutil.which("gswin64c") or shutil.which("gswin32c") or shutil.which("gs")
+        # Check common external tools (with Windows fallback paths and glob support)
+        import glob
+        
+        def _find_tool(cmd_name: str, fallback_patterns: list[str]) -> str | None:
+            # Primero buscar en PATH
+            found = shutil.which(cmd_name)
+            if found:
+                return found
+            # Luego buscar en fallbacks
+            if os.name != "nt":
+                return None
+            for pattern in fallback_patterns:
+                if "*" in pattern:
+                    matches = glob.glob(pattern)
+                    for match in matches:
+                        if os.path.isfile(match):
+                            return match
+                elif os.path.exists(pattern):
+                    return pattern
+            return None
+        
+        tesseract = _find_tool("tesseract", [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ])
+        qpdf = _find_tool("qpdf", [
+            r"C:\Program Files\qpdf*\bin\qpdf.exe",
+            r"C:\Program Files (x86)\qpdf*\bin\qpdf.exe",
+        ])
+        gs = _find_tool("gswin64c", [
+            r"C:\Program Files\gs\gs*\bin\gswin64c.exe",
+            r"C:\Program Files\gs\gs*\bin\gswin32c.exe",
+        ]) or _find_tool("gswin32c", []) or _find_tool("gs", [])
+        
         if not tesseract:
             ok = False; missing.append("tesseract")
         if not qpdf:
@@ -677,12 +699,22 @@ async def tools_health() -> Dict[str, Any]:
     - playwright: paquete instalado y navegador chromium instalado
     """
     def _which_with_windows_fallback(name: str, fallbacks: list[str] | None = None) -> Optional[str]:
+        """Busca ejecutable en PATH y fallback con soporte de glob patterns."""
         p = shutil.which(name)
         if p:
             return p
-        for fp in (fallbacks or []):
-            if os.path.exists(fp):
-                return fp
+        if not fallbacks or os.name != "nt":
+            return None
+        import glob
+        for pattern in fallbacks:
+            # Soporte para patrones glob (ej: qpdf*)
+            if "*" in pattern:
+                matches = glob.glob(pattern)
+                for match in matches:
+                    if os.path.isfile(match) and os.access(match, os.X_OK):
+                        return match
+            elif os.path.exists(pattern):
+                return pattern
         return None
 
     def _version_of(cmd: list[str]) -> Optional[str]:
@@ -696,13 +728,22 @@ async def tools_health() -> Dict[str, Any]:
         except Exception:
             return None
 
-    # qpdf
-    qpdf_path = _which_with_windows_fallback("qpdf")
+    # qpdf - con fallback de rutas comunes de Windows
+    qpdf_path = _which_with_windows_fallback("qpdf", [
+        r"C:\Program Files\qpdf*\bin\qpdf.exe",
+        r"C:\Program Files (x86)\qpdf*\bin\qpdf.exe",
+    ])
     qpdf_ver = _version_of([qpdf_path, "--version"]) if qpdf_path else None
     qpdf_ok = bool(qpdf_path and qpdf_ver)
 
-    # ghostscript
-    gs_bin = _which_with_windows_fallback("gswin64c") or _which_with_windows_fallback("gswin32c") or _which_with_windows_fallback("gs")
+    # ghostscript - con fallback de rutas comunes de Windows
+    gs_fallbacks = [
+        r"C:\Program Files\gs\gs*\bin\gswin64c.exe",
+        r"C:\Program Files\gs\gs*\bin\gswin32c.exe",
+        r"C:\Program Files (x86)\gs\gs*\bin\gswin64c.exe",
+        r"C:\Program Files (x86)\gs\gs*\bin\gswin32c.exe",
+    ]
+    gs_bin = _which_with_windows_fallback("gswin64c", gs_fallbacks) or _which_with_windows_fallback("gswin32c", gs_fallbacks) or _which_with_windows_fallback("gs", gs_fallbacks)
     gs_ver = _version_of([gs_bin, "-v"]) if gs_bin else None
     gs_ok = bool(gs_bin and gs_ver)
 

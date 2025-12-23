@@ -776,6 +776,60 @@ async def catalog_search_by_tags(
         raise HTTPException(status_code=500, detail=f"Error al buscar productos por tags: {e}")
 
 
+# ------------------------------- Secuencia para SKUs Canónicos -------------------------------
+@router.get(
+    "/catalog/next-seq",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+)
+async def catalog_next_seq(
+    category_id: int | None = Query(None, description="ID de categoría (opcional, si no se envía se calcula global)"),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Devuelve la próxima secuencia disponible para SKUs canónicos (XXX_####_YYY).
+    
+    El cálculo se basa en extraer el número máximo de secuencia de los SKUs existentes,
+    no simplemente en contar productos. Esto evita colisiones cuando se eliminan productos.
+    """
+    import re
+    
+    # Consultar todos los sku_custom de la categoría (o global si no hay category_id)
+    if category_id is not None:
+        stmt = select(CanonicalProduct.sku_custom).where(
+            CanonicalProduct.category_id == category_id,
+            CanonicalProduct.sku_custom.isnot(None)
+        )
+    else:
+        stmt = select(CanonicalProduct.sku_custom).where(
+            CanonicalProduct.category_id.is_(None),
+            CanonicalProduct.sku_custom.isnot(None)
+        )
+    
+    result = await session.execute(stmt)
+    skus = [row[0] for row in result.all() if row[0]]
+    
+    # Extraer el número de secuencia de cada SKU (formato: XXX_####_YYY)
+    # El número es la parte central entre los dos underscores
+    pattern = re.compile(r'^[A-Z]{3}_(\d{4})_[A-Z]{3}$')
+    max_seq = 0
+    
+    for sku in skus:
+        if sku:
+            match = pattern.match(sku.upper())
+            if match:
+                seq_num = int(match.group(1))
+                if seq_num > max_seq:
+                    max_seq = seq_num
+    
+    # La siguiente secuencia es max + 1 (mínimo 1)
+    next_seq = max_seq + 1
+    
+    return {
+        "category_id": category_id,
+        "next_seq": next_seq,
+        "max_existing": max_seq,
+    }
+
+
 # ------------------------------- Helper: Build Product Response -------------------------------
 async def _build_product_response(session: AsyncSession, product: Product) -> dict:
     """Construye la respuesta completa de un producto con su info canónica.

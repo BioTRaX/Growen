@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from pydantic import BaseModel
-from pathlib import Path
+ 
 
 from db.models import Image, ImageVersion, ImageReview, Product, AuditLog
 from db.session import get_session

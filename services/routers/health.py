@@ -62,6 +62,56 @@ def _which_any(names: List[str]) -> Tuple[str | None, str]:
     return None, names[0]
 
 
+def _which_with_fallback(name: str, fallback_patterns: List[str] | None = None) -> str | None:
+    """Busca un ejecutable en PATH y, si no lo encuentra, en rutas de fallback de Windows.
+    
+    Args:
+        name: Nombre del ejecutable (ej: "qpdf", "tesseract")
+        fallback_patterns: Lista de patrones glob para buscar en Windows
+                          (ej: [r"C:\\Program Files\\qpdf*\\bin\\qpdf.exe"])
+    
+    Returns:
+        Ruta al ejecutable si se encuentra, None si no.
+    """
+    # Primero buscar en PATH
+    found = shutil.which(name)
+    if found:
+        return found
+    
+    # Si no hay fallbacks o no estamos en Windows, retornar None
+    if not fallback_patterns or os.name != "nt":
+        return None
+    
+    # Buscar en rutas de fallback usando glob
+    import glob
+    for pattern in fallback_patterns:
+        matches = glob.glob(pattern)
+        for match in matches:
+            if os.path.isfile(match) and os.access(match, os.X_OK):
+                return match
+    
+    return None
+
+
+# Rutas de fallback comunes para Windows
+WINDOWS_FALLBACK_PATHS = {
+    "qpdf": [
+        r"C:\Program Files\qpdf*\bin\qpdf.exe",
+        r"C:\Program Files (x86)\qpdf*\bin\qpdf.exe",
+    ],
+    "tesseract": [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ],
+    "ghostscript": [
+        r"C:\Program Files\gs\gs*\bin\gswin64c.exe",
+        r"C:\Program Files\gs\gs*\bin\gswin32c.exe",
+        r"C:\Program Files (x86)\gs\gs*\bin\gswin64c.exe",
+        r"C:\Program Files (x86)\gs\gs*\bin\gswin32c.exe",
+    ],
+}
+
+
 @router.get("/service/{name}")
 async def health_service(name: str) -> Dict[str, Any]:
     """Chequeos específicos por servicio opcional (pdf_import, playwright, etc.)."""
@@ -77,19 +127,16 @@ async def health_service(name: str) -> Dict[str, Any]:
         ocrmypdf_ok = _try("ocrmypdf")
         pdfplumber_ok = _try("pdfplumber")
         camelot_ok = _try("camelot")
-        tesseract_path, _ = _which_any(["tesseract"])  # pragma: no cover
-        if not tesseract_path:
-            # Windows fallback common install dirs
-            possible = [
-                r"C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
-                r"C:\\Program Files (x86)\\Tesseract-OCR\\tesseract.exe",
-            ]
-            for p in possible:
-                if os.path.exists(p):
-                    tesseract_path = p
-                    break
-        qpdf_path, _ = _which_any(["qpdf"])  # pragma: no cover
-        gs_path, _ = _which_any(["gswin64c", "gswin32c", "gs"])  # pragma: no cover
+        
+        # Usar fallbacks de Windows para herramientas del sistema
+        tesseract_path = _which_with_fallback("tesseract", WINDOWS_FALLBACK_PATHS.get("tesseract"))
+        qpdf_path = _which_with_fallback("qpdf", WINDOWS_FALLBACK_PATHS.get("qpdf"))
+        gs_path = _which_with_fallback("gswin64c", WINDOWS_FALLBACK_PATHS.get("ghostscript"))
+        if not gs_path:
+            gs_path = _which_with_fallback("gswin32c")
+        if not gs_path:
+            gs_path = _which_with_fallback("gs")
+        
         hints: List[str] = []
         if not tesseract_path:
             hints.append("Instalá Tesseract (con idioma español)")
@@ -100,7 +147,7 @@ async def health_service(name: str) -> Dict[str, Any]:
         if not ocrmypdf_ok:
             hints.append("Instalá ocrmypdf en el venv")
         ok = ocrmypdf_ok and bool(tesseract_path and qpdf_path and gs_path)
-        return {"service": name, "ok": ok, "deps": {"ocrmypdf": ocrmypdf_ok, "pdfplumber": pdfplumber_ok, "camelot": camelot_ok, "tesseract": bool(tesseract_path), "tesseract_path": tesseract_path, "qpdf": bool(qpdf_path), "ghostscript": bool(gs_path)}, "hints": hints}
+        return {"service": name, "ok": ok, "deps": {"ocrmypdf": ocrmypdf_ok, "pdfplumber": pdfplumber_ok, "camelot": camelot_ok, "tesseract": bool(tesseract_path), "tesseract_path": tesseract_path, "qpdf": bool(qpdf_path), "qpdf_path": qpdf_path, "ghostscript": bool(gs_path), "gs_path": gs_path}, "hints": hints}
     if name == "playwright":
         try:
             import importlib

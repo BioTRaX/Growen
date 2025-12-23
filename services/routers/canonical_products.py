@@ -91,13 +91,33 @@ async def create_canonical_product(
     # - Si hay categoría, la secuencia es por categoría
     # - Si no hay categoría, la secuencia agrupa por category_id NULL y usa prefijos por defecto
     if not sku_custom:
-        # Determinar secuencia inicial según categoría (o NULL)
+        import re as _re
+        # Determinar secuencia inicial basándose en el MÁXIMO número de secuencia existente
+        # (no en contar productos, ya que pueden haberse eliminado registros)
         if req.category_id is not None:
-            base_query = select(CanonicalProduct).where(CanonicalProduct.category_id == req.category_id)
+            sku_stmt = select(CanonicalProduct.sku_custom).where(
+                CanonicalProduct.category_id == req.category_id,
+                CanonicalProduct.sku_custom.isnot(None)
+            )
         else:
-            base_query = select(CanonicalProduct).where(CanonicalProduct.category_id.is_(None))
-        total = await session.scalar(select(func.count()).select_from(base_query.subquery())) or 0
-        next_seq = int(total) + 1
+            sku_stmt = select(CanonicalProduct.sku_custom).where(
+                CanonicalProduct.category_id.is_(None),
+                CanonicalProduct.sku_custom.isnot(None)
+            )
+        sku_result = await session.execute(sku_stmt)
+        existing_skus = [row[0] for row in sku_result.all() if row[0]]
+        
+        # Extraer el número de secuencia de cada SKU (formato: XXX_####_YYY)
+        sku_pattern = _re.compile(r'^[A-Z]{3}_(\d{4})_[A-Z]{3}$')
+        max_seq = 0
+        for sku in existing_skus:
+            match = sku_pattern.match(sku.upper())
+            if match:
+                seq_num = int(match.group(1))
+                if seq_num > max_seq:
+                    max_seq = seq_num
+        
+        next_seq = max_seq + 1
         cat_name = await _get_category_name(session, req.category_id)
         sub_name = await _get_category_name(session, req.subcategory_id) if req.subcategory_id else None
         # Reintento ante colisión: incrementar secuencia y reconstruir
