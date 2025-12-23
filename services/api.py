@@ -390,6 +390,8 @@ app.include_router(admin_chat.router)  # Admin chat sessions
 app.include_router(admin_scheduler.router)  # Admin scheduler control
 from services.routers import knowledge as knowledge_admin  # Knowledge Base admin
 app.include_router(knowledge_admin.router)
+from services.routers import rag as rag_router  # RAG search API
+app.include_router(rag_router.router)
 try:
     # include legacy /healthz for compatibility if present
     app.include_router(health.legacy_router)  # type: ignore[attr-defined]
