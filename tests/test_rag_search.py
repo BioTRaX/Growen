@@ -6,10 +6,19 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 
+# Skip si no está disponible pgvector (entorno SQLite)
+try:
+    import pgvector  # noqa: F401
+    HAS_PGVECTOR = True
+except ImportError:
+    HAS_PGVECTOR = False
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [
+    pytest.mark.asyncio,
+    pytest.mark.skipif(not HAS_PGVECTOR, reason="pgvector not available (SQLite test env)")
+]
 
 
 class TestRAGSearchEndpoint:

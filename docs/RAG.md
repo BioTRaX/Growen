@@ -434,51 +434,73 @@ python scripts/index_docs.py
 # Salida: "Documento 'README.md' ya existe con mismo contenido (hash: a874be41...)"
 ```
 
-## Próximos Pasos (Etapa 3+)
+## API de Búsqueda
 
-### 1. Endpoint de Búsqueda
+### Endpoint: POST /api/v1/rag/search
 
-**Archivo**: `services/routers/rag.py` (nuevo)
+**Estado**: ✅ **Implementado** (Etapa 3) - 2025-12-23
 
-```python
-from fastapi import APIRouter, Depends
-from ai.embeddings import get_embedding_service
-from sqlalchemy import select
+Búsqueda semántica en la base de conocimientos usando pgvector y similitud coseno.
 
-router = APIRouter(prefix="/api/v1/rag", tags=["RAG"])
+#### Request
 
-@router.post("/search")
-async def search_knowledge(
-    query: str,
-    top_k: int = 5,
-    session: AsyncSession = Depends(get_session)
-):
-    """Búsqueda semántica en base de conocimiento."""
-    # 1. Generar embedding de la pregunta
-    embedding_service = get_embedding_service()
-    query_vector = await embedding_service.generate_embedding(query)
-    
-    # 2. Búsqueda por similitud
-    stmt = select(KnowledgeChunk).order_by(
-        KnowledgeChunk.embedding.cosine_distance(query_vector)
-    ).limit(top_k)
-    
-    results = await session.execute(stmt)
-    chunks = results.scalars().all()
-    
-    # 3. Retornar con metadatos
-    return {
-        "query": query,
-        "results": [
-            {
-                "content": chunk.content,
-                "source": chunk.source.filename,
-                "chunk_index": chunk.chunk_index,
-                "similarity": 1 - chunk.embedding.cosine_distance(query_vector)
-            }
-            for chunk in chunks
-        ]
-    }
+```json
+POST /api/v1/rag/search
+Content-Type: application/json
+
+{
+    "query": "¿Cuál es el horario de atención?",
+    "top_k": 5,
+    "min_similarity": 0.5
+}
+```
+
+| Campo | Tipo | Requerido | Default | Descripción |
+|-------|------|-----------|---------|-------------|
+| query | string | ✅ Sí | - | Texto de búsqueda (1-2000 chars) |
+| top_k | int | No | 5 | Máximo de resultados (1-20) |
+| min_similarity | float | No | 0.5 | Umbral mínimo de similitud (0-1) |
+
+#### Response
+
+```json
+{
+    "query": "¿Cuál es el horario de atención?",
+    "results": [
+        {
+            "content": "Nuestro horario de atención es de lunes a viernes de 9:00 a 18:00...",
+            "source": "FAQ.md",
+            "similarity": 0.87,
+            "chunk_index": 3,
+            "source_id": 5
+        }
+    ],
+    "total_results": 1
+}
+```
+
+#### Ejemplo con curl
+
+```powershell
+curl -X POST "http://localhost:8000/api/v1/rag/search" `
+  -H "Content-Type: application/json" `
+  -d '{"query": "precio del producto X", "top_k": 3}'
+```
+
+#### Health Check
+
+```
+GET /api/v1/rag/health
+```
+
+Retorna estado del servicio de embeddings:
+
+```json
+{
+    "status": "ok",
+    "embedding_model": "text-embedding-3-small",
+    "embedding_dimensions": 1536
+}
 ```
 
 ### 2. Integración con Chatbot
@@ -583,7 +605,7 @@ self.text_splitter = RecursiveCharacterTextSplitter(
 
 ---
 
-**Última actualización**: 2025-11-30  
+**Última actualización**: 2025-12-23  
 **Mantenedor**: Backend Team  
-**Estado**: ✅ Infraestructura + Admin UI completos, listo para Etapa 3 (búsqueda + integración chatbot)  
+**Estado**: ✅ Infraestructura + Admin UI + API de Búsqueda completos (Etapa 3)  
 **Ver también**: [docs/KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md) - Guía de uso del Admin Panel "Cerebro"
