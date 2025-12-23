@@ -157,7 +157,17 @@ Reglas estrictas de salida:
 - No modifiques product_id ni supplier_item_id. NO generes nuevas líneas.
 - Números: elimina separadores de miles, usa punto como decimal (e.g., 1.234,56 -> 1234.56).
 - Fechas: emitir en formato ISO YYYY-MM-DD.
-- Si no hay correcciones seguras, devolvé: {"header":{},"lines":[],"confidence":0.75,"comments":["Sin diferencias evidentes"]}.
+- Si no hay correcciones seguras, devolvé: {"header":{},"lines":[],"lines_to_remove":[],"confidence":0.75,"comments":["Sin diferencias evidentes"]}.
+
+Detección de líneas a eliminar (metadata/encabezados):
+- Identificá líneas que son claramente metadata y NO productos reales:
+    - Líneas con qty=0, unit_cost=0 y sin SKU válido.
+    - Líneas con títulos que son direcciones (Av., Calle, C.A.B.A., Buenos Aires).
+    - Líneas con CUIT, IVA RESPONSABLE, razón social (S.R.L., S.A.).
+    - Líneas de encabezado del proveedor (SANTA PLANTA, Distribuidora, Tel.).
+    - Líneas de campos de formulario (Señores, Entrega, Controlado por, Despachado por).
+- Agregá esos índices al array lines_to_remove.
+- Solo eliminá líneas si estás MUY SEGURO (>95%) de que no son productos.
 
 Estrategia de matching para líneas:
 - Primero intenta emparejar por Código (supplier_sku) exacto.
@@ -176,19 +186,21 @@ Esquema de salida EXACTO:
 {
     "header": {"remito_number"?: string, "remito_date"?: string, "vat_rate"?: number},
     "lines": [ { "index": number, "fields": { "qty"?: number, "unit_cost"?: number, "line_discount"?: number, "supplier_sku"?: string, "title"?: string } } ],
+    "lines_to_remove": number[],
     "confidence": number,
     "comments": string[]
 }
 
-Ejemplo mínimo (sólo cambios seguros):
+Ejemplo mínimo (con eliminación de metadata):
 {
     "header": {"remito_number": "0001-12345678", "remito_date": "2025-09-17", "vat_rate": 21},
     "lines": [
         {"index": 0, "fields": {"supplier_sku": "A-123", "qty": 12, "unit_cost": 1500.0, "line_discount": 10.0}},
         {"index": 2, "fields": {"title": "Maceta 12cm Negra"}}
     ],
+    "lines_to_remove": [3, 5, 7],
     "confidence": 0.88,
-    "comments": ["Se normaliza N° de remito y fecha", "Se corrigen SKU y % bonificación"]
+    "comments": ["Se normaliza N° de remito y fecha", "Se eliminan líneas de encabezado/metadata"]
 }
 """.strip()
     )
@@ -978,7 +990,411 @@ async def iaval_preview(purchase_id: int, db: AsyncSession = Depends(get_session
                     chg[f] = {"old": getattr(ln, f), "new": fields[f]}
             if chg:
                 diff["lines"].append({"index": idx, "changes": chg})
-    return {"proposal": {"header": header, "lines": lines}, "diff": diff, "confidence": confidence, "comments": comments, "raw": raw}
+    
+    # Procesar lines_to_remove del LLM
+    lines_to_remove = []
+    try:
+        ltr_raw = json.loads(raw).get("lines_to_remove") or []
+        if isinstance(ltr_raw, list):
+            for idx in ltr_raw:
+                try:
+                    idx_int = int(idx)
+                    if 0 <= idx_int < len(p.lines):
+                        lines_to_remove.append({
+                            "index": idx_int,
+                            "title": p.lines[idx_int].title[:50] if p.lines[idx_int].title else None,
+                            "reason": "metadata/encabezado detectado por IA"
+                        })
+                except (TypeError, ValueError):
+                    continue
+    except Exception:
+        pass
+    
+    return {
+        "proposal": {"header": header, "lines": lines, "lines_to_remove": [x["index"] for x in lines_to_remove]},
+        "diff": diff,
+        "lines_to_remove": lines_to_remove,
+        "confidence": confidence,
+        "comments": comments,
+        "raw": raw
+    }
+
+
+# --- NUEVO: IAVAL Vision AI ---
+
+def _pdf_to_base64_image(pdf_path: str, page: int = 0, dpi: int = 150) -> str:
+    """Convierte una página del PDF a imagen base64 para Vision API."""
+    import io
+    import base64
+    
+    # Intentar con PyMuPDF primero (más rápido)
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(pdf_path)
+        page_obj = doc[page]
+        mat = fitz.Matrix(dpi / 72, dpi / 72)
+        pix = page_obj.get_pixmap(matrix=mat)
+        img_bytes = pix.tobytes("png")
+        doc.close()
+        return base64.b64encode(img_bytes).decode("utf-8")
+    except ImportError:
+        pass
+    
+    # Fallback: pdf2image
+    try:
+        from pdf2image import convert_from_path
+        images = convert_from_path(pdf_path, dpi=dpi, first_page=page+1, last_page=page+1)
+        if images:
+            buffer = io.BytesIO()
+            images[0].save(buffer, format="PNG")
+            return base64.b64encode(buffer.getvalue()).decode("utf-8")
+    except ImportError:
+        pass
+    
+    # Fallback: pdfplumber con PIL
+    try:
+        import pdfplumber
+        from PIL import Image
+        with pdfplumber.open(pdf_path) as pdf:
+            if page < len(pdf.pages):
+                img = pdf.pages[page].to_image(resolution=dpi)
+                buffer = io.BytesIO()
+                img.original.save(buffer, format="PNG")
+                return base64.b64encode(buffer.getvalue()).decode("utf-8")
+    except Exception:
+        pass
+    
+    raise ValueError("No se pudo convertir el PDF a imagen. Instale PyMuPDF, pdf2image o pdfplumber.")
+
+
+VISION_EXTRACTION_PROMPT = """Eres un extractor experto de datos de remitos argentinos. 
+Analiza la imagen del remito y extrae TODOS los datos en formato JSON estructurado.
+
+IMPORTANTE:
+- Extrae el número de remito completo (formato típico: XXXX-XXXXXXXX)
+- Extrae la fecha de emisión en formato YYYY-MM-DD
+- Extrae TODAS las líneas de productos con sus datos completos
+- Los SKU del proveedor suelen ser códigos numéricos de 6-12 dígitos
+- Los precios usan formato argentino (punto como separador de miles, coma como decimal)
+
+Responde SOLO con JSON válido, sin markdown ni texto adicional:
+
+{
+    "header": {
+        "proveedor": "nombre del proveedor",
+        "remito_number": "XXXX-XXXXXXXX",
+        "remito_date": "YYYY-MM-DD"
+    },
+    "lines": [
+        {
+            "index": 0,
+            "supplier_sku": "código del producto",
+            "title": "nombre/descripción del producto", 
+            "qty": 1.0,
+            "unit_cost": 1000.00,
+            "line_discount": 0.0,
+            "total": 1000.00
+        }
+    ],
+    "confidence": 0.95,
+    "comments": ["notas sobre la extracción"]
+}"""
+
+
+@router.post("/{purchase_id}/iaval/vision", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
+async def iaval_vision(
+    purchase_id: int,
+    db: AsyncSession = Depends(get_session),
+    apply: int = Query(0, description="Si =1, aplica los cambios directamente; si =0 solo preview"),
+):
+    """Extrae datos del PDF usando OpenAI Vision API.
+    
+    Revolucionario: en lugar de parsear texto/tablas, envía una IMAGEN del PDF
+    a la IA para que extraiga los datos visualmente, como lo haría un humano.
+    
+    Incluye auditabilidad completa:
+    - Guarda la imagen enviada
+    - Guarda el prompt utilizado
+    - Guarda la respuesta raw de la IA
+    - Registra todos los cambios aplicados
+    """
+    import logging
+    import base64
+    from datetime import datetime as _dt
+    
+    log = logging.getLogger("growen")
+    correlation_id = str(uuid.uuid4())[:8]
+    
+    # Cargar la compra con relaciones
+    res = await db.execute(
+        select(Purchase)
+        .options(selectinload(Purchase.lines), selectinload(Purchase.attachments), selectinload(Purchase.supplier))
+        .where(Purchase.id == purchase_id)
+    )
+    p = res.scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Compra no encontrada")
+    if p.status not in ("BORRADOR", "PENDIENTE"):
+        raise HTTPException(status_code=400, detail="Solo disponible en BORRADOR o PENDIENTE")
+    if not p.attachments:
+        raise HTTPException(status_code=400, detail="La compra no tiene documento adjunto (PDF)")
+    
+    # Buscar PDF adjunto
+    att_pdf = None
+    for att in p.attachments:
+        mime = (att.mime or "").lower()
+        name = (att.filename or "").lower()
+        if (mime.startswith("application/pdf") or name.endswith(".pdf")) and os.path.exists(att.path):
+            att_pdf = att
+            break
+    
+    if not att_pdf:
+        raise HTTPException(status_code=400, detail="No se encontró PDF adjunto legible")
+    
+    # === AUDITABILIDAD: Crear directorio de logs ===
+    audit_dir = Path("data") / "purchases" / str(p.id) / "iaval_vision"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    ts = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
+    
+    # Convertir PDF a imagen
+    try:
+        pdf_image_b64 = _pdf_to_base64_image(att_pdf.path, page=0, dpi=150)
+    except Exception as e:
+        log.error(f"IAVAL Vision[{correlation_id}]: Error convirtiendo PDF a imagen: {e}")
+        raise HTTPException(status_code=500, detail=f"Error convirtiendo PDF a imagen: {e}")
+    
+    # === AUDITABILIDAD: Guardar imagen ===
+    image_path = audit_dir / f"{ts}_input.png"
+    try:
+        with open(image_path, "wb") as f:
+            f.write(base64.b64decode(pdf_image_b64))
+    except Exception as e:
+        log.warning(f"IAVAL Vision[{correlation_id}]: No se pudo guardar imagen de auditoría: {e}")
+    
+    # Preparar contexto de la compra actual
+    purchase_context = {
+        "id": p.id,
+        "supplier_id": p.supplier_id,
+        "supplier_name": getattr(getattr(p, "supplier", None), "name", None),
+        "remito_number_actual": p.remito_number,
+        "remito_date_actual": p.remito_date.isoformat() if p.remito_date else None,
+        "lines_actuales": [
+            {
+                "index": i,
+                "supplier_sku": ln.supplier_sku,
+                "title": ln.title,
+                "qty": float(ln.qty or 0),
+                "unit_cost": float(ln.unit_cost or 0),
+                "state": ln.state,
+            }
+            for i, ln in enumerate(p.lines)
+        ]
+    }
+    
+    # Construir prompt enriquecido
+    full_prompt = f"""{VISION_EXTRACTION_PROMPT}
+
+CONTEXTO DE LA COMPRA ACTUAL (para referencia):
+- Proveedor: {purchase_context['supplier_name']}
+- Remito actual: {purchase_context['remito_number_actual']}
+- Fecha actual: {purchase_context['remito_date_actual']}
+- Líneas existentes: {len(purchase_context['lines_actuales'])}
+
+Tu tarea: Analiza la imagen del remito y extrae los datos REALES del documento.
+Si los datos actuales son incorrectos, proporciona los valores correctos del remito."""
+
+    # === AUDITABILIDAD: Guardar prompt ===
+    prompt_path = audit_dir / f"{ts}_prompt.txt"
+    try:
+        with open(prompt_path, "w", encoding="utf-8") as f:
+            f.write(full_prompt)
+    except Exception:
+        pass
+    
+    # Llamar a Vision API
+    log.info(f"IAVAL Vision[{correlation_id}]: Enviando imagen a Vision API...")
+    router_ai = AIRouter(settings)
+    
+    try:
+        image_data_url = f"data:image/png;base64,{pdf_image_b64}"
+        raw_response = await router_ai.run_async(
+            task=Task.REASONING.value,
+            prompt=full_prompt,
+            images=[image_data_url],
+            user_context={"role": "admin", "intent": "iaval_vision"}
+        )
+    except Exception as e:
+        log.error(f"IAVAL Vision[{correlation_id}]: Error en Vision API: {e}")
+        raise HTTPException(status_code=500, detail=f"Error en Vision API: {e}")
+    
+    # === AUDITABILIDAD: Guardar respuesta raw ===
+    response_path = audit_dir / f"{ts}_response.txt"
+    try:
+        with open(response_path, "w", encoding="utf-8") as f:
+            f.write(raw_response)
+    except Exception:
+        pass
+    
+    # Parsear respuesta JSON
+    parsed = None
+    try:
+        # Limpiar prefijo del provider
+        clean_response = raw_response
+        if isinstance(clean_response, str):
+            if clean_response.startswith("openai:"):
+                clean_response = clean_response[7:]
+            elif clean_response.startswith("ollama:"):
+                clean_response = clean_response[7:]
+            
+            # Limpiar markdown code blocks si existen
+            clean_response = clean_response.strip()
+            if clean_response.startswith("```json"):
+                clean_response = clean_response[7:]
+            if clean_response.startswith("```"):
+                clean_response = clean_response[3:]
+            if clean_response.endswith("```"):
+                clean_response = clean_response[:-3]
+            clean_response = clean_response.strip()
+            # _coerce_json ya devuelve dict (incluye json.loads internamente)
+            parsed = _coerce_json(clean_response)
+        elif isinstance(clean_response, dict):
+            # Ya es un dict, usarlo directamente
+            parsed = clean_response
+        else:
+            parsed = {"header": {}, "lines": [], "confidence": 0, "comments": ["Respuesta no reconocida"]}
+    except Exception as e:
+        log.warning(f"IAVAL Vision[{correlation_id}]: Error parseando JSON: {e}")
+        parsed = {"header": {}, "lines": [], "confidence": 0, "comments": ["Error parseando respuesta"]}
+    
+    # Extraer datos
+    header = parsed.get("header") or {}
+    lines = parsed.get("lines") or []
+    confidence = float(parsed.get("confidence") or 0)
+    comments = parsed.get("comments") or []
+    
+    # Calcular diff con datos actuales
+    diff = {"header": {}, "lines": [], "lines_new": []}
+    
+    # Diff de header
+    if "remito_number" in header and header["remito_number"] and str(p.remito_number) != str(header["remito_number"]):
+        diff["header"]["remito_number"] = {"old": p.remito_number, "new": header["remito_number"]}
+    if "remito_date" in header and header["remito_date"]:
+        try:
+            new_date = header["remito_date"]
+            old_date = p.remito_date.isoformat() if p.remito_date else None
+            if old_date != new_date:
+                diff["header"]["remito_date"] = {"old": old_date, "new": new_date}
+        except Exception:
+            pass
+    
+    # Diff de líneas: comparar productos extraídos vs existentes
+    existing_skus = {ln.supplier_sku: i for i, ln in enumerate(p.lines) if ln.supplier_sku}
+    for extracted_line in lines:
+        sku = extracted_line.get("supplier_sku")
+        if sku and sku in existing_skus:
+            # Línea existente: comparar cambios
+            idx = existing_skus[sku]
+            existing = p.lines[idx]
+            changes = {}
+            if extracted_line.get("title") and extracted_line["title"] != existing.title:
+                changes["title"] = {"old": existing.title, "new": extracted_line["title"]}
+            if extracted_line.get("qty") and float(extracted_line["qty"]) != float(existing.qty or 0):
+                changes["qty"] = {"old": float(existing.qty or 0), "new": float(extracted_line["qty"])}
+            if extracted_line.get("unit_cost") and float(extracted_line["unit_cost"]) != float(existing.unit_cost or 0):
+                changes["unit_cost"] = {"old": float(existing.unit_cost or 0), "new": float(extracted_line["unit_cost"])}
+            if changes:
+                diff["lines"].append({"index": idx, "changes": changes})
+        else:
+            # Línea nueva detectada
+            diff["lines_new"].append(extracted_line)
+    
+    # === AUDITABILIDAD: Registrar en AuditLog ===
+    db.add(AuditLog(
+        action="purchase.iaval.vision",
+        table="purchases",
+        entity_id=p.id,
+        meta={
+            "correlation_id": correlation_id,
+            "confidence": confidence,
+            "diff_summary": {
+                "header_changes": len(diff["header"]),
+                "line_changes": len(diff["lines"]),
+                "new_lines": len(diff["lines_new"]),
+            },
+            "audit_files": {
+                "image": str(image_path),
+                "prompt": str(prompt_path),
+                "response": str(response_path),
+            }
+        }
+    ))
+    
+    # Si apply=1, aplicar los cambios
+    applied = None
+    if apply:
+        applied = {"header": {}, "lines": [], "lines_added": []}
+        
+        # Aplicar cambios de header
+        if diff["header"].get("remito_number"):
+            p.remito_number = diff["header"]["remito_number"]["new"]
+            applied["header"]["remito_number"] = diff["header"]["remito_number"]
+        if diff["header"].get("remito_date"):
+            try:
+                p.remito_date = date.fromisoformat(diff["header"]["remito_date"]["new"])
+                applied["header"]["remito_date"] = diff["header"]["remito_date"]
+            except Exception:
+                pass
+        
+        # Aplicar cambios a líneas existentes
+        for line_diff in diff["lines"]:
+            idx = line_diff["index"]
+            if 0 <= idx < len(p.lines):
+                ln = p.lines[idx]
+                for field, change in line_diff["changes"].items():
+                    setattr(ln, field, change["new"])
+                applied["lines"].append(line_diff)
+        
+        # Agregar líneas nuevas
+        for new_line in diff["lines_new"]:
+            db.add(PurchaseLine(
+                purchase_id=p.id,
+                supplier_sku=new_line.get("supplier_sku"),
+                title=new_line.get("title", "(sin título)"),
+                qty=Decimal(str(new_line.get("qty") or 0)),
+                unit_cost=Decimal(str(new_line.get("unit_cost") or 0)),
+                line_discount=Decimal(str(new_line.get("line_discount") or 0)),
+                state="SIN_VINCULAR",
+            ))
+            applied["lines_added"].append(new_line)
+        
+        db.add(AuditLog(
+            action="purchase.iaval.vision.apply",
+            table="purchases",
+            entity_id=p.id,
+            meta={"applied": applied, "correlation_id": correlation_id}
+        ))
+    
+    await db.commit()
+    
+    log.info(f"IAVAL Vision[{correlation_id}]: Completado. Conf={confidence}, Changes={len(diff['lines'])}, New={len(diff['lines_new'])}")
+    
+    return {
+        "ok": True,
+        "correlation_id": correlation_id,
+        "proposal": {
+            "header": header,
+            "lines": lines,
+        },
+        "diff": diff,
+        "confidence": confidence,
+        "comments": comments,
+        "applied": applied,
+        "audit": {
+            "image": str(image_path),
+            "prompt": str(prompt_path),
+            "response": str(response_path),
+        }
+    }
 
 
 @router.post("/{purchase_id}/iaval/apply", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
@@ -1025,6 +1441,29 @@ async def iaval_apply(
                 p.vat_rate = header["vat_rate"]
         except Exception:
             pass
+    
+    # === NUEVO: Eliminar líneas marcadas como erróneas/metadata ===
+    lines_to_remove = prop.get("lines_to_remove") or []
+    removed_lines = []
+    if isinstance(lines_to_remove, list) and lines_to_remove:
+        # Ordenar en reversa para mantener índices correctos al eliminar
+        existing_lines = list(p.lines)
+        for idx in sorted(set(lines_to_remove), reverse=True):
+            try:
+                idx = int(idx)
+                if 0 <= idx < len(existing_lines):
+                    ln_to_remove = existing_lines[idx]
+                    removed_lines.append({
+                        "index": idx,
+                        "title": ln_to_remove.title[:50] if ln_to_remove.title else None,
+                        "supplier_sku": ln_to_remove.supplier_sku,
+                    })
+                    await db.delete(ln_to_remove)
+            except (TypeError, ValueError):
+                continue
+        if removed_lines:
+            applied["lines_removed"] = removed_lines
+    
     # Lines
     if isinstance(lines, list):
         for item in lines:
@@ -1149,6 +1588,8 @@ async def confirm_purchase(
     - Deja AuditLog con resumen y deltas; notifica por Telegram si está configurado.
     - Si PURCHASE_CONFIRM_REQUIRE_ALL_LINES=1 y hay líneas sin resolver, aborta con 422 y revierte.
     """
+    # Forzar recarga fresca desde BD para evitar líneas eliminadas en caché de sesión
+    # Consulta fresca desde BD con selectinload para obtener las líneas actuales
     res = await db.execute(
         select(Purchase)
         .options(selectinload(Purchase.lines))
@@ -2069,12 +2510,12 @@ async def import_santaplanta_pdf(
             {
                 "supplier_sku": ln.supplier_sku,
                 "title": ln.title,
-                "qty": float(ln.qty),
-                "unit_cost": float(ln.unit_cost_bonif),
-                "line_discount": float(ln.pct_bonif),
-                "subtotal": float(ln.subtotal or (ln.qty * ln.unit_cost_bonif)),
+                "qty": float(ln.qty or 0),
+                "unit_cost": float(ln.unit_cost_bonif or 0),
+                "line_discount": float(ln.pct_bonif or 0),
+                "subtotal": float(ln.subtotal or 0) if ln.subtotal else float((ln.qty or 0) * (ln.unit_cost_bonif or 0)),
                 "iva": float(ln.iva or 0),
-                "total": float(ln.total or (ln.subtotal or (ln.qty * ln.unit_cost_bonif))),
+                "total": float(ln.total or 0) if ln.total else float(ln.subtotal or 0) if ln.subtotal else float((ln.qty or 0) * (ln.unit_cost_bonif or 0)),
             }
             for ln in res.lines
         ]
@@ -2134,6 +2575,32 @@ async def import_santaplanta_pdf(
         for ln in src_lines:
             sku = (ln.get("supplier_sku") or "").strip()
             title = (ln.get("title") or "").strip() or sku or "(sin título)"
+            
+            # SEGURIDAD: Si título es muy largo, intentar extraer solo la parte del producto
+            if len(title) > 150:
+                # El fallback multiline a veces concatena todo el texto previo
+                # Buscar patrones de producto real: SKU largo (6-12 dígitos con ceros) seguido de nombre
+                import re as _re
+                # Patrón específico Santa Planta: SKU de 6-12 dígitos (típicamente 000000092)
+                # seguido de nombre de producto (letras, al menos una palabra de 3+ chars)
+                m = _re.search(
+                    r'\b(\d{6,12})\s+([A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñÁÉÍÓÚÑ\s0-9\-\.x]+)',
+                    title
+                )
+                if m and len(m.group(2).strip()) > 5:
+                    # Verificar que el título extraído tenga palabras válidas (no solo números/fechas)
+                    extracted_title = m.group(2).strip()
+                    # Rechazar si parece una fecha o número puro
+                    if not _re.fullmatch(r'[\d\s/\-]+', extracted_title):
+                        if not sku or len(sku) < 6:
+                            sku = m.group(1)
+                        log.info(f"Import[{correlation_id}]: Título extraído de texto largo: '{extracted_title}' (SKU: {sku})")
+                        title = extracted_title
+            
+            # SEGURIDAD: Truncar título a 250 chars (límite BD es 300)
+            if len(title) > 250:
+                title = title[:247] + "..."
+            
             qty = Decimal(str(ln.get("qty") or 0))
             unit_cost = Decimal(str(ln.get("unit_cost") or 0))
             line_discount = Decimal(str(ln.get("line_discount") or 0))

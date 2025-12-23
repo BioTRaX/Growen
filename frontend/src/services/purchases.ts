@@ -137,15 +137,37 @@ export async function searchSupplierProducts(supplierId: number, sku: string) {
   return r.data as { id: number; supplier_product_id: string; title: string; product_id: number }[]
 }
 
-// iAVaL (IA Validator) services
+// iAVaL (IA Validator) services - Ahora usa Vision AI para mejor precisión
 export async function iavalPreview(id: number) {
+  // Usar endpoint Vision para extracción visual del PDF
+  const r = await http.post(`/purchases/${id}/iaval/vision`, {})
+  return r.data as {
+    ok: boolean
+    correlation_id: string
+    proposal: { header: any; lines: any[] }
+    diff: { header: any; lines: any[]; lines_new?: any[] }
+    confidence: number
+    comments: string[]
+    applied: any
+    audit: { image: string; prompt: string; response: string }
+  }
+}
+
+export async function iavalApply(id: number, proposal: any, emitLog?: boolean) {
+  // Si ya usamos Vision con apply=1, no necesitamos este paso adicional
+  // Pero lo mantenemos para compatibilidad con el flujo existente
+  const r = await http.post(`/purchases/${id}/iaval/vision`, {}, { params: { apply: 1 } })
+  return r.data as { ok: boolean; applied: any; correlation_id?: string }
+}
+
+// Versión legacy (textual) - usar si Vision falla
+export async function iavalPreviewLegacy(id: number) {
   const r = await http.post(`/purchases/${id}/iaval/preview`, {})
   return r.data as { proposal: any; diff: { header: any; lines: any[] }; confidence: number; comments: string[]; raw: string }
 }
 
-export async function iavalApply(id: number, proposal: any, emitLog?: boolean) {
+export async function iavalApplyLegacy(id: number, proposal: any, emitLog?: boolean) {
   const r = await http.post(`/purchases/${id}/iaval/apply`, { proposal }, { params: { emit_log: emitLog ? 1 : 0 } })
   return r.data as { ok: boolean; applied: any; log?: { filename: string; path: string; csv_filename?: string | null; url_json?: string; url_csv?: string | null } }
 }
-
 

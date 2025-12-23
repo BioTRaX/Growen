@@ -372,6 +372,8 @@ app.include_router(tags.router, prefix="/tags", tags=["tags"])
 app.include_router(images.router)
 app.include_router(images.admin_images_router)  # Logo management endpoints
 app.include_router(products_stock.router)
+from services.routers import stock_shortages  # nuevo router faltantes stock
+app.include_router(stock_shortages.router, prefix="/stock")
 app.include_router(purchases.router)
 app.include_router(customers.router)
 app.include_router(sales.router)

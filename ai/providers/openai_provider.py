@@ -187,24 +187,40 @@ class OpenAIProvider(ILLMProvider):
         if not tools_schema:
             try:
                 # Detectar si se requiere JSON estricto
+                # NOTA: response_format=json_object no siempre funciona con vision, evitar usarlo
                 wants_json = (
                     "Esquema de salida EXACTO:" in user_prompt
                     or "Esquema de salida esperado:" in user_prompt
+                    or "Responde SOLO con JSON" in user_prompt
                 )
                 # Usar modelo con visión si hay imágenes, sino el modelo por defecto
                 model_to_use = vision_model or self.model
-                resp = client.chat.completions.create(
-                    model=model_to_use,
-                    messages=messages,
-                    temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
-                    max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")),
-                    response_format=(
-                        {"type": "json_object"} if wants_json else {"type": "text"}
-                    ),
-                )
+                
+                # Para Vision API, usar más tokens y evitar response_format
+                if vision_model:
+                    max_tokens = int(os.getenv("OPENAI_VISION_MAX_TOKENS", "2048"))
+                    # Vision no siempre soporta response_format bien, omitir
+                    resp = client.chat.completions.create(
+                        model=model_to_use,
+                        messages=messages,
+                        temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
+                        max_tokens=max_tokens,
+                    )
+                else:
+                    resp = client.chat.completions.create(
+                        model=model_to_use,
+                        messages=messages,
+                        temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
+                        max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")),
+                        response_format=(
+                            {"type": "json_object"} if wants_json else {"type": "text"}
+                        ),
+                    )
                 text = resp.choices[0].message.content if resp.choices else ""
                 return text.strip()
-            except Exception:
+            except Exception as e:
+                # Loguear el error para debugging
+                logging.warning("generate_async: Error en Vision API: %s: %s", type(e).__name__, e)
                 # Fallback: devolver prompt del usuario
                 return user_prompt
 

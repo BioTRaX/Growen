@@ -12,6 +12,7 @@ const AdminPanel = lazy(() => import('./pages/AdminPanel'))
 const ImagesAdminPanel = lazy(() => import('./pages/ImagesAdminPanel'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const Stock = lazy(() => import('./pages/Stock'))
+const StockShortages = lazy(() => import('./pages/StockShortages'))
 const Market = lazy(() => import('./pages/Market'))
 const Productos = lazy(() => import('./pages/Productos'))
 const ProductDetail = lazy(() => import('./pages/ProductDetail'))
@@ -75,6 +76,14 @@ export default function App() {
                     element={
                       <ProtectedRoute roles={["cliente", "proveedor", "colaborador", "admin"]}>
                         <Stock />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path={PATHS.stockShortages}
+                    element={
+                      <ProtectedRoute roles={["colaborador", "admin"]}>
+                        <StockShortages />
                       </ProtectedRoute>
                     }
                   />

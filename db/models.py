@@ -1052,6 +1052,36 @@ class StockLedger(Base):
     product: Mapped["Product"] = relationship()
 
 
+# --- Stock Shortages (Faltantes de inventario) ---
+
+class StockShortage(Base):
+    """Reporte de faltantes de stock (mermas, regalos, ventas pendientes)."""
+    __tablename__ = "stock_shortages"
+    __table_args__ = (
+        CheckConstraint(
+            "reason IN ('GIFT','PENDING_SALE','UNKNOWN')",
+            name="ck_stock_shortages_reason",
+        ),
+        CheckConstraint(
+            "status IN ('OPEN','RECONCILED')",
+            name="ck_stock_shortages_status",
+        ),
+        Index("ix_stock_shortages_product_created", "product_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer)  # Siempre positivo (reduce stock)
+    reason: Mapped[str] = mapped_column(String(20))  # GIFT, PENDING_SALE, UNKNOWN
+    status: Mapped[str] = mapped_column(String(16), default="OPEN")  # OPEN, RECONCILED
+    observation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+    product: Mapped["Product"] = relationship()
+    user: Mapped[Optional["User"]] = relationship()
+
+
 # --- RAG (Retrieval-Augmented Generation) - Etapa 2 ---
 
 class KnowledgeSource(Base):

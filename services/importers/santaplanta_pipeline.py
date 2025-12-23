@@ -220,14 +220,167 @@ def pdf_has_text(pdf_path: Path, *, min_chars: int) -> bool:
         return False
 
 def _extract_lines_from_table(table: list[list[str]], dbg: Dict[str, Any]) -> List[ParsedLine]:
+    """Extrae líneas de producto de una tabla, filtrando metadata y encabezados.
+    
+    Criterios de filtrado inteligente:
+    1. Ignora filas que contienen patrones de metadata (direcciones, CUIT, razón social)
+    2. Requiere al menos uno de: SKU numérico, qty > 0, precio > 0
+    3. Descarta líneas con títulos muy cortos sin números
+    """
     lines: List[ParsedLine] = []
+    
+    # Patrones de metadata que indican que NO es una línea de producto
+    METADATA_PATTERNS = [
+        r"\bS\.?R\.?L\.?\b",           # S.R.L.
+        r"\bS\.?A\.?\b",               # S.A.
+        r"\bCUIT\b",                   # CUIT
+        r"\bC\.?U\.?I\.?T\.?:?",       # C.U.I.T.:
+        r"\bIVA\s*(RESPONSABLE|INSCRIPTO|EXENTO)",  # IVA RESPONSABLE
+        r"\bINGRESOS\s*BRUTOS\b",      # Ingresos Brutos
+        r"\bCONDICI[OÓ]N\s*DE\s*VENTA\b",  # Condición de Venta
+        r"\bFECHA\s*DE\s*EMISI[OÓ]N\b",    # Fecha de Emisión
+        r"\bDOCUMENTO\s*NO\s*V[AÁ]LIDO\b", # Documento No Válido
+        r"\bAv\.?\s+[A-ZÁ-Ú]",         # Av. (avenida)
+        r"\bCALLE\s+\d+\s*N[°º]?\s*\d+", # Calle X Nº Y
+        r"\bC\.?A\.?B\.?A\.?\b",       # C.A.B.A.
+        r"\bBUENOS\s*AIRES\b",         # Buenos Aires
+        r"\bBERAZATEGUI\b",            # Berazategui
+        r"\bTel\.?:?\s*\(",            # Tel.: (
+        r"\(\d{2,4}\)\s*\d{3,4}[-\s]?\d{4}",  # Teléfono
+        r"www\.[a-z]+\.(com|ar)",      # Website
+        r"\bDISTRIBUIDORA\b",          # Distribuidora
+        r"\bSANTAPLANTA\b",            # Santa Planta (proveedor)
+        r"\bSe[ñn]ores?\b",            # Señor/Señores
+        r"\bCLIENTE\b",                # Cliente
+        r"\bDOMICILIO\b",              # Domicilio
+        r"\bENTREGA\s*:",              # Entrega:
+        r"\bZONA\s*TRANSPORTE\b",      # Zona Transporte
+        r"\bCONTROLADO\s*POR\b",       # Controlado por
+        r"\bDESPACHADO\s*POR\b",       # Despachado por
+        r"\bENVIADO\s*POR\b",          # Enviado por
+        r"\bSUSTRATOS?\b",             # Sustratos
+        r"\bBIDONES?\b",               # Bidones
+        r"\bFLETE\s*TOTAL\b",          # Flete Total
+        r"\bREMITO\b",                 # REMITO (encabezado)
+        r"\bFACTURA\b",                # FACTURA
+        r"^\s*R\s*$",                  # Solo "R" (código de remito)
+        r"^Cod\.\d+$",                 # Cod.XX
+    ]
+    
+    # Patrones que indican un SKU válido de producto
+    SKU_PATTERN = re.compile(r"^0*(\d{1,9})$")  # Números con ceros a la izquierda
+    
     for row in table[1:]:  # skip header
         if not any(row):
             continue
-        title = " ".join(c.strip() for c in row if c).strip()
-        if not title:
+        
+        # Unir todas las celdas para análisis
+        cells = [(_norm_text(c) if c else '') for c in row]
+        full_text = " ".join(cells).strip()
+        
+        if not full_text:
             continue
-        lines.append(ParsedLine(title=title))
+        
+        # === FILTRO 1: Detectar metadata por patrones ===
+        is_metadata = False
+        for pattern in METADATA_PATTERNS:
+            if re.search(pattern, full_text, re.IGNORECASE):
+                is_metadata = True
+                break
+        
+        if is_metadata:
+            dbg.setdefault('filtered_metadata', []).append(full_text[:80])
+            continue
+        
+        # === FILTRO 2: Extraer datos de producto ===
+        sku = None
+        title = None
+        qty = Decimal(0)
+        unit_cost = Decimal(0)
+        
+        # Buscar SKU (código numérico de 1-9 dígitos)
+        for c in cells:
+            m = SKU_PATTERN.match(c.strip())
+            if m and not sku:
+                # Validar que no sea un año (2017-2025) o número muy corto
+                num = int(m.group(1))
+                if num > 0 and not (2010 <= num <= 2030):
+                    sku = c.strip()
+                    break
+        
+        # Título: la celda más larga que no sea el SKU
+        for c in cells:
+            if c and c != sku and (not title or len(c) > len(title)):
+                title = c
+        
+        # Buscar cantidad (número entero pequeño, usualmente 1-1000)
+        for c in cells:
+            if c != sku and re.fullmatch(r"\d{1,4}([,\.]\d{1,2})?", c.strip().replace(',', '.')):
+                try:
+                    val = Decimal(c.strip().replace(',', '.'))
+                    if 0 < val <= 10000:
+                        qty = val
+                        break
+                except:
+                    pass
+        
+        # Buscar precio (número con formato monetario)
+        for c in reversed(cells):
+            if c and re.search(r"\d+[,\.]\d{2}", c):
+                parsed = _parse_money(c)
+                if parsed > 0:
+                    unit_cost = parsed
+                    break
+        
+        # === FILTRO 3: Validar que parece un producto real ===
+        has_sku = bool(sku)
+        has_qty = qty > 0
+        has_price = unit_cost > 0
+        has_product_title = (
+            title and 
+            len(title) > 3 and 
+            len(title) <= 200 and  # Títulos muy largos = metadata concatenada
+            any(c.isalpha() for c in title)
+        )
+        
+        # REGLA: Debe tener al menos SKU, o (qty Y precio), o (título de producto Y precio)
+        is_valid_product = (
+            has_sku or 
+            (has_qty and has_price) or 
+            (has_product_title and has_price and has_qty)
+        )
+        
+        # REGLA ADICIONAL: Si full_text es muy largo (>250), probablemente es metadata concatenada
+        if len(full_text) > 250:
+            dbg.setdefault('filtered_too_long', []).append(full_text[:80])
+            continue
+        
+        if not is_valid_product:
+            # No es un producto válido, descartar
+            dbg.setdefault('filtered_no_product_data', []).append({
+                'text': full_text[:80],
+                'sku': sku,
+                'qty': float(qty),
+                'price': float(unit_cost)
+            })
+            continue
+        
+        # === Crear línea de producto ===
+        if not title:
+            title = sku or "(sin título)"
+        
+        # Truncar título a máximo 250 chars (límite BD es 300, dejamos margen)
+        if len(title) > 250:
+            title = title[:247] + "..."
+        
+        pl = ParsedLine(
+            supplier_sku=sku,
+            title=title,
+            qty=qty,
+            unit_cost_bonif=unit_cost,
+        )
+        lines.append(pl)
+    
     return lines
 
 def _norm_text(s: str) -> str:
@@ -607,6 +760,16 @@ def _heuristic_fallback_rows(raw_tables: list[list[list[str]]], events: list[dic
                     # Prefer longest token (e.g., '6400' vs '607')
                     sku = max(title_tokens, key=lambda t: (len(t), t))
                     events.append({'level': 'INFO', 'stage': 'fallback', 'event': 'sku_inferred', 'details': {'sku': sku}})
+            
+            # NUEVO: Descartar filas con títulos muy largos (probablemente metadata concatenada)
+            if title and len(title) > 200:
+                events.append({'level': 'DEBUG', 'stage': 'fallback', 'event': 'title_too_long_skipped', 'details': {'len': len(title)}})
+                continue
+            
+            # NUEVO: Truncar título si excede 250 chars (límite BD es 300)
+            if title and len(title) > 250:
+                title = title[:247] + "..."
+            
             pl = ParsedLine(supplier_sku=sku, title=title, qty=Decimal(qty), unit_cost_bonif=unit_cost)
             raw_lines.append(pl)
             if sample_added < 5:
@@ -794,11 +957,17 @@ def _normalize_embedded_skus(lines: List[ParsedLine], events: List[Dict[str, Any
             continue
         candidates: List[Tuple[str,int]] = []  # (sku, pos)
         for b in blocks:
+            # NUEVO: Aceptar el bloque entero si 7-12 dígitos (formato Santa Planta: 018406552)
+            # Estos son SKUs completos que no deben cortarse
+            if 7 <= len(b) <= 12 and re.fullmatch(r"\d{7,12}", b):
+                candidates.append((b, title.find(b)))
+                continue  # No generar ventanas, usar SKU completo
             # Aceptar el bloque entero si 3-6 dígitos
             if 3 <= len(b) <= 6 and re.fullmatch(r"\d{3,6}", b) and not b.startswith("0"):
                 candidates.append((b, title.find(b)))
-            # Si es más largo, generar ventanas 5..3
-            if len(b) > 6:
+            # Si es más largo pero no fue aceptado arriba, generar ventanas 5..3
+            # Solo si no hay un candidato largo ya
+            if len(b) > 6 and not any(len(c[0]) >= 7 for c in candidates):
                 for w in (5,4,3):
                     if w >= len(b):
                         continue
@@ -818,6 +987,7 @@ def _normalize_embedded_skus(lines: List[ParsedLine], events: List[Dict[str, Any
         if not candidates:
             continue
         # Ordenar: longitud desc, posición asc, valor asc (para determinismo total)
+        # Esto prioriza SKUs largos (9 dígitos) sobre cortos (5 dígitos)
         candidates.sort(key=lambda t: (-len(t[0]), t[1], t[0]))
         chosen = candidates[0][0]
         old = l.supplier_sku

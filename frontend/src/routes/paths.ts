@@ -8,6 +8,7 @@ export const PATHS = {
   productDetail: (id: number | string) => `/productos/${id}`,
   productImages: (id: number | string) => `/productos/${id}/imagen`,
   stock: "/stock",
+  stockShortages: "/stock/shortages",
   market: "/mercado",
   suppliers: "/proveedores",
   purchases: "/compras",
