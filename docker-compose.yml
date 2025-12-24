@@ -143,6 +143,9 @@ services:
       # para acceder al puerto 8000 del host. Si la API corre en Docker, usar http://api:8000
       API_BASE_URL: ${API_BASE_URL:-http://host.docker.internal:8000}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      # Seguridad JWT (debe coincidir con el backend que genera los tokens)
+      MCP_SECRET_KEY: ${MCP_SECRET_KEY}
+      MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-60}
       LOG_LEVEL: info
     ports:
       - "8100:8100"

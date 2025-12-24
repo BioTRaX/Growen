@@ -305,6 +305,7 @@ class OpenAIProvider(ILLMProvider):
                         "Tool call find_products_by_name sin 'query' válido. Args recibidos: %s",
                         fn_args
                     )
+                else:
                     # Llamada correcta al MCP
                     tool_result = await self.call_mcp_tool(
                         tool_name=fn_name,
@@ -765,13 +766,12 @@ class OpenAIProvider(ILLMProvider):
                 fn_args = json.loads(call.function.arguments or "{}")
             except Exception:
                 fn_args = {}
-            params: Dict[str, Any] = {"user_role": user_role}
             if fn_name == "find_products_by_name":
                 query = fn_args.get("query") or fn_args.get("name") or fn_args.get("product_name")
                 if not query or not isinstance(query, str):
                     tool_result = {"error": "missing_query"}
                 else:
-                    tool_result = await self.call_mcp_tool(tool_name=fn_name, parameters={"query": query, "user_role": user_role})
+                    tool_result = await self.call_mcp_tool(tool_name=fn_name, parameters={"query": query}, user_role=user_role)
                     # Si hay un único resultado podemos preparar un segundo paso auto
                     if isinstance(tool_result, dict) and not tool_result.get("error"):
                         items = tool_result.get("items", [])
@@ -783,7 +783,7 @@ class OpenAIProvider(ILLMProvider):
                 if not sku or not isinstance(sku, str):
                     tool_result = {"error": "missing_sku"}
                 else:
-                    tool_result = await self.call_mcp_tool(tool_name=fn_name, parameters={"sku": sku, "user_role": user_role})
+                    tool_result = await self.call_mcp_tool(tool_name=fn_name, parameters={"sku": sku}, user_role=user_role)
             tool_results_for_model.append({"name": fn_name, "result": tool_result})
             messages.append(
                 {
@@ -796,7 +796,7 @@ class OpenAIProvider(ILLMProvider):
             # Si acabamos de hacer búsqueda y obtuvimos 1 SKU, forzamos siguiente llamada get_product_info
             if fn_name == "find_products_by_name" and used_search_sku and all(c.function.name != "get_product_info" for c in tool_calls):
                 # Inyectar manualmente una tool call sintética para obtener info
-                synthetic_result = await self.call_mcp_tool(tool_name="get_product_info", parameters={"sku": used_search_sku, "user_role": user_role})
+                synthetic_result = await self.call_mcp_tool(tool_name="get_product_info", parameters={"sku": used_search_sku}, user_role=user_role)
                 messages.append(
                     {
                         "role": "tool",
