@@ -4,6 +4,10 @@
 // NG-HEADER: Lineamientos: Ver AGENTS.md
 // File consolidated below; removed duplicate earlier implementation
 import { useEffect, useMemo, useState } from 'react'
+import { useMassCanonical, type MarketProductSource } from '../contexts/MassCanonicalContext'
+import { createCanonicalBatch, type CanonicalBatchItem } from '../services/canonical'
+import MassCanonicalWizard from './MassCanonicalWizard'
+import MassCanonicalRecoveryModal from './MassCanonicalRecoveryModal'
 import { FixedSizeList as List, ListChildComponentProps } from 'react-window'
 import SupplierAutocomplete from './supplier/SupplierAutocomplete'
 import type { SupplierSearchItem } from '../services/suppliers'
@@ -89,6 +93,12 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
   const [listHeight, setListHeight] = useState<number>(400)
   // Forzar recarga aun si ya estamos en página 1
   const [reloadTick, setReloadTick] = useState(0)
+
+  // Alta Masiva de Productos Canónicos
+  const massCanonical = useMassCanonical()
+  const [showWizard, setShowWizard] = useState(false)
+  const [showRecoveryModal, setShowRecoveryModal] = useState(false)
+  const [recoveryProductCount, setRecoveryProductCount] = useState(0)
 
   const { prefs, setPrefs, reset } = useProductsTablePrefs()
 
@@ -257,9 +267,72 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
 
   useEffect(() => {
     if (open) {
-      listCategories().then(setCategories).catch(() => {})
+      listCategories().then(setCategories).catch(() => { })
     }
   }, [open])
+
+  // Verificar si hay sesión de alta masiva abandonada al abrir
+  useEffect(() => {
+    if (open && massCanonical.checkRecoverSession()) {
+      const saved = localStorage.getItem('mass_cannon_session')
+      if (saved) {
+        try {
+          const data = JSON.parse(saved)
+          setRecoveryProductCount(data.sourceProducts?.length || 0)
+          setShowRecoveryModal(true)
+        } catch { }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  // Handlers para Alta Masiva
+  function handleRecoverSession() {
+    massCanonical.recoverSession()
+    setShowRecoveryModal(false)
+    setShowWizard(true)
+  }
+
+  function handleDiscardSession() {
+    massCanonical.clearSession()
+    setShowRecoveryModal(false)
+  }
+
+  function handleWizardClose() {
+    setShowWizard(false)
+  }
+
+  async function handleWizardComplete() {
+    setShowWizard(false)
+
+    const drafts = massCanonical.state.processedDrafts
+    if (drafts.length === 0) {
+      showToast('error', 'No hay productos para procesar')
+      return
+    }
+
+    showToast('info', `Enviando ${drafts.length} productos al servidor...`)
+
+    try {
+      const batchItems: CanonicalBatchItem[] = drafts.map(draft => ({
+        name: draft.name,
+        brand: draft.brand,
+        category_id: draft.categoryId,
+        subcategory_id: draft.subcategoryId,
+        sku_custom: (draft.specsJson as any)?.generatedSku || null,
+        source_product_id: draft.sourceProductId,
+      }))
+
+      const result = await createCanonicalBatch(batchItems)
+
+      showToast('success', `✅ ${result.message} (Job: ${result.job_id})`)
+      massCanonical.clearSession()
+      forceRefreshFirstPage()
+
+    } catch (error: any) {
+      showToast('error', error?.response?.data?.detail || error?.message || 'Error al procesar productos')
+    }
+  }
 
   const topLevelCategories = useMemo(() => categories.filter(c => c.parent_id == null), [categories])
 
@@ -319,7 +392,7 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
           setItems((prev) => (page === 1 ? r.items : [...prev, ...r.items]))
           setTotal(r.total)
         })
-        .catch(() => {})
+        .catch(() => { })
         .finally(() => setLoading(false))
     }, 300)
     return () => clearTimeout(t)
@@ -628,7 +701,7 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
       },
     ]
     return defs
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, saleEditing, saleVal, editing, stockVal, prefs, canEdit])
 
   const orderedCols: ColDef[] = useMemo(() => {
@@ -700,10 +773,34 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
         <button
           className="btn"
           disabled={!items.length}
-          onClick={toggleSelectAllOnPage}
+          onClick={selectAllOnPage}
         >
-          {selected.length === items.length && items.length > 0 ? 'Deseleccionar página' : 'Seleccionar página'}
+          Seleccionar página
         </button>
+        {canEdit && (
+          <button
+            className="btn-dark"
+            disabled={!selected.length}
+            onClick={() => {
+              // Convertir items seleccionados a formato MarketProductSource
+              const selectedItems = items.filter(it => selected.includes(it.product_id))
+              const products: MarketProductSource[] = selectedItems.map(it => ({
+                product_id: it.product_id,
+                preferred_name: it.name,
+                product_sku: (it as any).canonical_sku || (it as any).first_variant_sku || '',
+                category_id: (it as any).category_id || null,
+                category_name: it.category_path?.split(' > ')?.[0] || null,
+                supplier_id: it.supplier?.id || null,
+                supplier_name: it.supplier?.name || null,
+              }))
+              massCanonical.startSession(products)
+              setShowWizard(true)
+            }}
+            title="Crear múltiples productos canónicos desde selección"
+          >
+            📝 Altas Cannon
+          </button>
+        )}
         <button
           className="btn"
           disabled={!selected.length}
@@ -712,8 +809,8 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
           Limpiar selección
         </button>
         <button className="btn" onClick={() => setShowColsCfg((v) => !v)}>Diseño</button>
-  <button className="btn" onClick={() => reset()}>Restaurar diseño</button>
-  <button className="btn" onClick={() => setShowDiag(true)}>Ver diagnósticos</button>
+        <button className="btn" onClick={() => reset()}>Restaurar diseño</button>
+        <button className="btn" onClick={() => setShowDiag(true)}>Ver diagnósticos</button>
         {canEdit && (
           <button className="btn" onClick={() => setShowCreate(true)}>Nuevo producto</button>
         )}
@@ -734,7 +831,7 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
                 try {
                   const m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/)
                   if (m) headers['X-CSRF-Token'] = decodeURIComponent(m[1])
-                } catch {}
+                } catch { }
                 const res = await fetch('/products-ex/supplier-items/fill-missing-sale', {
                   method: 'POST',
                   credentials: 'include',
@@ -924,9 +1021,9 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
       {/* Pagination controls for embedded mode */}
       {isEmbedded && (
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'center' }}>
-          <button 
-            className="btn-dark btn-lg" 
-            disabled={page === 1 || loading} 
+          <button
+            className="btn-dark btn-lg"
+            disabled={page === 1 || loading}
             onClick={() => {
               setPage(1)
               setItems([])
@@ -935,9 +1032,9 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
           >
             Anterior
           </button>
-          <button 
-            className="btn-dark btn-lg" 
-            disabled={items.length >= total || loading} 
+          <button
+            className="btn-dark btn-lg"
+            disabled={items.length >= total || loading}
             onClick={() => setPage((p) => p + 1)}
           >
             Más
@@ -1120,7 +1217,7 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
                         const sample = withStock.slice(0, showCount).map(it => String(it.product_id)).join(', ')
                         showToast('info', `Seleccionaste ${withStock.length} con stock > 0${withStock.length ? ` (ej: ${sample}${withStock.length > showCount ? '…' : ''})` : ''}. El backend bloqueará esos borrados.`)
                       }
-                    } catch {}
+                    } catch { }
                     const r = await deleteProducts(ids)
                     let msg = `Borrados ${r.deleted.length} de ${r.requested.length}`
                     const blockedMessages: string[] = []
@@ -1141,14 +1238,14 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
                     if ((r.blocked_stock?.length || 0) + (r.blocked_refs?.length || 0)) {
                       showToast('info', 'Sugerencia: filtrá "Sin stock" para facilitar el borrado de los que quedaron bloqueados por stock.')
                     }
-                    
+
                     if (r.deleted.length > 0) {
                       setItems(prev => prev.filter(it => !r.deleted.includes(it.product_id)))
                     }
                     setSelected(prev => prev.filter(id => !r.deleted.includes(id)))
                     setPendingDeleteIds(null)
                     setShowDeleteConfirm(false)
-                    
+
                     // If the list becomes empty after deletion, force a refresh of the first page
                     if (items.length === r.deleted.length) {
                       setTimeout(() => {
@@ -1169,6 +1266,21 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
           </div>
         </div>
       )}
+
+      {/* Modal de recuperación de sesión de alta masiva */}
+      <MassCanonicalRecoveryModal
+        open={showRecoveryModal}
+        productCount={recoveryProductCount}
+        onContinue={handleRecoverSession}
+        onDiscard={handleDiscardSession}
+      />
+
+      {/* Wizard de alta masiva */}
+      <MassCanonicalWizard
+        open={showWizard}
+        onClose={handleWizardClose}
+        onComplete={handleWizardComplete}
+      />
     </div>
   )
 }

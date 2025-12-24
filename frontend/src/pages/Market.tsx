@@ -40,7 +40,7 @@ export default function Market() {
   // Estado para modal de detalles
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null)
   const [selectedProductName, setSelectedProductName] = useState<string>('')
-  
+
   // Estado para confirmación de eliminación
   const [deletingProductId, setDeletingProductId] = useState<number | null>(null)
 
@@ -50,7 +50,7 @@ export default function Market() {
 
   // Cargar categorías al montar
   useEffect(() => {
-    listCategories().then(setCategories).catch(() => {})
+    listCategories().then(setCategories).catch(() => { })
   }, [])
 
   // Cargar productos con filtros
@@ -72,14 +72,14 @@ export default function Market() {
         page,
         page_size: pageSize,
       })
-      
+
       setItems(response.items)
       setTotal(response.total)
       setTotalPages(response.pages)
     } catch (error: any) {
-      push({ 
-        kind: 'error', 
-        message: error?.message || 'Error cargando productos del mercado' 
+      push({
+        kind: 'error',
+        message: error?.message || 'Error cargando productos del mercado'
       })
       setItems([])
       setTotal(0)
@@ -128,7 +128,7 @@ export default function Market() {
     if (!confirm(`¿Estás seguro de eliminar el producto "${productName}" (ID: ${productId})?\n\nEsta acción es permanente y eliminará el producto canónico y todas sus fuentes de mercado asociadas.`)) {
       return
     }
-    
+
     try {
       setDeletingProductId(productId)
       await deleteCanonicalProduct(productId)
@@ -160,7 +160,6 @@ export default function Market() {
   function clearSelection() {
     setSelected(new Set())
   }
-
   function selectAllOnPage() {
     setSelected(new Set(items.map((item) => item.product_id)))
   }
@@ -180,7 +179,7 @@ export default function Market() {
     }
 
     const productIds = Array.from(selected)
-    
+
     // Validar límite del backend
     if (productIds.length > 100) {
       push({ kind: 'error', message: 'Máximo 100 productos por actualización' })
@@ -190,7 +189,7 @@ export default function Market() {
     setUpdating(true)
     try {
       const response = await batchUpdateMarketPrices(productIds)
-      
+
       // Construir mensaje de resumen
       const parts: string[] = []
       parts.push(`${response.enqueued} producto${response.enqueued !== 1 ? 's' : ''} encolado${response.enqueued !== 1 ? 's' : ''}`)
@@ -200,21 +199,21 @@ export default function Market() {
       if (response.errors > 0) {
         parts.push(`${response.errors} con error${response.errors !== 1 ? 'es' : ''}`)
       }
-      
+
       push({
         kind: 'success',
         message: parts.join(', ')
       })
-      
+
       // Limpiar selección después de éxito
       clearSelection()
-      
+
       // Opcional: recargar productos después de un delay para ver actualizaciones
       // (las tareas se procesan en background, puede tomar varios segundos)
       setTimeout(() => {
         loadProducts()
       }, 2000)
-      
+
     } catch (error: any) {
       push({
         kind: 'error',
@@ -268,7 +267,7 @@ export default function Market() {
     const now = new Date()
     const diffMs = now.getTime() - date.getTime()
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-    
+
     if (diffDays === 0) return 'Hoy'
     if (diffDays === 1) return 'Ayer'
     if (diffDays < 7) return `Hace ${diffDays} días`
@@ -278,13 +277,13 @@ export default function Market() {
 
   function getPriceComparisonClass(salePrice: number | null, marketMin: number | null, marketMax: number | null): string {
     if (!salePrice || !marketMin || !marketMax) return ''
-    
+
     // Si nuestro precio está por debajo del mínimo del mercado
     if (salePrice < marketMin) return 'price-below-market'
-    
+
     // Si nuestro precio está por encima del máximo del mercado
     if (salePrice > marketMax) return 'price-above-market'
-    
+
     // Si está dentro del rango
     return 'price-in-market'
   }
@@ -299,7 +298,7 @@ export default function Market() {
    */
   function formatToTitleCase(text: string | null | undefined): string {
     if (!text) return ''
-    
+
     // Dividir por espacios o guiones bajos y convertir cada palabra a Title Case
     return text
       .split(/\s+|_+/)
@@ -319,19 +318,14 @@ export default function Market() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
         <h2 style={{ marginTop: 0, marginBottom: 0, flex: 1 }}>Mercado</h2>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button 
-            className="btn" 
+          <button
+            className="btn"
             onClick={handleBatchUpdate}
             disabled={selected.size === 0 || updating}
             title={selected.size === 0 ? 'Seleccione productos para actualizar' : `Actualizar ${selected.size} producto${selected.size !== 1 ? 's' : ''}`}
           >
             {updating ? 'Actualizando...' : `Actualizar ${selected.size > 0 ? `(${selected.size})` : ''}`}
           </button>
-          {selected.size > 0 && (
-            <button className="btn-secondary" onClick={clearSelection}>
-              Limpiar selección
-            </button>
-          )}
           <button className="btn-dark btn-lg" onClick={() => navigate(PATHS.products)}>
             Ir a Productos
           </button>
@@ -366,7 +360,7 @@ export default function Market() {
               title="Buscar por nombre de producto o SKU"
             />
           </div>
-          
+
           {/* Filtro por proveedor - Centro */}
           <div style={{ minWidth: 200, justifySelf: 'center' }}>
             <label style={{ display: 'block', fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>
@@ -374,7 +368,7 @@ export default function Market() {
             </label>
             <SupplierAutocomplete
               value={supplierSel}
-              onChange={(item) => { 
+              onChange={(item) => {
                 setSupplierSel(item)
                 setSupplierId(item ? String(item.id) : '')
                 resetAndSearch()
@@ -382,15 +376,15 @@ export default function Market() {
               placeholder="Todos los proveedores"
             />
           </div>
-          
+
           {/* Filtro por categoría - Derecha */}
           <div style={{ minWidth: 150, justifySelf: 'flex-end' }}>
             <label style={{ display: 'block', fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>
               Categoría
             </label>
-            <select 
-              className="select" 
-              value={categoryId} 
+            <select
+              className="select"
+              value={categoryId}
               onChange={(e) => { setCategoryId(e.target.value); resetAndSearch() }}
               title="Filtrar por categoría de producto"
             >
@@ -405,8 +399,8 @@ export default function Market() {
         {/* Botón limpiar filtros - Debajo de los filtros */}
         {hasActiveFilters() && (
           <div style={{ marginTop: 8 }}>
-            <button 
-              className="btn-secondary" 
+            <button
+              className="btn-secondary"
               onClick={clearAllFilters}
               title="Limpiar todos los filtros"
             >
@@ -421,7 +415,7 @@ export default function Market() {
             {q && (
               <span className="filter-badge">
                 Búsqueda: "{q}"
-                <button 
+                <button
                   onClick={() => { setQ(''); resetAndSearch() }}
                   style={{ marginLeft: 6, cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 14 }}
                   title="Quitar filtro"
@@ -433,7 +427,7 @@ export default function Market() {
             {supplierSel && (
               <span className="filter-badge">
                 Proveedor: {supplierSel.name}
-                <button 
+                <button
                   onClick={() => { setSupplierSel(null); setSupplierId(''); resetAndSearch() }}
                   style={{ marginLeft: 6, cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 14 }}
                   title="Quitar filtro"
@@ -445,7 +439,7 @@ export default function Market() {
             {categoryId && (
               <span className="filter-badge">
                 Categoría: {categories.find(c => c.id === Number(categoryId))?.name}
-                <button 
+                <button
                   onClick={() => { setCategoryId(''); resetAndSearch() }}
                   style={{ marginLeft: 6, cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 14 }}
                   title="Quitar filtro"
@@ -510,7 +504,7 @@ export default function Market() {
                   product.market_price_min,
                   product.market_price_max
                 )
-                
+
                 return (
                   <tr key={product.product_id}>
                     {/* Checkbox de selección */}
@@ -525,8 +519,8 @@ export default function Market() {
                     {/* Nombre del producto */}
                     <td style={{ textAlign: 'left' }}>
                       {product.internal_product_id ? (
-                        <Link 
-                          className="truncate product-title" 
+                        <Link
+                          className="truncate product-title"
                           to={`/productos/${product.internal_product_id}`}
                           state={{ from: '/mercado' }}
                           title={product.preferred_name}
@@ -534,8 +528,8 @@ export default function Market() {
                           {formatToTitleCase(product.preferred_name)}
                         </Link>
                       ) : (
-                        <span 
-                          className="truncate" 
+                        <span
+                          className="truncate"
                           style={{ color: 'var(--text-secondary)', cursor: 'not-allowed' }}
                           title="No hay Product interno asociado - No se puede ver el detalle"
                         >
@@ -602,8 +596,8 @@ export default function Market() {
                             onClick={() => handleDeleteProduct(product.product_id, product.preferred_name)}
                             disabled={deletingProductId === product.product_id}
                             title="Eliminar producto canónico (sin Product interno asociado)"
-                            style={{ 
-                              padding: '4px 8px', 
+                            style={{
+                              padding: '4px 8px',
                               fontSize: 14,
                               color: '#ef4444',
                               borderColor: '#ef4444'
@@ -625,9 +619,9 @@ export default function Market() {
       {/* Paginación */}
       {total > pageSize && (
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'center', alignItems: 'center' }}>
-          <button 
-            className="btn-dark btn-lg" 
-            disabled={page === 1 || loading} 
+          <button
+            className="btn-dark btn-lg"
+            disabled={page === 1 || loading}
             onClick={() => setPage((p) => Math.max(1, p - 1))}
           >
             Anterior
@@ -635,9 +629,9 @@ export default function Market() {
           <span style={{ display: 'flex', alignItems: 'center', padding: '0 12px' }}>
             Página {page} de {totalPages} ({total} productos)
           </span>
-          <button 
-            className="btn-dark btn-lg" 
-            disabled={page >= totalPages || loading} 
+          <button
+            className="btn-dark btn-lg"
+            disabled={page >= totalPages || loading}
             onClick={() => setPage((p) => p + 1)}
           >
             Siguiente
@@ -696,6 +690,7 @@ export default function Market() {
           background-color: var(--primary-light, rgba(59, 130, 246, 0.1));
         }
       `}</style>
+
     </div>
   )
 }
