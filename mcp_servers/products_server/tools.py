@@ -33,9 +33,15 @@ logger = logging.getLogger("mcp_products.tools")
 # Roles permitidos para la herramienta "full" (por ahora hace lo mismo que la básica)
 _FULL_INFO_ROLES = {"admin", "colaborador"}
 
-
-class PermissionError(ValueError):
-    """Error de permiso insuficiente para la operación solicitada."""
+# Importar módulo de seguridad
+from .security import (
+    require_mcp_auth,
+    MCPAuthError,
+    MCPTokenExpired,
+    MCPTokenInvalid,
+    MCPUnauthorized,
+    MCPRateLimited,
+)
 
 
 def _get_cache_ttl() -> float:
@@ -88,7 +94,8 @@ def _cache_put(key: str, value: Dict[str, Any]) -> None:
     _cache[key] = (time.time(), value)
 
 
-async def get_product_info(sku: str = None, product_id: int = None, user_role: str = "guest") -> Dict[str, Any]:
+@require_mcp_auth()  # Todos los usuarios autenticados pueden acceder
+async def get_product_info(sku: str = None, product_id: int = None) -> Dict[str, Any]:
     """Obtiene información de un producto por SKU canónico o ID, incluyendo descripción.
 
     Retorna datos del producto: name, sale_price, stock, sku, y descripción/especificaciones
@@ -97,7 +104,6 @@ async def get_product_info(sku: str = None, product_id: int = None, user_role: s
     Args:
         sku: SKU canónico del producto (formato XXX_####_YYY).
         product_id: ID interno del producto (alternativa al SKU).
-        user_role: Rol declarado del usuario que solicita la información.
 
     Returns:
         Diccionario con claves: name, sale_price, stock, sku, description, technical_specs, usage_instructions.
@@ -209,7 +215,8 @@ async def get_product_info(sku: str = None, product_id: int = None, user_role: s
             raise
 
 
-async def get_product_full_info(sku: str = None, product_id: int = None, user_role: str = "guest") -> Dict[str, Any]:
+@require_mcp_auth(allowed_roles=["admin", "colaborador"])
+async def get_product_full_info(sku: str = None, product_id: int = None) -> Dict[str, Any]:
     """Obtiene información completa del producto incluyendo datos de enriquecimiento.
 
     Incluye toda la información básica más:
@@ -220,19 +227,15 @@ async def get_product_full_info(sku: str = None, product_id: int = None, user_ro
     Args:
         sku: SKU canónico del producto (formato XXX_####_YYY).
         product_id: ID interno del producto (alternativa al SKU).
-        user_role: Rol declarado del usuario que solicita. Debe ser 'admin' o 'colaborador'.
 
     Returns:
         Diccionario con estructura extendida incluyendo campos de enriquecimiento.
 
     Raises:
-        PermissionError: Si el rol no está autorizado para información "full".
+        MCPUnauthorized: Si el rol no está autorizado para información "full".
         httpx.HTTPStatusError / httpx.RequestError: Errores de transporte a la API.
         KeyError: Campos faltantes en la respuesta de la API.
     """
-    if user_role not in _FULL_INFO_ROLES:
-        raise PermissionError("Permission denied: rol insuficiente para información completa.")
-    
     if not sku and not product_id:
         raise ValueError("Se requiere 'sku' o 'product_id'.")
     
@@ -299,12 +302,12 @@ async def get_product_full_info(sku: str = None, product_id: int = None, user_ro
             raise
 
 
-async def find_products_by_name(query: str, user_role: str) -> Dict[str, Any]:
+@require_mcp_auth()  # Todos los usuarios autenticados
+async def find_products_by_name(query: str) -> Dict[str, Any]:
     """Busca productos por nombre (búsqueda parcial) y retorna coincidencias con stock.
 
     Args:
         query: Texto ingresado por el usuario (nombre parcial o completo).
-        user_role: Rol declarado (no se restringe en MVP).
 
     Returns:
         Dict con clave `items` que es una lista de productos con:
@@ -375,12 +378,13 @@ TOOLS_REGISTRY = {
 }
 
 
-async def invoke_tool(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
-    """Despacha la herramienta solicitada.
+async def invoke_tool(tool_name: str, parameters: Dict[str, Any], token: str) -> Dict[str, Any]:
+    """Despacha la herramienta solicitada con autenticación JWT.
 
     Args:
         tool_name: Nombre registrado de la herramienta.
-        parameters: Parámetros (deben incluir `user_role` y `sku` o `product_id`).
+        parameters: Parámetros de la herramienta (sku, product_id, query según el tool).
+        token: Token JWT para autenticación (validado por el decorador @require_mcp_auth).
 
     Returns:
         Resultado de la herramienta como dict.
@@ -388,17 +392,16 @@ async def invoke_tool(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, A
     Raises:
         KeyError: Si el tool no existe.
         ValueError: Validaciones internas de parámetros.
+        MCPAuthError: Si la autenticación o autorización falla.
     """
-    # DEBUG: Log de entrada
-    logger.info("invoke_tool: Tool Call Inputs: %s -> %s", tool_name, parameters)
+    # DEBUG: Log de entrada (sin mostrar token completo por seguridad)
+    logger.info("invoke_tool: Tool Call Inputs: %s -> %s (token=%s...)", 
+                tool_name, parameters, token[:20] if token else "None")
     
     if tool_name not in TOOLS_REGISTRY:
         raise KeyError(f"Tool desconocida: {tool_name}")
     if not isinstance(parameters, dict):
         raise ValueError("parameters debe ser un objeto JSON (dict).")
-    user_role = parameters.get("user_role")
-    if not user_role or not isinstance(user_role, str):
-        raise ValueError("Parámetro 'user_role' requerido (string).")
 
     func = TOOLS_REGISTRY[tool_name]
     result: Dict[str, Any] = {}
@@ -407,8 +410,9 @@ async def invoke_tool(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, A
         query = parameters.get("query")
         if not query or not isinstance(query, str):
             raise ValueError("Parámetro 'query' requerido (string).")
-        logger.info("invoke_tool: Ejecutando %s con query='%s' role='%s'", tool_name, query, user_role)
-        result = await func(query=query, user_role=user_role)  # type: ignore[arg-type]
+        logger.info("invoke_tool: Ejecutando %s con query='%s'", tool_name, query)
+        # El decorador @require_mcp_auth recibe token como primer parámetro
+        result = await func(token, query=query)  # type: ignore[arg-type]
     else:
         # Tools de producto: aceptan sku o product_id
         sku = parameters.get("sku")
@@ -421,14 +425,16 @@ async def invoke_tool(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, A
         if not sku and not product_id:
             raise ValueError("Se requiere 'sku' o 'product_id'.")
         
-        logger.info("invoke_tool: Ejecutando %s con sku='%s' product_id=%s role='%s'", tool_name, sku, product_id, user_role)
-        result = await func(sku=sku, product_id=product_id, user_role=user_role)  # type: ignore[arg-type]
+        logger.info("invoke_tool: Ejecutando %s con sku='%s' product_id=%s", tool_name, sku, product_id)
+        # El decorador @require_mcp_auth recibe token como primer parámetro
+        result = await func(token, sku=sku, product_id=product_id)  # type: ignore[arg-type]
     
     # DEBUG: Log de salida (truncado si es muy largo)
     result_summary = _summarize_tool_output(result)
     logger.info("invoke_tool: Tool Call Output (%s): %s", tool_name, result_summary)
     
     return result
+
 
 
 def _summarize_tool_output(result: Dict[str, Any], max_length: int = 500) -> str:

@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Callable
 
 from fastapi import Depends, HTTPException, Request
+from jose import jwt as jose_jwt, JWTError
 import logging
 from fastapi.responses import Response
 from passlib.hash import argon2
@@ -250,6 +251,53 @@ def reset_login_attempts(ip: str) -> None:
     _login_attempts.pop(ip, None)
 
 
+def create_mcp_token(
+    sub: str,
+    role: str,
+    expires_delta: timedelta | None = None,
+    extra_claims: dict | None = None,
+) -> str:
+    """Genera un JWT firmado para autenticación de servidores MCP.
+    
+    El token es firmado con MCP_SECRET_KEY (diferente de SECRET_KEY principal)
+    y contiene claims de usuario para autorización en herramientas MCP.
+    
+    Args:
+        sub: Identificador del sujeto (user_id, service_name, etc.)
+        role: Rol del usuario (admin, colaborador, guest, etc.)
+        expires_delta: Duración de validez del token. Por defecto: 15 minutos.
+        extra_claims: Claims adicionales a incluir en el payload.
+    
+    Returns:
+        Token JWT firmado como string.
+        
+    Raises:
+        RuntimeError: Si MCP_SECRET_KEY no está configurado.
+    """
+    secret = settings.mcp_secret_key
+    if not secret:
+        if settings.env == "dev":
+            # En desarrollo, usar una clave predecible para tests
+            secret = "dev-mcp-secret-key"
+        else:
+            raise RuntimeError("MCP_SECRET_KEY not configured")
+    
+    now = datetime.utcnow()
+    expires = now + (expires_delta or timedelta(minutes=15))
+    
+    payload = {
+        "sub": sub,
+        "role": role,
+        "iat": now,
+        "exp": expires,
+        "jti": secrets.token_hex(8),  # Prevenir replay attacks
+    }
+    if extra_claims:
+        payload.update(extra_claims)
+    
+    return jose_jwt.encode(payload, secret, algorithm="HS256")
+
+
 __all__ = [
     "hash_pw",
     "verify_pw",
@@ -261,5 +309,6 @@ __all__ = [
     "check_login_rate_limit",
     "record_failed_login",
     "reset_login_attempts",
+    "create_mcp_token",
 ]
 

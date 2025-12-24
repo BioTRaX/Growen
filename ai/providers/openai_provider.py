@@ -24,6 +24,7 @@ import logging
 from ..provider_base import ILLMProvider
 from ..types import Task
 from agent_core.detect_mcp_url import get_mcp_products_url, get_mcp_web_search_url
+from services.auth import create_mcp_token
 
 try:  # Import perezoso para no forzar dependencia si no se usa
     from openai import OpenAI  # type: ignore
@@ -304,11 +305,11 @@ class OpenAIProvider(ILLMProvider):
                         "Tool call find_products_by_name sin 'query' válido. Args recibidos: %s",
                         fn_args
                     )
-                else:
                     # Llamada correcta al MCP
                     tool_result = await self.call_mcp_tool(
                         tool_name=fn_name,
-                        parameters={"query": query, "user_role": user_role},
+                        parameters={"query": query},
+                        user_role=user_role,
                     )
                     # Auto-extracción de product_id y sku si búsqueda retorna 1 resultado único
                     if isinstance(tool_result, dict) and not tool_result.get("error"):
@@ -364,7 +365,7 @@ class OpenAIProvider(ILLMProvider):
                         )
                     else:
                         # Llamada correcta al MCP (preferir product_id sobre sku)
-                        params = {"user_role": user_role}
+                        params = {}
                         if product_id:
                             params["product_id"] = product_id
                         if sku:
@@ -372,6 +373,7 @@ class OpenAIProvider(ILLMProvider):
                         tool_result = await self.call_mcp_tool(
                             tool_name=fn_name,
                             parameters=params,
+                            user_role=user_role,
                         )
 
             # Guardar tool call para logging
@@ -423,7 +425,7 @@ class OpenAIProvider(ILLMProvider):
                 and (used_search_product_id or used_search_sku)
                 and all(c.function.name != "get_product_info" for c in tool_calls)
             ):
-                synthetic_params = {"user_role": user_role}
+                synthetic_params = {}
                 if used_search_product_id:
                     synthetic_params["product_id"] = used_search_product_id
                 if used_search_sku:
@@ -432,6 +434,7 @@ class OpenAIProvider(ILLMProvider):
                 synthetic_result = await self.call_mcp_tool(
                     tool_name="get_product_info",
                     parameters=synthetic_params,
+                    user_role=user_role,
                 )
                 
                 # IMPORTANTE: Agregar la llamada sintética al assistant message
@@ -615,18 +618,38 @@ class OpenAIProvider(ILLMProvider):
             )
         return base_tools
 
-    async def call_mcp_tool(self, *, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any] | str:
-        """Invoca el servidor MCP de productos de forma resiliente.
+    async def call_mcp_tool(self, *, tool_name: str, parameters: Dict[str, Any], user_role: str = "guest") -> Dict[str, Any] | str:
+        """Invoca el servidor MCP de productos de forma resiliente con autenticación JWT.
 
-        Lee URL desde `MCP_PRODUCTS_URL` o detecta automáticamente según contexto
-        (Docker vs host local). Maneja errores de red devolviendo un JSON serializado
-        que el modelo pueda interpretar para responder al usuario sin exponer detalles técnicos.
+        Genera un token JWT firmado con el rol del usuario y lo envía en el header
+        X-MCP-Token. Lee URL desde `MCP_PRODUCTS_URL` o detecta automáticamente
+        según contexto (Docker vs host local).
+        
+        Args:
+            tool_name: Nombre de la herramienta MCP a invocar.
+            parameters: Parámetros de la herramienta (sku, product_id, query, etc.).
+            user_role: Rol del usuario para generar el token JWT.
+            
+        Returns:
+            Resultado de la herramienta o dict con "error" si falla.
         """
         mcp_url = get_mcp_products_url()
-        payload = {"tool_name": tool_name, "parameters": parameters}
+        
+        # Generar token JWT para autenticación
+        try:
+            token = create_mcp_token(sub="openai_provider", role=user_role)
+        except Exception as e:
+            logging.error("Error generando token MCP: %s", e)
+            return {"error": "token_generation_failed"}
+        
+        # Eliminar user_role de parameters si existe (ahora va en el token)
+        clean_params = {k: v for k, v in parameters.items() if k != "user_role"}
+        payload = {"tool_name": tool_name, "parameters": clean_params}
+        headers = {"X-MCP-Token": token}
+        
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.post(mcp_url, json=payload)
+                resp = await client.post(mcp_url, json=payload, headers=headers)
                 if resp.status_code != 200:
                     logging.warning("MCP respondió status=%s detail=%s", resp.status_code, resp.text[:200])
                     return {"error": "tool_call_failed", "status": resp.status_code}
