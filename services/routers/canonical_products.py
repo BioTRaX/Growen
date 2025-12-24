@@ -43,6 +43,21 @@ class CanonicalUpdate(BaseModel):
     subcategory_id: int | None = None
 
 
+class CanonicalBatchItem(BaseModel):
+    """Item para creación batch de producto canónico."""
+    name: str
+    brand: str | None = None
+    category_id: int | None = None
+    subcategory_id: int | None = None
+    sku_custom: str | None = None
+    source_product_id: int | None = None  # ID del producto de mercado origen
+
+
+class CanonicalBatchRequest(BaseModel):
+    """Request para creación batch de productos canónicos."""
+    items: list[CanonicalBatchItem]
+
+
 @canonical_router.get("/resolve", dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))])
 async def resolve_canonical_by_sku(
     sku: str = Query(..., description="NG-SKU (NG-######) o SKU propio canónico (XXX_####_YYY)"),
@@ -173,6 +188,61 @@ async def create_canonical_product(
         "sku_custom": cp.sku_custom,
         "category_id": cp.category_id,
         "subcategory_id": cp.subcategory_id,
+    }
+
+
+@canonical_router.post(
+    "/batch-job",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+    status_code=202,
+)
+async def create_canonical_batch_job(
+    req: CanonicalBatchRequest,
+    request: Request,
+    sess: SessionData = Depends(current_session),
+) -> dict:
+    """Encola creación batch de productos canónicos.
+    
+    Retorna un job_id para tracking. El procesamiento se realiza en segundo plano
+    mediante Dramatiq workers. Se intenta procesar todos los items, reportando
+    errores parciales en lugar de rollback total.
+    
+    **Límite**: Máximo 100 productos por request.
+    
+    **Response 202 Accepted**:
+    - `job_id`: Identificador único del job
+    - `message`: Mensaje descriptivo
+    - `total_items`: Cantidad de items encolados
+    """
+    import uuid
+    
+    if not req.items:
+        raise HTTPException(status_code=400, detail="Debe proporcionar al menos un producto")
+    
+    if len(req.items) > 100:
+        raise HTTPException(status_code=400, detail="Máximo 100 productos por request")
+    
+    # Generar job_id único
+    job_id = f"batch-canon-{uuid.uuid4().hex[:12]}"
+    
+    # Preparar items para el worker
+    items_data = [item.model_dump() for item in req.items]
+    
+    # Encolar job en Dramatiq
+    try:
+        from services.jobs.catalog_jobs import process_canonical_batch
+        process_canonical_batch.send(job_id, items_data)
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Error encolando job: {str(e)}. Verifica que el worker esté corriendo."
+        )
+    
+    return {
+        "status": "accepted",
+        "job_id": job_id,
+        "message": f"Encolados {len(req.items)} productos para creación",
+        "total_items": len(req.items),
     }
 
 

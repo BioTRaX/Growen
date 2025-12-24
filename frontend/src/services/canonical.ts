@@ -78,3 +78,35 @@ export async function getNextSeq(category_id: number | null | undefined): Promis
   const j = await res.json().catch(() => ({} as any))
   return Number(j?.next_seq ?? 1)
 }
+
+// ============================================================================
+// BATCH CREATION
+// ============================================================================
+
+export interface CanonicalBatchItem {
+  name: string
+  brand?: string | null
+  category_id?: number | null
+  subcategory_id?: number | null
+  sku_custom?: string | null
+  source_product_id?: number | null
+}
+
+export interface CanonicalBatchResponse {
+  status: string
+  job_id: string
+  message: string
+  total_items: number
+}
+
+/**
+ * Encola creación batch de productos canónicos.
+ * @param items Lista de productos a crear
+ * @returns job_id y metadata del job encolado
+ */
+export async function createCanonicalBatch(
+  items: CanonicalBatchItem[],
+): Promise<CanonicalBatchResponse> {
+  const res = await http.post('/canonical-products/batch-job', { items })
+  return res.data
+}

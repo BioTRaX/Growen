@@ -157,7 +157,7 @@ export async function iavalApply(id: number, proposal: any, emitLog?: boolean) {
   // Si ya usamos Vision con apply=1, no necesitamos este paso adicional
   // Pero lo mantenemos para compatibilidad con el flujo existente
   const r = await http.post(`/purchases/${id}/iaval/vision`, {}, { params: { apply: 1 } })
-  return r.data as { ok: boolean; applied: any; correlation_id?: string }
+  return r.data as { ok: boolean; applied: any; correlation_id?: string; log?: { filename: string; url_json?: string; url_csv?: string | null } }
 }
 
 // Versión legacy (textual) - usar si Vision falla
