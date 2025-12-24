@@ -12,7 +12,14 @@ from typing import Any, Dict
 import os
 import logging
 
-from .tools import invoke_tool, PermissionError
+from .tools import invoke_tool
+from .security import (
+    MCPAuthError,
+    MCPTokenExpired,
+    MCPTokenInvalid,
+    MCPUnauthorized,
+    MCPRateLimited,
+)
 import httpx
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
@@ -20,7 +27,7 @@ logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 logger = logging.getLogger("mcp_products.main")
 
 
-app = FastAPI(title="Growen MCP Products Server", version="0.1.0")
+app = FastAPI(title="Growen MCP Products Server", version="0.2.0")
 
 
 class InvokeRequest(BaseModel):
@@ -49,27 +56,40 @@ async def invoke_tool_endpoint(
 ):
     """Invoca una herramienta registrada en el servidor MCP.
 
+    Requiere autenticación JWT vía header X-MCP-Token.
+    
     Manejo de errores:
+    - 401 si token ausente, inválido o expirado
+    - 403 si permiso insuficiente (rol no autorizado)
     - 404 si tool desconocida
-    - 403 si permiso insuficiente
+    - 429 si rate limit excedido
     - 400 para validaciones genéricas
     - 502 para errores de red hacia la API backend
     """
-    # Lectura dinámica de configuración de token en cada request para permitir cambios en runtime/tests
-    require_token = os.getenv("MCP_REQUIRE_TOKEN", "0") == "1"
-    shared_token = os.getenv("MCP_SHARED_TOKEN", "")
+    # Obtener token de cualquiera de los headers
     token_value = x_mcp_token or x_mcp_token_lower
-    if require_token:
-        if not token_value or token_value != shared_token:
-            raise HTTPException(status_code=401, detail="Token MCP inválido o ausente")
+    
+    # Token requerido siempre (seguridad por defecto)
+    if not token_value:
+        raise HTTPException(status_code=401, detail="Token MCP requerido (header X-MCP-Token)")
+    
     try:
-        result = await invoke_tool(payload.tool_name, payload.parameters)
+        result = await invoke_tool(payload.tool_name, payload.parameters, token_value)
         logger.debug("Tool %s ejecutada OK", payload.tool_name)
         return InvokeResponse(tool_name=payload.tool_name, result=result)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    except PermissionError as e:  # tipo propio
+    except MCPTokenExpired as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    except MCPTokenInvalid as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    except MCPUnauthorized as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
+    except MCPRateLimited as e:
+        raise HTTPException(status_code=429, detail=str(e)) from e
+    except MCPAuthError as e:
+        # Catch-all para cualquier error de auth no manejado específicamente
+        raise HTTPException(status_code=401, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except httpx.TimeoutException as e:  # noqa: PERF203
@@ -97,3 +117,4 @@ async def root():
 
 
 # Para ejecución local: uvicorn mcp_servers.products_server.main:app --reload --port 8100
+

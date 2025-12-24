@@ -61,6 +61,11 @@ class Settings:
     dev_assume_admin: bool = os.getenv("DEV_ASSUME_ADMIN", "false").lower() == "true"
     # Token secreto para autenticación entre servicios internos (MCP servers, workers)
     internal_service_token: str = os.getenv("INTERNAL_SERVICE_TOKEN", "")
+    # Clave secreta para firmar JWT tokens MCP (debe ser diferente de SECRET_KEY)
+    mcp_secret_key: str = os.getenv("MCP_SECRET_KEY", "")
+    # Rate limit para MCP: peticiones por minuto por usuario
+    mcp_rate_limit_per_minute: int = int(os.getenv("MCP_RATE_LIMIT_PER_MINUTE", "60"))
+
 
     # Configuracion de importacion de PDFs
     import_ocr_lang: str = os.getenv("IMPORT_OCR_LANG", "spa+eng")
