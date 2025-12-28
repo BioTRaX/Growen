@@ -76,6 +76,6 @@ USER app
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import os; import redis; r=redis.from_url(os.getenv('REDIS_URL', 'redis://redis:6379/0')); r.ping()" || exit 1
 
-# Comando por defecto: worker de drive_sync
-CMD ["python", "-m", "dramatiq", "services.jobs.drive_sync", "--processes", "1", "--threads", "1", "--queues", "drive_sync"]
+# Comando por defecto: worker para drive_sync y catalog
+CMD ["python", "-m", "dramatiq", "services.jobs.drive_sync", "services.jobs.catalog_jobs", "--processes", "1", "--threads", "1", "--queues", "drive_sync", "catalog"]
 

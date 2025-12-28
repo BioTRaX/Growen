@@ -214,6 +214,7 @@ async def create_canonical_batch_job(
     - `message`: Mensaje descriptivo
     - `total_items`: Cantidad de items encolados
     """
+    import os
     import uuid
     
     if not req.items:
@@ -228,20 +229,35 @@ async def create_canonical_batch_job(
     # Preparar items para el worker
     items_data = [item.model_dump() for item in req.items]
     
-    # Encolar job en Dramatiq
-    try:
-        from services.jobs.catalog_jobs import process_canonical_batch
-        process_canonical_batch.send(job_id, items_data)
-    except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Error encolando job: {str(e)}. Verifica que el worker esté corriendo."
-        )
+    # Verificar si ejecutar inline (sincrónico) o enviar al worker
+    run_inline = os.getenv("RUN_INLINE_JOBS", "0") == "1"
+    
+    if run_inline:
+        # Ejecutar sincrónicamente (sin worker)
+        import asyncio
+        from services.jobs.catalog_jobs import _process_canonical_batch_async
+        try:
+            asyncio.create_task(_process_canonical_batch_async(job_id, items_data))
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error procesando batch: {str(e)}"
+            )
+    else:
+        # Encolar job en Dramatiq (requiere worker activo)
+        try:
+            from services.jobs.catalog_jobs import process_canonical_batch
+            process_canonical_batch.send(job_id, items_data)
+        except Exception as e:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Error encolando job: {str(e)}. Verifica que el worker esté corriendo."
+            )
     
     return {
         "status": "accepted",
         "job_id": job_id,
-        "message": f"Encolados {len(req.items)} productos para creación",
+        "message": f"{'Procesando' if run_inline else 'Encolados'} {len(req.items)} productos para creación",
         "total_items": len(req.items),
     }
 

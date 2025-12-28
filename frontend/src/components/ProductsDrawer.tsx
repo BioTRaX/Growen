@@ -785,7 +785,7 @@ export default function ProductsDrawer({ open, onClose, mode = 'overlay' }: Prop
               // Convertir items seleccionados a formato MarketProductSource
               const selectedItems = items.filter(it => selected.includes(it.product_id))
               const products: MarketProductSource[] = selectedItems.map(it => ({
-                product_id: it.product_id,
+                product_id: (it as any).supplier_item_id || it.product_id,  // supplier_item_id es el ID del SupplierProduct
                 preferred_name: it.name,
                 product_sku: (it as any).canonical_sku || (it as any).first_variant_sku || '',
                 category_id: (it as any).category_id || null,

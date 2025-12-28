@@ -36,6 +36,8 @@ import { MassCanonicalProvider } from './contexts/MassCanonicalContext'
 const AdminLayout = lazy(() => import('./pages/admin/AdminLayout'))
 const AdminUsers = lazy(() => import('./pages/admin/UsersPage'))
 const AdminServices = lazy(() => import('./pages/admin/ServicesPage'))
+const AdminServicesWorkers = lazy(() => import('./pages/admin/WorkersPage'))
+const AdminServicesMCP = lazy(() => import('./pages/admin/MCPToolsPage'))
 const AdminImages = lazy(() => import('./pages/admin/ImagesCrawlerPage'))
 const AdminDriveSync = lazy(() => import('./pages/admin/DriveSyncPage'))
 const AdminBackups = lazy(() => import('./pages/admin/BackupsPage'))
@@ -212,6 +214,8 @@ export default function App() {
                       }
                     >
                       <Route path="servicios" element={<AdminServices />} />
+                      <Route path="servicios/workers" element={<AdminServicesWorkers />} />
+                      <Route path="servicios/mcp-tools" element={<AdminServicesMCP />} />
                       <Route path="imagenes-productos" element={<Navigate to={PATHS.imagesProducts} replace />} />
                       <Route path="drive-sync" element={<AdminDriveSync />} />
                       <Route path="backups" element={<AdminBackups />} />

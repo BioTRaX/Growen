@@ -22,6 +22,8 @@ export const PATHS = {
   admin: "/admin",
   adminUsers: "/admin/usuarios",
   adminServices: "/admin/servicios",
+  adminServicesWorkers: "/admin/servicios/workers",
+  adminServicesMCP: "/admin/servicios/mcp-tools",
   adminImages: "/admin/imagenes-productos", // Legacy redirect to /imagenes-productos
   adminDriveSync: "/admin/drive-sync",
   adminCatalogDiagnostics: "/admin/catalogos/diagnostico",

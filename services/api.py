@@ -385,6 +385,8 @@ app.include_router(image_jobs.router)
 app.include_router(drive_sync.router)
 app.include_router(health.router)
 app.include_router(services_admin.router)
+from services.routers import mcp_admin  # MCP servers admin
+app.include_router(mcp_admin.router)
 app.include_router(backups_admin.router)
 app.include_router(admin_chat.router)  # Admin chat sessions
 app.include_router(admin_scheduler.router)  # Admin scheduler control

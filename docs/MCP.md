@@ -97,3 +97,25 @@ Notas:
 - Todos los MCP deberían exponer `GET /health` devolviendo `{ "status": "ok" }`.
 - MCP Web Search incluye ese endpoint y la imagen Docker define `HEALTHCHECK` para que Docker marque el contenedor como `healthy`.
 - La API principal realiza un preflight (GET `/health`, timeout ~2s) antes de invocar `search_web`; si el server está `unhealthy` se omite la búsqueda y se continúa en modo fallback (sin bloquear el enriquecimiento).
+
+## Administración desde el Panel de Admin
+
+Los servidores MCP se pueden monitorear y controlar desde el panel de administración:
+
+- **Ruta**: `/admin/servicios/mcp-tools`
+- **Acceso**: Solo usuarios con rol `admin`
+- **Funcionalidades**:
+  - Ver estado de MCP Products (puerto 8100) y MCP Web Search (puerto 8102)
+  - Indicadores visuales: 🟢 corriendo/saludable, 🟡 corriendo/sin respuesta, 🔴 detenido
+  - Botones para iniciar/detener contenedores Docker directamente desde la UI
+  - Health checks automáticos cada 15 segundos
+
+**API Backend**:
+- `GET /admin/mcp/health` → Estado de todos los servidores MCP
+- `POST /admin/mcp/{name}/start` → Inicia contenedor Docker
+- `POST /admin/mcp/{name}/stop` → Detiene contenedor Docker
+
+**Inicio manual por terminal**:
+```bash
+docker compose up -d mcp_products mcp_web_search
+```

@@ -47,6 +47,7 @@ KNOWN_SERVICES = [
     "market_worker",  # Worker de actualización de precios de mercado
     "drive_sync_worker",  # Worker de sincronización Drive
     "telegram_polling_worker",  # Worker de Long Polling para Telegram Bot
+    "catalog_worker",  # Worker de creación batch de productos canónicos
 ]
 
 
@@ -645,6 +646,24 @@ async def deps_check(name: str) -> Dict[str, Any]:
             ok = False
             missing.append("httpx")
             hints.append("pip install httpx")
+    elif name == "catalog_worker":
+        # Verificar que Redis esté disponible para las colas
+        try:
+            import redis
+            redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+            r = redis.from_url(redis_url)
+            r.ping()
+        except Exception as e:
+            ok = False
+            missing.append("Redis connection")
+            hints.append(f"Verificar REDIS_URL en .env: {e}")
+        # Verificar que dramatiq esté instalado
+        try:
+            import dramatiq
+        except ImportError:
+            ok = False
+            missing.append("dramatiq")
+            hints.append("pip install dramatiq[redis]")
     else:
         return {"ok": False, "missing": [], "detail": ["servicio desconocido"]}
     return {"ok": ok, "missing": missing, "hints": hints}
