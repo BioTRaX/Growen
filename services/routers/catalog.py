@@ -45,6 +45,7 @@ from agent_core.config import settings
 from ai.router import AIRouter
 from ai.providers.openai_provider import OpenAIProvider
 from ai.types import Task
+from agent_core.detect_mcp_url import get_mcp_web_search_url
 from services.auth import require_csrf, require_roles, current_session, SessionData
 
 logger = logging.getLogger(__name__)
@@ -3668,7 +3669,7 @@ async def debug_enrich_product(
             web_health = "unknown"
             try:
                 import httpx as _httpx
-                mcp_url = _os.getenv("MCP_WEB_SEARCH_URL", "http://mcp_web_search:8002/invoke_tool")
+                mcp_url = get_mcp_web_search_url()
                 health_url = mcp_url.replace("/invoke_tool", "/health")
                 async with _httpx.AsyncClient(timeout=2.0) as _cli:
                     _h = await _cli.get(health_url)
@@ -3875,7 +3876,7 @@ async def enrich_product(
         
         # Health check del servicio MCP Web Search
         import httpx as _httpx
-        mcp_url = _os.getenv("MCP_WEB_SEARCH_URL", "http://mcp_web_search:8002/invoke_tool")
+        mcp_url = get_mcp_web_search_url()
         health_url = mcp_url.replace("/invoke_tool", "/health")
         web_health = "unknown"
         

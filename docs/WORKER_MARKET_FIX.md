@@ -32,7 +32,7 @@ El worker de market (PID 15616) está en loop infinito intentando conectar a Red
 
 ### **Paso 1: Detener Worker Zombie**
 
-Desde el panel de admin (`http://127.0.0.1:5175/admin/servicios`):
+Desde el panel de admin (`http://127.0.0.1:5175/admin/servicios/workers`):
 1. Buscar "Worker Market"
 2. Click en "Detener"
 
@@ -88,7 +88,7 @@ Remove-Item "logs\worker_market.log" -Force
 ### **Paso 5: Reiniciar Worker**
 
 **Opción A - Desde Admin Panel** (Recomendado):
-1. Ir a `http://127.0.0.1:5175/admin/servicios`
+1. Ir a `http://127.0.0.1:5175/admin/servicios/workers`
 2. Buscar "Worker Market"
 3. Click en "Iniciar"
 

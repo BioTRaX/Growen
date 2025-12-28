@@ -271,7 +271,7 @@ async def health_dramatiq() -> Dict[str, Any]:
         
         # Verificar múltiples colas
         queues_info = {}
-        for queue_name in ["images", "market", "drive_sync"]:
+        for queue_name in ["images", "market", "drive_sync", "catalog"]:
             q_name = f"{prefix}:queue:{queue_name}"
             q_exists = bool(client.exists(q_name))
             q_len = int(client.llen(q_name)) if q_exists else 0
@@ -356,7 +356,7 @@ async def health_summary(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
             
             # Verificar múltiples colas
             queues_info = {}
-            for queue_name in ["images", "market", "drive_sync"]:
+            for queue_name in ["images", "market", "drive_sync", "catalog"]:
                 q_name = f"{prefix}:queue:{queue_name}"
                 q_exists = bool(client.exists(q_name))
                 q_len = int(client.llen(q_name)) if q_exists else 0

@@ -6,7 +6,19 @@
 from __future__ import annotations
 
 import logging
+import sys
+import asyncio
 from typing import TypedDict
+
+# FIX: Windows ProactorEventLoop no soporta psycopg async
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# IMPORTANTE: Importar el paquete services.jobs primero para inicializar el broker Redis
+try:
+    import services.jobs  # noqa: F401 - Inicializa el broker
+except ImportError:
+    pass
 
 try:  # Hacer opcional dramatiq para permitir levantar la API sin la dependencia
     import dramatiq  # type: ignore
@@ -22,7 +34,7 @@ except Exception:  # pragma: no cover - entorno sin dramatiq
     dramatiq = _StubModule()  # type: ignore
 
 from db.session import SessionLocal
-from db.models import CanonicalProduct, Category, AuditLog
+from db.models import CanonicalProduct, Category, AuditLog, SupplierProduct, ProductEquivalence
 
 logger = logging.getLogger(__name__)
 
@@ -103,9 +115,15 @@ async def _process_canonical_batch_async(job_id: str, items: list[dict]) -> None
     
     results: list[BatchResultItem] = []
     generated_skus: set[str] = set()  # SKUs generados en este batch para evitar duplicados
+    # Diccionario para trackear el máximo secuencial por prefijo de categoría en este batch
+    # Esto asegura que cada categoría tenga números únicos incluso con diferentes subcategorías
+    category_max_seq: dict[str, int] = {}
     
     async with SessionLocal() as db:
         for idx, item_dict in enumerate(items):
+            # LOG de diagnóstico para ver qué datos llegan
+            logger.info(f"[Batch {job_id}] Item {idx}: source_product_id={item_dict.get('source_product_id')}, name={item_dict.get('name', 'N/A')[:30]}, category_id={item_dict.get('category_id')}, subcategory_id={item_dict.get('subcategory_id')}")
+            
             item = CanonicalProductBatchItem(**item_dict)
             result: BatchResultItem = {
                 "index": idx,
@@ -160,33 +178,33 @@ async def _process_canonical_batch_async(job_id: str, items: list[dict]) -> None
                     # Combinar con SKUs ya generados en este batch
                     all_used_skus = existing_skus | generated_skus
                     
-                    # Extraer secuencia máxima
-                    sku_pattern = _re.compile(r'^[A-Z]{3}_(\d{4})_[A-Z]{3}$')
-                    max_seq = 0
-                    for sku in all_used_skus:
-                        match = sku_pattern.match(sku)
-                        if match:
-                            seq_num = int(match.group(1))
-                            if seq_num > max_seq:
-                                max_seq = seq_num
+                    # Obtener prefijo de categoría para filtrar
+                    cat_prefix = _slugify3(cat_name, 'SIN')
                     
-                    next_seq = max_seq + 1
+                    # Si no tenemos max_seq para esta categoría en el batch, calcularlo de la BD + generated_skus
+                    if cat_prefix not in category_max_seq:
+                        sku_pattern = _re.compile(rf'^{cat_prefix}_(\d{{4}})_[A-Z]{{3}}$')
+                        max_seq = 0
+                        for sku in all_used_skus:
+                            match = sku_pattern.match(sku)
+                            if match:
+                                seq_num = int(match.group(1))
+                                if seq_num > max_seq:
+                                    max_seq = seq_num
+                        category_max_seq[cat_prefix] = max_seq
                     
-                    # Generar SKU único
-                    attempts = 0
-                    while attempts < 10:
-                        candidate = build_canonical_sku(cat_name, sub_name, next_seq)
-                        if candidate.upper() not in all_used_skus:
-                            sku_custom = candidate
-                            break
-                        attempts += 1
-                        next_seq += 1
+                    # Incrementar y guardar el siguiente número para esta categoría
+                    category_max_seq[cat_prefix] += 1
+                    next_seq = category_max_seq[cat_prefix]
                     
-                    if not sku_custom:
-                        # Fallback con sufijo
-                        import random, string
-                        suf = ''.join(random.choices(string.ascii_uppercase + string.digits, k=2))
-                        sku_custom = f"{build_canonical_sku(cat_name, sub_name, next_seq)}{suf}"
+                    # Generar SKU con el número garantizado único para esta categoría
+                    sku_custom = build_canonical_sku(cat_name, sub_name, next_seq)
+                    
+                    # DEBUG: Log para diagnosticar duplicación de SKU
+                    logger.info(f"[Batch {job_id}] SKU DEBUG: cat_prefix={cat_prefix}, next_seq={next_seq}, category_max_seq={category_max_seq}")
+                    
+                    # Registrar SKU como usado
+                    generated_skus.add(sku_custom.upper())
                 
                 # Verificar unicidad final en DB
                 exists = await db.scalar(
@@ -214,11 +232,33 @@ async def _process_canonical_batch_async(job_id: str, items: list[dict]) -> None
                 
                 # Generar ng_sku
                 cp.ng_sku = f"NG-{cp.id:06d}"
+                
+                # Crear equivalencia si hay producto de proveedor origen
+                source_product_id = item.get("source_product_id")
+                if source_product_id:
+                    # Obtener el supplier_id del SupplierProduct
+                    sp = await db.get(SupplierProduct, source_product_id)
+                    if sp and sp.supplier_id:
+                        # Verificar si ya existe una equivalencia para este supplier_product
+                        from sqlalchemy import select as sql_select
+                        existing_eq = await db.scalar(
+                            sql_select(ProductEquivalence).where(
+                                ProductEquivalence.supplier_product_id == source_product_id
+                            )
+                        )
+                        if not existing_eq:
+                            equiv = ProductEquivalence(
+                                supplier_id=sp.supplier_id,
+                                supplier_product_id=source_product_id,
+                                canonical_product_id=cp.id,
+                                confidence=1.0,  # Alta confianza porque es creación manual
+                                source="batch_cannon",
+                            )
+                            db.add(equiv)
+                            logger.info(f"[Batch {job_id}] Creada equivalencia: SP#{source_product_id} -> Canon#{cp.id}")
+                
                 await db.commit()
                 await db.refresh(cp)
-                
-                # Registrar SKU como usado
-                generated_skus.add(sku_custom.upper())
                 
                 # Resultado exitoso
                 result["success"] = True

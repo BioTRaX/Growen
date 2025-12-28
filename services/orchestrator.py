@@ -33,6 +33,7 @@ _MARKET_WORKER_PROC: Optional[subprocess.Popen] = None  # Track market_worker pr
 _DRIVE_SYNC_WORKER_PROC: Optional[subprocess.Popen] = None  # Track drive_sync_worker process
 _DRIVE_SYNC_WORKER_MODE: Optional[str] = None  # Track mode: 'docker' or 'local'
 _TELEGRAM_POLLING_WORKER_PROC: Optional[subprocess.Popen] = None  # Track telegram_polling_worker process
+_CATALOG_WORKER_PROC: Optional[subprocess.Popen] = None  # Track catalog_worker process
 
 
 def _has_docker() -> bool:
@@ -78,7 +79,7 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
         correlation_id: ID de correlación para logging
         mode: Modo de ejecución ('docker' o 'local'), solo aplica a drive_sync_worker
     """
-    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC
+    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC
     
     # Manejo especial para drive_sync_worker (puede ser Docker o Local)
     if name == "drive_sync_worker":
@@ -166,6 +167,29 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
         except Exception as e:
             return ServiceStatus(name=name, status="failed", ok=False, detail=str(e))
     
+    # Manejo especial para catalog_worker (proceso local, no Docker)
+    if name == "catalog_worker":
+        current = status_service(name)
+        if current.status == "running":
+            return ServiceStatus(name=name, status="running", ok=True, detail="noop: already running")
+        
+        script_path = ROOT / "scripts" / "start_worker_catalog.cmd"
+        if not script_path.exists():
+            return ServiceStatus(name=name, status="failed", ok=False, detail="Script not found")
+        
+        try:
+            # Ejecutar el script en background
+            _CATALOG_WORKER_PROC = subprocess.Popen(
+                [str(script_path)],
+                cwd=str(ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
+            )
+            return ServiceStatus(name=name, status="running", ok=True, detail=f"Started with PID {_CATALOG_WORKER_PROC.pid}")
+        except Exception as e:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=str(e))
+    
     # Lógica original para servicios Docker
     if _has_docker():
         # Idempotencia amable: si ya está en running/starting, no intentes reiniciar
@@ -185,7 +209,7 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
 
 
 def stop_service(name: str, correlation_id: str) -> ServiceStatus:
-    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC
+    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC
     
     # Manejo especial para drive_sync_worker
     if name == "drive_sync_worker":
@@ -293,6 +317,36 @@ def stop_service(name: str, correlation_id: str) -> ServiceStatus:
             _TELEGRAM_POLLING_WORKER_PROC = None
             return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Force terminated: {e}")
     
+    # Manejo especial para catalog_worker
+    if name == "catalog_worker":
+        if _CATALOG_WORKER_PROC is None or _CATALOG_WORKER_PROC.poll() is not None:
+            # Proceso no existe o ya terminó
+            # Buscar por nombre de proceso como fallback
+            try:
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    try:
+                        cmdline = proc.info.get('cmdline', [])
+                        if cmdline and 'dramatiq' in ' '.join(cmdline).lower() and 'catalog_jobs' in ' '.join(cmdline).lower():
+                            proc.terminate()
+                            proc.wait(timeout=5)
+                            return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Terminated PID {proc.info['pid']}")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                return ServiceStatus(name=name, status="stopped", ok=True, detail="Process not found (already stopped)")
+            except Exception as e:
+                return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Error finding process: {e}")
+        
+        # Terminar proceso conocido
+        try:
+            _CATALOG_WORKER_PROC.terminate()
+            _CATALOG_WORKER_PROC.wait(timeout=5)
+            pid = _CATALOG_WORKER_PROC.pid
+            _CATALOG_WORKER_PROC = None
+            return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Terminated PID {pid}")
+        except Exception as e:
+            _CATALOG_WORKER_PROC = None
+            return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Force terminated: {e}")
+    
     # Lógica original para servicios Docker
     if _has_docker():
         proc = _compose(["stop", name])
@@ -304,7 +358,7 @@ def stop_service(name: str, correlation_id: str) -> ServiceStatus:
 
 
 def status_service(name: str) -> ServiceStatus:
-    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC
+    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC
     
     # Manejo especial para drive_sync_worker
     if name == "drive_sync_worker":
@@ -394,6 +448,26 @@ def status_service(name: str) -> ServiceStatus:
                 try:
                     cmdline = proc.info.get('cmdline', [])
                     if cmdline and 'telegram_polling' in ' '.join(cmdline).lower():
+                        return ServiceStatus(name=name, status="running", ok=True, detail=f"Running PID {proc.info['pid']}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception:
+            pass
+        
+        return ServiceStatus(name=name, status="stopped", ok=True, detail="Not running")
+    
+    # Manejo especial para catalog_worker
+    if name == "catalog_worker":
+        # Verificar proceso global primero
+        if _CATALOG_WORKER_PROC is not None and _CATALOG_WORKER_PROC.poll() is None:
+            return ServiceStatus(name=name, status="running", ok=True, detail=f"Running PID {_CATALOG_WORKER_PROC.pid}")
+        
+        # Buscar en procesos del sistema
+        try:
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+                try:
+                    cmdline = proc.info.get('cmdline', [])
+                    if cmdline and 'dramatiq' in ' '.join(cmdline).lower() and 'catalog_jobs' in ' '.join(cmdline).lower():
                         return ServiceStatus(name=name, status="running", ok=True, detail=f"Running PID {proc.info['pid']}")
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue

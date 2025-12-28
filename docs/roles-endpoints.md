@@ -77,6 +77,9 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | POST | /bug-report | Ninguno (sin CSRF; solo registra log) |
 | POST | /purchases/{purchase_id}/rollback | colaborador, admin (requiere CSRF) |
 | GET | /admin/services/metrics/bug-reports | admin |
+| GET | /admin/mcp/health | admin |
+| POST | /admin/mcp/{name}/start | admin (requiere CSRF) |
+| POST | /admin/mcp/{name}/stop | admin (requiere CSRF) |
 
 Las rutas marcadas con * solo están disponibles cuando `ENV` es distinto de `production`.
 

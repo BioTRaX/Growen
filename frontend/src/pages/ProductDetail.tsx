@@ -8,7 +8,7 @@ import http from '../services/http'
 import { uploadProductImage, addImageFromUrl, setPrimary, lockImage, deleteImage, refreshSEO, removeBg, watermark, generateWebP } from '../services/images'
 import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '../services/servicesAdmin'
 import { useAuth } from '../auth/AuthContext'
-import { getProductDetailStylePref, putProductDetailStylePref, ProductDetailStyle, updateSalePrice, updateSupplierBuyPrice } from '../services/productsEx'
+import { getProductDetailStylePref, putProductDetailStylePref, ProductDetailStyle, updateSalePrice, updateSupplierBuyPrice, updateCanonicalSku } from '../services/productsEx'
 import { listProductVariants, linkSupplierProduct, ProductVariantItem, patchProduct, updateVariantSku, deleteProducts } from '../services/products'
 import { listCategories, Category } from '../services/categories'
 import SupplierAutocomplete from '../components/supplier/SupplierAutocomplete'
@@ -74,7 +74,7 @@ export default function ProductDetail() {
   const { state, refreshMe, hydrated } = useAuth()
   const isAdmin = state.role === 'admin'
   const canEdit = isAdmin || state.role === 'colaborador'
-  
+
   // Guardar la ruta anterior cuando el componente se monta
   useEffect(() => {
     if (location.state?.from) {
@@ -123,12 +123,13 @@ export default function ProductDetail() {
   const [savingCat, setSavingCat] = useState(false)
   const [skuEditing, setSkuEditing] = useState<{ id: number; val: string } | null>(null)
   const [selectedCatId, setSelectedCatId] = useState<string>('')
-  const [techEditing, setTechEditing] = useState<null | { field: 'weight_kg'|'height_cm'|'width_cm'|'depth_cm'|'market_price_reference'; val: string }>(null)
+  const [techEditing, setTechEditing] = useState<null | { field: 'weight_kg' | 'height_cm' | 'width_cm' | 'depth_cm' | 'market_price_reference'; val: string }>(null)
   const [srcOpen, setSrcOpen] = useState(false)
   const [srcLoading, setSrcLoading] = useState(false)
   const [srcText, setSrcText] = useState<string>('')
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [tagsModalOpen, setTagsModalOpen] = useState(false)
+  const [canonicalSkuEditing, setCanonicalSkuEditing] = useState<{ val: string } | null>(null)
   const theme = useMemo(() => ({
     bg: styleVariant === 'minimalDark' ? '#0b0f14' : '#0d1117',
     card: styleVariant === 'minimalDark' ? 'rgba(17,24,39,0.7)' : '#111827',
@@ -150,7 +151,7 @@ export default function ProductDetail() {
       const status = e?.response?.status
       const retried = options?.retried ?? false
       if ((status === 401 || status === 403) && !retried) {
-        try { await refreshMe() } catch {}
+        try { await refreshMe() } catch { }
         return refresh({ ...options, silent: true, retried: true })
       }
       if (!options?.silent) {
@@ -170,15 +171,15 @@ export default function ProductDetail() {
   useEffect(() => {
     if (!pid || state.role === 'guest') { setVariants([]); return }
     let mounted = true
-    ;(async () => {
-      try {
-        const v = await listProductVariants(pid)
-        if (mounted) setVariants(v)
-        if (mounted && v.length > 0) setSelectedVariantId(v[0].id)
-      } catch {
-        if (mounted) setVariants([])
-      }
-    })()
+      ; (async () => {
+        try {
+          const v = await listProductVariants(pid)
+          if (mounted) setVariants(v)
+          if (mounted && v.length > 0) setSelectedVariantId(v[0].id)
+        } catch {
+          if (mounted) setVariants([])
+        }
+      })()
     return () => { mounted = false }
   }, [pid, state.role])
 
@@ -186,9 +187,9 @@ export default function ProductDetail() {
   useEffect(() => {
     if (state.role === 'guest') { setCategories([]); return }
     let mounted = true
-    ;(async () => {
-      try { const cs = await listCategories(); if (mounted) setCategories(cs) } catch {}
-    })()
+      ; (async () => {
+        try { const cs = await listCategories(); if (mounted) setCategories(cs) } catch { }
+      })()
     return () => { mounted = false }
   }, [state.role])
 
@@ -204,24 +205,24 @@ export default function ProductDetail() {
   // Preferencia de estética de ficha
   useEffect(() => {
     let mounted = true
-    ;(async () => {
-      if (state.role === 'guest') {
-        const local = (localStorage.getItem('ng_product_detail_style') || 'default') as ProductDetailStyle
-        if (mounted) setStyleVariant(local)
-        return
-      }
-      try {
-        const r = await getProductDetailStylePref()
-        if ((r as any)?.style && mounted) setStyleVariant((r as any).style as ProductDetailStyle)
-        else {
+      ; (async () => {
+        if (state.role === 'guest') {
+          const local = (localStorage.getItem('ng_product_detail_style') || 'default') as ProductDetailStyle
+          if (mounted) setStyleVariant(local)
+          return
+        }
+        try {
+          const r = await getProductDetailStylePref()
+          if ((r as any)?.style && mounted) setStyleVariant((r as any).style as ProductDetailStyle)
+          else {
+            const local = (localStorage.getItem('ng_product_detail_style') || 'default') as ProductDetailStyle
+            if (mounted) setStyleVariant(local)
+          }
+        } catch {
           const local = (localStorage.getItem('ng_product_detail_style') || 'default') as ProductDetailStyle
           if (mounted) setStyleVariant(local)
         }
-      } catch {
-        const local = (localStorage.getItem('ng_product_detail_style') || 'default') as ProductDetailStyle
-        if (mounted) setStyleVariant(local)
-      }
-    })()
+      })()
     return () => { mounted = false }
   }, [state.role])
 
@@ -332,7 +333,7 @@ export default function ProductDetail() {
       showToast('error', 'ID de producto inválido')
       return
     }
-    
+
     // Abrir modal de confirmación
     setDeleteConfirmOpen(true)
   }
@@ -346,15 +347,15 @@ export default function ProductDetail() {
 
     // Usar nombre del producto si existe, sino usar pid
     const productName = prod?.canonical_name || prod?.title || `producto ${pid}`
-    
+
     setDeleteConfirmOpen(false)
     try {
       setLoading(true)
       const result = await deleteProducts([pid])
-      
+
       // Determinar si se eliminó exitosamente
       const wasDeleted = result.deleted && result.deleted.length > 0 && result.deleted.includes(pid)
-      
+
       if (wasDeleted) {
         showToast('success', `Producto "${productName}" eliminado`)
         // Redirigir a la página anterior después de 1 segundo
@@ -416,7 +417,7 @@ export default function ProductDetail() {
       const st = await serviceStatus('image_processing')
       if ((st?.status || '') !== 'running') {
         setGateImgNeeded(true)
-        try { setGateImgLogs(await tailServiceLogs('image_processing', 80)) } catch {}
+        try { setGateImgLogs(await tailServiceLogs('image_processing', 80)) } catch { }
         return false
       }
       return true
@@ -434,7 +435,7 @@ export default function ProductDetail() {
       alert('Procesador de imágenes iniciado')
     } catch (e) {
       alert('No se pudo iniciar image_processing (ver logs)')
-      try { setGateImgLogs(await tailServiceLogs('image_processing', 120)) } catch {}
+      try { setGateImgLogs(await tailServiceLogs('image_processing', 120)) } catch { }
     } finally {
       setGateImgBusy(false)
     }
@@ -467,8 +468,8 @@ export default function ProductDetail() {
           onChange={async (e) => {
             const v = e.target.value as ProductDetailStyle
             setStyleVariant(v)
-            try { await putProductDetailStylePref(v) } catch {}
-            try { localStorage.setItem('ng_product_detail_style', v) } catch {}
+            try { await putProductDetailStylePref(v) } catch { }
+            try { localStorage.setItem('ng_product_detail_style', v) } catch { }
           }}
           style={{ borderColor: theme.accentGreen }}
         >
@@ -537,16 +538,16 @@ export default function ProductDetail() {
       {/* Botón de eliminación - Solo admin, siempre visible */}
       {isAdmin && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, position: 'relative', zIndex: 10 }}>
-          <button 
-            className="btn" 
+          <button
+            className="btn"
             onClick={(e) => {
               e.preventDefault()
               e.stopPropagation()
               handleDelete() // Abre el modal
             }}
             disabled={loading || !pid || isNaN(pid)}
-            style={{ 
-              borderColor: '#ef4444', 
+            style={{
+              borderColor: '#ef4444',
               color: '#ef4444',
               fontWeight: 600,
               cursor: 'pointer',
@@ -665,11 +666,56 @@ export default function ProductDetail() {
         <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
           <div><span style={{ opacity: 0.7 }}>ID:</span> {prod?.id}</div>
           {prod?.slug && <div><span style={{ opacity: 0.7 }}>Slug:</span> {prod.slug}</div>}
-            {(prod?.canonical_sku || prod?.sku_root) && (
-              <div title={prod?.canonical_sku ? 'Si hay canónico, se muestra su SKU (preferido)' : 'SKU propio del producto interno'}>
-                <span style={{ opacity: 0.7 }}>SKU:</span> {prod?.canonical_sku || prod?.sku_root}
-              </div>
-            )}
+          {(prod?.canonical_sku || prod?.sku_root) && (
+            <div title={prod?.canonical_sku ? 'Si hay canónico, se muestra su SKU (preferido) - Click para editar' : 'SKU propio del producto interno'}>
+              <span style={{ opacity: 0.7 }}>SKU:</span>{' '}
+              {canEdit && prod?.canonical_product_id ? (
+                canonicalSkuEditing ? (
+                  <input
+                    className="input"
+                    style={{ width: 180 }}
+                    value={canonicalSkuEditing.val}
+                    onChange={(e) => setCanonicalSkuEditing({ val: e.target.value })}
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter') {
+                        const newSku = canonicalSkuEditing.val.trim()
+                        if (!newSku) { showToast('error', 'SKU no puede estar vacío'); return }
+                        try {
+                          await updateCanonicalSku(prod.canonical_product_id!, newSku)
+                          await refresh()
+                          showToast('success', 'SKU actualizado')
+                          setCanonicalSkuEditing(null)
+                        } catch (err: any) { showToast('error', err?.message || 'Error al actualizar SKU') }
+                      }
+                      if (e.key === 'Escape') setCanonicalSkuEditing(null)
+                    }}
+                    onBlur={async () => {
+                      const newSku = canonicalSkuEditing?.val.trim()
+                      if (!newSku) { setCanonicalSkuEditing(null); return }
+                      try {
+                        await updateCanonicalSku(prod.canonical_product_id!, newSku)
+                        await refresh()
+                        showToast('success', 'SKU actualizado')
+                        setCanonicalSkuEditing(null)
+                      } catch (err: any) { showToast('error', err?.message || 'Error al actualizar SKU') }
+                    }}
+                    autoFocus
+                  />
+                ) : (
+                  <>
+                    <span>{prod?.canonical_sku || prod?.sku_root}</span>
+                    <button
+                      className="btn-secondary"
+                      style={{ marginLeft: 6 }}
+                      onClick={() => setCanonicalSkuEditing({ val: prod?.canonical_sku || prod?.sku_root || '' })}
+                    >✎</button>
+                  </>
+                )
+              ) : (
+                <span>{prod?.canonical_sku || prod?.sku_root}</span>
+              )}
+            </div>
+          )}
           <div><span style={{ opacity: 0.7 }}>Stock:</span> {prod?.stock}</div>
           <div><span style={{ opacity: 0.7 }}>Tiene imagen:</span> {(prod?.images?.length || 0) > 0 ? 'Sí' : 'No'}</div>
           {prod?.canonical_product_id ? (
@@ -843,7 +889,7 @@ export default function ProductDetail() {
       )}
 
       {/* Proveedores y precios */}
-  <SupplierOfferings key={`offer-${offeringsTick}`} productId={pid} theme={theme} />
+      <SupplierOfferings key={`offer-${offeringsTick}`} productId={pid} theme={theme} />
 
       {/* Variantes y SKU propio */}
       <div className="card" style={{ background: theme.card, padding: 12, borderRadius: theme.radius, border: `1px solid ${theme.border}`, marginTop: 12 }}>
@@ -942,7 +988,7 @@ export default function ProductDetail() {
                   <li key={i}>[{l.level}] {l.created_at} — {l.action} — {l.ok ? 'OK' : 'FAIL'} — {(l as any).error || (l as any)?.payload?.detail || ''}</li>
                 ))}
               </ul>
-              <button className="btn" onClick={async () => { try { setGateImgLogs(await tailServiceLogs('image_processing', 120)) } catch {} }}>Actualizar logs</button>
+              <button className="btn" onClick={async () => { try { setGateImgLogs(await tailServiceLogs('image_processing', 120)) } catch { } }}>Actualizar logs</button>
             </details>
           </div>
         </div>
@@ -1027,7 +1073,7 @@ export default function ProductDetail() {
                   showToast('success', 'Vínculo creado')
                   setLinkOpen(false)
                   // Refrescar ofertas
-                  try { await refresh() } catch {}
+                  try { await refresh() } catch { }
                   setOfferingsTick(t => t + 1)
                 } catch (e: any) {
                   showToast('error', e?.message || 'No se pudo crear el vínculo')
@@ -1058,8 +1104,8 @@ export default function ProductDetail() {
               <li>Variantes asociadas</li>
             </ul>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 24 }}>
-              <button 
-                className="btn-secondary" 
+              <button
+                className="btn-secondary"
                 onClick={() => setDeleteConfirmOpen(false)}
                 disabled={loading}
                 style={{ borderColor: theme.border, color: theme.text }}
@@ -1070,8 +1116,8 @@ export default function ProductDetail() {
                 className="btn"
                 onClick={handleConfirmDelete}
                 disabled={loading}
-                style={{ 
-                  borderColor: '#ef4444', 
+                style={{
+                  borderColor: '#ef4444',
                   color: '#ef4444',
                   fontWeight: 600
                 }}
@@ -1112,17 +1158,17 @@ function SupplierOfferings({ productId, theme }: { productId: number; theme: { c
 
   useEffect(() => {
     let mounted = true
-    ;(async () => {
-      try {
-        setLoading(true)
-        const r = await http.get(`/products-ex/products/internal/${productId}/offerings`)
-        if (mounted) setRows(r.data || [])
-      } catch (e: any) {
-        if (mounted) setError(e?.message || 'Error')
-      } finally {
-        if (mounted) setLoading(false)
-      }
-    })()
+      ; (async () => {
+        try {
+          setLoading(true)
+          const r = await http.get(`/products-ex/products/internal/${productId}/offerings`)
+          if (mounted) setRows(r.data || [])
+        } catch (e: any) {
+          if (mounted) setError(e?.message || 'Error')
+        } finally {
+          if (mounted) setLoading(false)
+        }
+      })()
     return () => { mounted = false }
   }, [productId])
 

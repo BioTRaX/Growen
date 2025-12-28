@@ -87,7 +87,7 @@ async def create_tag(
 
 
 @router.post(
-    "products/{product_id}/tags",
+    "/products/{product_id}/tags",
     dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
 )
 async def assign_tags_to_product(
@@ -142,7 +142,7 @@ async def assign_tags_to_product(
 
 
 @router.delete(
-    "products/{product_id}/tags/{tag_id}",
+    "/products/{product_id}/tags/{tag_id}",
     dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
 )
 async def remove_tag_from_product(
@@ -182,7 +182,7 @@ async def remove_tag_from_product(
 
 
 @router.post(
-    "products/bulk-tags",
+    "/products/bulk-tags",
     dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
 )
 async def bulk_assign_tags(

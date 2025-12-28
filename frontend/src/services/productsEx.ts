@@ -24,6 +24,23 @@ export async function updateSalePrice(
   return res.json()
 }
 
+export async function updateCanonicalSku(
+  canonicalProductId: number,
+  sku_custom: string,
+): Promise<{ id: number; sku_custom: string | null }> {
+  const res = await fetch(`${base}/canonical-products/${canonicalProductId}`, {
+    method: 'PATCH',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders() },
+    body: JSON.stringify({ sku_custom }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
 export async function updateSupplierBuyPrice(
   supplierItemId: number,
   buy_price: number,
