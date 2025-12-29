@@ -31,21 +31,33 @@ Growen utiliza una **máquina de estados** que adapta tono y estilo según rol y
 - **Comportamiento**: Saluda casual, NO ofrece productos de inmediato
 - **Transiciones**: Problema de cultivo → CULTIVATOR | Consulta de producto → SALESMAN
 
-#### CULTIVATOR (Diagnóstico Técnico)
+#### CULTIVATOR (Diagnóstico Técnico + Farmacéutico)
 - **Activación**: Menciones de problemas de cultivo, imágenes de plantas
 - **Comportamiento**: 
   - Usa contexto RAG si disponible
-  - Hace preguntas diagnósticas conversacionales
+  - Hace preguntas diagnósticas conversacionales (pH, etapa, riego)
   - Si hay producto relacionado, los Tags ayudan a filtrar
+  - **Rol Farmacéutico**: Tras diagnóstico, pregunta "¿Querés que busque productos?"
+  - **Lógica NPK**: Interpreta tags "NPK X-X-X" para recomendar productos
+    - Carencia N → buscar alto en 1er número
+    - Carencia P → buscar alto en 2do número
+    - Carencia K → buscar alto en 3er número
+  - Muestra máximo 3 opciones variando precios
+  - Solo recomienda productos con stock > 0 (proactivo)
 - **Transición**: Diagnóstico completo con producto → SALESMAN
 
 #### SALESMAN (Cierre de Venta)
 - **Activación**: Oportunidad de venta, consulta directa de precio
 - **Comportamiento**:
   - Usa Tags de productos para recomendar
-  - Crea urgencia si poco stock
+  - **CERO URGENCIA**: NUNCA usa frases como "¡Quedan pocas!" o "¡Comprá ya!"
   - NUNCA muestra SKUs técnicos a clientes
   - Prioriza beneficios, no datos internos
+  - **Manejo de stock**:
+    - Stock > 0: "Disponible para entrega"
+    - Stock = 0 (usuario pidió específicamente): "Disponible pero el tiempo de entrega será mayor"
+    - Stock = 0 (recomendación proactiva): No mostrar, ofrecer alternativas
+
 
 #### ASISTENTE (Admin/Colaborador)
 - **Activación**: Rol admin o colaborador

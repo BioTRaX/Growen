@@ -66,35 +66,68 @@ async def _buscar_producto(nombre_producto: str) -> List[Dict[str, Any]]:
         print(f"Error de estado HTTP al buscar producto: {e.response.status_code}")
         return []
 
-def _formatear_info_producto(producto: Dict[str, Any], user_role: str) -> str:
-    """Formatea la información de un producto en un string legible para el usuario, respetando su rol."""
-    # Roles con acceso a información sensible como el stock
+def _formatear_info_producto(producto: Dict[str, Any], user_role: str, is_user_request: bool = False) -> str:
+    """
+    Formatea la información de un producto en un string legible para el usuario.
+    
+    Args:
+        producto: Diccionario con datos del producto
+        user_role: Rol del usuario (admin, colaborador, cliente, guest)
+        is_user_request: Si True, el usuario pidió específicamente este producto
+                        (permite mostrar productos sin stock con advertencia de demora)
+    """
+    # Roles con acceso a información sensible como el stock exacto
     ROLES_CON_ACCESO_AVANZADO = {"admin", "colaborador"}
 
-    nombre = producto.get('name', 'Nombre no disponible')
+    nombre = producto.get('name', producto.get('title', 'Nombre no disponible'))
     precio = producto.get('price', 0.0)
     descripcion = producto.get('description')
     categoria = producto.get('category')
     stock = producto.get('stock')
+    tags = producto.get('tags', [])
 
     info = f"-- Producto: {nombre} --\n"
     info += f"Precio: ${precio:.2f}\n"
+    
     if descripcion:
         info += f"Descripción: {descripcion}\n"
     if categoria:
         info += f"Categoría: {categoria}\n"
     
+    # Mostrar tags relevantes (NPK, tipo, etc.) sin el símbolo #
+    if tags:
+        tags_display = [t.lstrip('#') for t in tags[:3]]  # Máx 3 tags
+        info += f"Características: {', '.join(tags_display)}\n"
+    
+    # Manejo de stock según rol y contexto
     if user_role in ROLES_CON_ACCESO_AVANZADO:
+        # Admin/colaborador: mostrar stock exacto
         if stock is not None:
             info += f"Stock disponible: {stock} unidades\n"
         else:
             info += "Stock: No disponible\n"
+    else:
+        # Cliente/guest: mensajes amigables sin urgencia
+        if stock is not None and stock > 0:
+            info += "Disponible para entrega\n"
+        elif is_user_request:
+            # Usuario pidió específicamente este producto sin stock
+            info += "Disponible pero el tiempo de entrega será mayor\n"
+        else:
+            # Recomendación proactiva: no mostrar productos sin stock
+            # (esto no debería llegar aquí, pero por seguridad)
+            info += "Consultar disponibilidad\n"
             
     return info
+
+
 
 async def consultar_producto(nombre_producto: str, user_role: str) -> str:
     """
     Consulta la información de un producto y la devuelve formateada según el rol del usuario.
+    
+    Esta función se usa cuando el usuario pregunta específicamente por un producto,
+    por lo que permite mostrar productos sin stock con advertencia de demora.
     """
     productos_encontrados = await _buscar_producto(nombre_producto)
 
@@ -103,17 +136,22 @@ async def consultar_producto(nombre_producto: str, user_role: str) -> str:
 
     if len(productos_encontrados) == 1:
         producto = productos_encontrados[0]
-        return _formatear_info_producto(producto, user_role)
+        # is_user_request=True porque el usuario preguntó específicamente por este producto
+        return _formatear_info_producto(producto, user_role, is_user_request=True)
 
     # Si hay múltiples resultados, los listamos con información básica.
     respuesta = f"Encontré varios productos que coinciden con '{nombre_producto}':\n"
     for producto in productos_encontrados:
-        nombre = producto.get('name', 'Nombre no disponible')
+        nombre = producto.get('name', producto.get('title', 'Nombre no disponible'))
         precio = producto.get('price', 0.0)
-        respuesta += f"- {nombre} (Precio: ${precio:.2f})\n"
-    respuesta += "\nPor favor, sé más específico para obtener más detalles."
+        stock = producto.get('stock', 0)
+        # Indicar disponibilidad sin urgencia
+        disponibilidad = "✓" if stock and stock > 0 else "(pedido)"
+        respuesta += f"- {nombre} (${precio:.2f}) {disponibilidad}\n"
+    respuesta += "\n¿Cuál te interesa?"
     
     return respuesta
+
 
 async def _gestionar_cliente(nombre_cliente: str) -> Optional[Dict[str, Any]]:
     """

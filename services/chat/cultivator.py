@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 # NG-HEADER: Nombre de archivo: cultivator.py
 # NG-HEADER: Ubicación: services/chat/cultivator.py
-# NG-HEADER: Descripción: Lógica de diagnóstico de plantas con visión y RAG
+# NG-HEADER: Descripción: Lógica de diagnóstico de plantas con visión, RAG y recomendaciones NPK
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Servicio de diagnóstico de plantas para el Modo Cultivador."""
 from __future__ import annotations
 
 import base64
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,159 @@ from services.notifications.telegram import download_telegram_file
 from services.rag.search import get_rag_search_service
 
 logger = logging.getLogger(__name__)
+
+
+# --- Utilidades NPK ---
+
+def parse_npk_from_tags(tags: List[str]) -> Optional[Dict[str, float]]:
+    """
+    Parsea tags buscando formato NPK X-X-X.
+    
+    Soporta formatos:
+    - "NPK 10-2,4-6" (español con comas)
+    - "NPK 10-2.4-6" (inglés con puntos)
+    - "NPK 10-2,4-6 + Zinc(Zn) 0.09%..." (con extras)
+    
+    Args:
+        tags: Lista de tags del producto (ej: ["NPK 10-2,4-6 + Zinc...", "#Organico"])
+        
+    Returns:
+        {"N": 10.0, "P": 2.4, "K": 6.0} o None si no encuentra
+    """
+    for tag in tags:
+        if not tag:
+            continue
+        # Buscar patrón NPK X-X-X (con decimales opcionales, comas o puntos)
+        match = re.search(
+            r'NPK\s*(\d+(?:[.,]\d+)?)-(\d+(?:[.,]\d+)?)-(\d+(?:[.,]\d+)?)',
+            tag,
+            re.IGNORECASE
+        )
+        if match:
+            # Normalizar comas a puntos para parseo
+            n_val = float(match.group(1).replace(',', '.'))
+            p_val = float(match.group(2).replace(',', '.'))
+            k_val = float(match.group(3).replace(',', '.'))
+            return {"N": n_val, "P": p_val, "K": k_val}
+    return None
+
+
+def filter_products_by_deficiency(
+    products: List[Dict[str, Any]], 
+    deficiency: str,
+    only_with_stock: bool = True
+) -> List[Dict[str, Any]]:
+    """
+    Filtra productos por carencia detectada usando lógica NPK.
+    
+    Mapeo de carencias:
+    - Carencia Nitrógeno → Alto N (primer dígito >= 10)
+    - Carencia Fósforo → Alto P (segundo dígito >= 10)
+    - Carencia Potasio → Alto K (tercer dígito >= 10)
+    - Carencia Calcio/Magnesio → Buscar "CalMag", "Ca", "Mg" en tags
+    
+    Args:
+        products: Lista de productos con campo "tags" y "stock"
+        deficiency: String describiendo la carencia (ej: "carencia de nitrógeno")
+        only_with_stock: Si True, solo retorna productos con stock > 0
+        
+    Returns:
+        Lista filtrada de productos ordenada por relevancia
+    """
+    deficiency_lower = deficiency.lower()
+    filtered = []
+    
+    for product in products:
+        # Filtro de stock si aplica
+        if only_with_stock and (product.get("stock", 0) or 0) <= 0:
+            continue
+            
+        tags = product.get("tags", [])
+        npk = parse_npk_from_tags(tags)
+        tags_lower = " ".join(t.lower() for t in tags if t)
+        
+        # Score de relevancia (mayor = mejor)
+        score = 0
+        
+        # Mapeo carencia → nutriente requerido
+        if "nitrógeno" in deficiency_lower or "nitrogeno" in deficiency_lower:
+            if npk and npk["N"] >= 10:
+                score = npk["N"]
+            elif "nitrogeno" in tags_lower or "nitrógeno" in tags_lower or "veg" in tags_lower:
+                score = 5
+                
+        elif "fósforo" in deficiency_lower or "fosforo" in deficiency_lower:
+            if npk and npk["P"] >= 10:
+                score = npk["P"]
+            elif "fosforo" in tags_lower or "fósforo" in tags_lower or "bloom" in tags_lower:
+                score = 5
+                
+        elif "potasio" in deficiency_lower:
+            if npk and npk["K"] >= 10:
+                score = npk["K"]
+            elif "potasio" in tags_lower or "pk" in tags_lower or "bloom" in tags_lower:
+                score = 5
+                
+        elif "calcio" in deficiency_lower or "magnesio" in deficiency_lower:
+            if "calmag" in tags_lower or "calcio" in tags_lower or "magnesio" in tags_lower:
+                score = 10
+            elif "ca" in tags_lower or "mg" in tags_lower:
+                score = 5
+                
+        elif "hierro" in deficiency_lower or "fe" in deficiency_lower:
+            if "hierro" in tags_lower or "fe" in tags_lower or "iron" in tags_lower:
+                score = 10
+        
+        if score > 0:
+            product["_relevance_score"] = score
+            filtered.append(product)
+    
+    # Ordenar por score de relevancia (descendente)
+    filtered.sort(key=lambda p: p.get("_relevance_score", 0), reverse=True)
+    
+    # Limpiar campo temporal
+    for p in filtered:
+        p.pop("_relevance_score", None)
+    
+    return filtered
+
+
+def classify_products_by_price_tier(
+    products: List[Dict[str, Any]], 
+    max_per_tier: int = 1
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Clasifica productos en tres gamas de precio.
+    
+    Args:
+        products: Lista de productos con campo "price"
+        max_per_tier: Máximo de productos por gama
+        
+    Returns:
+        {"low": [...], "medium": [...], "high": [...]}
+    """
+    # Ordenar por precio
+    priced = [p for p in products if p.get("price") is not None]
+    priced.sort(key=lambda p: p.get("price", 0))
+    
+    if not priced:
+        return {"low": [], "medium": [], "high": []}
+    
+    # Dividir en terciles
+    n = len(priced)
+    if n == 1:
+        return {"low": [], "medium": priced[:1], "high": []}
+    elif n == 2:
+        return {"low": priced[:1], "medium": [], "high": priced[1:2]}
+    else:
+        tercile = n // 3
+        return {
+            "low": priced[:max_per_tier],
+            "medium": priced[tercile:tercile + max_per_tier],
+            "high": priced[-max_per_tier:],
+        }
+
+
 
 
 async def get_image_base64_from_file_id(
@@ -215,9 +369,9 @@ async def diagnose_plant(
     follow_up_question = None
     
     diagnosis_lower = diagnosis_response.lower()
-    if "confianza alta" in diagnosis_lower or "confianza alta" in diagnosis_lower or "estoy seguro" in diagnosis_lower:
+    if "confianza alta" in diagnosis_lower or "estoy seguro" in diagnosis_lower:
         confidence = 0.9
-    elif "confianza baja" in diagnosis_lower or "confianza baja" in diagnosis_lower or "no estoy seguro" in diagnosis_lower:
+    elif "confianza baja" in diagnosis_lower or "no estoy seguro" in diagnosis_lower:
         confidence = 0.5
         # Intentar extraer pregunta de seguimiento
         if "?" in diagnosis_response:
@@ -227,91 +381,96 @@ async def diagnose_plant(
                     follow_up_question = sent.strip()
                     break
     
-    # Paso 5: Buscar productos por tags relacionados (si diagnóstico es firme)
+    # Paso 5: Detectar carencia del diagnóstico y buscar productos con NPK relevante
     products_by_tier = {"low": [], "medium": [], "high": []}
+    detected_deficiency = None
     
-    if confidence >= 0.7 and session:
-        # Extraer tags relevantes del diagnóstico
-        # Heurística: buscar términos comunes de problemas y mapear a tags
+    # Mapeo de términos de diagnóstico a carencias
+    deficiency_keywords = {
+        "nitrógeno": "carencia de nitrógeno",
+        "nitrogeno": "carencia de nitrógeno", 
+        "fósforo": "carencia de fósforo",
+        "fosforo": "carencia de fósforo",
+        "potasio": "carencia de potasio",
+        "calcio": "carencia de calcio",
+        "magnesio": "carencia de magnesio",
+        "calmag": "carencia de calcio",
+        "hierro": "carencia de hierro",
+    }
+    
+    # Detectar carencia mencionada en el diagnóstico
+    for keyword, deficiency in deficiency_keywords.items():
+        if keyword in diagnosis_lower and ("carencia" in diagnosis_lower or "deficiencia" in diagnosis_lower or "falta" in diagnosis_lower):
+            detected_deficiency = deficiency
+            break
+    
+    if confidence >= 0.7 and session and detected_deficiency:
+        # Buscar productos por tags relevantes y filtrar por NPK
         tag_mapping = {
-            "plaga": ["#Plagas", "#Acaricida", "#Insecticida"],
-            "ácaros": ["#Acaricida", "#Plagas"],
-            "pulgones": ["#Insecticida", "#Plagas"],
-            "carencia": ["#Nutrientes", "#Fertilizante"],
-            "nitrógeno": ["#Nitrogeno", "#Fertilizante"],
-            "fósforo": ["#Fosforo", "#Fertilizante"],
-            "potasio": ["#Potasio", "#Fertilizante"],
-            "hongos": ["#Fungicida", "#Hongos"],
-            "moho": ["#Fungicida", "#Hongos"],
-            "orgánico": ["#Organico"],
-            "mineral": ["#Mineral"],
+            "nitrógeno": ["Fertilizante", "Vegetativo", "Nitrogeno"],
+            "fósforo": ["Fertilizante", "Floracion", "Fosforo"],
+            "potasio": ["Fertilizante", "Floracion", "Potasio", "PK"],
+            "calcio": ["CalMag", "Calcio", "Micronutrientes"],
+            "magnesio": ["CalMag", "Magnesio", "Micronutrientes"],
+            "hierro": ["Hierro", "Micronutrientes", "Quelatos"],
         }
         
-        # Buscar tags relevantes en el diagnóstico
+        # Determinar tags a buscar según la carencia
         relevant_tags = []
-        diagnosis_lower = diagnosis_response.lower()
         for keyword, tags in tag_mapping.items():
-            if keyword in diagnosis_lower:
+            if keyword in detected_deficiency.lower():
                 relevant_tags.extend(tags)
+                break
         
-        # Si hay tags relevantes, buscar productos
-        if relevant_tags:
-            try:
-                import httpx
-                import os
-                
-                # Obtener URL base de la API
-                api_base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
-                
-                # Normalizar tags (remover # y convertir a nombres)
-                tag_names = [t.lstrip("#") for t in relevant_tags]
-                tags_param = ",".join(tag_names[:3])  # Máximo 3 tags para la búsqueda
-                
-                # Llamar al endpoint de búsqueda por tags
-                url = f"{api_base_url}/catalog/search_by_tags"
-                params = {"tags": tags_param, "limit": 20}
-                
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.get(url, params=params)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        products_found = data.get("items", [])
-                        
-                        # Clasificar productos por precio en tres gamas
-                        for prod in products_found:
-                            price = prod.get("price")
-                            if price is None:
-                                continue
-                            
-                            # Heurística de gamas (ajustar según precios del catálogo)
-                            if price < 5000:  # Gama baja
-                                products_by_tier["low"].append(prod)
-                            elif price < 15000:  # Gama media
-                                products_by_tier["medium"].append(prod)
-                            else:  # Gama alta
-                                products_by_tier["high"].append(prod)
-                        
-                        # Limitar a 3 productos por gama
-                        products_by_tier["low"] = products_by_tier["low"][:3]
-                        products_by_tier["medium"] = products_by_tier["medium"][:3]
-                        products_by_tier["high"] = products_by_tier["high"][:3]
-                        
-                        logger.info(f"Productos encontrados por tags: {len(products_found)} total, "
-                                  f"{len(products_by_tier['low'])} baja, "
-                                  f"{len(products_by_tier['medium'])} media, "
-                                  f"{len(products_by_tier['high'])} alta")
-                    else:
-                        logger.warning(f"Error en búsqueda por tags: {resp.status_code}")
-            except Exception as e:
-                logger.error(f"Error buscando productos por tags: {e}")
-                # Continuar sin productos recomendados
+        if not relevant_tags:
+            relevant_tags = ["Fertilizante"]  # Fallback genérico
+        
+        try:
+            import httpx
+            import os
+            
+            api_base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
+            tags_param = ",".join(relevant_tags[:3])
+            
+            # Llamar al endpoint de búsqueda por tags
+            url = f"{api_base_url}/catalog/search_by_tags"
+            params = {"tags": tags_param, "limit": 30}
+            
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    products_found = data.get("items", [])
+                    
+                    # Filtrar por NPK según la carencia detectada (solo con stock > 0)
+                    filtered_products = filter_products_by_deficiency(
+                        products_found, 
+                        detected_deficiency,
+                        only_with_stock=True  # Recomendación proactiva: solo con stock
+                    )
+                    
+                    # Clasificar por precio en tres gamas
+                    products_by_tier = classify_products_by_price_tier(filtered_products, max_per_tier=1)
+                    
+                    total_recommended = sum(len(v) for v in products_by_tier.values())
+                    logger.info(
+                        f"Productos NPK recomendados para '{detected_deficiency}': "
+                        f"{total_recommended} total (low: {len(products_by_tier['low'])}, "
+                        f"medium: {len(products_by_tier['medium'])}, high: {len(products_by_tier['high'])})"
+                    )
+                else:
+                    logger.warning(f"Error en búsqueda por tags: {resp.status_code}")
+        except Exception as e:
+            logger.error(f"Error buscando productos por NPK: {e}")
     
     return {
         "diagnosis": diagnosis_response,
         "confidence": confidence,
         "follow_up_question": follow_up_question,
         "products": products_by_tier,
-        "rag_context": rag_context[:500] if rag_context else "",  # Limitar tamaño
+        "detected_deficiency": detected_deficiency,  # Nuevo: para flujo de conversación
+        "rag_context": rag_context[:500] if rag_context else "",
         "visual_symptoms": visual_symptoms[:200] if visual_symptoms else "",
     }
+
 
