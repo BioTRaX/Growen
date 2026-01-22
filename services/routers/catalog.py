@@ -3702,7 +3702,7 @@ async def debug_enrich_product(
 
     # Ejecutar una llamada de prueba (no persistente) y devolver texto crudo
     try:
-        raw = router_ai.run(Task.REASONING.value, prompt)
+        raw = await router_ai.run_async(Task.REASONING.value, prompt)
     except Exception as _e:
         raw = f"<error: {type(_e).__name__}>"
 
@@ -4037,7 +4037,7 @@ async def enrich_product(
                 pass
 
         router_ai = AIRouter(settings)
-        raw = router_ai.run(Task.REASONING.value, prompt)
+        raw = await router_ai.run_async(Task.REASONING.value, prompt)
         
         # Normalizar respuesta posible con prefijo y/o fences
         text = raw.strip()

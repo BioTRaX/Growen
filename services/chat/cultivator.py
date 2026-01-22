@@ -350,11 +350,53 @@ async def diagnose_plant(
     
     diagnosis_prompt = "".join(diagnosis_prompt_parts)
     
+    # Construir prompt con enfoque conversacional (Farmacéutico)
+    # El LLM debe hacer preguntas antes de diagnosticar
+    conversational_prompt_parts = []
+    
+    if conversation_history:
+        # Si hay historial, el LLM tiene contexto previo
+        conversational_prompt_parts.append(f"Historial reciente:\n{conversation_history}\n")
+    
+    if visual_symptoms:
+        conversational_prompt_parts.append(f"Síntomas visuales observados:\n{visual_symptoms}\n")
+    
+    if user_input:
+        conversational_prompt_parts.append(f"Mensaje del usuario:\n{user_input}\n")
+    
+    if rag_context:
+        conversational_prompt_parts.append(f"Contexto técnico relevante:\n{rag_context}\n")
+    
+    # Instrucción de diagnóstico conversacional
+    conversational_prompt_parts.append("""
+Responde como experto cultivador conversando naturalmente.
+
+Si es la PRIMERA mención del problema (sin historial de preguntas previas):
+1. Reconoce el síntoma mencionado
+2. Haz UNA pregunta clave de diagnóstico diferencial, por ejemplo:
+   - "¿Las hojas amarillas empiezan por las de abajo o por arriba?"
+   - "¿Medís el pH del agua de riego?"
+   - "¿En qué etapa está la planta (vegetativo o floración)?"
+3. NO recomiendes productos todavía
+
+Si ya hubo intercambio de preguntas Y tenés suficiente información:
+1. Da tu diagnóstico con nivel de confianza
+2. Explica brevemente la causa probable
+3. Pregunta: "¿Querés que te busque productos para esto?"
+
+Responde en español rioplatense casual. Sé breve y natural.""")
+    
+    full_diagnosis_prompt = "\n".join(conversational_prompt_parts)
+    
     try:
         diagnosis_response = await ai_router.run_async(
             task=Task.DIAGNOSIS_VISION.value if images else Task.REASONING.value,
-            prompt=diagnosis_prompt,
-            user_context={"role": user_role, "intent": "diagnosis"},
+            prompt=full_diagnosis_prompt,
+            user_context={
+                "role": user_role, 
+                "intent": "DIAGNOSTICO",  # Intent correcto para activar persona CULTIVATOR
+                "conversation_state": {"current_mode": "CULTIVATOR"},
+            },
             images=images if images else None,
         )
         # Limpiar prefijo técnico si existe
@@ -363,6 +405,7 @@ async def diagnose_plant(
     except Exception as e:
         logger.error(f"Error generando diagnóstico: {e}")
         diagnosis_response = "No pude generar un diagnóstico en este momento. Por favor, intenta de nuevo."
+
     
     # Paso 4: Extraer confianza y pregunta de seguimiento (heurística simple)
     confidence = 0.7  # Default medio
