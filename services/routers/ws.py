@@ -122,7 +122,7 @@ async def ai_reply(prompt: str) -> str:
     """
     router = AIRouter(core_settings)
     t0 = time.perf_counter()
-    raw_reply = router.run(Task.SHORT_ANSWER.value, prompt)
+    raw_reply = await router.run_async(Task.SHORT_ANSWER.value, prompt)
     duration_ms = int((time.perf_counter() - t0) * 1000)
     provider = None
     try:

@@ -912,7 +912,7 @@ async def iaval_preview(purchase_id: int, db: AsyncSession = Depends(get_session
     supplier_name = getattr(getattr(p, "supplier", None), "name", None) or f"Proveedor {p.supplier_id}"
     prompt = _format_iaval_prompt(supplier_name, purchase_json, pdf_text)
     router_ai = AIRouter(settings)
-    raw = router_ai.run(Task.REASONING.value, prompt)
+    raw = await router_ai.run_async(Task.REASONING.value, prompt)
     parsed = None
     try:
         parsed = _coerce_json(raw)

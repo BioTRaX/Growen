@@ -64,6 +64,7 @@ from services.chat.shared import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai.intent_classifier import classify_intent, UserIntent
+from ai.persona import get_persona_prompt
 from services.chat.sales_handler.tools import manejar_conversacion_venta, consultar_producto
 from services.chat.history import save_message, get_recent_history
 
@@ -249,6 +250,21 @@ async def chat_endpoint(
         intent = UserIntent.DIAGNOSTICO
     else:
         intent = await classify_intent(ai_router, user_text)
+    
+    # 1.1 Fallback local: detectar keywords diagnósticas si el LLM no las detectó
+    # Esto asegura que "hojas amarillas", "plaga", etc. siempre activen DIAGNOSTICO
+    if intent not in (UserIntent.DIAGNOSTICO, UserIntent.VENTA_CONVERSACIONAL):
+        diagnostic_keywords = [
+            "hojas amarillas", "hojas marrones", "hojas secas", "hojas quemadas",
+            "plaga", "plagas", "carencia", "deficiencia", "problema", "diagnóstico",
+            "enfermedad", "hongos", "moho", "se muere", "se seca", "manchas",
+            "qué le pasa", "qué tiene", "por qué", "insectos", "ácaros",
+            "pulgones", "trips", "araña roja", "oídio", "botrytis",
+        ]
+        user_text_lower = user_text.lower()
+        if any(kw in user_text_lower for kw in diagnostic_keywords):
+            logger.info(f"Fallback local: detectada intención DIAGNOSTICO por keywords")
+            intent = UserIntent.DIAGNOSTICO
 
     # 2. Obtener o inicializar la memoria de la conversación (robusto ante sesión ausente)
     try:
@@ -289,7 +305,101 @@ async def chat_endpoint(
             terms = memory_terms_text(memory_state.query)
             return ChatOut(text=clarify_prompt_text(terms), type="clarify_prompt", intent="clarify")
 
-    # 4. Detección de consultas de producto (precio/stock) con tool calling asíncrono
+    # 4. Diagnóstico de plantas (Modo Cultivador) - PRIORIDAD ANTES de productos
+    #    Si el usuario tiene un problema de cultivo, primero diagnosticamos.
+    if intent == UserIntent.DIAGNOSTICO:
+        try:
+            from services.chat.cultivator import diagnose_plant
+            
+            # Obtener el prompt de persona correcto para CULTIVATOR
+            persona_mode, system_prompt = get_persona_prompt(
+                user_role=user_role,
+                intent="DIAGNOSTICO",
+                user_text=user_text,
+                has_image=bool(payload.image_file_id or payload.image_url),
+                conversation_state=conversation_state,
+            )
+            logger.info(f"Modo persona activo: {persona_mode}")
+            
+            # Obtener historial reciente para contexto
+            conversation_history = await get_recent_history(db, chat_session_id, limit=10)
+            
+            # Llamar a diagnose_plant
+            diagnosis_result = await diagnose_plant(
+                user_input=user_text,
+                image_file_id=payload.image_file_id,
+                image_url=payload.image_url,
+                conversation_history=conversation_history,
+                session=db,
+                user_role=user_role,
+            )
+            
+            # Construir respuesta con diagnóstico y productos recomendados
+            response_parts = [diagnosis_result["diagnosis"]]
+            
+            # Si hay pregunta de seguimiento, agregarla
+            if diagnosis_result.get("follow_up_question"):
+                response_parts.append(f"\n\n{diagnosis_result['follow_up_question']}")
+            
+            # Si se detectó una carencia, ofrecer buscar productos
+            detected_deficiency = diagnosis_result.get("detected_deficiency")
+            if detected_deficiency and diagnosis_result.get("confidence", 0) >= 0.7:
+                # Si hay productos recomendados, mostrarlos
+                products = diagnosis_result.get("products", {})
+                if any(products.values()):
+                    response_parts.append("\n\n¿Querés que te muestre productos para esto? Encontré algunas opciones:")
+                    
+                    all_products = []
+                    for tier_products in products.values():
+                        all_products.extend(tier_products)
+                    
+                    for prod in all_products[:3]:  # Máximo 3 productos
+                        price_str = f" - ${prod.get('price', 'N/A'):,.0f}" if prod.get('price') else ""
+                        stock_str = " ✓" if prod.get('stock', 0) > 0 else ""
+                        response_parts.append(f"• {prod.get('title', 'N/A')}{price_str}{stock_str}")
+                else:
+                    response_parts.append(f"\n\n¿Querés que busque productos para ayudarte con esto?")
+            
+            answer = "\n".join(response_parts)
+            
+            # Guardar mensajes en historial
+            await save_message(
+                db, 
+                chat_session_id, 
+                "user", 
+                user_text, 
+                metadata={
+                    "intent": intent.value if hasattr(intent, 'value') else str(intent),
+                    "has_image": bool(payload.image_file_id or payload.image_url),
+                    "image_file_id": payload.image_file_id,
+                    "image_url": payload.image_url,
+                },
+                user_identifier=user_identifier
+            )
+            await save_message(
+                db, 
+                chat_session_id, 
+                "assistant", 
+                answer, 
+                metadata={
+                    "type": "diagnosis",
+                    "persona_mode": persona_mode,
+                    "confidence": diagnosis_result.get("confidence", 0.7),
+                    "detected_deficiency": detected_deficiency,
+                    "has_rag_context": bool(diagnosis_result.get("rag_context")),
+                },
+                user_identifier=user_identifier
+            )
+            await db.commit()
+            
+            return ChatOut(text=answer, type="diagnosis", intent=UserIntent.DIAGNOSTICO.value)
+            
+        except Exception as e:
+            logger.error(f"Error en diagnóstico de plantas: {e}", exc_info=True)
+            # Fallback a chat general si falla el diagnóstico
+            pass  # Continuar al flujo siguiente
+
+    # 5. Detección de consultas de producto (precio/stock) con tool calling asíncrono
     #    El AIRouter maneja internamente el tool calling con OpenAI.
     product_query = extract_product_query(user_text)
     if product_query or intent == UserIntent.CONSULTA_PRECIO:
@@ -416,86 +526,9 @@ async def chat_endpoint(
             logger.exception("chat.local_price_fallback_error")
             return ChatOut(text="Error resolviendo información de producto.", type="error", intent=UserIntent.CONSULTA_PRECIO.value)
 
-    # 5. Diagnóstico de plantas (Modo Cultivador)
-    if intent == UserIntent.DIAGNOSTICO:
-        try:
-            from services.chat.cultivator import diagnose_plant
-            
-            # Obtener historial reciente para contexto
-            conversation_history = await get_recent_history(db, chat_session_id, limit=10)
-            
-            # Llamar a diagnose_plant
-            diagnosis_result = await diagnose_plant(
-                user_input=user_text,
-                image_file_id=payload.image_file_id,
-                image_url=payload.image_url,
-                conversation_history=conversation_history,
-                session=db,
-                user_role=user_role,
-            )
-            
-            # Construir respuesta con diagnóstico y productos recomendados
-            response_parts = [diagnosis_result["diagnosis"]]
-            
-            # Si hay pregunta de seguimiento, agregarla
-            if diagnosis_result.get("follow_up_question"):
-                response_parts.append(f"\n\n{diagnosis_result['follow_up_question']}")
-            
-            # Si hay productos recomendados, agregarlos
-            products = diagnosis_result.get("products", {})
-            if any(products.values()):  # Si hay productos en alguna gama
-                response_parts.append("\n\n**Productos recomendados:**")
-                
-                for tier_name, tier_products in [
-                    ("Gama Baja", products.get("low", [])),
-                    ("Gama Media", products.get("medium", [])),
-                    ("Gama Alta", products.get("high", [])),
-                ]:
-                    if tier_products:
-                        response_parts.append(f"\n**{tier_name}:**")
-                        for prod in tier_products[:3]:  # Máximo 3 por gama
-                            price_str = f" - ${prod.get('price', 'N/A')}" if prod.get('price') else ""
-                            stock_str = f" (Stock: {prod.get('stock', 0)})" if prod.get('stock', 0) > 0 else " (Sin stock)"
-                            tags_str = f" {', '.join(prod.get('tags', []))}" if prod.get('tags') else ""
-                            response_parts.append(f"- {prod.get('title', 'N/A')}{price_str}{stock_str}{tags_str}")
-            
-            answer = "\n".join(response_parts)
-            
-            # Guardar mensajes en historial
-            await save_message(
-                db, 
-                chat_session_id, 
-                "user", 
-                user_text, 
-                metadata={
-                    "intent": intent.value if hasattr(intent, 'value') else str(intent),
-                    "has_image": bool(payload.image_file_id or payload.image_url),
-                    "image_file_id": payload.image_file_id,
-                    "image_url": payload.image_url,
-                },
-                user_identifier=user_identifier
-            )
-            await save_message(
-                db, 
-                chat_session_id, 
-                "assistant", 
-                answer, 
-                metadata={
-                    "type": "diagnosis",
-                    "confidence": diagnosis_result.get("confidence", 0.7),
-                    "has_rag_context": bool(diagnosis_result.get("rag_context")),
-                },
-                user_identifier=user_identifier
-            )
-            await db.commit()
-            
-            return ChatOut(text=answer, type="diagnosis", intent=UserIntent.DIAGNOSTICO.value)
-            
-        except Exception as e:
-            logger.error(f"Error en diagnóstico de plantas: {e}", exc_info=True)
-            # Fallback a chat general si falla el diagnóstico
-            pass  # Continuar al flujo de chat general
-    
+
+    # Note: Diagnosis is now handled in block 4 above (before product queries)
+
     # 6. Ventas conversacionales (si no aplicó consulta de producto ni diagnóstico)
     if intent == UserIntent.VENTA_CONVERSACIONAL:
         sales_state = conversation_state.get("sales_flow", None)
