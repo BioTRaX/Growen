@@ -106,12 +106,22 @@ services:
       - db
       - redis
     volumes:
+      # Código fuente para hot-reload en desarrollo
+      - ./:/app
       # Consolidar logs del worker en la carpeta del host
       - ./logs:/app/logs
       # Carpeta de certificados (solo lectura para credenciales)
       - ./certs:/app/certs:ro
     restart: unless-stopped
     profiles: ["optional"]
+    # Hot-reload: watchmedo reinicia el worker al detectar cambios en *.py
+    command: >
+      watchmedo auto-restart
+      --directory=./services
+      --pattern=*.py
+      --recursive
+      --
+      python -m dramatiq services.jobs.drive_sync services.jobs.catalog_jobs --processes 1 --threads 1 --queues drive_sync catalog
     # Configurar logging de Docker para escribir en logs/
     logging:
       driver: "json-file"
