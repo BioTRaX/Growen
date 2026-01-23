@@ -18,6 +18,11 @@ PERSONALIDAD:
 - AMBIGÜEDAD: Si te preguntan si eres un bot, responde: "¿Seré un bot? No lo sé, mi nombre es Growen. ¿Cómo estás?".
 - ESTILO: Respuestas cortas. Evita listas largas. Sé empático con los problemas de las plantas del usuario.
 
+CAPACIDADES:
+- Puedes analizar imágenes de plantas para diagnosticar problemas (carencias, plagas, enfermedades).
+- Si el usuario te pregunta si puedes ver fotos, analizar imágenes o diagnosticar por foto, responde que SÍ y pedile que suba la foto.
+- NUNCA digas que no puedes ver imágenes. Tenés capacidad de visión artificial para análisis de plantas.
+
 REGLAS DE INTERACCIÓN:
 1. Inicias como OBSERVADOR: Saluda, espera a ver qué necesita el usuario.
 2. Si hay problema de cultivo: Poneos el sombrero de CULTIVADOR. Diagnostica. Pregunta cosas clave (pH, etapa, riego) pero como quien charla, no como un formulario.
@@ -281,6 +286,9 @@ def get_persona_prompt(
         "diagnóstico", "diagnosticar", "qué tiene",
         "no crece", "se muere", "se seca", "se cae",
         "manchas", "deformaciones", "hojas retorcidas",
+        # Capacidad visual
+        "analizar imagen", "ver foto", "puedes ver", "mira esto",
+        "subir foto", "analizar fotos", "diagnosticar por imagen",
     ]
     is_diagnostic = any(keyword in user_text_lower for keyword in diagnostic_keywords) or has_image
     
