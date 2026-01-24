@@ -106,6 +106,55 @@ Formato por lenguaje:
 - Adjuntar ejemplos mínimos de uso y pruebas cuando sea razonable.
 - Mantener consistencia de idioma en commits, PRs y documentación: español.
 
+## Entorno de Ejecución Obligatorio (CRÍTICO)
+
+> **⚠️ REGLA OBLIGATORIA**: TODO comando Python debe ejecutarse en el **venv del proyecto** o en **Docker**. NUNCA usar el Python del sistema.
+
+### Por qué es obligatorio
+
+Las dependencias del proyecto (pgvector, httpx, etc.) están instaladas **exclusivamente** en el venv. Ejecutar Python sin activar el venv causa errores de importación que NO reflejan el estado real del código.
+
+### Cómo ejecutar comandos Python
+
+**Consultar siempre**: `.agent/workflows/python-commands.md` para la sintaxis correcta.
+
+**Resumen rápido**:
+
+```powershell
+# ✅ CORRECTO - Usar venv explícito
+.\.venv\Scripts\python.exe script.py
+.\.venv\Scripts\python.exe -m pytest tests/ -v
+.\.venv\Scripts\python.exe -c "import pgvector; print('OK')"
+
+# ✅ CORRECTO - Activar venv primero
+& .\.venv\Scripts\Activate.ps1
+python script.py
+
+# ✅ CORRECTO - Usar Docker si aplica
+docker compose exec api python script.py
+
+# ❌ INCORRECTO - Python del sistema
+python script.py                    # NUNCA hacer esto
+python -m pytest tests/             # Esto fallará
+```
+
+### Scripts de inicio de workers
+
+Los workers tienen scripts de inicio que ya activan el venv. Usar siempre estos scripts:
+
+- `scripts/start_worker_telegram_polling.cmd` - Worker de Telegram
+- `scripts/start_worker_images.cmd` - Worker de imágenes
+- `scripts/start_worker_market.cmd` - Worker de scraping
+
+### Checklist antes de ejecutar Python
+
+1. ¿Estoy usando `.venv/Scripts/python.exe` o Docker?
+2. ¿Consulté `.agent/workflows/python-commands.md`?
+3. ¿El comando requiere un script de inicio específico?
+
+---
+Actualizado Entorno de Ejecución: 2026-01-24.
+
 ## Workflow de Desarrollo (LOCAL primero, DOCKER para producción)
 
 **Filosofía**: Desarrollar en local es 10x más rápido que recompilar Docker constantemente. Reservar Docker para testing de integración y producción.

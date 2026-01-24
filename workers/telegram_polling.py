@@ -304,9 +304,26 @@ async def run_polling() -> None:
     else:
         logger.warning("⚠ No se pudo eliminar el webhook. Continuando de todas formas...")
     
-    # 2. Inicializar offset
+    # 2. Inicializar offset (recuperar de archivo si existe)
+    offset_file = LOGS_DIR / "telegram_offset.txt"
     last_update_id = 0
+    try:
+        if offset_file.exists():
+            offset_str = offset_file.read_text().strip()
+            if offset_str.isdigit():
+                last_update_id = int(offset_str)
+                logger.info(f"✓ Offset recuperado de archivo: {last_update_id}")
+    except Exception as e:
+        logger.warning(f"⚠ Error leyendo offset de archivo: {e}")
+    
     logger.info(f"Offset inicial: {last_update_id}")
+    
+    # Función para persistir el offset
+    def save_offset(offset: int) -> None:
+        try:
+            offset_file.write_text(str(offset))
+        except Exception as e:
+            logger.debug(f"Error guardando offset: {e}")
     
     # 3. Bucle principal
     logger.info("✓ Iniciando bucle de polling...")
@@ -397,6 +414,9 @@ async def run_polling() -> None:
                     logger.error(f"✗ Error creando tarea de procesamiento: {task_err}", exc_info=True)
             
             consecutive_errors = 0
+            # Persistir offset para evitar pérdida de mensajes en reinicios
+            if last_update_id > 0:
+                save_offset(last_update_id)
             if updates_processed > 0 and updates_processed % 10 == 0:
                 logger.info(f"📊 Estadísticas: {updates_processed} updates procesados, {messages_processed} mensajes procesados")
             
