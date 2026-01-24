@@ -251,7 +251,8 @@ async def diagnose_plant(
         - products: Lista de productos recomendados agrupados por gama
         - rag_context: Contexto relevante de la Knowledge Base
     """
-    ai_router = AIRouter()
+    from agent_core.config import settings as core_settings
+    ai_router = AIRouter(core_settings)
     rag_service = get_rag_search_service()
     
     # Paso 1: Análisis de imagen (si hay)
@@ -371,17 +372,20 @@ async def diagnose_plant(
     conversational_prompt_parts.append("""
 Responde como experto cultivador conversando naturalmente.
 
+ANÁLISIS DE CONTEXTO OBLIGATORIO:
+1. Revisa el historial y el mensaje actual buscando el MEDIO de cultivo (Hidroponia/DWC vs Tierra/Sustrato).
+2. Revisa la ETAPA de la planta (Vegetativo vs Floración).
+3. Adapta tus preguntas y consejos a este contexto (ej: pH 5.8 hidro vs 6.5 tierra).
+
 Si es la PRIMERA mención del problema (sin historial de preguntas previas):
 1. Reconoce el síntoma mencionado
-2. Haz UNA pregunta clave de diagnóstico diferencial, por ejemplo:
-   - "¿Las hojas amarillas empiezan por las de abajo o por arriba?"
-   - "¿Medís el pH del agua de riego?"
-   - "¿En qué etapa está la planta (vegetativo o floración)?"
-3. NO recomiendes productos todavía
+2. Si NO sabes el medio de cultivo, PREGUNTA: "¿Estás en tierra o hidro?"
+3. Haz UNA pregunta clave de diagnóstico diferencial adaptada al medio.
+4. NO recomiendes productos todavía
 
 Si ya hubo intercambio de preguntas Y tenés suficiente información:
 1. Da tu diagnóstico con nivel de confianza
-2. Explica brevemente la causa probable
+2. Explica brevemente la causa probable (contextualizando al medio)
 3. Pregunta: "¿Querés que te busque productos para esto?"
 
 Responde en español rioplatense casual. Sé breve y natural.""")

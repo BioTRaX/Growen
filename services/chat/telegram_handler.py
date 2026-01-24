@@ -63,6 +63,23 @@ async def handle_telegram_message(
         logger.debug(f"Error recuperando historial para Telegram: {e}")
         history_context = ""
     
+    # Detectar si hay un diagnóstico en curso basándose en el historial
+    # Esto permite mantener el modo CULTIVATOR incluso si el mensaje actual no tiene imagen
+    conversation_state = None
+    if history_context:
+        history_lower = history_context.lower()
+        diagnostic_indicators = [
+            "hojas amarillas", "clorosis", "diagnóstico", "diagnosticar",
+            "carencia", "deficiencia", "planta", "cultivo", "ph",
+            "vegetativo", "floración", "síntomas", "problema",
+            "hidropónico", "hidroponica", "dwc", "sustrato",
+            "fertilizante", "nutrientes", "qué le pasa",
+        ]
+        is_diagnosis_in_progress = any(indicator in history_lower for indicator in diagnostic_indicators)
+        if is_diagnosis_in_progress:
+            conversation_state = {"current_mode": "CULTIVATOR"}
+            logger.debug(f"Diagnóstico en curso detectado para chat_id={chat_id}")
+    
     # Si hay imagen, usar flujo de diagnóstico
     if image_file_id:
         try:
@@ -228,11 +245,17 @@ async def handle_telegram_message(
         prompt_parts.append(f"Usuario: {user_text}")
         prompt_with_context = "\n\n".join(prompt_parts) if prompt_parts else user_text
         
-        # Generar respuesta sin tools (chat general)
+        # Generar respuesta sin tools (chat general o continuación de diagnóstico)
+        # Si hay diagnóstico en curso, usar intent DIAGNOSTICO para activar persona CULTIVATOR
+        active_intent = "DIAGNOSTICO" if conversation_state else "chat_general"
         raw = await ai_router.run_async(
             task=Task.SHORT_ANSWER.value,
             prompt=prompt_with_context,
-            user_context={"role": user_role, "intent": "chat_general"},
+            user_context={
+                "role": user_role, 
+                "intent": active_intent,
+                "conversation_state": conversation_state,  # Mantener modo CULTIVATOR si aplica
+            },
         )
         
         # Limpiar prefijo técnico si existe
