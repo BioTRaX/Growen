@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Optional
 
 try:  # httpx opcional; si no está, el envío se omite silenciosamente
@@ -138,5 +139,100 @@ async def download_telegram_file(
             
             return download_resp.content
             
+
     except Exception:
         return None
+
+
+async def send_photo(
+    photo: str | bytes | Path,
+    caption: Optional[str] = None,
+    *,
+    chat_id: Optional[str | int] = None,
+    token: Optional[str] = None,
+    timeout: float = 30.0,
+    parse_mode: Optional[str] = None,
+) -> bool:
+    """Envía una foto a Telegram.
+    
+    Args:
+        photo: Puede ser:
+            - str: URL pública (http...) o path local
+            - bytes: Contenido del archivo
+            - Path: Objeto Path a archivo local
+        caption: Texto que acompaña la imagen (opcional)
+        chat_id: ID del chat destino (usa default si es None)
+        token: Token del bot (usa default si es None)
+        
+    Returns:
+        True si se envió correctamente, False en caso contrario.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        enabled = os.getenv("TELEGRAM_ENABLED", "0").lower() in ("1", "true", "yes")
+    except Exception:
+        enabled = False
+    if not enabled:
+        logger.debug("TELEGRAM_ENABLED no está habilitado, omitiendo envío de foto")
+        return False
+
+    tok = token or os.getenv("TELEGRAM_BOT_TOKEN")
+    chat = chat_id or os.getenv("TELEGRAM_DEFAULT_CHAT_ID")
+    
+    if not tok or not chat or httpx is None:
+        return False
+
+    url_api = f"https://api.telegram.org/bot{tok}/sendPhoto"
+    params = {"chat_id": chat}
+    if caption:
+        params["caption"] = caption
+    if parse_mode:
+        params["parse_mode"] = parse_mode
+        
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            # Caso 1: URL pública (string)
+            if isinstance(photo, str) and (photo.startswith("http://") or photo.startswith("https://")):
+                params["photo"] = photo
+                resp = await client.post(url_api, params=params)
+            
+            # Caso 2: Archivo local (str o Path) o Bytes
+            else:
+                files = {}
+                file_content = None
+                filename = "image.jpg"
+                
+                if isinstance(photo, (str, Path)):
+                    p = Path(photo)
+                    if not p.exists():
+                        logger.error(f"Archivo de imagen no encontrado: {p}")
+                        return False
+                    file_content = open(p, "rb")
+                    filename = p.name
+                else:
+                    # Bytes
+                    file_content = photo
+                
+                # Enviar multipart/form-data
+                # Nota: httpx cierra el archivo si se pasa como objeto file-like
+                files = {"photo": (filename, file_content)}
+                
+                resp = await client.post(url_api, params=params, files=files)
+                
+                # Cerrar archivo si lo abrimos nosotros
+                if isinstance(photo, (str, Path)) and hasattr(file_content, "close"):
+                    file_content.close() # type: ignore
+
+            if resp.status_code == 200:
+                logger.debug(f"✓ Foto enviada exitosamente a chat_id={chat}")
+                return True
+            else:
+                logger.error(f"✗ Error enviando foto a chat_id={chat}: {resp.status_code} - {resp.text[:200]}")
+                return False
+                
+    except Exception as e:
+        logger.error(f"✗ Excepción enviando foto a chat_id={chat}: {e}")
+        return False
+
