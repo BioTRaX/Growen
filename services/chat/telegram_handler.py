@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent_core.config import settings as core_settings
@@ -58,7 +59,9 @@ async def handle_telegram_message(
     
     # Recuperar historial reciente para contexto
     try:
+        logger.debug(f"Recuperando historial para session_id={telegram_session_id}")
         history_context = await get_recent_history(db, telegram_session_id, limit=6)
+        logger.debug(f"Historial recuperado: {len(history_context) if history_context else 0} caracteres")
     except Exception as e:
         logger.debug(f"Error recuperando historial para Telegram: {e}")
         history_context = ""
@@ -66,6 +69,7 @@ async def handle_telegram_message(
     # Detectar si hay un diagnóstico en curso basándose en el historial
     # Esto permite mantener el modo CULTIVATOR incluso si el mensaje actual no tiene imagen
     conversation_state = None
+    logger.debug(f"Analizando historial para detectar conversación en curso...")
     if history_context:
         history_lower = history_context.lower()
         diagnostic_indicators = [
@@ -78,8 +82,32 @@ async def handle_telegram_message(
         is_diagnosis_in_progress = any(indicator in history_lower for indicator in diagnostic_indicators)
         if is_diagnosis_in_progress:
             conversation_state = {"current_mode": "CULTIVATOR"}
-            logger.debug(f"Diagnóstico en curso detectado para chat_id={chat_id}")
+            logger.debug(f"Conversación de diagnóstico detectada en historial")
     
+    logger.debug(f"Estado de conversación: {conversation_state}")
+    
+    # Determinar modo y tarea según el contexto
+    mode = None
+    task = Task.SHORT_ANSWER
+    
+    logger.debug(f"Determinando modo... image_file_id={image_file_id}, conversation_state={conversation_state}")
+    
+    if image_file_id or (conversation_state and conversation_state.get("current_mode") == "CULTIVATOR"):
+        mode = "CULTIVATOR"
+        task = Task.LONG_ANSWER
+        logger.debug(f"Modo CULTIVATOR seleccionado (imagen o diagnóstico en curso)")
+    else:
+        logger.debug(f"Verificando si es consulta de producto...")
+        # Detectar si es una consulta de producto
+        product_query_result = extract_product_query(user_text)
+        logger.debug(f"Resultado de extract_product_query: {product_query_result}")
+        if product_query_result:
+            mode = "PRODUCT_LOOKUP"
+            task = Task.SHORT_ANSWER
+            logger.debug(f"Modo PRODUCT_LOOKUP seleccionado")
+    
+    logger.debug(f"Modo final: {mode}, Tarea final: {task}")
+
     # Si hay imagen, usar flujo de diagnóstico
     if image_file_id:
         try:
@@ -181,18 +209,129 @@ async def handle_telegram_message(
             if hasattr(provider, '_build_tools_schema'):
                 tools_schema = provider._build_tools_schema(user_role)
             
+            logger.debug(f"Preparando llamada a AIRouter con task={Task.SHORT_ANSWER.value}, intent=product_lookup")
+            
             # Generar respuesta con tool calling
-            answer = await ai_router.run_async(
-                task=Task.SHORT_ANSWER.value,
-                prompt=prompt_with_context,
-                user_context={"role": user_role, "intent": "product_lookup"},
-                tools_schema=tools_schema,
-            )
+            try:
+                logger.debug(f"Llamando a ai_router.run_async para consulta de producto...")
+                answer = await ai_router.run_async(
+                    task=Task.SHORT_ANSWER.value,
+                    prompt=prompt_with_context,
+                    user_context={"role": user_role, "intent": "product_lookup"},
+                    tools_schema=tools_schema,
+                )
+                logger.debug(f"Respuesta de ai_router.run_async recibida.")
+            except Exception as e:
+                logger.error(f"Error durante la llamada a ai_router.run_async para producto: {e}", exc_info=True)
+                raise # Re-lanzar para que el except externo lo capture
             
             # Limpiar prefijo técnico si existe (openai:, ollama:)
             if ":" in answer and answer.split(":")[0] in ("openai", "ollama"):
                 answer = answer.split(":", 1)[1].strip()
             
+            # Detectar y procesar envío de imágenes
+            # Soporta: [SEND_IMAGE: path] y Markdown ![alt](path)
+            import re
+            
+            # Estrategia 1: Tags explícitos [SEND_IMAGE: ...]
+            image_matches = re.findall(r'\[SEND_IMAGE: (.*?)\]', answer)
+            
+            # Estrategia 2: Markdown images ![alt](url) - Fallback si el modelo ignora instrucciones
+            markdown_matches = re.findall(r'!\[.*?\]\((.*?)\)', answer)
+            
+            # Unificar y procesar
+            all_images = list(image_matches) + list(markdown_matches)
+            
+            for image_path in all_images:
+                raw_path = image_path.strip()
+                
+                # Limpiar tags de la respuesta visible
+                answer = answer.replace(f"[SEND_IMAGE: {raw_path}]", "")
+                # Limpiar markdown de la respuesta visible (opcional, pero mejor UX)
+                # Regex más complejo para reemplazar exactamente el markdown correcto con el path
+                answer = re.sub(r'!\[.*?\]\(' + re.escape(raw_path) + r'\)', '', answer)
+
+                # Lógica de saneamiento de URL alucinada por el LLM (hack para nicegrow.com)
+                clean_path = raw_path
+                if "nicegrow.com/media/" in raw_path:
+                    clean_path = raw_path.split("nicegrow.com/")[-1].lstrip("/")
+                elif raw_path.startswith("/media/"):
+                    clean_path = raw_path.lstrip("/")
+
+                # Convertir paths relativos a absolutos desde el root del proyecto
+                from pathlib import Path as PathLib
+                ROOT = PathLib(__file__).resolve().parent.parent.parent
+                
+                # Normalizar separadores primero (Windows usa \, queremos /)
+                clean_path = clean_path.replace("\\", "/")
+                
+                if clean_path.startswith("media/"):
+                    # Path tiene media/ prefix - convertir a Devs/Imagenes/
+                    clean_path = clean_path.replace("media/", "Devs/Imagenes/", 1)
+                    clean_path = str(ROOT / clean_path)
+                elif clean_path.startswith("Productos/") or "/Productos/" in clean_path:
+                    # Path de producto sin prefix - agregar Devs/Imagenes/
+                    clean_path = str(ROOT / "Devs" / "Imagenes" / clean_path)
+                elif not clean_path.startswith(("c:", "C:", "/")):
+                    # Otros paths relativos - intentar con Devs/Imagenes/
+                    candidate = ROOT / "Devs" / "Imagenes" / clean_path
+                    if candidate.exists():
+                        clean_path = str(candidate)
+
+                
+                # Optimización WebP: Buscar versión optimizada en 'derived'
+                # Estructura típica: .../Productos/12/raw/FILE -> .../Productos/12/derived/*-full.webp
+                try:
+                    logger.debug(f"Iniciando optimización WebP para: {clean_path}")
+                    p = Path(clean_path)
+                    logger.debug(f"Path creado, verificando existencia...")
+                    if p.exists() and "raw" in p.parts:
+                        logger.debug(f"Path existe y contiene 'raw', buscando derived...")
+                        # Identificar carpeta 'derived' paralela a 'raw'
+                        parent = p.parent.parent # ej: .../Productos/12
+                        derived_dir = parent / "derived"
+                        logger.debug(f"Buscando en derived_dir: {derived_dir}")
+                        if derived_dir.exists():
+                            logger.debug(f"Derived dir existe, buscando archivos webp...")
+                            # Buscar archivos webp, preferiblemente 'card' o 'full'
+                            webp_candidates = list(derived_dir.glob("*.webp"))
+                            logger.debug(f"Encontrados {len(webp_candidates)} archivos webp")
+                            if webp_candidates:
+                                # Priorizar 'card' > 'full' > cualquiera (card es más liviano para Telegram)
+                                chosen = None
+                                for cand in webp_candidates:
+                                    if "-card.webp" in cand.name:
+                                        chosen = cand
+                                        break
+                                if not chosen:
+                                    for cand in webp_candidates:
+                                        if "-full.webp" in cand.name:
+                                            chosen = cand
+                                            break
+                                if not chosen and webp_candidates:
+                                    chosen = webp_candidates[0]
+                                
+                                if chosen:
+                                    logger.info(f"Optimización: Usando WebP {chosen} en lugar de RAW {p}")
+                                    clean_path = str(chosen)
+                                else:
+                                    logger.debug(f"No se encontró archivo webp preferido, usando path original")
+                    else:
+                        logger.debug(f"Path no existe o no contiene 'raw': exists={p.exists()}, parts={p.parts}")
+                except Exception as e:
+                    logger.error(f"Error intentando optimizar imagen a WebP: {e}", exc_info=True)
+
+                logger.debug(f"Intentando enviar imagen: {clean_path}")
+                try:
+                    from services.notifications.telegram import send_photo
+                    # Enviar la imagen
+                    await send_photo(photo=clean_path, chat_id=chat_id)
+                    logger.info(f"✓ Imagen enviada a Telegram: {clean_path} (raw: {raw_path})")
+                except Exception as e:
+                    logger.error(f"✗ Error enviando imagen {clean_path}: {e}", exc_info=True)
+            
+            answer = answer.strip()
+
             # Guardar mensaje del usuario y respuesta
             try:
                 await save_message(
