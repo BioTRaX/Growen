@@ -162,6 +162,12 @@ async def get_product_info(sku: str = None, product_id: int = None) -> Dict[str,
             if tags and isinstance(tags, list):
                 result["tags"] = tags
                 logger.debug("get_product_info: Incluyendo tags: %s", tags)
+
+            # Incluir imágenes si están disponibles
+            images = data.get("images")
+            if images and isinstance(images, list):
+                result["images"] = images
+                logger.debug("get_product_info: Incluyendo %d imágenes", len(images))
             
             # Incluir descripción y especificaciones si están disponibles
             description = data.get("description")
@@ -271,6 +277,12 @@ async def get_product_full_info(sku: str = None, product_id: int = None) -> Dict
                 "stock": data.get("stock"),
             }
             
+            # Incluir imágenes si están disponibles
+            images = data.get("images")
+            if images and isinstance(images, list):
+                result["images"] = images
+                logger.debug("get_product_full_info: Incluyendo %d imágenes", len(images))
+
             # Incluir descripción enriquecida si existe
             description = data.get("description")
             if description:
@@ -349,6 +361,7 @@ async def find_products_by_name(query: str) -> Dict[str, Any]:
             stock = prod.get("stock")
             price = prod.get("price") or prod.get("sale_price")
             tags = prod.get("tags", [])  # Tags del producto (ej: ["#Organico", "#Floracion"])
+            image_path = prod.get("image_path")
             
             # Solo incluir si tiene SKU canónico (no mostrar SKUs internos)
             # El SKU canónico tiene formato XXX_####_YYY
@@ -365,6 +378,10 @@ async def find_products_by_name(query: str) -> Dict[str, Any]:
             # Incluir tags si están disponibles
             if tags:
                 item["tags"] = tags
+            
+            # Incluir imagen principal si está disponible (para preview rápida)
+            if image_path:
+                item["images"] = [{"path": image_path, "is_primary": True}]
             
             items.append(item)
         
@@ -451,6 +468,8 @@ def _summarize_tool_output(result: Dict[str, Any], max_length: int = 500) -> str
             summary[key] = f"({len(value)} chars) {value[:100]}..." if len(value) > 100 else value
         elif key == "items" and isinstance(value, list):
             summary[key] = f"[{len(value)} items]"
+        elif key == "images" and isinstance(value, list):
+            summary[key] = f"[{len(value)} images]"
         elif isinstance(value, str) and len(value) > 200:
             summary[key] = f"{value[:200]}..."
         else:
