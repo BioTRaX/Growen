@@ -19,7 +19,7 @@ from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import func, select, or_, update
+from sqlalchemy import func, select, or_, and_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
@@ -526,6 +526,17 @@ async def catalog_search(
     """
     term = (q or "").strip()
     
+    # Subquery para imagen principal
+    from db.models import Image
+    primary_image_path = (
+        select(Image.path)
+        .where(Image.product_id == Product.id)
+        .where(Image.active == True)
+        .order_by(Image.is_primary.desc(), Image.sort_order.asc(), Image.id.asc())
+        .limit(1)
+        .scalar_subquery()
+    )
+
     # Query base: productos con su info canónica vinculada
     base_query = (
         select(
@@ -538,6 +549,7 @@ async def catalog_search(
             CanonicalProduct.sku_custom.label("canonical_sku"),
             CanonicalProduct.ng_sku,
             CanonicalProduct.sale_price,
+            primary_image_path.label("image_path"),
         )
         .join(SupplierProduct, SupplierProduct.internal_product_id == Product.id, isouter=True)
         .join(ProductEquivalence, ProductEquivalence.supplier_product_id == SupplierProduct.id, isouter=True)
@@ -555,48 +567,41 @@ async def catalog_search(
             )
         ).all()
     else:
-        like = f"%{term}%"
-        # Normalizar término para búsquedas relacionadas
+        # Búsqueda por palabras clave (AND logic)
+        terms = term.split()
+        
+        # Lista de condiciones AND (una por cada palabra)
+        and_conditions = []
+        
+        for t in terms:
+            w_like = f"%{t}%"
+            # Para cada palabra, debe machear en al menos uno de los campos (OR)
+            or_conditions = [
+                Product.title.ilike(w_like),
+                CanonicalProduct.name.ilike(w_like),
+                CanonicalProduct.sku_custom.ilike(w_like),
+                CanonicalProduct.ng_sku.ilike(w_like),
+                Product.description_html.ilike(w_like),
+            ]
+            and_conditions.append(or_(*or_conditions))
+        
+        # Normalizar término completo para búsqueda de relaciones (opcional)
         term_lower = term.lower()
         related_terms = []
         
-        # Mapeo de términos relacionados para búsqueda mejorada
-        if any(t in term_lower for t in ["vegetativo", "veg", "crecimiento", "vegetacion"]):
-            related_terms.extend(["vegetativo", "veg", "crecimiento", "vegetacion", "vegetativa"])
-        if any(t in term_lower for t in ["nitrogeno", "nitrógeno", "n "]):
-            related_terms.extend(["nitrogeno", "nitrógeno", "n ", "nitrogen"])
-        if any(t in term_lower for t in ["floracion", "floración", "flor", "flora"]):
-            related_terms.extend(["floracion", "floración", "flor", "flora"])
+        # Mapeo de términos relacionados (se agregan como OR global o se refinan?)
+        # Nota: La lógica anterior usaba OR global. Para mantener simplicidad y potencia,
+        # usaremos la lógica de palabras clave AND como base.
+        # Los related terms (veg, flora) podrían sumarse a la query si no hay resultados,
+        # pero por ahora priorizamos la búsqueda exacta de palabras.
         
-        # Construir condiciones de búsqueda
-        conditions = [
-            Product.title.ilike(like),
-            CanonicalProduct.name.ilike(like),
-            CanonicalProduct.sku_custom.ilike(like),
-            CanonicalProduct.ng_sku.ilike(like),
-        ]
+        stmt = base_query.where(and_(*and_conditions))
         
-        # Agregar búsqueda en descripción HTML si existe
-        conditions.append(Product.description_html.ilike(like))
+        # Ordenar: primero stock, luego título
+        stmt = stmt.order_by(Product.stock.desc().nullslast(), Product.title.asc())
+        stmt = stmt.limit(limit * 2)
         
-        # Agregar términos relacionados
-        for rel_term in related_terms:
-            rel_like = f"%{rel_term}%"
-            conditions.extend([
-                Product.title.ilike(rel_like),
-                Product.description_html.ilike(rel_like),
-                CanonicalProduct.name.ilike(rel_like),
-            ])
-        
-        # Buscar en título, nombre canónico, SKU y descripción
-        rows = (
-            await session.execute(
-                base_query
-                .where(or_(*conditions))
-                .order_by(Product.stock.desc().nullslast(), Product.title.asc())
-                .limit(limit * 2)  # Extra para deduplicar
-            )
-        ).all()
+        rows = (await session.execute(stmt)).all()
     
     # Deduplicar por product_id (puede haber múltiples filas si hay varios SupplierProducts)
     seen_ids: set[int] = set()
@@ -899,6 +904,27 @@ async def _build_product_response(session: AsyncSession, product: Product) -> di
         # Si falla la consulta de tags, continuar sin tags
         tags = []
 
+    # Obtener imgenes del producto (para Telegram/Chatbot)
+    images = []
+    try:
+        img_result = (
+            await session.execute(
+                select(Image)
+                .where(Image.product_id == product.id)
+                .where(Image.active == True)
+                .order_by(Image.sort_order, Image.id)
+            )
+        ).scalars().all()
+        for img in img_result:
+            images.append({
+                "image_id": img.id,
+                "url": img.url,
+                "path": img.path,
+                "is_primary": img.is_primary
+            })
+    except Exception:
+        pass
+
     return {
         "product_id": product.id,
         "sku": canonical_sku,  # SKU canónico (puede ser None si no hay)
@@ -909,6 +935,7 @@ async def _build_product_response(session: AsyncSession, product: Product) -> di
         "technical_specs": getattr(product, 'technical_specs', None),
         "usage_instructions": getattr(product, 'usage_instructions', None),
         "tags": tags,  # Lista de tags formateados como ["#Organico", "#Floracion"]
+        "images": images, # Lista de imágenes
     }
 
 
