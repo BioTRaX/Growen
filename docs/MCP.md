@@ -12,6 +12,22 @@ Esta página consolida la documentación de la capa MCP (Model Context Protocol 
 - Homogeneizar invocaciones: contrato estándar `POST /invoke_tool` en todos los MCP.
 - Controlar acceso por rol de usuario (MVP) y preparar el camino para autenticación firmada y auditoría.
 
+## Primer Arranque en Desarrollo
+
+Para habilitar herramientas MCP en entorno local desde el primer inicio:
+
+```bash
+# Paso 1: levantar MCP servers
+docker compose up -d mcp_products mcp_web_search
+
+# Paso 2: validar estado
+docker compose ps
+```
+
+Si no levantas MCP, el sistema puede arrancar igual en modo desarrollo, pero las funciones de IA que dependen de tools externas quedarán degradadas.
+
+Referencia del flujo completo: `docs/DEVELOPMENT_WORKFLOW.md`.
+
 ## Contrato de invocación
 - Endpoint: `POST /invoke_tool`
 - Request JSON:

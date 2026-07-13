@@ -12,6 +12,29 @@
 - SKU Canónico (formato, generación, secuencias): [docs/CANONICAL_SKU.md](./docs/CANONICAL_SKU.md)
 - **Logging y diagnóstico de enriquecimiento IA**: [docs/ENRICHMENT_LOGS.md](./docs/ENRICHMENT_LOGS.md)
 
+## Primer Arranque en Desarrollo (Windows)
+
+Secuencia recomendada para primer inicio local:
+
+1. Levantar MCP (si vas a usar herramientas IA):
+  - `docker compose up -d mcp_products mcp_web_search`
+2. Levantar base de datos:
+  - `docker compose up -d db`
+3. Crear entorno virtual (primera vez):
+  - `python -m venv .venv`
+4. Activar entorno virtual:
+  - PowerShell: `.\.venv\Scripts\Activate.ps1`
+  - CMD: `.venv\Scripts\activate.bat`
+5. Instalar dependencias dentro de `.venv`:
+  - `pip install -r requirements.txt`
+6. Levantar backend + frontend:
+  - Opción recomendada: `start.bat`
+
+Documentación complementaria:
+- Flujo completo local vs Docker: [docs/DEVELOPMENT_WORKFLOW.md](./docs/DEVELOPMENT_WORKFLOW.md)
+- Capa MCP y troubleshooting: [docs/MCP.md](./docs/MCP.md)
+- Entorno Python y errores comunes de `.venv`: [docs/PYTHON_ENVIRONMENT_SETUP.md](./docs/PYTHON_ENVIRONMENT_SETUP.md)
+
 ## Chatbot Growen
 
 - Growen responde en espanol rioplatense con tono malhumorado, humor negro y sarcasmo directo.
@@ -114,6 +137,7 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - **Base de datos**: PostgreSQL 15 (Alembic para migraciones).
 - **IA**: ruteo automático entre Ollama (local) y OpenAI.
 - **Frontend**: React + Vite con listas virtualizadas mediante `react-window`.
+- **Nota de evolución frontend**: la arquitectura objetivo para un shell modular con plugins en Vue 3 + Vuetify + SASS está documentada en `frontend/brainstorming_Growen.md`.
 - **Adapters**: exportación a TiendaNegocio via XLS.
 - **MCP Servers (nuevo)**: microservicios auxiliares (ej. `mcp_products`, `mcp_web_search`) que exponen herramientas (`tools`) vía un endpoint uniforme `POST /invoke_tool` para consumo de agentes LLM, actuando como fachada HTTP hacia la API principal (sin acceso directo a DB).
   - Products: tools `get_product_info` y `get_product_full_info` (URL default `http://mcp_products:8001/invoke_tool`, configurable con `MCP_PRODUCTS_URL`).

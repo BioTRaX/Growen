@@ -5,12 +5,16 @@
 
 # Roadmap del Proyecto
 
-Última actualización: 2025-11-25
+Última actualización: 2026-06-06
 
 Este documento resume el estado actual del proyecto, las funcionalidades ya implementadas y los trabajos pendientes. Debe mantenerse actualizado por cada contribución (humana o de un agente) que cambie comportamiento, endpoints, modelos o UI relevante.
 
 ## Contexto
 ## Actualizaciones recientes
+
+- Frontend/Arquitectura: Se creó la base arquitectónica objetivo para una UI modular basada en plugins (Sidebar colapsable + Main Content) usando Vue 3 + Vuetify + SASS y Composition API con `script setup` en `frontend/brainstorming_Growen.md`. Esta definición es de objetivo futuro y no reemplaza el stack React actual hasta ejecutar una migración planificada.
+
+- Documentación/Onboarding Dev: Se consolidó el primer arranque en desarrollo con una secuencia explícita `MCP -> DB -> .venv -> start.bat` en `README.md`, `docs/DEVELOPMENT_WORKFLOW.md` y `docs/MCP.md` para reducir ambigüedades en setup inicial.
 
 - DB/Backend: Se agregaron metadatos de trazabilidad de enriquecimiento en `products` (`last_enriched_at`, `enriched_by`) y se exponen en `GET /products/{id}`. El endpoint `POST /products/{id}/enrich` los setea automáticamente; `DELETE /products/{id}/enrichment` los limpia. Migración: `20251021_add_product_enrichment_trace.py`.
 
