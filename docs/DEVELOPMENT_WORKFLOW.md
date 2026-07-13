@@ -15,14 +15,17 @@ Guía para optimizar el ciclo de desarrollo usando servicios locales y reservar 
 
 ## Setup Inicial
 
-### 1. Levantar Solo Infraestructura en Docker
+### 1. Levantar Infraestructura en Docker (primer inicio)
 
 ```powershell
-# Solo PostgreSQL (y servicios externos si necesitas)
+# Paso 1: MCP servers (si vas a usar herramientas IA)
+docker compose up -d mcp_products mcp_web_search
+
+# Paso 2: Base de datos
 docker compose up -d db
 
-# O todo menos API si quieres probar workers
-docker compose up -d db mcp_products mcp_web_search
+# Alternativa en un solo comando
+# docker compose up -d db mcp_products mcp_web_search
 ```
 
 **Puertos expuestos**:
@@ -72,6 +75,27 @@ pip install -r requirements.txt
 
 # Verificar instalación
 python scripts/check_admin_user.py
+```
+
+### 4. Levantar Backend + Frontend
+
+**Opción recomendada (automática):**
+
+```powershell
+./start.bat
+```
+
+`start.bat` orquesta validaciones, migraciones y arranque de API + frontend para desarrollo local.
+
+**Opción manual (más control):**
+
+```powershell
+# Terminal 1: API local
+python -m uvicorn services.api:app --reload --port 8000 --log-level info
+
+# Terminal 2: Frontend
+cd frontend
+npm run dev
 ```
 
 ## Desarrollo LAN (Compartir con otros dispositivos)
