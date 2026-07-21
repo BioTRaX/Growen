@@ -640,7 +640,7 @@ price = await scrape_dynamic_price(url, selector=".price")
 assert price == Decimal("1250.50")
 ```
 
-**Nota:** Los tests con AsyncMock generan warnings sobre coroutines no esperadas. Es comportamiento normal y no afecta funcionalidad.
+**Nota:** una advertencia `coroutine ... was never awaited` no se considera normal ni debe ignorarse como garantía de funcionamiento. La suite dinámica conserva un caso de borde con esa deuda en Windows; debe aislarse con `tracemalloc` y corregirse antes de exigir ejecución con warnings como errores.
 
 ## Troubleshooting
 

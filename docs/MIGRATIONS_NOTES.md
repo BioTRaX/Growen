@@ -4,6 +4,14 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Notas de migraciones
 
+## 2026-07-21 — `20260721_market_observability_v1`
+
+Revisión focal posterior a `20260718_product_taxonomy_tags_v1`. Crea `market_alerts`, `market_update_jobs`, `market_update_items` y `market_update_source_results`; amplía fuentes e historial con validación, auditoría y referencias al trabajo originador. `source_type` pasa del enum PostgreSQL cerrado a `VARCHAR(16)` con check `static|dynamic|manual`, lo que permite el backfill manual dentro de una única revisión transaccional.
+
+El índice parcial `uq_market_update_items_active_product` impide dos items `queued|running` para el mismo producto; el servicio complementa la garantía con advisory locks por producto. El backfill sólo crea fuente/observación manual cuando existe una referencia legacy. El downgrade está bloqueado porque eliminaría trazabilidad o podría perder alertas.
+
+Verificación: upgrade incremental local a head y cadena completa sobre PostgreSQL temporal aprobados; la prueba valida tablas, columnas e índice parcial. La revisión no incorpora el drift histórico ajeno que continúa reportando `alembic check`.
+
 ## 2026-07-18 — `20260718_product_taxonomy_tags_v1`
 
 Revisión posterior a `20260718_admin_jsonb_v2`. Agrega `categories.kind`, `products.subcategory_id` y `canonical_batch_job_items.tag_names`; incorpora índices únicos funcionales por `kind + lower(name)` y `lower(tags.name)`. Migra raíces a `category`, descendientes a `subcategory` y mueve productos asociados a una categoría hija hacia `subcategory_id`, resolviendo su raíz histórica para `category_id`.

@@ -5,6 +5,33 @@
 
 # Roadmap del Proyecto
 
+## Actualización 2026-07-21 — Mercado observable y migrado a Vue
+
+- [x] Migración focal `20260721_market_observability_v1`: alertas, jobs, items, resultados por fuente, validación, observaciones auditables e histórico de tres años.
+- [x] Promedio aritmético de últimas observaciones ARS efectivas; cargas manuales como observaciones y fuente libre auditada.
+- [x] API observable con deduplicación por producto, estados terminales, jobs, histórico, revalidación y listado sin N+1.
+- [x] Worker Docker dedicado no-root con Chromium, HTTP primero, cuatro consumidores configurables, exclusión por dominio, backoff, heartbeat y control desde Administración.
+- [x] Panel administrativo reconciliado con el estado Compose real y health específico de Mercado, evitando falsos “Docker no disponible” por latencia de Docker Desktop.
+- [x] Extracción robustecida con prioridad JSON-LD `Product/Offer`, separación nombre canónico/SKU y recarga automática al finalizar jobs.
+- [x] `/mercado` activado en Vue con filtros, batch, polling cancelable, detalle de fuentes, observación manual, histórico SVG y ocho bandas accesibles.
+- [x] Credencial local de PostgreSQL rotada e invalidada sin exponer el reemplazo; cola Redis obsoleta depurada por IDs exactos.
+- [x] Upgrade incremental y limpio a head, build Vue, imagen Docker y smoke job→worker→terminal verificados.
+- [ ] Evolución: score de confianza, circuit breaker por dominio, dashboard de cobertura/volatilidad y recomendaciones explicables con aprobación humana.
+- [ ] Retirar el fallback React tras un ciclo estable y smoke visual autenticado por ambos roles.
+- [x] Retrospectiva técnica publicada con incidentes post-implementación, soluciones y ajustes al diagnóstico agéntico.
+- [ ] Incorporar guarda de listener único para la API y estado de invalidación auditable para observaciones erróneas.
+
+## Actualización 2026-07-21 — Retrospectiva de publicación segura en `dev`
+
+- [x] Preservado el worktree completo al crear `dev` desde `main`; 327 archivos se organizaron en cuatro commits atómicos y se publicaron sin modificar `main`.
+- [x] Quality gate consolidado aprobado: seguridad/dependencias, 39 pruebas Python, builds React/Vue, 65 pruebas Vue y 5 smokes E2E.
+- [x] Corregida la falsa SQLite compartida en Windows: `:memory:` se conserva y `StaticPool` evita convertir la base de tests en una ruta física `file:...`.
+- [x] Robustecido el smoke `/compras` con selector semántico y espera compatible con compilación lazy inicial de Vite.
+- [x] Publicación auditada sin secretos; el falso positivo `AKIA...` fue trazado a un hash npm `integrity`.
+- [x] Skill `git-commit-push` ampliada con escaneo redactado, verificación de remoto, aprobación explícita y comprobación del SHA remoto.
+- [ ] Evaluar un `scripts/audit-secrets.ps1` reutilizable que implemente las mismas reglas y pruebas para evitar scanners ad hoc.
+- [ ] Migrar los tests heredados de `TestClient` antes de adoptar `httpx2`.
+
 ## Actualización 2026-07-20 — Stock Vue listo para validación
 
 - [x] Implementadas `/stock` y `/stock/shortages` en Vue 3 con filtros URL, debounce, cancelación, paginación reemplazable, permisos y estados de error.
@@ -135,7 +162,7 @@
 - [x] Skill `database-migrations` endurecida para descartar deriva autogenerada no relacionada y evitar secretos en outputs.
 - [ ] Incorporar un E2E automatizado del ciclo `BORRADOR` → `VALIDADA` → `CONFIRMADA` con verificación de impacto.
 
-Última actualización general: 2026-07-17
+Última actualización general: 2026-07-21
 
 Este documento resume el estado actual del proyecto, las funcionalidades ya implementadas y los trabajos pendientes. Debe mantenerse actualizado por cada contribución (humana o de un agente) que cambie comportamiento, endpoints, modelos o UI relevante.
 
@@ -443,18 +470,17 @@ Hito 5 - Chatbot administrativo con acceso controlado
 Hito 5.1 - Funcionalidad "Mercado" (comparación de precios)
 - Objetivo
   - Permitir a admins y colaboradores comparar rápidamente los precios de venta internos con los rangos actuales del mercado para tomar decisiones de precios informadas.
-- Estado actual: **Etapa 0 (Planificación) y Etapa 1 (UI básica) completadas**
+- Estado actual: **backend observable y módulo Vue activos; React permanece como fallback temporal**
   - Documentación completa en `docs/MERCADO.md` con plan de 10 secciones (alcance, UI/UX, modelo de datos, fuentes, worker scraping, seguridad, testing, futuras mejoras).
   - Componente frontend `Market.tsx` implementado con tabla de productos mostrando: nombre, precio venta (ARS), rango mercado (min-máx), última actualización, categoría y botón de detalle.
   - Navegación configurada: nueva ruta `/mercado` protegida (solo admin/colaborador), botón "Mercado" agregado en `AppToolbar` junto a "Productos".
   - Filtros implementados: búsqueda por nombre/SKU, filtro por proveedor (autocomplete) y categoría (dropdown).
   - Indicadores visuales de comparación: precio por debajo, dentro o por encima del rango de mercado con colores distintivos.
-- Próximas etapas (pendientes)
-  - **Etapa 2**: Modelo de datos backend (tabla `Source` para fuentes obligatorias/adicionales, campos `market_price_min/max`, endpoint `GET /market/products`).
-  - **Etapa 3**: Worker de scraping (Playwright + BeautifulSoup, parsers por fuente, integración con MCP Web Search, endpoint `POST /products/{id}/update-market`).
-  - **Etapa 4**: Modal de detalles (lista de fuentes con precios y enlaces, configuración de fuentes obligatorias, botón actualizar manual, historial de precios).
-  - **Etapa 5**: Tests y QA (unit tests de parsers con HTML guardado, integration tests con respx/mocks, tests UI de filtrado/modal).
-  - Futuras mejoras: actualización automática programada, alertas de precios fuera de rango, ampliar biblioteca de parsers por dominio.
+- Implementado: `market_sources`, API de listado/fuentes/mutaciones/batch, scraping estático y dinámico, descubrimiento, scheduler persistente, alertas y modal React.
+- Estado operativo actualizado el 2026-07-21: worker `market_worker` Docker saludable, heartbeat vigente y cola `market` sin mensajes pendientes; las fuentes y observaciones quedan auditadas por producto y trabajo.
+- Implementado: consumidor dedicado, jobs persistentes e idempotentes, histórico de tres años, política ARS/promedio y observabilidad por cola, producto y fuente.
+- Migración Vue: módulo `market` activo en Vue sobre `/mercado`; React se conserva como fallback durante un ciclo estable.
+- Auditoría y plan: `docs/MARKET_CURRENT_STATE_20260721.md`.
 - Criterios de aceptación
   - Admin/Colaborador pueden visualizar lista de productos con comparación de precios vs mercado.
   - Scraping funcional para al menos 3 fuentes obligatorias (MercadoLibre, tienda competidora, fabricante).

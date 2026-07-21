@@ -5,6 +5,10 @@
 
 # Migración del frontend a Vue 3 y Vuetify 3
 
+## Mercado — corte Vue implementado (2026-07-21)
+
+`/mercado` está activo en Vue para `colaborador|admin`. El módulo vive en `frontend-vue/src/modules/market/` y conserva backend autoritativo, CSRF, filtros, batch, fuentes, observaciones manuales, histórico SVG y seguimiento de jobs hasta estado terminal. React queda como fallback durante un ciclo de versión; no debe retirarse hasta completar el smoke visual autenticado y observar estabilidad operativa.
+
 ## Stock y Faltantes — 2026-07-20
 
 Las vistas Vue `/stock` y `/stock/shortages` están implementadas y compiladas. Stock ofrece pestañas con/sin stock, filtros persistidos en URL, búsqueda con debounce/cancelación, edición decimal, exportaciones XLSX/CSV/PDF y TiendaNegocio sólo para staff. Faltantes incorpora métricas, filtro por motivo, búsqueda remota limitada a 50 productos, alta decimal y confirmación de saldo negativo.
@@ -13,7 +17,7 @@ El backend usa `Decimal(14,2)`, bloqueo de fila, ledger y auditoría transaccion
 
 Estado de despliegue: el router Vue conoce ambos componentes, pero el manifiesto permanece `runtime: legacy`, `state: pending`. El gate de activación exige que Productos/Catálogos esté disponible desde una ruta Vue productiva y que pase el smoke visual por rol. Rollback posterior: volver a `legacy/pending`, regenerar Nginx y desplegar sin revertir datos ni ledger.
 
-Validación local: 65 pruebas Vue, 12 pruebas backend funcionales más el contrato CSRF aislado, `vue-tsc`, build Vue, build React y generación Nginx aprobados. Quedan pendientes smoke visual autenticado y prueba de concurrencia real sobre PostgreSQL. El rerun backend agrupado posterior reprodujo el conflicto conocido del fixture SQLite compartido (`table already exists`/`no such table`); no se usa como evidencia de concurrencia.
+Validación local: 65 pruebas Vue, 12 pruebas backend funcionales más el contrato CSRF aislado, `vue-tsc`, build Vue, build React y generación Nginx aprobados. Quedan pendientes smoke visual autenticado y prueba de concurrencia real sobre PostgreSQL. La colisión heredada `table already exists`/`no such table` quedó resuelta al conservar SQLite `:memory:` con `StaticPool`; el quality gate consolidado posterior aprobó 39/39 pruebas Python. SQLite sigue sin ser evidencia válida del bloqueo pesimista PostgreSQL.
 
 ## Productos: taxonomía plana y tags — 2026-07-18
 

@@ -83,9 +83,14 @@ DEBUG_SQL=0  # Cambia a 1 para ver queries SQL
 
 # Incluye Redis + Dramatiq para altas canónicas masivas
 .\scripts\start-dev.ps1 -WithCatalogWorker
+
+# Incluye Redis + worker Mercado Docker con Chromium
+.\scripts\start-dev.ps1 -WithMarketWorker
 ```
 
-`start-dev.ps1` orquesta validaciones, migraciones y arranque local de API, MCP Products y Vue. Con `-WithCatalogWorker` también levanta Redis y Dramatiq mediante el perfil `optional`, verifica el puerto host `6379` y confirma ambos servicios Compose en ejecución.
+`start-dev.ps1` orquesta validaciones, migraciones y arranque local de API, MCP Products y Vue. Con `-WithCatalogWorker` levanta Redis y Dramatiq. Con `-WithMarketWorker` inicia Redis y compila/levanta el contenedor dedicado `market_worker` sin recrear PostgreSQL; verifica consumidor y health antes de continuar.
+
+El panel Administración → Workers reconcilia el estado de `market_worker` con Docker Compose aunque el contenedor haya sido iniciado desde el launcher o Docker Desktop. La detección de Docker admite la latencia normal de Docker Desktop mediante `DOCKER_PROBE_TIMEOUT_S` (8 segundos por defecto), mientras que el health operativo de Mercado se obtiene del broker y del heartbeat del consumidor.
 
 **Opción manual (más control):**
 
@@ -454,21 +459,20 @@ npm run dev
 Antes de hacer commit/push:
 
 ```powershell
-# 1. Tests locales pasan
-.\.venv\Scripts\python.exe -m pytest -q
+# 1. Gate canónico: venv 3.14.6, lint, seguridad, tests y frontends
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-quality.ps1
 
-# 2. Linting OK
-ruff check .
-black --check .
+# 2. Verificar whitespace y alcance exacto
+git diff --check
+git status --short
 
-# 3. No hay imports rotos
-.\.venv\Scripts\python.exe verify_imports.py
-
-# 4. (Opcional) Test Docker completo
+# 3. (Opcional) Test Docker completo antes de merge/deploy
 docker compose up -d --build
 # Probar en navegador
 docker compose down
 ```
+
+Antes del push, auditar secretos sin imprimir valores, resolver `git remote get-url origin` y confirmar rama/destino. Usar staging por rutas explícitas; no usar `git add .`. Si el remoto no puede verificarse como confiable o privado, detenerse hasta contar con aprobación explícita informada. Ver `docs/SECURITY.md` y `.agents/skills/git-commit-push/SKILL.md`.
 
 ## Troubleshooting Común
 
@@ -562,14 +566,21 @@ No incluir la salida completa de `docker compose config` en reportes: Compose ex
 
 ### Problema: "Port 8000 already in use"
 
-**Causa**: Otra instancia de API corriendo
-```powershell
-# Ver qué usa el puerto
-netstat -ano | findstr :8000
+**Causa**: otra instancia de API corriendo. En Windows pueden coexistir dos listeners sobre `127.0.0.1:8000`; en ese estado un `/health` exitoso no garantiza qué proceso ni qué versión atendió una petición.
 
-# Matar proceso
-taskkill /PID <numero> /F
+```powershell
+# Enumerar todos los listeners y sus PID
+netstat -ano -p TCP | Select-String "127.0.0.1:8000"
+
+# Correlacionar PID, hora de inicio y proceso padre
+Get-CimInstance Win32_Process -Filter "ProcessId=<PID>" |
+    Select-Object ProcessId, ParentProcessId, CreationDate, CommandLine
+
+# Detener desde el launcher o terminal que lo inició. Sólo con autorización:
+taskkill /PID <PID> /T /F
 ```
+
+El estado esperado es un único listener. Si `taskkill` devuelve `Acceso denegado`, cerrar o reiniciar el launcher con los mismos privilegios que creó el proceso; no asumir que el hot reload actualizó ambas instancias. Después del reinicio, volver a enumerar el puerto antes de validar contratos en la UI.
 
 ### Problema: "Module not found"
 

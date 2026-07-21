@@ -9,6 +9,16 @@
 - Nunca versionar archivos `.env` ni credenciales.
 - Utilizar gestores de secretos cuando sea posible.
 
+## Publicación Git y auditoría previa
+
+- Antes de un push, revisar archivos sensibles y patrones de alta confianza en el contenido final y en las líneas agregadas.
+- Los reportes de auditoría deben mostrar solo archivo, línea, variable y categoría. No imprimir valores coincidentes, incluso al investigar falsos positivos.
+- Confirmar que los archivos de entorno versionados sean exclusivamente ejemplos. Un valor de ejemplo no debe parecer una credencial real ni reutilizarse en despliegues.
+- Los fragmentos con forma de token dentro de `package-lock.json` deben validarse por contexto; una coincidencia dentro de `integrity` es un hash de cadena de suministro, no una credencial.
+- La credencial PostgreSQL de desarrollo expuesta por el script legacy de Mercado fue rotada e invalidada el 2026-07-21. `scripts/rotate_dev_db_password.ps1` actualiza `POSTGRES_PASSWORD`, `DB_PASS` y la credencial embebida en `DB_URL` sin imprimir valores; luego deben recrearse los consumidores y reiniciarse la API, nunca el volumen.
+- Resolver la URL del remoto antes de publicar. Si el destino externo no puede verificarse como confiable o privado, informar el alcance y obtener aprobación explícita.
+- Después del push, verificar que el SHA local coincida con la referencia remota esperada.
+
 ## Política de scraping
 - Solo se permiten fuentes en la whitelist del proyecto.
 - Respetar términos de uso y legislaciones vigentes.

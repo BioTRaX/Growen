@@ -179,6 +179,8 @@ El sistema calcula automáticamente la severidad basándose en el `delta_percent
 
 ### Tabla `market_alerts`
 
+La definición autoritativa y único mecanismo de instalación es la revisión Alembic `20260721_market_observability_v1`. El siguiente fragmento es sólo una vista conceptual; no debe ejecutarse manualmente. La tabla real agrega referencias opcionales a `job_id`, `job_item_id`, `source_id` y `observation_id` para trazabilidad del evento originador.
+
 ```sql
 CREATE TABLE market_alerts (
     id SERIAL PRIMARY KEY,

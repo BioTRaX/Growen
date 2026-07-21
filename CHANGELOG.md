@@ -4,6 +4,40 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-07-21 — Retrospectiva técnica de Mercado
+
+- Se documentaron las tareas completadas, los incidentes post-implementación, sus causas y la deuda residual de Mercado.
+- El flujo de diagnóstico ahora exige detectar listeners duplicados, comprobar la frescura de imágenes Docker y registrar bloqueos de permisos.
+- Se corrigieron instrucciones desactualizadas de pruebas, estado del módulo y warnings async en la documentación de Mercado.
+
+## 2026-07-21 — Corrección de extracción y presentación en Mercado
+
+- Los scrapers estático y Chromium priorizan `Product/Offer` de JSON-LD y contenedores del producto antes de clases genéricas, evitando capturar carrito, cuotas o carruseles.
+- Mercado separa el nombre canónico del SKU personalizado y refresca la tabla automáticamente cuando un job llega a estado terminal.
+- Se corrigió la observación de `SUS_0001_INE`: la fuente y el promedio vigente quedaron en `3700 ARS`; las capturas incorrectas permanecen en el histórico auditable.
+
+## 2026-07-21 — Reconciliación del worker Mercado en Administración
+
+- El panel de workers deja de conservar un falso estado `failed` cuando `market_worker` fue iniciado fuera de la UI.
+- La detección de Docker Desktop amplía su timeout configurable y el health genérico delega al chequeo específico de broker, heartbeat y cola de Mercado.
+
+## 2026-07-21 — Auditoría y estabilización de Mercado
+
+- Se incorporó la revisión focal `20260721_market_observability_v1` con alertas, jobs/items/resultados por fuente, validación y observaciones inmutables; se validó upgrade incremental y desde PostgreSQL vacío.
+- Mercado opera exclusivamente en ARS y calcula un promedio aritmético con una observación efectiva por fuente activa; automáticas vencen por defecto a los siete días y manuales al ser reemplazadas.
+- Refresh individual y batch crean trabajos idempotentes y consultables; los fallos de broker y scraping terminan de forma explícita y conservan trazabilidad.
+- Se agregó `market_worker` Docker no-root con dependencias bloqueadas, Chromium, cola exclusiva, cuatro hilos configurables, lock por dominio, heartbeat y health de broker/consumidor/cola.
+- `/mercado` pasó a Vue con filtros, selección masiva, detalle de fuentes, histórico SVG, polling terminal y ocho bandas accesibles; React conserva compatibilidad temporal.
+- Se retiraron puntualmente dos mensajes obsoletos de Redis, se rotó e invalidó la credencial local expuesta y se incorporó un rotador que también actualiza `DB_URL` sin imprimir secretos.
+
+## 2026-07-21 — Publicación segura y cierre de conocimiento agéntico
+
+- Se documentó la publicación de 327 archivos en `dev`, separados en cuatro commits de plataforma, backend, frontend y documentación.
+- SQLite de tests conserva `sqlite+aiosqlite:///:memory:` con `StaticPool`; se eliminó la interpretación Windows de la URI nombrada como archivo físico y el gate consolidado aprobó 39/39 pruebas Python.
+- El smoke E2E de Compras usa un encabezado semántico y una espera explícita para absorber la compilación lazy inicial de Vite sin relajar la ruta ni el rol esperado.
+- La skill `git-commit-push` exige auditoría de secretos redactada, clasificación contextual de locks, verificación del remoto, aprobación informada cuando corresponda y comparación de SHA tras el push.
+- Se agregó `docs/RETROSPECTIVE_REPOSITORY_PUBLICATION_20260721.md` con tareas, incidentes, soluciones y mejoras derivadas exclusivamente de esta sesión.
+
 ## 2026-07-20 — Migración de Stock a Vue preparada para smoke
 
 - Se incorporaron vistas Vue para Stock y Faltantes con filtros persistidos en URL, búsqueda cancelable, paginación, permisos por rol y descargas mediante blobs.
@@ -12,7 +46,7 @@
 - `GET /stock/export.csv` y `GET /stock/export.pdf` quedaron operativos; XLSX, CSV y PDF comparten consulta, filtros y reglas de precio/categoría/SKU. PDF usa ReportLab sin dependencia nueva.
 - Productos Vue incorpora enriquecimiento masivo, completar precios faltantes, generación de catálogo e histórico/descarga de catálogos.
 - El módulo permanece `legacy/pending`: React sigue atendiendo producción hasta activar Productos/Catálogos Vue y completar smoke visual por rol.
-- Validación: 65/65 Vitest, 12/12 pytest funcionales y contrato CSRF aislado, typecheck y builds Vue/React aprobados. El rerun conjunto posterior expuso el conflicto heredado del fixture SQLite compartido, no una falla funcional del endpoint.
+- Validación: 65/65 Vitest, 12/12 pytest funcionales y contrato CSRF aislado, typecheck y builds Vue/React aprobados. El rerun conjunto expuso una URI SQLite interpretada como archivo físico en Windows; el incidente no pertenecía al endpoint y quedó corregido el 2026-07-21.
 
 ## 2026-07-20 — Recuperación operativa del batch canónico
 

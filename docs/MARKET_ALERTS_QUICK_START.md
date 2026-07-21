@@ -21,27 +21,15 @@ ALERT_COOLDOWN_HOURS=24
 ALERT_EMAIL_ENABLED=false
 ```
 
-### 2. Crear Migración de Base de Datos
+### 2. Aplicar la migración versionada
 
-```bash
-# Opción A: Script automatizado
-python scripts/generate_market_alerts_migration.py
-
-# Opción B: Comando directo
-alembic revision --autogenerate -m "Add MarketAlert table"
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-### 3. Aplicar Migración
+`market_alerts` se instala exclusivamente mediante `20260721_market_observability_v1`; no generar SQL ni revisiones locales ad hoc.
 
-```bash
-# Ver SQL que se ejecutará (opcional)
-alembic upgrade head --sql
-
-# Aplicar migración
-alembic upgrade head
-```
-
-### 4. Verificar Instalación
+### 3. Verificar instalación y worker
 
 ```bash
 # Verificar tabla creada
@@ -198,7 +186,7 @@ ORDER BY date DESC, alert_type;
 1. Verificar worker corriendo:
    ```bash
    # Windows
-   scripts\start_worker_market.cmd
+   scripts\start-dev.ps1 -WithMarketWorker
    
    # Linux/Mac
    dramatiq workers.market_scraping --queues market

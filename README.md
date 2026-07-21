@@ -55,8 +55,9 @@ Secuencia recomendada para primer inicio local:
 2. Crear o reparar el entorno: `.\scripts\bootstrap-dev.ps1`.
 3. Iniciar DB, API, MCP Products y Vue: `.\scripts\start-dev.ps1`.
 4. Para incluir Web Search: `.\scripts\start-dev.ps1 -McpMode All`.
-5. Validar sin iniciar procesos ni migrar: `.\scripts\start-dev.ps1 -CheckOnly`.
-6. Detener únicamente procesos del último run: `.\scripts\stop-dev.ps1`.
+5. Para trabajar con Mercado: `.\scripts\start-dev.ps1 -WithMarketWorker`.
+6. Validar sin iniciar procesos ni migrar: `.\scripts\start-dev.ps1 -CheckOnly`.
+7. Detener únicamente procesos del último run: `.\scripts\stop-dev.ps1`.
 
 El bootstrap instala todas las dependencias dentro de `.venv`; no se requiere ejecutar `pip` con el Python del sistema.
 
@@ -225,6 +226,8 @@ El bootstrap instala `requirements-lock.txt` con `--require-hashes`. Las imágen
 
 El quality gate incluye Ruff, Bandit, `pip-audit`, pruebas MCP/seguridad, Vue, detección de secretos y un SBOM CycloneDX reproducible en `security/sbom.cdx.json`.
 
+Antes de publicar una rama, revisar el alcance por rutas explícitas, auditar secretos con salida redactada y confirmar la URL del remoto. Un patrón de token dentro de un campo npm `integrity` debe clasificarse por contexto antes de tratarlo como credencial. Si el destino externo no puede verificarse como confiable o privado, el push requiere aprobación explícita informada. El flujo completo está en `docs/DEVELOPMENT_WORKFLOW.md` y `docs/SECURITY.md`.
+
 ### Inicio único de desarrollo en Windows
 
 Durante la migración a Vue, el flujo diario se inicia desde la raíz con:
@@ -326,7 +329,7 @@ set RUN_INLINE_JOBS=1
 
 #### Variables de Entorno
 
-- `REDIS_URL`: URL de Redis (default: `redis://localhost:6379/0`)
+- `REDIS_URL`: URL de Redis (default local: `redis://127.0.0.1:6379/0`; en Docker: `redis://redis:6379/0`)
 - `RUN_INLINE_JOBS`: Si es `1`, usa StubBroker (sin Redis, solo desarrollo)
 
 #### Logs
@@ -335,6 +338,8 @@ set RUN_INLINE_JOBS=1
 - `logs/worker_market.log`: worker de mercado
 - `logs/worker_drive_sync.log`: worker de sincronización Drive
 - `logs/worker_all.log`: worker unificado
+
+El servicio Compose `dramatiq` liviano consume `drive_sync` y `catalog`. Mercado usa `market_worker`, una imagen dedicada Python 3.14.6 no-root con Playwright/Chromium, cola exclusiva, heartbeat y health propio. En desarrollo se inicia con `scripts\start-dev.ps1 -WithMarketWorker`; `scripts\start_worker_market.cmd` queda como alternativa local. El scraper prioriza ofertas JSON-LD del producto antes de heurísticas visuales. Administración reconcilia su estado con Compose aunque haya sido iniciado desde Docker Desktop; `DOCKER_PROBE_TIMEOUT_S` controla la espera de detección y usa 8 segundos por defecto. La ruta `/mercado` ya se sirve desde Vue y React permanece como fallback temporal durante un ciclo.
 
 #### Monitoreo
 

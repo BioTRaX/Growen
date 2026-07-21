@@ -5,6 +5,19 @@
 
 # Testing en Growen
 
+## Suite focalizada de Mercado observable y Vue
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_market_api.py tests\test_market_integration.py tests\test_market_permissions.py tests\test_market_pricing.py tests\test_market_validation.py tests\test_market_worker.py tests\test_health_dramatiq.py tests\test_services_admin_orchestration.py -q -p no:randomly
+cd frontend-vue
+npm.cmd test -- src/app/modules/manifest.spec.ts src/modules/market/priceComparison.spec.ts
+npm.cmd run build
+cd ..\frontend
+npm.cmd test -- src/__tests__/Market.test.tsx src/__tests__/MarketDetailModal.test.tsx
+```
+
+La integración PostgreSQL limpia se habilita con `MIGRATION_TEST_POSTGRES_URL` y debe alcanzar `20260721_market_observability_v1`. El smoke operativo `scripts/smoke_market_job.py` requiere DB/Redis/worker reales, crea dos pedidos para el producto local 1, exige deduplicación y espera un estado terminal.
+
 ## Suite focalizada de Compras v2
 
 ```powershell
@@ -174,7 +187,7 @@ Sesión async SQLite en memoria para tests aislados. Se crea y destruye por cada
 ```python
 @pytest_asyncio.fixture(scope="function", autouse=True)
 async def db_session():
-    """DB limpia por test (SQLite memoria compartida)."""
+    """DB limpia por test (SQLite en memoria aislada por proceso)."""
     # Crea todas las tablas
     # Yield session
     # Drop all tables
@@ -247,10 +260,11 @@ Evitar en tests:
 |-------|-------|----------|
 | `ModuleNotFoundError` | venv no activada | Activar venv primero |
 | `visit_JSONB` error | Tipo JSONB en SQLite | Usar `JSONBCompat` en modelo |
-| `no such table: X` | Tablas no creadas | Verificar `Base.metadata.create_all` en fixture |
+| `no such table: X` | Tablas no creadas o teardown concurrente sobre el mismo engine | Verificar `Base.metadata.create_all` y que `DB_URL` conserve `:memory:` con `StaticPool` |
+| `table X already exists` durante `create_all` | Una URI SQLite `file:...` se interpretó como archivo físico compartido, especialmente en Windows | No reescribir `:memory:` como URI nombrada; inspeccionar `engine.url` y `dialect.create_connect_args()` |
 | Tests colgados | Fixtures async mal definidas | Usar `@pytest_asyncio.fixture` |
 | `'coroutine' object has no attribute` | Fixture no awaiteada | Verificar decorador `@pytest_asyncio.fixture` |
-| Errores en teardown | Conflicto en DB compartida | Ejecutar tests individuales o con `-p no:randomly` |
+| Errores en teardown | Ciclo de esquema duplicado o procesos pytest simultáneos | Confirmar aislamiento `:memory:` y ejecutar un solo pytest por checkout |
 | `CancelledError` en cleanup | Event loop cerrado | Verificar scope de fixture async |
 
 ### Fixture async no se espera
@@ -362,7 +376,9 @@ El marker `no_auth_override` también restaura la validación CSRF real. No agre
 
 ### Serialización de pytest en el workspace compartido
 
-No lanzar dos procesos pytest simultáneos sobre el mismo checkout. El arranque de la aplicación ejecuta diagnósticos y ambos procesos pueden competir por `__pycache__`, la SQLite compartida o `app.dependency_overrides`, produciendo `WinError 5`, timeouts o resultados contaminados. Se puede ejecutar `npm.cmd run build` en paralelo con un único pytest porque no comparten esos recursos Python.
+No lanzar dos procesos pytest simultáneos sobre el mismo checkout. SQLite ya queda aislada por proceso mediante `:memory:` y `StaticPool`, pero los procesos todavía pueden competir por `__pycache__`, logs, puertos y recursos externos, o producir diagnósticos difíciles de atribuir. `app.dependency_overrides` se comparte dentro de cada proceso y exige restauración por test. Se puede ejecutar `npm.cmd run build` en paralelo con un único pytest porque no comparte esos recursos Python.
+
+Ante `table already exists`/`no such table` en `create_all` o `drop_all`, comprobar primero cómo SQLAlchemy interpreta la URL. En Windows, `sqlite+aiosqlite:///file:memdb1?mode=memory&cache=shared` puede resolver a una ruta física. La configuración canónica conserva `sqlite+aiosqlite:///:memory:` y agrega solamente `StaticPool`.
 
 ### Deuda conocida del cliente síncrono
 

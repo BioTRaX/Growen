@@ -5,6 +5,30 @@
 
 # API del Módulo Mercado
 
+## Estado operativo auditado (2026-07-21)
+
+Mercado está activo en Vue y usa un consumidor Docker dedicado `market_worker`, separado del contenedor liviano `dramatiq`. El worker consume exclusivamente `market`, publica heartbeat y su health distingue broker, consumidor y profundidad lista/diferida. El diagnóstico canónico es `scripts\diagnose_market.ps1` y el arranque diario es `scripts\start-dev.ps1 -WithMarketWorker`.
+
+En los contratos de producto, `preferred_name`/`product_name` contienen siempre el nombre canónico y `product_sku` contiene `sku_custom`, `ng_sku` o el fallback por ID. Para extraer precios se prioriza JSON-LD Schema.org `Product → Offer → priceSpecification`, seguido por metadata/contenedores del producto; las clases genéricas y regex son únicamente fallback, porque pueden incluir carrito, cuotas y productos relacionados.
+
+El agregado `market_price_reference` es el promedio aritmético de la observación ARS efectiva más reciente de cada fuente activa. Todas pesan igual; `is_mandatory` sólo ordena y destaca. Las capturas automáticas vencen por defecto a los siete días y las manuales siguen vigentes hasta ser reemplazadas. Una fuente confirmada como no ARS, sin entrega argentina o insegura se rechaza y no puede guardarse como fuente efectiva.
+
+La comparación usa `Decimal` sin redondear para clasificar: `(precio_venta - promedio) / promedio × 100`. El contrato devuelve `price_delta_pct`, `price_position` y `comparison_label`; venta/promedio ausente o no positivo produce `unavailable`.
+
+### Contratos observables agregados
+
+| Método | Ruta | Propósito |
+|---|---|---|
+| GET | `/market/jobs` | Lista paginada de trabajos persistentes |
+| GET | `/market/jobs/{id}` | Estado terminal e items/resultados del trabajo |
+| GET | `/market/products/{id}/history` | Series por fuente y promedio, rango máximo tres años |
+| POST | `/market/products/{id}/refresh-market` | Crea o deduplica un item y devuelve `market_job_id` |
+| POST | `/market/products/batch-refresh` | Crea items idempotentes para una selección |
+| POST | `/market/sources/{id}/observations` | Registra una observación manual ARS auditable |
+| POST | `/market/sources/{id}/revalidate` | Revalida URL, moneda y alcance argentino |
+
+Los estados de job son `queued`, `running`, `partial`, `succeeded`, `failed` y `cancelled`. Un fallo al publicar en Redis marca el item como terminal `failed`; nunca queda un `202` huérfano. `PATCH /market/products/{id}/market-reference` está deprecado y sólo se conserva para el fallback React: internamente crea una observación manual; `0` retira la referencia vigente y no se promedia.
+
 ## Scheduler persistente (2026-07-18)
 
 `scheduler_settings` conserva habilitación, zona horaria, hora, intervalo, antigüedad, límite y prioridad. Las variables de entorno sólo siembran la fila singleton inicial. `scheduler_runs` registra ejecuciones manuales y automáticas; un advisory lock PostgreSQL impide que dos réplicas ejecuten simultáneamente el job automático.
@@ -65,16 +89,16 @@ Retorna una lista paginada de productos canónicos con su precio de venta actual
 | `product_id` | int | ID del producto canónico |
 | `preferred_name` | string | Nombre preferido (usa `sku_custom` si existe, sino `name`) |
 | `sale_price` | float\|null | Precio de venta actual del producto |
-| `market_price_reference` | float\|null | Valor de mercado de referencia (ingresado manualmente) |
-| `market_price_min` | float\|null | Precio mínimo detectado en fuentes de mercado *(Etapa 2)* |
-| `market_price_max` | float\|null | Precio máximo detectado en fuentes de mercado *(Etapa 2)* |
-| `last_market_update` | string\|null | Fecha ISO 8601 de última actualización de mercado *(Etapa 2)* |
+| `market_price_reference` | float\|null | Promedio de las observaciones ARS efectivas |
+| `market_price_min` | float\|null | Mínimo de las fuentes con precio disponible |
+| `market_price_max` | float\|null | Máximo de las fuentes con precio disponible |
+| `last_market_update` | string\|null | Fecha ISO 8601 del último promedio calculado |
 | `category_id` | int\|null | ID de la categoría principal |
 | `category_name` | string\|null | Nombre de la categoría |
 | `supplier_id` | int\|null | ID del proveedor principal (primera equivalencia) |
 | `supplier_name` | string\|null | Nombre del proveedor principal |
 
-**Nota**: Los campos `market_price_min`, `market_price_max` y `last_market_update` están marcados para implementación futura (Etapa 2) cuando se agregue la tabla `market_sources`. Actualmente retornan `null`.
+El listado agrega también cobertura efectiva/vencida/con advertencias, estado del último job y posición porcentual. La consulta usa agregados y subconsultas para evitar N+1.
 
 #### Errores
 
@@ -261,32 +285,15 @@ Este precio puede ser actualizado mediante:
 
 ### Valor de Mercado de Referencia (market_price_reference)
 
-Proviene del campo `market_price_reference` de la tabla `products` o `canonical_products`.
-
-Este valor puede ser:
-- Ingresado manualmente desde la UI
-- Corregido cuando el scraping automático falla
-- Usado como referencia cuando no hay fuentes automáticas
-
-Endpoint para actualizar: `PATCH /products/{id}/market-reference` *(pendiente Etapa 2)*
+Se materializa en `canonical_products` a partir del promedio ARS efectivo y cada recálculo genera un snapshot inmutable en `market_price_history`. La carga humana se realiza con `POST /market/sources/{id}/observations`; el PATCH directo está deprecado.
 
 ### Rango de Mercado (market_price_min / market_price_max)
 
-**Estado actual**: Retorna `null` (pendiente implementación Etapa 2)
-
-**Implementación futura** (Etapa 2):
-- Se calculará desde la tabla `market_sources`
-- Tomará el mínimo y máximo de `last_price` de fuentes activas
-- Se actualizará automáticamente cuando se ejecute scraping
+Se calculan desde los últimos precios disponibles de las fuentes. El promedio autoritativo aplica además vigencia, estado activo, validación y moneda ARS.
 
 ### Última Actualización (last_market_update)
 
-**Estado actual**: Retorna `null` (pendiente implementación Etapa 2)
-
-**Implementación futura** (Etapa 2):
-- Timestamp de la última vez que se actualizaron las fuentes
-- Proviene del campo `updated_at` de `market_sources` más reciente
-- Se usa para determinar "frescura" de los datos
+Timestamp del último recálculo. La UI muestra además la frescura de cada fuente y la cobertura efectiva.
 
 ### Filtro por Proveedor
 
@@ -715,7 +722,7 @@ POST /market/products/999999/refresh-market
 
 #### Comportamiento del Worker
 
-**Worker**: `workers.market_scraping.refresh_market_prices_task`
+**Worker**: `workers.market_scraping.process_market_item_task`
 
 **Cola Dramatiq**: `market` (separada de `images` para mejor organización)
 
@@ -727,11 +734,11 @@ El worker ejecuta las siguientes acciones:
    - **Scraping estático** (requests + BeautifulSoup) para páginas HTML estándar
    - **Scraping dinámico** (Playwright headless) para páginas con JavaScript
    - Si una fuente falla, continúa con las demás (tolerancia a fallos parciales)
-4. **Normalización de precios**: Detecta moneda (ARS, USD, EUR, etc.) y convierte a Decimal
+4. **Normalización de precios**: exige ARS y rechaza/desactiva una fuente que confirme otra moneda
 5. **Actualización de precios**:
    - Si scraping exitoso: actualiza `last_price` y `last_checked_at`
    - Si falla: solo actualiza `last_checked_at` (marca intento)
-6. **Cálculo de referencia**: Calcula promedio de precios obtenidos → `market_price_reference`
+6. **Cálculo de referencia**: promedia la última observación efectiva de cada fuente activa
 7. **Timestamps**: Actualiza `market_price_updated_at` y `updated_at` del producto
 8. **Log detallado**: Registra resultado con contexto completo (fuentes exitosas/fallidas, errores específicos)
 
@@ -748,7 +755,7 @@ El worker de scraping de mercado requiere Redis y se ejecuta mediante Dramatiq:
 scripts\start_worker_market.cmd
 
 # Linux/Mac
-python -m dramatiq workers.market_scraping --processes 1 --threads 2 --queues market
+.venv/bin/python -m dramatiq workers.market_scraping --processes 1 --threads 2 --queues market
 ```
 
 **Opción 2 - Worker multi-cola (images + market)**:
@@ -757,7 +764,7 @@ python -m dramatiq workers.market_scraping --processes 1 --threads 2 --queues ma
 scripts\start_worker_all.cmd
 
 # Linux/Mac
-python -m dramatiq services.jobs.images workers.market_scraping --processes 1 --threads 3 --queues images,market
+.venv/bin/python -m dramatiq services.jobs.images workers.market_scraping --processes 1 --threads 3 --queues images,market
 ```
 
 **Opción 3 - Modo desarrollo sin Redis**:
@@ -982,11 +989,11 @@ Las tareas se procesan en paralelo según la configuración del worker (número 
 ```bash
 # Usar StubBroker (cola en memoria, sin persistencia)
 set RUN_INLINE_JOBS=1
-python services/main.py
+.\.venv\Scripts\python.exe services/main.py
 ```
 
 **Variables de entorno requeridas**:
-- `REDIS_URL`: URL de conexión a Redis (default: `redis://localhost:6379/0`)
+- `REDIS_URL`: URL de conexión a Redis (default local: `redis://127.0.0.1:6379/0`)
 - `DB_URL`: URL de conexión a la base de datos (requerida para el worker)
 
 **Logs**:
@@ -2151,21 +2158,10 @@ POST /market/products/123/sources
 
 #### Moneda
 
-**Códigos válidos**:
-- `ARS` (Peso Argentino) - **default**
-- `USD` (Dólar Estadounidense)
-- `EUR` (Euro)
-- `BRL` (Real Brasileño)
-- `CLP` (Peso Chileno)
-- `UYU` (Peso Uruguayo)
-- `PYG` (Guaraní Paraguayo)
-- `BOB` (Boliviano)
-- `MXN` (Peso Mexicano)
-- `COP` (Peso Colombiano)
-- `PEN` (Sol Peruano)
+**Código válido**: exclusivamente `ARS` (Peso Argentino).
 
 **Validaciones**:
-- ✅ Códigos ISO 4217 comunes de Latinoamérica
+- ✅ `ARS`, normalizado a mayúsculas
 - ✅ Case-insensitive (se convierte a mayúsculas automáticamente)
 - ❌ Rechaza códigos no listados
 
@@ -2185,7 +2181,7 @@ POST /market/products/123/sources
     {
       "type": "value_error",
       "loc": ["body", "currency"],
-      "msg": "Value error, Moneda 'INVALID' no soportada. Monedas válidas: ARS, USD, EUR, BRL, CLP, UYU, PYG, BOB, MXN, COP, PEN",
+      "msg": "Value error, Moneda 'INVALID' no soportada. Monedas válidas: ARS",
       "input": "INVALID"
     }
   ]
@@ -2197,9 +2193,10 @@ POST /market/products/123/sources
 **Valores válidos**:
 - `static` (default) - HTML estático, scraping con requests
 - `dynamic` - Requiere JavaScript, scraping con Playwright
+- `manual` - Fuente libre con declaración auditada de venta/entrega en Argentina
 
 **Validaciones**:
-- ✅ Solo acepta `"static"` o `"dynamic"`
+- ✅ Acepta `"static"`, `"dynamic"` o `"manual"`
 - ❌ Rechaza cualquier otro valor
 
 ### Códigos de Error HTTP
@@ -2318,8 +2315,8 @@ El módulo incluye suite completa de tests (`tests/test_market_validation.py`):
 - ✅ Mensajes de error son claros y específicos
 
 **Ejecutar tests de validación**:
-```bash
-pytest tests/test_market_validation.py -v
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_market_validation.py -v
 ```
 
 **Clases de tests**:
@@ -2337,22 +2334,18 @@ pytest tests/test_market_validation.py -v
 **Suite completa de tests**: Ver `docs/MARKET_UNIT_TESTS.md` para documentación detallada.
 
 **Ejecutar**:
-```bash
+```powershell
 # Todos los tests unitarios de Market
-pytest tests/unit/test_price_normalizer.py tests/unit/test_static_scraper.py tests/unit/test_dynamic_scraper.py -v
+.\.venv\Scripts\python.exe -m pytest tests/unit/test_price_normalizer.py tests/unit/test_static_scraper.py tests/unit/test_dynamic_scraper.py -v
 
 # Solo normalización de precios
-pytest tests/unit/test_price_normalizer.py -v
+.\.venv\Scripts\python.exe -m pytest tests/unit/test_price_normalizer.py -v
 
 # Con cobertura
-pytest tests/unit/test_price_normalizer.py --cov=workers.scraping.price_normalizer --cov-report=html
+.\.venv\Scripts\python.exe -m pytest tests/unit/test_price_normalizer.py --cov=workers.scraping.price_normalizer --cov-report=html
 ```
 
-**Tests implementados**:
-- ✅ 89 tests de normalización de precios (formatos, monedas, separadores)
-- ✅ 30 tests de scraping estático (extractores, errores de red)
-- ✅ 24 tests de scraping dinámico (Playwright, selectores, async)
-- **Total: 143 tests (137 passing, 6 skipped con razón documentada)**
+Los conteos no se fijan como contrato porque cambian con cada regresión. Como evidencia de cierre del 2026-07-21, la selección focal ampliada de scrapers, API, integración, migraciones y stock/ventas completó `182 passed, 9 skipped`; Vue completó `20 passed`, typecheck y build. La selección aislada del scraper dinámico completó `18 passed, 8 skipped` sin coroutines pendientes.
 
 ### Optimizaciones Futuras
 
@@ -2382,7 +2375,6 @@ pytest tests/unit/test_price_normalizer.py --cov=workers.scraping.price_normaliz
 
 ---
 
-**Última actualización**: 2025-01-10  
-**Versión API**: 1.0  
-**Estado**: Etapa 2 casi completa (8/11 items, 73%). CRUD de fuentes implementado con validaciones completas. Etapa 3 iniciada (worker base implementado, parsers pendientes). **Tests unitarios completados: 143 tests (95.8% passing)**.
+**Última actualización**: 2026-07-21
+**Estado**: módulo Vue activo, worker Mercado Docker dedicado y observable, jobs idempotentes con estados terminales, fuentes/promedios exclusivamente ARS e histórico auditable de tres años. React permanece como fallback temporal durante un ciclo estable.
 
