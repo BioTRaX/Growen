@@ -5,6 +5,17 @@
 
 # Compras (Purchases)
 
+## Ingesta transaccional v2 (2026-07-16)
+
+La interfaz Vue elige el proveedor mediante un autocomplete respaldado por `GET /suppliers/search`; no solicita IDs manuales. Los administradores pueden crear un proveedor desde el mismo control y reutilizarlo inmediatamente. En esta versión, la extracción automática sigue usando exclusivamente el perfil Santa Planta.
+
+- Santa Planta es el primer perfil soportado; admite PDF, JPG y PNG.
+- La importación conserva original, MIME, tamaño y SHA-256, y devuelve la compra existente ante reintentos por remito/hash.
+- Los SKU desconocidos o ausentes quedan `PENDIENTE_CREACION`; no bloquean la validación si nombre, cantidad entera positiva y costo son válidos.
+- La confirmación exige estado `VALIDADA`, crea productos faltantes sin canónico y actualiza stock, ledger e historial en una transacción.
+- `CONFIRMADA` y `ANULADA` son inmutables. Rollback genera movimientos compensatorios.
+- `GET /purchases/{id}/impact` devuelve productos creados/reutilizados y movimientos resultantes.
+
 Esta documentación cubre el flujo de importación, validación, confirmación y reenvío de stock, así como utilidades de diagnóstico.
 
 ## Estados
@@ -304,6 +315,10 @@ En la vista `PurchaseDetail` se muestra (si existe) el último reenvío: `Últim
   - Si se generan logs, se muestran botones “Descargar log JSON/CSV” en el modal (usando el endpoint de descarga) sin cerrar inmediatamente el modal.
 
 Mejoras recientes en la pantalla de Compras:
+- La tabla Vue de detalle asigna más espacio a `Nombre original`, compacta SKU y campos numéricos, y conserva desplazamiento horizontal en viewports angostos.
+- La columna `Total` calcula en vivo `cantidad × costo bruto × (1 - bonificación / 100)`, se actualiza al editar cualquiera de esos campos y se presenta en la moneda de la compra (ARS como fallback).
+- La validación distingue `errors` bloqueantes de `warnings`: los errores se muestran en rojo, resaltan la bonificación de la línea y mantienen el estado `BORRADOR`; intentar confirmar en ese estado explica que primero se debe corregir y validar.
+- La bonificación se toma exclusivamente de la columna documental. Textos como `-20% DESC` dentro del nombre de un pack no se reinterpretan como descuento de línea, evitando falsos porcentajes negativos o positivos.
 - Badge visual “SKU no encontrado”: después de ejecutar Validar, si la respuesta incluye `missing_skus`, en cada línea cuyo `supplier_sku` figure en esa lista se muestra un distintivo rojo junto al campo de SKU con el texto “SKU no encontrado”. Esto ayuda a detectar de inmediato qué líneas requieren creación/vinculación.
 - Atajo para agregar línea: se cambió el gesto para insertar una nueva línea a Alt+Enter. Esto evita inserciones accidentales al presionar Enter durante la edición.
 
@@ -350,4 +365,5 @@ Actualizado: 2025-09-17.
 
 Notas:
 - La confirmación de compras también realiza auto-vínculo por SKU de proveedor si la línea no tenía `supplier_item_id`, actualiza `current_purchase_price` y genera `PriceHistory` (entity_type="supplier") y luego impacta stock.
+- `SupplierPriceHistory.file_fk` es opcional desde la revisión Alembic `c923732e1cab`, porque las compras confirmadas pueden registrar historial sin provenir de un `supplier_file`.
 - El endpoint de reenvío de stock no modifica precios ni historial.

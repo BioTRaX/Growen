@@ -1,8 +1,43 @@
 # Growen
 
+## Compras Vue e ingesta de remitos
+
+El primer dominio operativo de la migración Vue permite importar remitos de Santa Planta en PDF, JPG o PNG, revisar las líneas y confirmar el impacto. Los productos desconocidos se crean dentro de la confirmación con stock inicial cero y sin producto canónico; la misma transacción registra costo, historial y movimiento de stock.
+
+Compras selecciona el proveedor mediante un desplegable con búsqueda; los administradores pueden darlo de alta sin ingresar IDs internos. La ruta Vue `/proveedores` ofrece el listado y alta básica. Las cookies de sesión contienen el SID crudo aleatorio y la base conserva únicamente su hash.
+
+La validación Vue distingue errores bloqueantes de advertencias de alta automática y explica por qué una compra aún no puede confirmarse. El historial generado por la confirmación admite registros sin `supplier_file`; requiere Alembic head `c923732e1cab` o posterior.
+
+Configuración principal: `PURCHASE_ATTACHMENT_MAX_BYTES`, `PURCHASE_ATTACHMENT_ALLOWED_MIME`, `PURCHASE_STORAGE_ROOT`, `PURCHASE_TOTAL_MISMATCH_TOLERANCE_PCT` y `PURCHASE_CONFIRM_REQUIRE_ALL_LINES`. El perfil documental vive en `config/suppliers/santa-planta.yml`.
+
+Endpoints nuevos: `GET /purchases/{id}/impact` y `GET /products/{id}/purchase-history`.
+
+## Productos Vue
+
+Categoría y subcategoría son clasificaciones planas, independientes y creables desde sus autocompletes. Son opcionales para el producto interno y obligatorias para el canónico. Los productos admiten múltiples tags opcionales, editables en el detalle, agregables a una selección masiva y combinables como tags comunes/particulares del wizard. Esta capacidad requiere Alembic head `20260718_product_taxonomy_tags_v1`; React continúa como fallback hasta cerrar el smoke de paridad.
+
+El primer corte operativo de `/productos` incorpora catálogo tipado, búsqueda diferida, filtros combinables, paginación y restauración del estado desde la URL. La navegación lateral agrupa Catálogo, Stock e Imágenes bajo Productos, manteniendo las rutas históricas durante la convivencia con React.
+
+El listado está disponible para usuarios autenticados. El detalle básico admite invitados; el historial de compras y movimientos se reserva a `colaborador` y `admin`. Staff puede crear productos con oferta de proveedor, editar stock y precio efectivo, seleccionar filas y solicitar borrado protegido. Ambos selectores de taxonomía y el selector múltiple de tags permiten buscar, crear y seleccionar sin abandonar el formulario. El enriquecimiento masivo, completar precios y catálogos ya están implementados en Vue; imágenes, detalle enriquecido y preferencias avanzadas continúan en React hasta completar sus fases de paridad.
+
+El catálogo Vue permite además crear productos canónicos en lote desde ofertas de proveedor seleccionadas. El asistente exige categoría y subcategoría independientes, combina tags comunes con tags particulares, conserva borradores v3 por usuario y muestra una vista previa no reservante del SKU. La asignación definitiva `XXX_####_YYY`, la equivalencia, los tags y los resultados parciales se resuelven en backend mediante un job persistente. Antes de usar esta capacidad se debe aplicar `20260718_product_taxonomy_tags_v1` y disponer del worker de la cola `catalog`, salvo desarrollo con `RUN_INLINE_JOBS=1`.
+
+Los lotes son idempotentes. Un reintento de un lote que falló antes de procesar filas vuelve a encolar el mismo job cuando Redis se recupera, sin duplicar canónicos.
+
+## Stock Vue en validación
+
+`frontend-vue` implementa `/stock` y `/stock/shortages` para validación local en el puerto 5176. Incluye filtros restaurables desde URL, edición decimal de stock y precios, conflicto optimista mediante `expected_stock`, exportaciones XLSX/CSV/PDF y alta decimal de faltantes con advertencia de saldo negativo. Enriquecimiento masivo, completar precios y operaciones de catálogos viven en Productos Vue, no en Stock.
+
+El manifiesto conserva Stock en `legacy/pending`: producción continúa en React hasta que Productos/Catálogos sea una ruta Vue activa y se complete el smoke autenticado para cliente, proveedor, colaborador y admin. No se agregó una migración Alembic porque el esquema ya usa `Numeric(14,2)`.
+
 ## Documentación
 
 - Hoja de ruta: [Roadmap.md](./Roadmap.md)
+- Retrospectiva técnica de Productos Vue: [docs/RETROSPECTIVE_PRODUCTS_20260718.md](./docs/RETROSPECTIVE_PRODUCTS_20260718.md)
+- Retrospectiva de taxonomía plana, tags y QA: [docs/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md](./docs/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md)
+- Retrospectiva operativa de Redis, Dramatiq y batch canónico: [docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md](./docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md)
+- Skill de migración React → Vue: [.agents/skills/vue-module-migration/SKILL.md](./.agents/skills/vue-module-migration/SKILL.md)
+- Relevamiento funcional del portal React y mapa de migración Vue: [docs/relevamiento_admin.md](./docs/relevamiento_admin.md)
 - **Workflow de Desarrollo (Local vs Docker)**: [docs/DEVELOPMENT_WORKFLOW.md](./docs/DEVELOPMENT_WORKFLOW.md) ⚡
 - Capa MCP (servers/tools): [docs/MCP.md](./docs/MCP.md)
 - Arquitectura chatbot admin: [docs/CHATBOT_ARCHITECTURE.md](./docs/CHATBOT_ARCHITECTURE.md)
@@ -16,19 +51,14 @@
 
 Secuencia recomendada para primer inicio local:
 
-1. Levantar MCP (si vas a usar herramientas IA):
-  - `docker compose up -d mcp_products mcp_web_search`
-2. Levantar base de datos:
-  - `docker compose up -d db`
-3. Crear entorno virtual (primera vez):
-  - `python -m venv .venv`
-4. Activar entorno virtual:
-  - PowerShell: `.\.venv\Scripts\Activate.ps1`
-  - CMD: `.venv\Scripts\activate.bat`
-5. Instalar dependencias dentro de `.venv`:
-  - `pip install -r requirements.txt`
-6. Levantar backend + frontend:
-  - Opción recomendada: `start.bat`
+1. Instalar Python 3.14.6 x64 o una revisión posterior de seguridad de la serie 3.14.
+2. Crear o reparar el entorno: `.\scripts\bootstrap-dev.ps1`.
+3. Iniciar DB, API, MCP Products y Vue: `.\scripts\start-dev.ps1`.
+4. Para incluir Web Search: `.\scripts\start-dev.ps1 -McpMode All`.
+5. Validar sin iniciar procesos ni migrar: `.\scripts\start-dev.ps1 -CheckOnly`.
+6. Detener únicamente procesos del último run: `.\scripts\stop-dev.ps1`.
+
+El bootstrap instala todas las dependencias dentro de `.venv`; no se requiere ejecutar `pip` con el Python del sistema.
 
 Documentación complementaria:
 - Flujo completo local vs Docker: [docs/DEVELOPMENT_WORKFLOW.md](./docs/DEVELOPMENT_WORKFLOW.md)
@@ -136,12 +166,14 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - **Backend**: FastAPI + WebSocket.
 - **Base de datos**: PostgreSQL 15 (Alembic para migraciones).
 - **IA**: ruteo automático entre Ollama (local) y OpenAI.
-- **Frontend**: React + Vite con listas virtualizadas mediante `react-window`.
-- **Nota de evolución frontend**: la arquitectura objetivo para un shell modular con plugins en Vue 3 + Vuetify + SASS está documentada en `frontend/brainstorming_Growen.md`.
+- **Frontend productivo**: React + Vite con listas virtualizadas mediante `react-window` en `frontend/`.
+- **Frontend Vue en migración**: Vue 3 + Vuetify 3 + Pinia + Vue Router en `frontend-vue/`, disponible durante desarrollo en `http://127.0.0.1:5176` sin reemplazar todavía el build React.
+- **Plan de evolución frontend**: arquitectura objetivo en `frontend/brainstorming_Growen.md` y estado operativo en `docs/FRONTEND_MIGRATION_VUE.md`.
 - **Adapters**: exportación a TiendaNegocio via XLS.
-- **MCP Servers (nuevo)**: microservicios auxiliares (ej. `mcp_products`, `mcp_web_search`) que exponen herramientas (`tools`) vía un endpoint uniforme `POST /invoke_tool` para consumo de agentes LLM, actuando como fachada HTTP hacia la API principal (sin acceso directo a DB).
-  - Products: tools `get_product_info` y `get_product_full_info` (URL default `http://mcp_products:8001/invoke_tool`, configurable con `MCP_PRODUCTS_URL`).
-  - Web Search (MVP): tool `search_web(query)` que retorna títulos/URLs/snippets desde un buscador HTML (URL default `http://mcp_web_search:8002/invoke_tool`, configurable con `MCP_WEB_SEARCH_URL`).
+- **MCP real**: Products y Web Search exponen Streamable HTTP en `/mcp`; Growen descubre tools dinámicamente y las filtra por rol.
+  - Products Docker: `http://mcp_products:8100/mcp`.
+  - Web Search Docker: `http://mcp_web_search:8002/mcp`.
+  - `/invoke_tool` permanece temporalmente como adaptador deprecado.
   - Enriquecimiento IA puede anexar contexto de `search_web` al prompt si `AI_USE_WEB_SEARCH=1` y `ai_allow_external=true`.
 
 ## Enriquecimiento de productos con IA
@@ -154,7 +186,7 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
   - Preferencia de título: usa el nombre del producto canónico (si existe) como entrada del prompt; si no hay canónico, usa el título del producto interno.
   - Si la respuesta incluye “Fuentes”, se escribe un `.txt` bajo `/media/enrichment_logs/` y se expone `enrichment_sources_url`.
   - Metadatos de trazabilidad: `last_enriched_at` y `enriched_by` se setean al enriquecer y se limpian al borrar.
-  - Auditoría: acción `enrich`/`reenrich` con `prompt_hash`, `fields_generated`, `source_file` y, si `AI_USE_WEB_SEARCH=1`, `web_search_query` y `web_search_hits`.
+  - Auditoría: acción `enrich`/`reenrich` con `prompt_hash`, `fields_generated`, `source_file` y, si `AI_USE_WEB_SEARCH=1`, `web_search_query_hash` y `web_search_hits`.
   - Robustez: si `AI_USE_WEB_SEARCH=1`, el backend realiza un preflight a `GET /health` del MCP Web Search; si no está saludable, omite la búsqueda y continúa el enriquecimiento sin bloquear.
 - Acciones masivas: `POST /products/enrich-multiple` (máximo 20 IDs por solicitud) con validaciones de título y omitidos si ya enriquecidos (a menos que `force`).
 - Flags relevantes:
@@ -169,20 +201,49 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 
 ## Requisitos
 
-- Python 3.11+
+- Python 3.14.6+
 - Node.js LTS
 - PostgreSQL 15
 - Opcional (dev/pruebas): SQLite 3 con `aiosqlite` (ya incluido en dependencias)
-- Opcional: Docker y Docker Compose
-# Modo “Docker Stack” (dev en Windows)
+- Docker Desktop y Docker Compose para la base PostgreSQL local.
 
-Para entornos Windows con Docker Desktop/WSL2, el arranque por defecto usa un modo seguro que evita tocar el engine cuando ya hay contenedores activos:
+### Quality gate y CI manual
 
-- `USE_DOCKER_STACK=1` (por defecto): el script de inicio se acopla al stack Docker ya levantado, valida puertos (API 8000, DB 5433, FE 5173) y omite levantar uvicorn local o compilar el frontend.
-- `DB_NO_TOUCH_IF_PRE_OK=1`: si el PRE‑FLIGHT detectó la DB OK, no intenta `compose up db` ante flaps momentáneos.
-- `DB_FLAP_BACKOFF_SEC=10`: backoff entre reintentos si la DB flapea (ajustable a 30–60 en entornos más lentos).
+```powershell
+.\scripts\check-quality.ps1
+```
 
-Consejo: si el engine WSL/Docker Desktop está inestable, reiniciar Docker Desktop y reintentar. Los snapshots forenses del arranque quedan en `logs/start.log` (incluyen `docker info/ps`, probes de puertos y `pg_isready`).
+CI (integración continua) repite tests y validaciones en una máquina limpia para detectar diferencias del entorno local. El workflow `.github/workflows/quality-manual.yml` usa únicamente `workflow_dispatch`: no corre en cada push o PR y solo consume créditos cuando alguien lo inicia manualmente desde GitHub Actions.
+
+El bootstrap instala `requirements-lock.txt` con `--require-hashes`. Las imágenes usan locks separados para API, worker y cada MCP. Para una actualización intencional:
+
+```powershell
+.\scripts\update-locks.ps1
+.\scripts\check-quality.ps1
+.\scripts\generate-sbom.ps1
+```
+
+El quality gate incluye Ruff, Bandit, `pip-audit`, pruebas MCP/seguridad, Vue, detección de secretos y un SBOM CycloneDX reproducible en `security/sbom.cdx.json`.
+
+### Inicio único de desarrollo en Windows
+
+Durante la migración a Vue, el flujo diario se inicia desde la raíz con:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
+```
+
+El script administra Compose `db`; API, MCP y frontend se ejecutan localmente con hot reload. Si un servicio ya está saludable, lo reutiliza. En caso contrario:
+
+1. Levanta `db` y espera el puerto `5433`.
+2. Ejecuta `alembic upgrade head` con `.venv\Scripts\python.exe`.
+3. Verifica dependencias e inicia la API en `8000`.
+4. Inicia MCP Products en `8100`; `-McpMode All` agrega Web Search en `8102`.
+5. Inicia `frontend-vue` en `5176`.
+
+Cada ejecución guarda diagnóstico, migraciones, stdout, stderr y PIDs en `logs/dev/<fecha-hora>/`. Ante un fallo detiene solo los procesos que inició. Redis y workers continúan siendo opcionales.
+
+La infraestructura local `db`/`redis` usa una red Compose interna para comunicación entre servicios y una red `host_access` adicional para publicar únicamente en loopback `5433`/`6379`. Esta segunda conexión es necesaria cuando API o workers corren en Windows; eliminarla deja los contenedores saludables internamente pero inaccesibles desde `start-dev.ps1`.
 
 - El backend usa httpx para llamadas a proveedores (Ollama / APIs); ya viene incluido.
 
@@ -204,7 +265,7 @@ sudo apt-get install -y ocrmypdf tesseract-ocr tesseract-ocr-spa ghostscript pop
 Para verificar que todas las dependencias están correctamente instaladas y accesibles en el `PATH` del sistema, se puede usar el script "doctor":
 
 ```bash
-python tools/doctor.py
+.\.venv\Scripts\python.exe tools/doctor.py
 ```
 
 O a través del endpoint de la API (disponible solo para administradores en entorno de desarrollo): `GET /admin/import/doctor`.
@@ -260,7 +321,7 @@ scripts\start_worker_all.cmd drive_sync
 ```bash
 # Usar StubBroker en memoria
 set RUN_INLINE_JOBS=1
-python services/main.py
+.\.venv\Scripts\python.exe services/main.py
 ```
 
 #### Variables de Entorno
@@ -305,7 +366,7 @@ Si se prefiere un layout `src/`, trasladá las carpetas anteriores a `src/` y a�
 
 ```bash
 # Crear entorno virtual
-python -m venv .venv
+.\scripts\bootstrap-dev.ps1
 
 # Activar entorno virtual (OBLIGATORIO - usar SIEMPRE)
 # Windows PowerShell:
@@ -325,7 +386,7 @@ cp .env.example .env
 
 # Crear base de datos growen en PostgreSQL
 # Aplicar migraciones
-alembic -c ./alembic.ini upgrade head
+.\.venv\Scripts\python.exe -m alembic -c ./alembic.ini upgrade head
 
 # Iniciar API
 uvicorn services.api:app --reload
@@ -337,13 +398,13 @@ uvicorn services.api:app --reload
 
 ```bash
 # Crear una nueva revisión a partir de los modelos
-alembic -c ./alembic.ini revision -m "descripcion" --autogenerate
+.\.venv\Scripts\python.exe -m alembic -c ./alembic.ini revision -m "descripcion" --autogenerate
 
 # Aplicar las migraciones pendientes
-alembic -c ./alembic.ini upgrade head
+.\.venv\Scripts\python.exe -m alembic -c ./alembic.ini upgrade head
 
 # Revertir la última migración
-alembic -c ./alembic.ini downgrade -1
+.\.venv\Scripts\python.exe -m alembic -c ./alembic.ini downgrade -1
 ```
 
 ## Migraciones automáticas
@@ -545,27 +606,25 @@ type logs\backend.log
 
 ### Limpieza rápida de logs
 
-Para iniciar una sesión de depuración limpia:
+`start-dev.ps1` escribe cada ejecución en `logs/dev/<fecha-hora>/`. La limpieza canónica elimina carpetas completas de ejecuciones antiguas y preserva la ejecución activa o más reciente:
 
 ```bash
-python scripts/cleanup_logs.py --dry-run   # muestra acciones
-python scripts/cleanup_logs.py             # elimina rotaciones y trunca backend.log
-python scripts/cleanup_logs.py --skip-truncate  # no intenta truncar backend.log (útil si está bloqueado por el proceso)
-python scripts/cleanup_logs.py --keep-days 2
+.\.venv\Scripts\python.exe scripts/cleanup_logs.py --dry-run --keep-days 7
+.\.venv\Scripts\python.exe scripts/cleanup_logs.py --keep-days 7
+.\.venv\Scripts\python.exe scripts/cleanup_logs.py --skip-truncate  # no intenta truncar backend.log (útil si está bloqueado por el proceso)
+.\scripts\clean_all_logs.ps1 -DryRun -KeepDays 7
 ```
 
 Acciones del script:
-- Elimina `backend.log.*` y `.bak` (no borra `backend.log` principal; lo trunca).
-- Borra logs de diagnósticos y jobs de imágenes si coinciden con patrones.
-- Conserva estructura de carpetas. Usa `--keep-days N` para preservar archivos recientes.
- - Opcional: limpieza de capturas del botón de reporte según política:
-   - `--screenshots-keep-days N` (por defecto 30; 0 = sin límite por días)
-   - `--screenshots-max-mb M` (por defecto 200; 0 = sin límite)
+- Elimina el directorio completo de cada ejecución dev seleccionada; no deja carpetas vacías.
+- Trunca `backend.log` y elimina rotaciones, diagnósticos y logs legacy seleccionados.
+- Protege `BugReport.log`, capturas de reportes, historial de Catálogos y ejecuciones activas.
+- Las capturas sólo se limpian al indicar explícitamente `--screenshots-keep-days N` o `--screenshots-max-mb M`.
+- El panel Vue ofrece el mismo previsualizador en Servicios → Mantenimiento de logs físicos.
 
 Recomendado antes de reproducir un escenario (confirmar compra, probar WebSocket de chat, etc.) para aislar el nuevo output.
 
-Notas en Windows:
-- Si `backend.log` está bloqueado por el proceso de la API, el script registrará el error de permiso y creará el marcador `backend.log.cleared` para indicar que se intentó limpiar. Usá `--skip-truncate` para omitir el truncado y aun así limpiar rotaciones.
+Los alcances de Workers, Imágenes, archivos físicos y aliases legacy están detallados en [docs/LOG_CLEANUP.md](docs/LOG_CLEANUP.md).
 
 ### Migraciones
 
@@ -577,7 +636,7 @@ Notas en Windows:
 - Al invocar Alembic manualmente, las opciones globales como `--raiseerr` y `-x log_sql=1` deben ubicarse **antes** del subcomando. `log_sql=1` activa `sqlalchemy.echo` para registrar cada consulta. Ejemplo:
 
 ```
-alembic --raiseerr -x log_sql=1 -c alembic.ini upgrade head
+.\.venv\Scripts\python.exe -m alembic --raiseerr -x log_sql=1 -c alembic.ini upgrade head
 ```
 
 ## Instalación Frontend
@@ -988,7 +1047,7 @@ Este endpoint se utiliza para consultar el catálogo existente desde el frontend
 Comportamiento de campos (fallback canónico → proveedor):
 - Si un producto está vinculado a un canónico, la UI prioriza `canonical_sale_price` y `canonical_name` cuando están presentes; si no, cae a `precio_venta` y `supplier_title` del proveedor.
 
-Para modificar el stock manualmente existe `PATCH /products/{id}/stock` con cuerpo `{ "stock": <int> }`.
+Para modificar el stock manualmente existe `PATCH /products/{id}/stock` con cuerpo `{ "stock": 10.25, "expected_stock": 10.00 }`. `expected_stock` es opcional para clientes heredados; Vue lo envía para detectar conflictos 409.
 
 ## Historial de precios
 
@@ -997,9 +1056,15 @@ Debe indicarse `supplier_product_id` o `product_id` y se puede paginar con `page
 La respuesta incluye `purchase_price`, `sale_price` y sus variaciones porcentuales (`delta_purchase_pct`, `delta_sale_pct`).
 Solo los roles `cliente`, `proveedor`, `colaborador` o `admin` pueden consultarlo y el panel de productos enlaza a esta vista para auditoría.
 
-## Inicio rápido (1‑clic)
+## Inicio rápido canónico
 
-Levanta API y frontend al mismo tiempo.
+Desde PowerShell, ejecutar `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1`. Este flujo levanta PostgreSQL, aplica Alembic, inicia API, MCP Products y Vue en `http://127.0.0.1:5176`. Usar `-WithCatalogWorker` para iniciar y verificar además Redis y Dramatiq antes de probar altas canónicas masivas; `-CheckOnly` valida prerrequisitos sin iniciar ni migrar. Cuando un proceso local se reutiliza, `logs/dev/<run>/state.json` expone `*_log_source_hint` con la ubicación probable de sus logs originales.
+
+No mantener simultáneamente el `catalog_worker` local del panel y el contenedor `dramatiq`: ambos consumen la misma cola y los mensajes se reparten. El launcher avisa y registra `catalog_worker_competing_local_pids` si detecta esa condición; el worker local escribe en `logs/worker_catalog.log`.
+
+## Inicio rápido heredado React (`start.bat`)
+
+Este launcher se conserva por compatibilidad con React en el puerto 5173. No es el inicio recomendado para el desarrollo Vue actual.
 
 ### Windows
 
@@ -1013,7 +1078,7 @@ Ejecutar **desde CMD** con doble clic en `scripts\start.bat`. El script realiza 
 
 Requisitos previos:
 
-- Python 3.11 (si no existe un virtualenv, `scripts\start.bat` intentará crearlo automáticamente)
+- Python 3.14.6+ (crear o reparar la venv con `scripts\bootstrap-dev.ps1`)
 - Node.js/npm instalados (si faltan paquetes de frontend, `scripts\start.bat` ejecutará `npm install` en `frontend` cuando sea necesario)
 - `.env` completado (DB_URL, IA, etc.)
 - `frontend/.env` creado a partir de `frontend/.env.example` si se necesita ajustar `VITE_API_URL`.
@@ -1072,16 +1137,16 @@ variables definidas en `.env`, por lo que no es necesario configurar la URL en `
 ```bash
 cp .env.example .env   # en Windows usar: copy .env.example .env
 # Completar DB_URL y, en producción, definir SECRET_KEY y las credenciales ADMIN_USER/ADMIN_PASS reemplazando los placeholders
-alembic -c ./alembic.ini upgrade head
+.\.venv\Scripts\python.exe -m alembic -c ./alembic.ini upgrade head
 
 # Crear una nueva revisión a partir de los modelos
-alembic -c ./alembic.ini revision -m "descripcion" --autogenerate
+.\.venv\Scripts\python.exe -m alembic -c ./alembic.ini revision -m "descripcion" --autogenerate
 
 # Aplicar las migraciones pendientes
-alembic -c ./alembic.ini upgrade head
+.\.venv\Scripts\python.exe -m alembic -c ./alembic.ini upgrade head
 
 # Revertir la última migración
-alembic -c ./alembic.ini downgrade -1
+.\.venv\Scripts\python.exe -m alembic -c ./alembic.ini downgrade -1
 ```
 
 ## Variables de entorno
@@ -1219,7 +1284,7 @@ Permite subir archivos `.csv` o `.xlsx` de distintos proveedores para poblar el 
 - Se puede ejecutar desde el chat o por CLI:
 
 ```bash
-python -m cli.ng ingest file datos.xlsx --supplier default --dry-run
+.\.venv\Scripts\python.exe -m cli.ng ingest file datos.xlsx --supplier default --dry-run
 ```
 
 Con `--dry-run` se generan reportes en `data/reports/` sin tocar la base. Al aplicar sin ese flag se insertan/actualizan productos y variantes.
@@ -1234,8 +1299,8 @@ Si el archivo no incluye SKU ni GTIN se genera uno interno estable. Las categor�
 4. Para aplicar los cambios ejecutá `/import last --apply` en el chat o:
 
 ```bash
-python -m cli.ng ingest file ListaPrecios_export_XXXX.xlsx --supplier santa-planta --dry-run
-python -m cli.ng ingest last --apply
+.\.venv\Scripts\python.exe -m cli.ng ingest file ListaPrecios_export_XXXX.xlsx --supplier santa-planta --dry-run
+.\.venv\Scripts\python.exe -m cli.ng ingest last --apply
 ```
 
 ### Historial de precios
@@ -1260,9 +1325,9 @@ La API expone endpoints para administrar proveedores externos:
 
 Estos recursos facilitan la organización de las distintas listas de precio y su historial.
 
-## Categorías desde proveedor
+## Taxonomía desde proveedor (compatibilidad heredada)
 
-Se puede proponer y generar la jerarquía de categorías a partir de un archivo de proveedor:
+El endpoint heredado puede proponer rutas históricas de categorías a partir de un archivo de proveedor:
 
 ```bash
 POST /categories/generate-from-supplier-file
@@ -1272,9 +1337,9 @@ POST /categories/generate-from-supplier-file
 }
 ```
 
-Con `dry_run=true` solo se informa qué rutas de categoría se detectarían. Si se envía `dry_run=false`, las categorías faltantes se crean respetando la jerarquía `parent_id`.
+Con `dry_run=true` sólo se informa qué rutas se detectarían. Con `dry_run=false`, conserva `parent_id` para compatibilidad de datos importados, pero clasifica los nodos mediante `kind`. La UI nueva no depende de esa jerarquía: categoría y subcategoría se buscan y seleccionan como listas planas independientes.
 
-Además, `GET /categories` lista las categorías con su ruta completa y `GET /categories/search?q=` permite búsquedas parciales.
+Además, `GET /categories?kind=category|subcategory` lista por tipo y `GET /categories/search?q=&kind=` permite búsquedas parciales tipadas.
 
 ## IA híbrida
 
@@ -1292,7 +1357,7 @@ Para comprobar las mutaciones desde el navegador se documentan pruebas manuales 
 ## CLI
 
 ```bash
-python -m cli.ng db-init
+.\.venv\Scripts\python.exe -m cli.ng db-init
 ```
 
 ## Roadmap
@@ -1306,7 +1371,7 @@ Contribuciones y feedback son bienvenidos.
 
 ## Catálogo (PDF)
 
-Feature para generar un PDF de catálogo seleccionando productos desde la vista **Stock**.
+Feature para generar un PDF de catálogo seleccionando productos desde **Productos**. La nueva vista Stock se limita a existencias, precios y exportaciones.
 
 Endpoints (`/catalogs/*`, roles: `admin` y `colaborador`):
 
@@ -1340,7 +1405,7 @@ Dependencias:
 - `reportlab` como fallback.
 
 Frontend:
-- En `Stock` se agregó selección múltiple (checkbox por fila) y botones: **Generar catálogo**, **Ver catálogo**, **Descargar catálogo** y **Limpiar selección**.
+- En Productos Vue se ofrece selección múltiple y botones para **Generar catálogo**, **Ver catálogo actual**, **Descargar catálogo** y consultar el histórico. Stock Vue no contiene selección ni operaciones de catálogo.
 - Generar exige al menos un producto seleccionado (alert si no).
 - Ver/Descargar validan existencia con `HEAD` primero; si 404 muestra alerta.
 
@@ -1451,3 +1516,20 @@ El sistema incluye un pipeline robusto para importar remitos en formato PDF del 
 
 Consulta [AGENTS.md](AGENTS.md) para la estructura de prompts, el uso del encabezado NG-HEADER y el checklist de PRs.
 
+## Clientes y Ventas Vue
+
+Clientes y Ventas cuentan con implementación Vue 3/Vuetify y contratos backend para borradores, cotización autoritativa, pagos, devoluciones, reservas, cuenta corriente y reportes comerciales. React y Vue se compilan en paralelo: los assets React permanecen en `/assets` y Vue usa `/vue-assets`.
+
+El corte ya no usa `FRONTEND_VUE_ROUTES`: la fuente única es `frontend-vue/config/modules.json`, que genera router, sidebar y reglas Nginx. El rollback cambia el runtime del módulo a `legacy` y vuelve a desplegar el frontend, sin cambios de datos. Antes de activar en un ambiente con datos, aplicar Alembic hasta `20260717_sales_customers_v4`.
+
+La configuración, activación, smoke y rollback están documentados en [Operación de la migración React/Vue](docs/FRONTEND_MIGRATION_OPERATIONS.md).
+
+## Servicios administrativos Vue
+
+Las rutas `/admin/servicios`, `/admin/servicios/workers` y `/admin/servicios/mcp-tools` se sirven desde Vue. Workers permite a `colaborador` y `admin` consultar health, iniciar/detener, configurar auto-start, validar dependencias y operar logs/SSE. MCP respeta el contrato backend vigente y es visible exclusivamente para `admin`; la instalación de dependencias también se limita por capacidad a administradores.
+
+Usuarios (`/admin/usuarios`) y Backups (`/admin/backups`) también se sirven desde Vue y son exclusivos de `admin`. El resto de `/admin/*` mantiene fallback React hasta completar su paridad.
+
+El cierre técnico, los incidentes conocidos y el handoff para continuar los módulos pendientes están en [Retrospectiva de migración Vue y panel administrativo](docs/RETROSPECTIVE_FRONTEND_ADMIN_20260718.md).
+
+Drive Sync, Scheduler, Conocimiento, Operación/Revisión de Imágenes, Diagnóstico de catálogos, Dashboard técnico y Chat Inbox también cuentan con rutas Vue activas. Requieren Alembic head `20260718_admin_jsonb_v2` o posterior. Los roles, flujos persistentes, descargas, streaming y rollback están documentados en [Operación del panel administrativo Vue](docs/ADMIN_VUE_OPERATIONS.md).

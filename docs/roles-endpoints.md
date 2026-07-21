@@ -4,9 +4,31 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Roles por endpoint
 
+## Productos, taxonomía y tags (2026-07-18)
+
+| Método/ruta | Lectura | Mutación |
+|---|---|---|
+| `/categories`, `/categories/search` | cliente, proveedor, colaborador, admin | `POST /categories`: colaborador, admin + CSRF |
+| `/tags` | cliente, proveedor, colaborador, admin | `POST /tags`: colaborador, admin + CSRF |
+| `/tags/products/{id}/tags*`, `/tags/products/bulk-tags` | — | colaborador, admin + CSRF |
+| `/canonical-products/batch-job` | estado: colaborador, admin | alta: colaborador, admin + CSRF |
+
 Este documento enumera cada endpoint de la API con el método HTTP y los roles requeridos.
 Además, se planifica un chatbot corporativo diferenciado por roles; los endpoints se detallan en la sección de próximos hitos para asegurar controles de acceso y auditoría.
 Las rutas sin un rol específico son accesibles para cualquier usuario, incluido `guest`.
+
+## Operaciones administrativas Vue (2026-07-18)
+
+| Dominio | Lecturas | Mutaciones |
+|---|---|---|
+| Drive Sync `/admin/drive-sync/*` | admin; WebSocket con sesión admin | admin + CSRF |
+| Scheduler `/admin/scheduler/*` | admin | admin + CSRF |
+| Conocimiento `/admin/knowledge/*` y búsqueda RAG HTTP | admin | admin + CSRF |
+| Crawler `/admin/image-jobs/*` | admin | admin + CSRF |
+| Revisión/procesamiento `/products/*/images*` | colaborador, admin | colaborador, admin + CSRF |
+| Catálogos `/catalogs/diagnostics/*` | colaborador, admin | desbloqueo/eliminación: admin + CSRF |
+| Chat Inbox `/admin/chats*`, `/admin/chat-quality/metrics` | colaborador, admin | revisión/feedback: colaborador, admin + CSRF |
+| Prompts `/admin/chat-quality/prompts*` | admin | admin + CSRF |
 
 | Método | Ruta | Roles requeridos |
 |--------|------|------------------|
@@ -30,8 +52,12 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | GET | /categories/search | cliente, proveedor, colaborador, admin |
 | POST | /categories/generate-from-supplier-file | admin (requiere CSRF) |
 | GET | /products | cliente, proveedor, colaborador, admin |
-| GET | /products/{product_id} | cliente, proveedor, colaborador, admin |
+| POST | /products | colaborador, admin (requiere CSRF) |
+| GET | /products/{product_id} | guest, cliente, proveedor, colaborador, admin |
 | GET | /products/{product_id}/variants | cliente, proveedor, colaborador, admin |
+| POST | /canonical-products/batch-job | colaborador, admin (requiere CSRF) |
+| POST | /canonical-products/sku-preview | colaborador, admin (requiere CSRF) |
+| GET | /canonical-products/batch-jobs/{job_id} | colaborador propietario, admin |
 | PATCH | /products/{product_id} | colaborador, admin (requiere CSRF) |
 | POST | /products/{product_id}/enrich | colaborador, admin (requiere CSRF) |
 | DELETE | /products/{product_id}/enrichment | colaborador, admin (requiere CSRF) |
@@ -48,18 +74,24 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | POST | /equivalences | colaborador, admin (requiere CSRF) |
 | DELETE | /equivalences/{equivalence_id} | colaborador, admin (requiere CSRF) |
 | POST | /catalog/products | Ninguno (requiere CSRF) |
-| DELETE | /catalog/products | Ninguno (requiere CSRF) |
+| DELETE | /catalog/products | colaborador, admin (requiere CSRF) |
 | GET | /suppliers/search | cliente, proveedor, colaborador, admin |
 | PUT | /variants/{variant_id}/sku | colaborador, admin (requiere CSRF) |
 | POST | /supplier-products/link | colaborador, admin (requiere CSRF) |
 | PATCH | /products-ex/products/{product_id}/sale-price | colaborador, admin (requiere CSRF) |
 | PATCH | /products-ex/supplier-items/{supplier_item_id}/buy-price | colaborador, admin (requiere CSRF) |
+| PATCH | /products-ex/supplier-items/{supplier_item_id}/sale-price | colaborador, admin (requiere CSRF) |
 | POST | /products-ex/products/bulk-sale-price | colaborador, admin (requiere CSRF) |
 | GET | /products-ex/products/{product_id}/offerings | cliente, proveedor, colaborador, admin |
 | GET | /products-ex/users/me/preferences/products-table | cliente, proveedor, colaborador, admin |
 | PUT | /products-ex/users/me/preferences/products-table | cliente, proveedor, colaborador, admin (requiere CSRF) |
 | GET | /stock/export.xlsx | cliente, proveedor, colaborador, admin |
+| GET | /stock/export.csv | cliente, proveedor, colaborador, admin |
+| GET | /stock/export.pdf | cliente, proveedor, colaborador, admin |
 | GET | /stock/export-tiendanegocio.xlsx | colaborador, admin |
+| GET | /stock/shortages | colaborador, admin |
+| GET | /stock/shortages/stats | colaborador, admin |
+| POST | /stock/shortages | colaborador, admin (requiere CSRF) |
 | GET | /catalog/next-seq | colaborador, admin |
 | GET | /suppliers/price-list/template | cliente, proveedor, colaborador, admin |
 | GET | /suppliers/{supplier_id}/price-list/template | cliente, proveedor, colaborador, admin |
@@ -78,8 +110,8 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | POST | /purchases/{purchase_id}/rollback | colaborador, admin (requiere CSRF) |
 | GET | /admin/services/metrics/bug-reports | admin |
 | GET | /admin/mcp/health | admin |
-| POST | /admin/mcp/{name}/start | admin (requiere CSRF) |
-| POST | /admin/mcp/{name}/stop | admin (requiere CSRF) |
+| POST | /admin/mcp/{name}/start | admin |
+| POST | /admin/mcp/{name}/stop | admin |
 
 Las rutas marcadas con * solo están disponibles cuando `ENV` es distinto de `production`.
 
@@ -90,8 +122,11 @@ El canal `/ws` envía un ping JSON cada 30 s y se cierra tras 60 s sin recib
 Además de los permisos del backend, la interfaz limita qué opciones se muestran según el rol:
 
 - Invitado: solo ChatBot. No se muestran Proveedores, Clientes, Ventas, Compras, Admin, ni acciones de subida.
-- Cliente/Proveedor: pueden ver Productos y Stock. No ven Proveedores, Clientes, Ventas, Compras ni Admin.
-- Colaborador/Admin: ven todas las secciones y herramientas (incluye Proveedores, Clientes, Ventas, Compras, Admin, Imágenes productos, etc.).
+- Cliente/Proveedor: pueden ver Productos y Stock y exportar XLSX/CSV/PDF. No ven mutaciones, TiendaNegocio, Faltantes, Proveedores, Clientes, Ventas, Compras ni Admin.
+- Colaborador: ve operaciones de dominio y Workers, pero no Usuarios, Backups, MCP ni acciones con capacidades administrativas.
+- Admin: ve todas las secciones y herramientas habilitadas por el manifiesto.
+
+En Vue, `/admin/servicios` y `/admin/servicios/workers` requieren `services.control`; `/admin/servicios/mcp-tools` es solo `admin`. La instalación de dependencias se oculta sin `services.dependencies.install`, aunque FastAPI continúa siendo la autoridad final.
 
 Nota: Estas reglas de visibilidad no cambian la seguridad de los endpoints (que sigue controlada en el backend); simplemente reducen la superficie visible para cada rol.
 
@@ -101,8 +136,8 @@ Nota: Estas reglas de visibilidad no cambian la seguridad de los endpoints (que 
 	- `type=all` (default), `type=canonical` (sólo con producto canónico vinculado) o `type=supplier` (sin canónico).
 	- El backend normaliza el título (`name`) y el precio de venta (`precio_venta`) priorizando los datos del canónico cuando existen; si no, usa los del proveedor.
 
-- GET `/catalog/next-seq?category_id=…` devuelve la próxima secuencia por categoría para proponer SKUs canónicos bajo la regla `XXX_####_YYY`.
-	- Uso: la UI lo consume para vista previa; la generación/validación real del SKU se hace en backend.
+- GET `/catalog/next-seq?category_id=…` devuelve una estimación no reservante para clientes heredados bajo la regla `XXX_####_YYY`.
+	- Vue usa `POST /canonical-products/sku-preview` para lotes. Ninguno de los dos endpoints reserva números; la generación definitiva se hace en backend dentro de la transacción.
 
 ## Próximos endpoints (planificados)
 
@@ -117,6 +152,20 @@ Estos endpoints se agregarán en próximos hitos y pueden no estar disponibles a
 | POST | /chatbot/pr-suggestion | admin | Permite subir sugerencias bajo `PR/` con validación de ruta y auditoría.
 | GET | /chatbot/audit/logs | admin | Consulta de auditoría con filtros por usuario, fechas y recursos.
 
+## Clientes y Ventas Fase 4
+
+| Método | Ruta | Roles | Seguridad/uso |
+|---|---|---|---|
+| GET | `/customers`, `/customers/{id}`, `/customers/{id}/sales`, `/customers/{id}/account` | colaborador, admin | Lectura paginada y enriquecida. |
+| POST/PATCH/DELETE | `/customers`, `/customers/{id}`, `/customers/{id}/reactivate` | colaborador, admin | Sesión, rol, CSRF y auditoría. |
+| POST | `/customers/{id}/account/adjustments` | admin | CSRF y motivo obligatorio. |
+| GET | `/sales`, `/sales/{id}`, `/sales/reports/*` | colaborador, admin | Lectura enriquecida y reportes. |
+| POST | `/sales/quote` | colaborador, admin | Cálculo sin persistencia; CSRF. |
+| POST | `/sales` | colaborador, admin | CSRF, rate limit e `Idempotency-Key`. |
+| POST/PATCH/DELETE | `/sales/{id}/*` | colaborador, admin | CSRF; transiciones restringidas por estado. |
+
+Los permisos de acción retornados por el detalle son la fuente para habilitar controles Vue; el backend siempre vuelve a autorizar.
+
 ## Tools MCP (estado actual)
 
 Las tools expuestas a modelos (OpenAI) vía tool-calling se documentan para trazabilidad de roles:
@@ -126,9 +175,10 @@ Las tools expuestas a modelos (OpenAI) vía tool-calling se documentan para traz
 | get_product_info | Retorna info básica de producto (sku, name, sale_price, stock). | guest, cliente, proveedor, colaborador, admin |
 | get_product_full_info | Retorna info extendida (MVP: igual a básica; se ampliará). | colaborador, admin |
 
-Invocación estándar desde el modelo: `POST /invoke_tool` en `mcp_products` con cuerpo `{ "tool_name": ..., "parameters": {"sku": "...", "user_role": "..." } }`.
+Invocación estándar: MCP Streamable HTTP en `/mcp`, descubrimiento con `tools/list` y ejecución con `tools/call`.
 
 Notas:
-- `user_role` validado en el microservicio además de la selección dinámica de tools.
-- Se añadirá auditoría y token firmado en próximos hitos (ver Roadmap).
+- El rol se obtiene del JWT Bearer y no se expone como argumento al modelo.
+- Growen filtra el catálogo y el servidor vuelve a validar el rol.
+- La auditoría registra tool, sujeto, estado y latencia sin tokens ni parámetros sensibles.
 

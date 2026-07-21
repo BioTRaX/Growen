@@ -6,10 +6,17 @@
 Operación de Catálogos (PDF)
 ============================
 
+Historial persistente (2026-07-18)
+----------------------------------
+
+Cada generación crea una fila en `catalog_generation_runs` y eventos ordenados en `catalog_generation_events`. PostgreSQL coordina el inicio entre réplicas. Los eventos se descargan mediante `GET /catalogs/diagnostics/runs/{run_id}/download?format=ndjson|csv`.
+
+No se ejecuta retención ni limpieza automática. El desbloqueo y la eliminación explícita son exclusivos de admin, requieren CSRF y generan auditoría.
+
 Contexto
 - Los catálogos se generan bajo `/catalogs/generate` y se almacenan en `./catalogos/` como `catalog_YYYYMMDD_HHMMSS.pdf`.
 - Existe un alias `ultimo_catalogo.pdf` que apunta al último generado (symlink si el SO lo permite, o copia).
-- Durante la generación se mantiene un flag en memoria para evitar ejecuciones concurrentes.
+- Durante la generación PostgreSQL mantiene el estado persistente y coordina el acceso concurrente; el flag en memoria queda sólo como adaptador legacy.
 
 Diagnóstico rápido
 - Estado: `GET /catalogs/diagnostics/status` devuelve `{ active_generation, detail_logs, summaries }`.
@@ -24,7 +31,9 @@ Desbloqueo manual (lock)
 
 Descarga desde el Frontend
 - La descarga de XLS de stock usa `GET /stock/export.xlsx` (sin prefijo `/api`).
+- Stock dispone además de `GET /stock/export.csv` y `GET /stock/export.pdf`; los tres comparten consulta, filtros y reglas de datos. El PDF de stock usa ReportLab en A4 horizontal.
 - La visualización/descarga de PDF usa `GET /catalogs/latest` y `GET /catalogs/latest/download`.
+- Productos Vue contiene generación desde selección e histórico con filtros, visualización, descarga y borrado auditado para admin. Estas acciones no forman parte de Stock Vue.
 
 Detalles del XLS de stock
 - Columnas: NOMBRE DE PRODUCTO, PRECIO DE VENTA, CATEGORIA, SKU PROPIO.

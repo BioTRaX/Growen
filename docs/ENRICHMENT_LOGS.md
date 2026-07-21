@@ -289,7 +289,7 @@ Se registra **antes del commit final** en cada enriquecimiento.
   "num_sources": 2,
   "source_file": "/media/enrichment_logs/product_123_enrichment_20250108T120000Z.txt",
   "prompt_hash": "abc123...",
-  "web_search_query": "Nombre del producto",
+  "web_search_query_hash": "sha256-de-la-consulta",
   "web_search_hits": 3,
   "used_canonical_title": true
 }
@@ -448,7 +448,7 @@ Cuando el enriquecimiento falla:
 | `LOG_LEVEL` | `INFO` | Nivel de logging (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `LOG_DIR` | `logs/` | Directorio para `backend.log` |
 | `AI_USE_WEB_SEARCH` | `0` | Activar búsqueda web en enriquecimiento (`1` para activar) |
-| `MCP_WEB_SEARCH_URL` | `http://mcp_web_search:8002/invoke_tool` | URL del servicio MCP web-search |
+| `MCP_WEB_SEARCH_URL` | `http://mcp_web_search:8002/mcp` | URL Streamable HTTP del servicio MCP Web Search |
 | `AI_WEB_SEARCH_MAX_RESULTS` | `3` | Cantidad máxima de resultados web a incluir |
 | `OPENAI_API_KEY` | (vacío) | API key de OpenAI (si no está, cae a Ollama) |
 | `OLLAMA_HOST` | `http://localhost:11434` | Host de Ollama |

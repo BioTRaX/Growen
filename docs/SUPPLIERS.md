@@ -5,7 +5,19 @@
 
 # Gestión de Proveedores
 
+## Identidad de ofertas durante compras
+
+La identidad automática se limita a coincidencia exacta `(supplier_id, supplier_product_id)`. Si Santa Planta cambia el SKU, Compras crea una nueva oferta/producto y no fusiona por similitud. El título promocional del remito permanece como snapshot de la línea y como nombre de proveedor; la equivalencia canónica se asigna posteriormente de forma humana.
+
 Este documento describe el modelo extendido de proveedores, endpoints disponibles y el flujo de UI para crear y editar proveedores.
+
+## Corte Vue básico (2026-07-16)
+
+- `/proveedores` lista y busca proveedores por nombre o `slug`.
+- El rol `admin` puede crear proveedores desde esa vista o desde el botón de alta rápida del selector de Compras.
+- `/compras` y `/compras/nueva` usan un autocomplete por nombre; el ID interno se conserva sólo en el contrato HTTP.
+- La creación propone un `slug` normalizado a partir del nombre y permite editarlo antes de guardar.
+- El perfil automático de extracción disponible continúa siendo Santa Planta; habilitar un proveedor en el directorio no implica disponer de un parser específico para él.
 
 ## Campos del modelo `Supplier`
 Campo | Tipo | Descripción

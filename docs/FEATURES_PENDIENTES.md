@@ -80,7 +80,7 @@ async def search_knowledge(query: str, top_k: int = 5, session: AsyncSession = D
 
 ### 4. Token Firmado MCP (HMAC/JWT)
 
-**Estado actual**: MVP con `user_role` en parámetros (solo para desarrollo).
+**Estado actual**: MCP real con JWT; el rol viaja en claims firmados y no aparece en los argumentos de tools.
 
 **Acciones requeridas**:
 - [ ] Implementar firma de token con expiración y claims de rol

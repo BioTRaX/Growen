@@ -238,7 +238,7 @@ Cuando abras una nueva terminal en VS Code, debe aparecer automáticamente:
 ### Dockerfile Correcto
 
 ```dockerfile
-FROM python:3.11-slim
+FROM python:3.14.6-slim-bookworm
 
 WORKDIR /app
 
@@ -284,7 +284,7 @@ pip show <paquete>
 
 ### Pregunta 3: ¿VS Code usa el intérprete correcto?
 - Mirar barra inferior de VS Code
-- Debe decir: `Python 3.11.x ('.venv': venv)`
+- Debe decir: `Python 3.14.6+ ('.venv': venv)`
 
 ---
 
@@ -312,4 +312,4 @@ pip show <paquete>
 ---
 
 **Última actualización**: 2025-11-12  
-**Aplica a**: Python 3.11+, Windows PowerShell, VS Code
+**Aplica a**: Python 3.14.6+, Windows PowerShell, VS Code

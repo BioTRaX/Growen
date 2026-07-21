@@ -5,6 +5,10 @@
 
 # Arquitectura del Chatbot Administrativo
 
+## Enriquecimiento por tags de producto (2026-07-18)
+
+Products MCP expone tags como `list[str]` en búsqueda y detalle. La búsqueda interpreta cada término con lógica AND y permite coincidencia por tag, además de nombre, descripción o SKU. Los tags enriquecen recuperación y conversación, pero no reemplazan categoría/subcategoría ni forman parte del identificador permanente del producto.
+
 > **Documento consolidado** - Incluye arquitectura, roles, personas y matriz de permisos.
 
 ## Resumen
@@ -150,7 +154,7 @@ persona_mode, system_prompt = get_persona_prompt(
 
 ## 4. Migración a Tool-Calling
 
-> ⚠️ **Estado (2025-11-19)**: Requiere refactorización. Router síncrono no puede usar `chat_with_tools` asíncrono.
+> **Estado (2026-07-14)**: Tool calling asíncrono conectado y MCP real en migración compatible.
 
 ### Arquitectura Objetivo
 
@@ -164,21 +168,20 @@ persona_mode, system_prompt = get_persona_prompt(
 |------------|--------|
 | MCP Products Server | ✅ Implementado |
 | Tools definidas | ✅ Operativas |
-| Router asíncrono | ❌ **Bloqueador** |
-| `/chat` endpoint | ⚠️ Usa fallback `price_lookup.py` |
-| WebSocket y Telegram | ⏸️ Pendiente migrar |
+| Router asíncrono | ✅ Implementado |
+| `/chat` endpoint | ✅ Descubrimiento MCP; fallback legacy transitorio |
+| WebSocket y Telegram | ✅ Migrados a `run_async` |
 
 ### Próximos Pasos
 
-1. Convertir `AIRouter.run` a async
-2. Implementar `generate_async` en `OpenAIProvider`
-3. Actualizar endpoints para usar `await router.run(...)`
-4. Sincronizar esquemas JSON entre provider y MCP
+1. Mantener la venv Python 3.14.6+ y ejecutar contract tests.
+2. Validar paridad del catálogo descubierto.
+3. Retirar schemas y RPC legacy cuando no tengan uso.
 
 ### Configuración
 
 ```env
-MCP_PRODUCTS_URL=http://mcp_products:8001/invoke_tool
+MCP_PRODUCTS_URL=http://mcp_products:8100/mcp
 OPENAI_API_KEY=sk-...  # Requerida para tool-calling
 ```
 

@@ -14,6 +14,10 @@ La sincronización permite:
 - Validar que los nombres de archivo correspondan a SKUs canónicos
 - Procesar y asociar las imágenes a los productos correspondientes
 - Mover archivos a carpetas organizadas según el resultado del procesamiento
+- Conservar ejecuciones y resultados por archivo en PostgreSQL.
+- Solicitar cancelación cooperativa y reintentar una selección fallida mediante una ejecución hija.
+
+El WebSocket `/admin/drive-sync/ws` valida la cookie de sesión y el rol `admin` antes de aceptar. Redis distribuye el progreso en vivo, pero `drive_sync_runs` y `drive_sync_items` son la fuente histórica.
 - Monitorear el progreso en tiempo real mediante WebSocket
 
 ## Configuración

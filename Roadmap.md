@@ -5,16 +5,156 @@
 
 # Roadmap del Proyecto
 
-Última actualización: 2026-06-06
+## Actualización 2026-07-20 — Stock Vue listo para validación
+
+- [x] Implementadas `/stock` y `/stock/shortages` en Vue 3 con filtros URL, debounce, cancelación, paginación reemplazable, permisos y estados de error.
+- [x] Stock y faltantes admiten `Decimal(14,2)`; el ajuste manual usa `expected_stock`, bloqueo de fila, ledger y auditoría en una transacción.
+- [x] XLSX, CSV y PDF comparten selección y filtros; PDF usa ReportLab y TiendaNegocio conserva su contrato.
+- [x] Enriquecimiento masivo, completar precios, generación e histórico de catálogos fueron retirados de la nueva vista Stock y ubicados en Productos Vue.
+- [x] Quality gates locales: Vue 65/65, backend Stock 12/12 y contrato CSRF aislado aprobado, typecheck y builds Vue/React aprobados.
+- [ ] Mantener `stock` en `legacy/pending` hasta que Productos/Catálogos esté activo en una ruta Vue productiva y se complete el smoke visual autenticado por rol.
+- [ ] Validar concurrencia real de dos faltantes sobre PostgreSQL; SQLite no permite demostrar el bloqueo pesimista.
+- [ ] Tras dos releases estables y siete días sin incidentes críticos, evaluar el retiro de React en un corte separado.
+
+## Actualización 2026-07-20 — Incidente operativo del batch canónico
+
+- [x] Restaurada la publicación loopback de PostgreSQL/Redis sin pérdida de volúmenes y validado el arranque canónico completo.
+- [x] Corregido el reintento idempotente de jobs `FAILED` sin ítems procesados y añadida la acción Vue **Reintentar lote**.
+- [x] Verificado un lote final `COMPLETED` 10/10 con 10 canónicos y 10 equivalencias.
+- [x] Documentada la retrospectiva operativa y el diagrama FigJam del flujo completo.
+- [x] Operaciones Compose del panel ejecutadas fuera del event loop, con rollback seguro antes de registrar fallos.
+- [x] Incorporados eventos NDJSON del worker `catalog` y referencias `*_log_source_hint` para procesos reutilizados.
+- [x] Creada la skill canónica `diagnose-local-services` y ampliada `create-service` con dependencias, red, preflight y observabilidad.
+- [x] `start-dev.ps1 -WithCatalogWorker` inicia/verifica Redis+Dramatiq y reconcilia DB si Compose figura activo sin puerto host.
+- [x] El worker local de catálogo persiste stdout/stderr en `logs/worker_catalog.log`; el launcher detecta y registra consumidores locales que compiten con Dramatiq Docker.
+- [ ] Exponer en la UI un preflight previo al wizard que identifique explícitamente ausencia del consumidor `catalog`.
+
+## Actualización 2026-07-20 — Retrospectiva de taxonomía, tags y QA agéntico
+
+- [x] Compatibilidad entre aislamiento `backend: internal` y desarrollo local: PostgreSQL/Redis conservan bindings loopback mediante la red Compose `host_access`, evitando que el alta de Dramatiq deje inaccesibles `5433` y `6379` al recrear contenedores.
+- [x] Recuperación idempotente de lotes canónicos: los jobs `FAILED` sin ítems procesados vuelven a `QUEUED` y se despachan al recuperarse Redis, con cobertura automatizada.
+
+- [x] Contrastada la implementación de taxonomía plana y tags contra modelos, API, worker, Vue, MCP, exportaciones y pruebas.
+- [x] Registradas causas y soluciones de los fallos de autocomplete, Vuetify/JSDOM, búsqueda por tags, auditoría de producto y pruebas de migración.
+- [x] Actualizadas las skills `vue-module-migration` y `database-migrations` con controles surgidos de incidentes reales.
+- [x] Corregida la documentación heredada que todavía describía categorías/subcategorías jerárquicas.
+- [ ] Ejecutar smoke visual autenticado como staff y comprobar persistencia después de recargar.
+- [ ] Repetir la selección Python consolidada posterior a los fixes y resolver el drift Alembic histórico en revisiones separadas.
+
+## Actualización 2026-07-18 — Taxonomía plana y tags en Productos Vue
+
+- [x] Categoría y subcategoría tipadas como listas planas independientes, con creación inline y mismo nombre permitido entre tipos.
+- [x] Tags múltiples en alta individual, detalle, selección masiva y wizard canónico; borradores migrados a v3.
+- [x] Worker batch idempotente con persistencia transaccional de tags y equivalencia.
+- [x] Búsqueda MCP por tags y contrato `tags: list[str]` en las tres tools de Productos.
+- [x] Migración incremental y cadena PostgreSQL limpia validadas en el head `20260718_product_taxonomy_tags_v1`.
+- [ ] Completar el smoke visual por rol antes de retirar el fallback React.
+
+## Actualización 2026-07-18 — Panel administrativo Vue y persistencia operativa
+
+- [x] Limpieza de logs alineada con `start-dev.ps1`: previsualización Vue, retención, carpetas dev completas, ejecución activa protegida y scripts canónicos.
+- [x] Drive Sync Vue con historial PostgreSQL, detalle por archivo, cancelación cooperativa, reintentos hijos y WebSocket autenticado.
+- [x] Scheduler admin con configuración singleton persistente, historial manual/automático y liderazgo mediante advisory lock.
+- [x] Conocimiento RAG restringido a admin, tareas persistentes, validación de archivos y prueba semántica.
+- [x] Imágenes separadas entre operación del crawler admin y revisión/procesamiento para staff.
+- [x] Catálogos con ejecuciones/eventos persistentes, exportación NDJSON/CSV y desbloqueo admin auditado sin purga automática.
+- [x] Dashboard técnico Vue de solo lectura y enlaces a módulos responsables.
+- [x] Chat Inbox con filtros, asignación, tags, acciones masivas, feedback, clasificación y gobierno reversible de prompts.
+- [x] Revisiones Alembic `20260718_admin_operations_v1`/`20260718_admin_jsonb_v2` y contratos de seguridad/CSRF compartidos.
+- [ ] Completar dos releases estables y siete días sin incidentes críticos antes de retirar React.
+- [ ] Ejecutar el smoke visual por rol y el test fresh PostgreSQL en un host con Docker disponible.
+
+## Actualización 2026-07-18 — QA y conocimiento agéntico de Productos
+
+- [x] Documentada la retrospectiva técnica de catálogo Vue, alta masiva canónica y categorías inline.
+- [x] Corregida la documentación para distinguir preview legado, preview batch no reservante y SKU definitivo transaccional.
+- [x] Incorporados controles de Vitest, `vue-tsc`, sandbox de auditoría y preflight de Chrome a las guías de trabajo.
+- [ ] Completar un smoke visual staff en Chrome cuando el plugin y su host nativo vuelvan a estar disponibles.
+- [x] Creada la skill canónica `vue-module-migration` con adaptador legacy y controles de paridad, testing, navegador, documentación y fallback React.
+
+## Actualización 2026-07-17 — Alta masiva canónica Vue
+
+- [x] Wizard Vue de cuatro pasos desde la selección del catálogo, con nombre, categoría, subcategoría, marca opcional y SKU provisional.
+- [x] Alta inline buscable de categorías en el producto individual y de categoría/subcategoría planas e independientes dentro del wizard masivo.
+- [x] Borradores versionados por usuario, recuperación tras recarga y migración de `mass_cannon_session`.
+- [x] Lotes idempotentes y persistentes con polling, progreso, resultados por fila y errores parciales.
+- [x] Generación definitiva `XXX_####_YYY` mediante secuencia PostgreSQL bloqueada y vínculo atómico con el producto de proveedor.
+- [ ] Siguiente fase: administración independiente de canónicos y equivalencias.
+- [ ] Luego: detalle integral, imágenes, activación productiva de Productos/Catálogos y smoke final de Stock.
+
+## Actualización 2026-07-17 — Baseline funcional del portal React
+
+- [x] Inventariadas las rutas productivas, roles, vistas, formularios, acciones y endpoints consumidos por la SPA React.
+- [x] Documentado el mapeo a una arquitectura Plugin-based UI con Sidebar + Main Content en `docs/relevamiento_admin.md`.
+- [x] Identificadas inconsistencias de permisos visibles, aliases de imágenes, contratos iAVaL legacy y el alcance real de “Adjuntar Excel”.
+- [ ] Usar el relevamiento como checklist de paridad por plugin antes de retirar cada dominio React.
+
+## Actualización 2026-07-16 — Compras y primer corte de Productos Vue
+
+- [x] Primer corte funcional de Compras en Vue 3/Vuetify.
+- [x] Alta automática y transaccional de productos sin canónico al confirmar.
+- [x] Adjuntos PDF/JPG/PNG con hash, deduplicación y descarga del original.
+- [x] Movimientos de compras en `stock_ledger` e historial de compras por producto.
+- [x] Listado operativo de Productos con navegación agrupada, filtros persistentes, paginación, contratos tipados y permisos equivalentes a React.
+- [x] Detalle básico público y extensión de historial de compras para staff.
+- [x] Selector buscable y alta rápida de proveedores en Compras; listado `/proveedores` activo en Vue.
+- [x] Regresión de sesión corregida para que login, rol y CSRF autoricen mutaciones reales.
+- [x] Recuperar alta, edición de stock, precio efectivo y borrado protegido individual/masivo de Productos en Vue.
+- [ ] Completar preferencias de columnas y operaciones masivas de precios.
+- [ ] Migrar detalle enriquecido, canónicos, equivalencias e imágenes.
+- [ ] Resolver drift Alembic histórico no relacionado reportado por `alembic check`.
+- [ ] Extender perfiles de remito a proveedores distintos de Santa Planta.
+
+## Actualización 2026-07-17 — QA de sesión y conocimiento agéntico
+
+- [x] Documentada la retrospectiva técnica de Compras, Proveedores y autenticación.
+- [x] `no_auth_override` prueba ahora rol y CSRF reales y restaura los overrides sin contaminación.
+- [x] Regresión de sesión cubre login, `/auth/me` y una mutación protegida.
+- [x] Mocks iAVaL actualizados al contrato `AIRouter.run_async`.
+- [x] Documentada la ejecución secuencial de pytest en workspaces compartidos.
+- [ ] Migrar los tests síncronos heredados desde `TestClient` antes de adoptar `httpx2`.
+- [ ] Ejecutar E2E completo de OCR de imágenes en un host con Tesseract, QPDF, Ghostscript y OCRmyPDF.
+
+## Actualización 2026-07-17 — Legibilidad del detalle de Compras Vue
+
+- [x] Redistribuidas las columnas para priorizar el nombre original y compactar los datos numéricos.
+- [x] Incorporado el total neto reactivo y formateado por cada línea del remito.
+- [x] Cubierto el cálculo de línea con pruebas unitarias y documentado el comportamiento responsive.
+
+## Actualización 2026-07-17 — Confirmación de Compras y feedback de validación
+
+- [x] La UI diferencia errores bloqueantes de advertencias y elimina el fallo silencioso de `Confirmar` en estado `BORRADOR`.
+- [x] La importación deja de inferir bonificaciones desde el nombre comercial y preserva la columna documental.
+- [x] Alembic `c923732e1cab` alinea `supplier_price_history.file_fk` nullable con el modelo y desbloquea la transacción de confirmación.
+- [x] Compra 1 confirmada de extremo a extremo: 10 productos, 10 movimientos de stock y 10 historiales persistidos.
+
+## Actualización 2026-07-17 — Cierre QA y conocimiento operativo
+
+- [x] Retrospectiva ampliada con los incidentes de validación, confirmación, deriva de esquema y evidencia E2E persistida.
+- [x] Guía frontend incorpora correlación navegador/API/PostgreSQL, control de hot reload y verificación posterior de mutaciones.
+- [x] Skill `database-migrations` endurecida para descartar deriva autogenerada no relacionada y evitar secretos en outputs.
+- [ ] Incorporar un E2E automatizado del ciclo `BORRADOR` → `VALIDADA` → `CONFIRMADA` con verificación de impacto.
+
+Última actualización general: 2026-07-17
 
 Este documento resume el estado actual del proyecto, las funcionalidades ya implementadas y los trabajos pendientes. Debe mantenerse actualizado por cada contribución (humana o de un agente) que cambie comportamiento, endpoints, modelos o UI relevante.
 
 ## Contexto
 ## Actualizaciones recientes
 
-- Frontend/Arquitectura: Se creó la base arquitectónica objetivo para una UI modular basada en plugins (Sidebar colapsable + Main Content) usando Vue 3 + Vuetify + SASS y Composition API con `script setup` en `frontend/brainstorming_Growen.md`. Esta definición es de objetivo futuro y no reemplaza el stack React actual hasta ejecutar una migración planificada.
+- Base de datos/Migraciones: Se reparó la instalación completa desde PostgreSQL vacío. La revisión RAG autogenerada `cf0f6e70fe89` quedó como no-op, se preservaron la implementación manual `b2d22a7ce889` y el merge `fa50a5cba1bb`, y se agregó `20260714_schema_integrity` para garantizar índices y constraints omitidos por ramas históricas. Se incorporó una prueba PostgreSQL temporal de `alembic upgrade head`; resultado local: 53 tablas, único head y auditoría sin faltantes. Ver `docs/MIGRATIONS_NOTES.md`.
 
-- Documentación/Onboarding Dev: Se consolidó el primer arranque en desarrollo con una secuencia explícita `MCP -> DB -> .venv -> start.bat` en `README.md`, `docs/DEVELOPMENT_WORKFLOW.md` y `docs/MCP.md` para reducir ambigüedades en setup inicial.
+- Frontend/Migración Vue (fase 1): Se creó `frontend-vue/` como aplicación paralela con Vue 3, Vuetify 3, Pinia, Vue Router, SASS, shell colapsable, autenticación real, guardas por rol y contratos de rutas actuales. React continúa como frontend productivo mientras se migra por dominios. Estado y comandos en `docs/FRONTEND_MIGRATION_VUE.md`.
+
+- Frontend/Productos Vue: El primer corte reemplaza la vista de impacto por un catálogo operativo. Incluye búsqueda diferida, filtros combinables, paginación y URL persistente; Stock e Imágenes quedan agrupados y marcados como pendientes sin cambiar sus rutas públicas.
+
+- Frontend/Proveedores Vue: `/proveedores` habilita búsqueda y alta básica para administradores. Compras reutiliza el selector con autocomplete y deja de exponer IDs internos en sus formularios.
+
+- Desarrollo/Inicio local: `scripts/start-dev.ps1` es el método único durante la etapa de desarrollo. Reutiliza o levanta únicamente PostgreSQL mediante Docker, aplica Alembic y ejecuta API/Vue localmente con healthchecks y logs aislados por ejecución en `logs/dev/`. El arranque productivo se adaptará cuando se prepare el despliegue.
+
+- Frontend/Arquitectura: La base modular definida en `frontend/brainstorming_Growen.md` comenzó su implementación. La convivencia React/Vue evita cambiar Docker y el build productivo antes de lograr paridad funcional.
+
+- Documentación/Onboarding Dev: El flujo principal quedó consolidado en `.\scripts\start-dev.ps1`; los arranques manuales se mantienen únicamente como herramientas de diagnóstico.
 
 - DB/Backend: Se agregaron metadatos de trazabilidad de enriquecimiento en `products` (`last_enriched_at`, `enriched_by`) y se exponen en `GET /products/{id}`. El endpoint `POST /products/{id}/enrich` los setea automáticamente; `DELETE /products/{id}/enrichment` los limpia. Migración: `20251021_add_product_enrichment_trace.py`.
 
@@ -26,24 +166,17 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 
 - Backend: FastAPI + SQLAlchemy (async) para gestión de compras (borradores, validación, confirmación), adjuntos (PDF remito), logs y auditoría.
 - AI: Capa `ai/` con enrutador y proveedores (OpenAI y/o Ollama) para tareas de razonamiento y validación.
-- Frontend: SPA React/TypeScript (Vite) con páginas de compras y servicios HTTP.
+- Frontend: SPA React/TypeScript (Vite) productiva y SPA Vue 3/Vuetify 3 paralela en migración.
 - Almacenamiento de archivos: `data/purchases/{id}/...` para PDFs y artefactos relacionados.
 
 ## Roadmap de Inteligencia Growen (Evolución 2025)
 
-### Etapa 0: Refactorización Core AI (Tool Calling & Async)
-- **Estado**: En progreso (Prioridad Alta).
-- **Diagnóstico**: El router actual (`ai/router.py`) opera de forma síncrona, impidiendo el uso correcto de `chat_with_tools` en `OpenAIProvider` que requiere `async/await` para consultar el MCP de productos. Esto genera una desconexión arquitectónica que impide al chatbot responder correctamente consultas de stock y precios que requieren información externa en tiempo real.
-- **Plan de Acción**:
-  1. **Estandarización del Provider**: Unificar la interfaz en `OpenAIProvider` implementando `generate_async` que soporte inyección de herramientas y contexto de usuario, permitiendo el paso dinámico de tools disponibles según el rol.
-  2. **Router Asíncrono**: Convertir `AIRouter.run` a asíncrono y permitir el paso de `user_role` para control de acceso en herramientas. Actualizar la firma de métodos relevantes en la cadena de llamadas.
-  3. **Sincronización de Esquemas**: Asegurar que las definiciones JSON de las tools en el provider (`_build_tools_schema` en `openai_provider.py`) coincidan exactamente con la implementación en `mcp_servers/products_server/tools.py`.
-  4. **Conexión de Servicios**: Actualizar los consumidores del router (endpoints de chat en `services/routers/chat.py`, WebSocket y Telegram) para usar `await router.run(...)` y propagar correctamente el contexto de usuario.
-- **Criterios de Aceptación**:
-  - El chatbot responde consultas de stock/precios usando tool calling de forma asíncrona.
-  - No hay bloqueos ni timeouts en consultas que requieren acceso al MCP.
-  - Las pruebas existentes en `tests/test_ai_router.py` y `tests/test_chat_ws_price.py` pasan con la nueva implementación asíncrona.
-  - Documentación actualizada en `docs/CHAT.md` y `docs/CHATBOT_ARCHITECTURE.md` reflejando el nuevo flujo.
+### Etapa 0: Core AI asíncrono y MCP interoperable
+- **Estado**: Implementación completada sobre Python 3.14.6; quality gate de seguridad y contratos incorporado para ejecución local o CI manual.
+- `AIRouter.run_async`, OpenAI async y la propagación de rol están conectados en HTTP, WebSocket y Telegram.
+- Products y Web Search exponen MCP Streamable HTTP en `/mcp` y conservan `/invoke_tool` como adaptador deprecado.
+- Growen descubre `tools/list`, filtra por rol y ejecuta `tools/call` mediante `agent_core/mcp_client.py`.
+- El schema estático fue retirado. `chat_with_tools` quedó como adaptador del flujo asíncrono descubierto; su nombre y el RPC legacy se retirarán tras validar paridad y completar la ventana de dos semanas sin invocaciones RPC.
 
 ### Etapas Futuras (Resumen)
 - **Etapa 1**: Enriquecimiento de datos estructurados — **EN PROGRESO**
@@ -70,7 +203,7 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
     - Implementar índice IVFFlat después de alcanzar 10K+ vectores.
     - Monitorear costos de OpenAI API y latencias de búsqueda.
 
-- **Etapa 3**: Conciencia de Roles y Seguridad — Integración con SSO/MFA (Keycloak/Authentik), token firmado (HMAC/JWT) con claims de rol, y control de acceso granular en tools según el usuario autenticado.
+- **Etapa 3**: Conciencia de Roles y Seguridad — **EN PROGRESO**. JWT MCP por audiencia, control granular, rate limit y revocación distribuidos en Redis, rotación compatible por `kid`, aislamiento de contenedores y supply-chain checks ya implementados. Quedan SSO/MFA (Keycloak/Authentik) y automatizar la custodia/rotación externa de claves para un despliegue remoto.
 - **Etapa 4**: Modo Desarrollador — Indexación del repositorio local, acceso controlado al código fuente, gateway de lectura/escritura confinada a `PR/`, y memoria conversacional a largo plazo.
 - **Etapa 5**: Business Intelligence — Text-to-SQL para consultas de finanzas, stock, ventas y análisis de tendencias; dashboards conversacionales.
 
@@ -116,16 +249,16 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 
 ### Capa MCP Servers (estado)
 
-Arquitectura **MCP Servers** (Model Context Protocol simplificado) establecida para exponer herramientas de dominio a LLMs.
+Arquitectura MCP real establecida para exponer herramientas de dominio a LLMs.
 
 Servicio actual:
-- `mcp_products` (FastAPI independiente)
-  - Tools: `get_product_info`, `get_product_full_info`.
-  - Cache en memoria con TTL dinámico, token compartido opcional, logging y mapeo de errores (400/401/403/404/502/504).
-  - Endpoint estándar `POST /invoke_tool`.
+- `mcp_products` y `mcp_web_search` (FastMCP + ASGI).
+  - Tools descubiertas: `find_products_by_name`, `get_product_info`, `get_product_full_info`, `search_web`.
+  - Endpoint canónico `/mcp`; `/invoke_tool` queda deprecado durante la migración.
+  - JWT Bearer con issuer/audience, roles, rate limiting y auditoría compartida.
   - Consume API principal vía HTTP (no DB directa).
-  - Dockerizado (`docker-compose.yml`, puerto 8100) — el código de integración usa por defecto `http://mcp_products:8001`; ajustar `MCP_PRODUCTS_URL` o alinear puertos.
-  - Tests: permisos, cache, token auth, invocación tool (respx).
+  - Dockerizado en puertos 8100 y 8102; desarrollo local administrado por `scripts/start-dev.ps1`.
+  - Tests: permisos, cache, token auth, invocación tool (respx) y contrato Streamable HTTP `initialize` + `tools/list`.
 
 Integración chatbot:
 - Endpoint `/chat` ahora usa tool-calling (OpenAI → MCP) para consultas de producto. `price_lookup.py` marcado DEPRECATED.
@@ -139,8 +272,9 @@ Integración chatbot:
 - ⚠️ **Seguridad**: El token actual es para desarrollo. En producción debe rotarse por uno generado con `secrets.token_urlsafe(32)` y mantenerse secreto (no commitear).
 
 Próximos pasos MCP:
-- Firmar token (HMAC/JWT) con expiración y rol (evolución del token actual).
-- Auditoría estructurada de invocaciones (latencia, tool_name, rol, éxito/error).
+- Ejecutar contract tests con Python 3.14.6 y MCP Inspector.
+- Retirar RPC y schemas estáticos tras dos semanas sin invocaciones legacy.
+- Evaluar MCP SDK v2 después de su versión estable.
 - Extender tools: métricas de ventas, equivalencias SKU, historial de precios.
 - Rate limiting por rol y circuito de retry/backoff.
 
@@ -208,26 +342,26 @@ Hito 1 — Dominio SKU dual (SKU interno y SKU de proveedor)
   - [Implementado] `PUT /variants/{id}/sku` (CSRF, admin|colaborador): editar SKU interno (valida regex y unicidad; audita cambio en `AuditLog`).
   - [Implementado] `POST /supplier-products/link` (CSRF): cuerpo `{ supplier_id, supplier_product_id, title?, internal_variant_id }` crea o actualiza la relación con validaciones (upsert amigable).
 
-Hito 1.1 — Categorías manuales, asociación en productos y exportación de stock
+Hito 1.1 — Taxonomía manual, asociación en productos y exportación de stock
 - Objetivo
-  - Permitir crear manualmente categorías de 2 niveles (Categoria, SubCategoria), asociarlas a productos existentes desde la UI, y ofrecer exportación XLS desde Stock.
-- Modelo/Datos (existente y uso)
-  - `Category`: ya implementado con jerarquía por `parent_id`. Se usarán niveles: `Categoria` (nivel 1, parent_id=null) y `SubCategoria` (nivel 2, parent_id=<id nivel 1>).
-  - `Product.category_id`: FK a `categories.id` ya presente; se actualizará al asociar.
+  - Permitir crear manualmente categoría y subcategoría planas, asociarlas a productos existentes desde la UI y ofrecer exportación XLS desde Stock.
+- Modelo/Datos (vigente)
+  - `Category.kind` distingue `category` y `subcategory`; `parent_id` se conserva temporalmente para compatibilidad y no condiciona las selecciones nuevas.
+  - `Product.category_id` y `Product.subcategory_id` son FK independientes a `categories.id` y se validan contra su `kind`.
 - Endpoints Backend
-  - [Implementado] `GET /categories` y `POST /categories` (CSRF) para creación/listado; se utilizarán para alta manual de Categoria/SubCategoria.
-  - [Nuevo] `PATCH /products/{product_id}` aceptará `category_id` para actualizar la categoría del producto (con validación de existencia y auditoría `product_update.category`).
-  - [Implementado] `GET /stock/export.xlsx` (roles: cliente|proveedor|colaborador|admin): genera XLS con columnas `NOMBRE DE PRODUCTO`, `PRECIO DE VENTA` (canónico si existe, si no proveedor), `CATEGORIA` (path), `SKU PROPIO` respetando filtros del listado.
+  - [Implementado] `GET /categories?kind=` y `POST /categories` con `{name, kind}` para búsqueda y alta manual por tipo.
+  - [Implementado] `PATCH /products/{product_id}` acepta `category_id` y `subcategory_id`, valida el tipo y audita los cambios.
+  - [Implementado] `GET /stock/export.xlsx` (roles: cliente|proveedor|colaborador|admin): genera XLS con `CATEGORIA` en formato `Categoría > Subcategoría` y respeta los filtros del listado.
 - Frontend
   - Productos (`/productos`):
-    - [Implementado] Botones “Nueva categoría” y “Nueva subcategoría” con modales: crean `Categoria` (nivel 1) y `SubCategoria` (nivel 2) eligiendo `Categoria` padre. Usan `POST /categories` y refrescan lista.
-    - En la ficha del producto (`/productos/:id`): agregar selector de `Categoria`/`SubCategoria` con guardado que llama a `PATCH /products/{id}` con `category_id`.
+    - [Implementado] Autocompletes escribibles independientes: al no encontrar un nombre ofrecen `Agregar “…”` y crean el tipo correspondiente sin exigir padre.
+    - [Implementado] La ficha del producto permite asociar y modificar ambos campos independientemente.
     - En ficha mantener y documentar edición de SKUs: ya existe `PUT /variants/{id}/sku` para SKU propio y modal “Agregar SKU de proveedor” que usa `POST /supplier-products/link`.
   - Stock (`/stock`):
     - [Implementado] Botón oscuro “Descargar XLS” que llama a `GET /stock/export.xlsx` respetando filtros vigentes y descarga el archivo.
 - Criterios de aceptación
-  - [Hecho] Se pueden crear `Categoria` y `SubCategoria` manualmente desde `/productos` y quedan visibles en filtros.
-  - En la ficha de producto se puede asignar/modificar `Categoria/SubCategoria` y persiste en `Product.category_id`.
+  - [Hecho] Se pueden crear `category` y `subcategory` manualmente desde `/productos`, incluso con el mismo nombre entre tipos.
+  - [Hecho] En la ficha se pueden asignar/modificar ambos valores y persisten en `Product.category_id`/`Product.subcategory_id`.
   - En la ficha se puede modificar SKU propio (variante) y SKU proveedor (vía vínculo) conforme endpoints actuales.
   - En `/stock` se descarga un XLS con columnas y datos solicitados, respetando filtros.
   - Auditoría: cambios de categoría quedan registrados en `AuditLog`.
@@ -477,12 +611,12 @@ El enriquecimiento de productos con IA (`POST /products/{id}/enrich`) está func
 ---
 
 Hito 7 - Chatbot: Consulta de precios en lenguaje natural (REDEFINIDO - Ver "Roadmap de Inteligencia Growen")
-- **Estado**: Parcialmente implementado, requiere refactorización (ver Etapa 0 arriba).
+- **Estado**: Tool calling asíncrono implementado; validación y retiro legacy pendientes.
 - **Diagnóstico actual**:
   - ✅ Matcher `price_query` y servicio `price_lookup.py` implementados (funcional pero marcado DEPRECATED).
   - ✅ Frontend `ChatWindow` representa respuestas `price_answer` con detalle de ofertas.
   - ✅ MCP Products Server implementado con tools `get_product_info` y `get_product_full_info`.
-  - ❌ **Problema crítico**: Router síncrono (`ai/router.py`) no puede usar `chat_with_tools` asíncrono correctamente, impidiendo consultas de stock/precios en tiempo real mediante tool calling.
+  - ✅ Router asíncrono y descubrimiento MCP conectados en los canales principales.
   - ⚠️ Fallback a `price_lookup.py` funcional pero no escala ni permite acceso a información externa actualizada.
 - **Plan de evolución**:
   - Este hito se reestructura como parte de la **Etapa 0: Refactorización Core AI** (ver sección superior).
@@ -491,11 +625,9 @@ Hito 7 - Chatbot: Consulta de precios en lenguaje natural (REDEFINIDO - Ver "Roa
     - Acceder dinámicamente a MCP Products para información actualizada.
     - Escalar a nuevas tools (ventas, proveedores, equivalencias SKU) sin modificar el núcleo del router.
   - Etapas 1-5 expandirán las capacidades con RAG, roles, BI y más.
-- **Acciones pendientes inmediatas** (parte de Etapa 0):
-  - Convertir `AIRouter.run` a asíncrono.
-  - Implementar `generate_async` en `OpenAIProvider` con soporte de tools dinámicas.
-  - Actualizar endpoints `/chat`, `/ws` y `/telegram/webhook` para usar `await router.run(...)`.
-  - Sincronizar esquemas de tools entre provider y MCP.
+- **Acciones pendientes inmediatas**:
+  - Mantener la venv Python 3.14.6+ y ejecutar `scripts/check-quality.ps1`.
+  - Validar paridad y retirar `chat_with_tools`, schemas estáticos y RPC legacy.
 - **Criterios de aceptación** (actualizados):
   - El chatbot responde consultas de precio/stock sin bloqueos ni timeouts.
   - Tool calling funcional con inyección de contexto de usuario (rol).
@@ -541,6 +673,24 @@ Hito 8 — Módulo MCP de Ventas Conversacionales
 - Frontend:
   - Servicios en `frontend/src/services/purchases.ts` (`iavalPreview`, `iavalApply`).
   - Pantalla `PurchaseDetail.tsx`: botón “iAVaL”, modal y refresco tras `apply`.
+
+## Clientes y Ventas — Fases 0 a 4 (2026-07-17)
+
+- [x] Contratos consistentes: quote, borrador idempotente, CSRF, totales con costos adicionales y OpenAPI sin operation IDs duplicados.
+- [x] Cantidades decimales en inventario, compras, ventas, devoluciones, ledger y faltantes.
+- [x] Clientes Vue: CRUD, reactivación, ficha 360°, historial, métricas y cuenta corriente.
+- [x] Ventas Vue: listado, detalle, recibo, pagos, devoluciones, adjuntos y POS.
+- [x] Reservas explícitas, cuenta corriente append-only, límite de crédito, margen, canales y segmentación calculada.
+- [x] Corte reversible React/Vue mediante manifiesto modular único y assets separados.
+- [x] Proxy canónico `/api`, transportes HTTP/descargas/WS/SSE, capacidades y telemetría por release/correlation ID.
+- [x] Nginx dual generado desde el manifiesto, aliases de imágenes y fallback React sin cambios de rutas públicas.
+- [x] Quality gate Vue con tipos, unitarias, Playwright E2E, build y auditoría.
+- [x] Servicios administrativos Vue: resumen, workers, health, start/stop, auto-start, dependencias, logs/SSE y MCP con permisos alineados al backend.
+- [x] Usuarios y Backups Vue con capacidades admin, formularios, confirmaciones, reset seguro y descarga autenticada.
+- [x] Completar panel admin Vue: Drive Sync, Diagnóstico de catálogos, Scheduler, Conocimiento y Chat Inbox.
+- [x] Retrospectiva y handoff técnico del corte administrativo en `docs/RETROSPECTIVE_FRONTEND_ADMIN_20260718.md`; registra el 500 sin evidencia suficiente y el reinicio requerido ante un Vite desactualizado.
+
+Pendiente operativo: ejecutar migración y pruebas concurrentes contra PostgreSQL real en integración antes del corte productivo.
 
 ## Cómo probar manualmente (resumen)
 

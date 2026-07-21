@@ -112,7 +112,7 @@ frontend/src/components/
 
 ```bash
 # URL del servicio MCP Web Search
-MCP_WEB_SEARCH_URL=http://mcp_web_search:8002/invoke_tool
+MCP_WEB_SEARCH_URL=http://mcp_web_search:8002/mcp
 ```
 
 ### Dominios de Alta Confianza

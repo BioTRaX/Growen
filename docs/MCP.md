@@ -1,137 +1,94 @@
 <!-- NG-HEADER: Nombre de archivo: MCP.md -->
 <!-- NG-HEADER: Ubicación: docs/MCP.md -->
-<!-- NG-HEADER: Descripción: Capa MCP (Model Context Protocol simplificado): servers y tools disponibles, contrato y flags de entorno -->
+<!-- NG-HEADER: Descripción: Protocolo MCP real, servidores, seguridad y operación -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
-# MCP Servers (capa de herramientas para IA)
+# MCP en Growen
 
-Esta página consolida la documentación de la capa MCP (Model Context Protocol simplificado) usada para exponer "tools" a los modelos de IA mediante un contrato HTTP uniforme. Cada server MCP es un microservicio independiente que actúa como fachada hacia el dominio (productos, búsqueda web, etc.), sin acceso directo a la base de datos.
+## Tags en Products MCP (2026-07-18)
 
-## Objetivos
-- Separar preocupaciones: evitar que los modelos llamen directamente la API o la DB.
-- Homogeneizar invocaciones: contrato estándar `POST /invoke_tool` en todos los MCP.
-- Controlar acceso por rol de usuario (MVP) y preparar el camino para autenticación firmada y auditoría.
+`find_products_by_name` delega en `/catalog/search`, que busca por nombre, descripción, SKU y tags manteniendo AND entre términos. `find_products_by_name`, `get_product_info` y `get_product_full_info` devuelven siempre `tags: list[str]`, incluso como lista vacía. No se agregó una tool paralela: se conserva el flujo búsqueda → detalle y los roles existentes.
 
-## Primer Arranque en Desarrollo
+Growen utiliza Model Context Protocol real mediante el SDK oficial de Python. Cada servidor expone Streamable HTTP en `/mcp`, permite descubrimiento con `tools/list` e invocación con `tools/call`. `/invoke_tool` queda disponible temporalmente como adaptador RPC deprecado.
 
-Para habilitar herramientas MCP en entorno local desde el primer inicio:
+La dependencia está acotada a `mcp>=1.27,<2`: v1 es la línea estable. La adopción de v2 se tratará en una tarea independiente cuando exista una versión estable y pase los contract tests de Growen.
 
-```bash
-# Paso 1: levantar MCP servers
-docker compose up -d mcp_products mcp_web_search
+## Inicio local
 
-# Paso 2: validar estado
-docker compose ps
+```powershell
+# DB + API + Products MCP + Vue
+.\scripts\start-dev.ps1
+
+# Incluye Web Search
+.\scripts\start-dev.ps1 -McpMode All
+
+# Solo verifica configuración
+.\scripts\start-dev.ps1 -CheckOnly
 ```
 
-Si no levantas MCP, el sistema puede arrancar igual en modo desarrollo, pero las funciones de IA que dependen de tools externas quedarán degradadas.
+Endpoints locales:
 
-Referencia del flujo completo: `docs/DEVELOPMENT_WORKFLOW.md`.
+- Products: `http://localhost:8100/mcp`.
+- Web Search: `http://localhost:8102/mcp`.
+- Health: reemplazar `/mcp` por `/health`.
 
-## Contrato de invocación
-- Endpoint: `POST /invoke_tool`
-- Request JSON:
-  ```json
-  { "tool_name": "<string>", "parameters": { "user_role": "<rol>", "...": "..." } }
-  ```
-- Response JSON (éxito):
-  ```json
-  { "tool_name": "<string>", "result": { /* objeto plano serializable */ } }
-  ```
-- Códigos de error típicos:
-  - 400: parámetros inválidos
-  - 403: permiso insuficiente (rol)
-  - 404: tool desconocida
-  - 502: error interno del tool o de red hacia upstream
+## Descubrimiento e invocación
 
-Notas:
-- `user_role` es obligatorio en MVP (admin|colaborador|proveedor|cliente|guest). Algunas tools restringen a admin/colaborador.
-- Las respuestas deben ser serializables a JSON y no incluir tipos complejos.
+`agent_core/mcp_client.py` crea una sesión autenticada, ejecuta `initialize`, obtiene `tools/list`, filtra por rol y convierte `inputSchema` al formato de function calling. La ejecución utiliza `tools/call` y prefiere `structuredContent`.
 
-## Servidores disponibles
+Tools actuales:
 
-### 1) MCP Products (`mcp_servers/products_server`)
-- Propósito: exponer herramientas de consulta de productos internos.
-- Tools:
-  - `get_product_info({ sku, user_role })` → información básica (name, sale_price, stock, sku).
-  - `get_product_full_info({ sku, user_role })` → información extendida (MVP: igual a básica). Requiere rol `admin|colaborador`.
-- Variables de entorno relevantes (consumidas por la API al invocar):
-  - `MCP_PRODUCTS_URL` (default: `http://mcp_products:8001/invoke_tool`)
-- Notas de seguridad: el server products MCP consulta la API principal vía HTTP y aplica validación de rol en parámetros; no accede directo a la DB.
+| Servidor | Tool | Roles |
+|---|---|---|
+| Products | `find_products_by_name` | Todo usuario autenticado |
+| Products | `get_product_info` | Todo usuario autenticado |
+| Products | `get_product_full_info` | admin, colaborador |
+| Web Search | `search_web` | admin, colaborador |
 
-### 2) MCP Web Search (`mcp_servers/web_search_server`)
-- Propósito: exponer `search_web(query)` para obtener resultados básicos desde un motor HTML público (MVP: DuckDuckGo HTML).
-- Tools:
-  - `search_web({ query, user_role, max_results?=5 })` → lista `items[]` con `{ title, url, snippet? }`. Roles permitidos: `admin|colaborador`.
-- Variables de entorno:
-  - `MCP_WEB_SEARCH_URL` (default: `http://mcp_web_search:8002/invoke_tool`)
-  - `WEB_SEARCH_BASE` (opcional, default: `https://duckduckgo.com/html/`)
-- Notas: En producción se recomienda sustituir por proveedor con SLA (Serper/Bing API) y cachear resultados.
+## Seguridad
 
-## Integración con la API principal
-- Enriquecimiento de productos (`POST /products/{id}/enrich`):
-  - Integra opcionalmente `get_product_info` (contexto interno por SKU de variante).
-  - Integra opcionalmente `search_web` para anexar resultados al prompt cuando:
-    - `AI_USE_WEB_SEARCH=1` y `ai_allow_external=true`.
-    - Se pasa el rol del usuario (`sess.user.role`) al tool.
-  - Auditoría: incluye `web_search_query` y `web_search_hits` cuando hay búsqueda web, además de `prompt_hash`, `fields_generated` y `source_file` (si se generó `.txt` de fuentes).
+- Header: `Authorization: Bearer <JWT>`.
+- Claims requeridos: `iss`, `aud`, `sub`, `role`, `iat`, `exp`, `jti`.
+- El rol no forma parte de los argumentos visibles para el modelo.
+- El cliente filtra tools y el servidor vuelve a autorizar cada llamada.
+- Cada servidor filtra también `tools/list` según el rol autenticado, evitando revelar tools no autorizadas a clientes MCP externos.
+- Rate limiting en memoria por proceso durante desarrollo.
+- Auditoría estructurada sin tokens ni parámetros sensibles.
+- `X-MCP-Token` solo es aceptado por los adaptadores legacy; los clientes MCP nuevos usan Bearer.
 
-## Variables de entorno (resumen)
-- `MCP_PRODUCTS_URL`: endpoint del server MCP de productos.
-- `MCP_WEB_SEARCH_URL`: endpoint del server MCP de búsqueda web.
-- `AI_USE_WEB_SEARCH`: `0/1|true/false|yes/no` para activar búsqueda web en enrich.
-- `AI_WEB_SEARCH_MAX_RESULTS`: entero, top N resultados a anexar al prompt (default 3).
-- `ai_allow_external` (configuración de `agent_core.config.Settings`): debe ser `true` para permitir llamadas externas.
+## Configuración
 
-## Seguridad y roles
-- MVP: autorización basada en el campo `user_role` en los parámetros del tool.
-- Próximos pasos (obligatorios antes de exponer externamente):
-  - Token firmado (HMAC/JWT) con claims (`role`, expiración).
-  - Lista blanca de tools por rol y rate limiting por IP/rol.
-  - Auditoría estructurada: `tool_name`, `elapsed_ms`, `status`/`error`.
+```env
+MCP_PRODUCTS_URL=http://localhost:8100/mcp
+MCP_WEB_SEARCH_URL=http://localhost:8102/mcp
+MCP_PROTOCOL_VERSION=2025-11-25
+MCP_JWT_ISSUER=growen-api
+MCP_PRODUCTS_JWT_AUDIENCE=growen-mcp-products
+MCP_WEB_SEARCH_JWT_AUDIENCE=growen-mcp-web-search
+MCP_TOOL_CATALOG_TTL_SECONDS=60
+MCP_RATE_LIMIT_PER_MINUTE=60
+MCP_LEGACY_RPC_ENABLED=0
+# Solo al exponer detrás de proxy/LAN; listas explícitas separadas por coma
+MCP_ALLOWED_HOSTS=
+MCP_ALLOWED_ORIGINS=
+```
+
+`MCP_PRODUCTS_SECRET_KEY` y `MCP_WEB_SEARCH_SECRET_KEY` deben ser aleatorios, diferentes y tener al menos 32 bytes. Cada servidor valida una audience y un `kid` propios; durante una rotación puede configurarse únicamente la clave anterior correspondiente. El bootstrap genera valores locales sin mostrarlos.
+
+El rate limiting y la revocación de `jti` usan Redis en Compose. Si Redis falla, el control falla cerrado. El backend en memoria queda limitado a desarrollo y tests de un solo proceso.
+
+La publicación remota no está habilitada por esta autenticación interna. Antes de exponer `/mcp` fuera de loopback o de la red privada se debe incorporar OAuth 2.1, metadata del recurso protegido y tokens ligados a cada recurso MCP.
+
+La protección contra DNS rebinding está activa. Por defecto acepta únicamente loopback y los nombres internos de Compose; cualquier hostname u origen adicional debe declararse explícitamente con las variables anteriores.
+
+## Compatibilidad y retiro del RPC
+
+`POST /invoke_tool` emite warnings, incrementa `legacy_invocations_total` (visible en `/health`) y está marcado deprecado. No se permiten consumidores nuevos. Se eliminará cuando todo el repositorio use `/mcp` y no se observen llamadas legacy durante dos semanas de pruebas.
 
 ## Testing
-- Unit/integración recomendadas:
-  - Mock de red con `respx` para las llamadas HTTP de los MCP hacia la API principal.
-  - Pruebas de roles (403) y parámetros faltantes (400).
-  - Simular fallos de red (timeouts) y validar que el resultado sea `{ error: 'tool_network_failure' }` en la API consumidora.
-- La API principal ya contempla degradaciones (maneja errores devolviendo estructuras con `error` en contexto para no romper prompts).
 
-## Roadmap MCP
-- Autenticación mediante token firmado (HMAC/JWT) y whitelists por rol.
-- Métricas: invocaciones por tool, latencia p50/p95, tasa de error, ranking de queries.
-- Caching de resultados para `search_web` y consultas internas frecuentes.
-- Consolidar documentación viva con matrices rol→tool y SLA por entorno.
-
-## Troubleshooting
-- `403 rol insuficiente`: revisar `user_role` enviado al tool.
-- `502 tool failure` o `{ error: 'tool_network_failure' }`: validar `MCP_*_URL`, conectividad y timeouts.
-- El enrich no adjunta resultados web: verificar `AI_USE_WEB_SEARCH` y `ai_allow_external=true` (Settings). También revisar `AI_WEB_SEARCH_MAX_RESULTS`.
-- Fuentes `.txt` no generadas: la generación depende de que la IA devuelva un objeto `"Fuentes"` en el JSON; el backend registra `num_sources` en la auditoría.
-
-## Healthcheck y monitoreo
-- Todos los MCP deberían exponer `GET /health` devolviendo `{ "status": "ok" }`.
-- MCP Web Search incluye ese endpoint y la imagen Docker define `HEALTHCHECK` para que Docker marque el contenedor como `healthy`.
-- La API principal realiza un preflight (GET `/health`, timeout ~2s) antes de invocar `search_web`; si el server está `unhealthy` se omite la búsqueda y se continúa en modo fallback (sin bloquear el enriquecimiento).
-
-## Administración desde el Panel de Admin
-
-Los servidores MCP se pueden monitorear y controlar desde el panel de administración:
-
-- **Ruta**: `/admin/servicios/mcp-tools`
-- **Acceso**: Solo usuarios con rol `admin`
-- **Funcionalidades**:
-  - Ver estado de MCP Products (puerto 8100) y MCP Web Search (puerto 8102)
-  - Indicadores visuales: 🟢 corriendo/saludable, 🟡 corriendo/sin respuesta, 🔴 detenido
-  - Botones para iniciar/detener contenedores Docker directamente desde la UI
-  - Health checks automáticos cada 15 segundos
-
-**API Backend**:
-- `GET /admin/mcp/health` → Estado de todos los servidores MCP
-- `POST /admin/mcp/{name}/start` → Inicia contenedor Docker
-- `POST /admin/mcp/{name}/stop` → Detiene contenedor Docker
-
-**Inicio manual por terminal**:
-```bash
-docker compose up -d mcp_products mcp_web_search
+```powershell
+.\scripts\check-quality.ps1
 ```
+
+La suite incluye seguridad, roles, adaptador legacy, catálogo dinámico y contratos MCP. El workflow remoto es manual y solo consume créditos al ejecutarlo desde GitHub Actions.

@@ -5,6 +5,14 @@
 
 # Importación de PDF
 
+## Perfil documental Santa Planta v2
+
+El endpoint histórico conserva su nombre por compatibilidad, pero acepta `application/pdf`, `image/jpeg` e `image/png`. Las imágenes se convierten temporalmente para OCR y el archivo original se guarda sin transformaciones. El límite por defecto es 20 MiB.
+
+La deduplicación usa `(supplier_id, remito_number)` y SHA-256 del adjunto. Un reintento exitoso responde `idempotent=true` con el `purchase_id` existente. Las reglas del documento se configuran en `config/suppliers/santa-planta.yml`.
+
+Para el remito `0001-00099596`, el contrato esperado es fecha `05/08/2025`, diez líneas, bonificaciones preservadas y total documentado `$155.332,00`.
+
 El proceso de importación de PDF sigue el siguiente pipeline:
 1. `pdfplumber` extrae texto y se detectan encabezado (remito/fecha) y anchors del pie: “Cantidad De Items: N” e “Importe Total: $ …”. Estos datos funcionan como control de calidad del parser.
 2. `pdfplumber` intenta extraer tablas; se unen títulos multilínea (wrap) hasta encontrar una fila válida (SKU/Cant./números). Se generan métricas y muestras de filas.

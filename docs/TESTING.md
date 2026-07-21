@@ -5,6 +5,43 @@
 
 # Testing en Growen
 
+## Suite focalizada de Compras v2
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_purchase_domain.py tests\test_purchases_api.py tests\test_purchase_validation.py tests\test_dedupe_import_lines.py tests\test_purchases_iaval.py tests\test_auth_session_cookie.py -q -p no:randomly
+cd frontend-vue
+npm.cmd test
+npm.cmd run build
+```
+
+La cobertura incluye validación de cantidades enteras, bonificaciones, alta automática, idempotencia, ledger, historial e inmutabilidad posterior a confirmación.
+
+## Suite focalizada de Productos Vue y alta canónica masiva
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_canonical_batch.py tests\test_canonical_products_api.py tests\test_canonical_sequence.py -q -p no:randomly
+cd frontend-vue
+npm.cmd test -- src/modules/products
+npm.cmd run typecheck
+npm.cmd run build
+```
+
+El script `npm test` de `frontend-vue/package.json` ya incluye `vitest --run`. Para ejecutar archivos o carpetas concretos se pasan únicamente sus rutas después de `--`; no debe agregarse un segundo `--run`, porque Vitest rechaza valores duplicados para esa opción.
+
+Cuando se agreguen opciones discriminadas a un selector Vuetify —por ejemplo, un elemento sintético `create: true`— se debe declarar explícitamente el tipo del arreglo antes de insertar la opción y ejecutar `npm.cmd run typecheck`. Las pruebas de componente por sí solas pueden aprobar aunque la inferencia estructural falle durante `vue-tsc`.
+
+Los componentes cuya falla depende de escribir, abrir el menú o seleccionar una opción deben montarse con Vuetify real. El harness de Vitest debe cargar `vite-plugin-vuetify`, incluir `vuetify` como dependencia inline y proveer los APIs de navegador ausentes en JSDOM (`ResizeObserver` o `visualViewport` cuando el componente los use). Al activar auto-imports globales, ejecutar también las pruebas vecinas: un componente real puede reemplazar un stub shallow sin que el test lo advierta explícitamente.
+
+Si una corrida consolidada falla y luego se corrige sólo el módulo afectado, registrar ambos resultados por separado y volver a ejecutar la selección consolidada antes de declararla completamente aprobada.
+
+Para cambios en autenticación o mutaciones protegidas, sumar siempre:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_auth_session_cookie.py -q -p no:randomly
+```
+
+`@pytest.mark.no_auth_override` deshabilita tanto el rol simulado como el bypass CSRF. Un test de sesión debe cubrir login, `GET /auth/me` y al menos una mutación enviando la cookie y `X-CSRF-Token` reales.
+
 Este documento centraliza todos los lineamientos, convenciones y troubleshooting relacionados con la ejecución de tests en el proyecto.
 
 ## Requisitos previos
@@ -16,14 +53,14 @@ Este documento centraliza todos los lineamientos, convenciones y troubleshooting
 ```powershell
 # Opción 1: Activar venv explícitamente (RECOMENDADO para agentes)
 & C:/Proyectos/NiceGrow/Growen/.venv/Scripts/Activate.ps1
-pytest tests/ -v
+.\.venv\Scripts\python.exe -m pytest tests/ -v
 
 # Opción 2: Usar el ejecutable Python de la venv directamente
 C:/Proyectos/NiceGrow/Growen/.venv/Scripts/python.exe -m pytest tests/ -v
 
 # Opción 3: Desde directorio del proyecto con venv activada
 .venv\Scripts\activate
-pytest -q
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 **NUNCA ejecutar `pytest` directamente sin verificar que la venv esté activa.** Hacerlo puede usar un intérprete incorrecto o dependencias del sistema.
@@ -44,58 +81,58 @@ Verificar que `pytest.ini` esté configurado correctamente (ya incluido en el re
 
 ```powershell
 # Todos los tests (modo silencioso)
-pytest -q
+.\.venv\Scripts\python.exe -m pytest -q
 
 # Todos los tests con verbose
-pytest tests/ -v
+.\.venv\Scripts\python.exe -m pytest tests/ -v
 
 # Un archivo específico
-pytest tests/test_canonical_helpers.py -v
+.\.venv\Scripts\python.exe -m pytest tests/test_canonical_helpers.py -v
 
 # Tests por patrón de nombre
-pytest -k "canonical" -v
+.\.venv\Scripts\python.exe -m pytest -k "canonical" -v
 
 # Tests por marker
-pytest -m "not performance" -v
-pytest -m "slow" -v
+.\.venv\Scripts\python.exe -m pytest -m "not performance" -v
+.\.venv\Scripts\python.exe -m pytest -m "slow" -v
 ```
 
 ### Ejecución por carpeta/tipo
 
 ```powershell
 # Tests unitarios (sin DB, rápidos)
-pytest tests/unit/ -v
+.\.venv\Scripts\python.exe -m pytest tests/unit/ -v
 
 # Tests de routers/endpoints
-pytest tests/routers/ -v
+.\.venv\Scripts\python.exe -m pytest tests/routers/ -v
 
 # Tests de performance (requieren más tiempo)
-pytest tests/performance/ -v -m performance
+.\.venv\Scripts\python.exe -m pytest tests/performance/ -v -m performance
 
 # Tests E2E
-pytest tests/e2e/ -v
+.\.venv\Scripts\python.exe -m pytest tests/e2e/ -v
 ```
 
 ### Opciones útiles
 
 ```powershell
 # Con traceback corto (recomendado para CI)
-pytest --tb=short
+.\.venv\Scripts\python.exe -m pytest --tb=short
 
 # Con traceback largo (debug)
-pytest --tb=long
+.\.venv\Scripts\python.exe -m pytest --tb=long
 
 # Solo primeros N fallos
-pytest --maxfail=3
+.\.venv\Scripts\python.exe -m pytest --maxfail=3
 
 # Con cobertura
-pytest --cov=services --cov-report=html
+.\.venv\Scripts\python.exe -m pytest --cov=services --cov-report=html
 
 # Sin paralelismo (más estable para DB compartida)
-pytest -p no:randomly
+.\.venv\Scripts\python.exe -m pytest -p no:randomly
 
 # Ignorar carpeta específica
-pytest tests/ --ignore=tests/performance
+.\.venv\Scripts\python.exe -m pytest tests/ --ignore=tests/performance
 ```
 
 ---
@@ -104,7 +141,7 @@ pytest tests/ --ignore=tests/performance
 
 ```
 tests/
-├── conftest.py          # Fixtures compartidas (db_session, test_client, etc.)
+├── conftest.py          # Fixtures compartidas (db_session, client, admin_client, etc.)
 ├── fixtures/            # Datos de prueba (JSON, CSV, etc.)
 ├── html_fixtures/       # HTML de prueba para parsers
 ├── unit/                # Tests unitarios puros (sin DB)
@@ -127,6 +164,11 @@ tests/
 
 ### `db_session` (conftest.py principal)
 
+La base SQLite de pruebas usa `sqlite+aiosqlite:///:memory:` junto con
+`StaticPool`. No debe reemplazarse por una URI nombrada `file:...`: en Windows,
+SQLAlchemy puede interpretarla como una ruta física y provocar carreras entre
+procesos durante `create_all` y `drop_all`.
+
 Sesión async SQLite en memoria para tests aislados. Se crea y destruye por cada test.
 
 ```python
@@ -138,16 +180,15 @@ async def db_session():
     # Drop all tables
 ```
 
-### `test_client`
+### Clientes HTTP
 
-Cliente HTTP síncrono para probar endpoints FastAPI:
+La fixture compartida principal es `client`, un `httpx.AsyncClient` con `ASGITransport`. `admin_client` conserva `TestClient` para compatibilidad heredada:
 
 ```python
-@pytest.fixture
-def test_client():
-    from fastapi.testclient import TestClient
-    from services.api import app
-    return TestClient(app)
+@pytest_asyncio.fixture
+async def client():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        yield ac
 ```
 
 ### Fixtures de datos
@@ -255,6 +296,21 @@ def test_requires_real_postgres():
     ...
 ```
 
+Las pruebas puras de filesystem o transformaciones que no requieren ORM pueden usar `@pytest.mark.no_db`; el fixture global omite entonces la creación del esquema SQLite. No usar este marker en routers, servicios o lógica que consulte persistencia.
+
+### Migración completa sobre PostgreSQL vacío
+
+La prueba `tests/test_migrations_fresh_postgres.py` valida la cadena Alembic real sin tocar la base configurada: crea una base temporal con prefijo controlado, ejecuta `upgrade head`, audita objetos críticos y la elimina al finalizar.
+
+```powershell
+$env:MIGRATION_TEST_POSTGRES_URL="postgresql+psycopg://<usuario>:<password>@127.0.0.1:5433/growen"
+.\.venv\Scripts\python.exe -m pytest tests/test_migrations_fresh_postgres.py -v -p no:randomly
+```
+
+- No guardar la URL real en archivos versionados.
+- El usuario PostgreSQL debe poder crear/eliminar bases temporales y habilitar la extensión `vector`.
+- Sin `MIGRATION_TEST_POSTGRES_URL`, el test PostgreSQL se omite; el test de anonimización del auditor sigue ejecutándose.
+
 ---
 
 ## Escribir nuevos tests
@@ -302,6 +358,16 @@ class TestMyFeature:
 @pytest.mark.no_auth_override # No forzar admin en auth
 ```
 
+El marker `no_auth_override` también restaura la validación CSRF real. No agregar manualmente overrides dentro de esos tests salvo que el objetivo sea comprobar un bypass específico.
+
+### Serialización de pytest en el workspace compartido
+
+No lanzar dos procesos pytest simultáneos sobre el mismo checkout. El arranque de la aplicación ejecuta diagnósticos y ambos procesos pueden competir por `__pycache__`, la SQLite compartida o `app.dependency_overrides`, produciendo `WinError 5`, timeouts o resultados contaminados. Se puede ejecutar `npm.cmd run build` en paralelo con un único pytest porque no comparten esos recursos Python.
+
+### Deuda conocida del cliente síncrono
+
+Los tests que aún usan `fastapi.testclient.TestClient` emiten `StarletteDeprecationWarning` por la transición futura a `httpx2`. No bloquea la suite actual; los tests nuevos deben preferir la fixture async `client`.
+
 ### Fixtures personalizadas
 
 ```python
@@ -325,19 +391,15 @@ async def product_with_sources(db_session):
 
 ---
 
-## CI/CD
+## Quality gate local y CI manual
 
-### Comando recomendado para CI
+La entrada única es:
 
-```bash
-pytest tests/ \
-    --ignore=tests/performance \
-    --ignore=tests/manual \
-    -m "not slow" \
-    --tb=short \
-    --maxfail=10 \
-    -q
+```powershell
+.\scripts\check-quality.ps1
 ```
+
+El workflow `.github/workflows/quality-manual.yml` ejecuta la misma entrada en un runner limpio y solo se activa mediante `workflow_dispatch`. No se ejecuta automáticamente por push o pull request, evitando consumo involuntario de créditos.
 
 ### Variables de entorno para CI
 
@@ -364,10 +426,10 @@ Los tests en `tests/performance/` tienen fixtures especiales en su propio `conft
 
 ```powershell
 # Solo performance
-pytest tests/performance/ -v -m performance --timeout=300
+.\.venv\Scripts\python.exe -m pytest tests/performance/ -v -m performance --timeout=300
 
 # Excluir performance (run normal)
-pytest tests/ --ignore=tests/performance
+.\.venv\Scripts\python.exe -m pytest tests/ --ignore=tests/performance
 ```
 
 ---
@@ -383,4 +445,4 @@ pytest tests/ --ignore=tests/performance
 
 ---
 
-Actualizado: 2025-11-24
+Actualizado: 2026-07-14

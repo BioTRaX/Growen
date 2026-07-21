@@ -38,9 +38,9 @@ El sistema de descubrimiento automático de fuentes de precios utiliza **MCP Web
 # agent_core/detect_mcp_url.py
 def get_mcp_web_search_url() -> str:
     if is_running_in_docker():
-        return "http://mcp_web_search:8002/invoke_tool"
+        return "http://mcp_web_search:8002/mcp"
     else:
-        return "http://localhost:8102/invoke_tool"
+        return "http://localhost:8102/mcp"
 ```
 
 **Resultado**: 0% errores de red (antes: 100% de fallas)
@@ -217,7 +217,7 @@ Busca en el snippet:
 ```env
 # .env (para desarrollo local)
 # MCP_WEB_SEARCH_URL comentada para usar auto-detección
-# MCP_WEB_SEARCH_URL=http://localhost:8102/invoke_tool
+# MCP_WEB_SEARCH_URL=http://localhost:8102/mcp
 
 AI_USE_WEB_SEARCH=1
 AI_WEB_SEARCH_MAX_RESULTS=5

@@ -5,6 +5,12 @@
 
 # Chatbot Growen
 
+## Chat Inbox y calidad supervisada (2026-07-18)
+
+`/admin/chats` permite a staff buscar, filtrar, asignar, etiquetar y revisar conversaciones. Feedback, intención, sentimiento, confianza, modelo y señales problemáticas se conservan en PostgreSQL.
+
+Los prompts usan el ciclo candidato, evaluación, aprobación y activación. Sólo admin puede promoverlos; se exige seguridad aprobada y mejora compuesta mínima del 5 % contra la versión activa. La versión anterior queda reactivable y cada respuesta registra la versión utilizada en `chat_messages.meta`.
+
 > **Documento consolidado** - Incluye información de intents, memoria y sesiones persistentes.
 
 ## Resumen
@@ -18,11 +24,11 @@ El chatbot Growen responde en español rioplatense con tono casual y empático. 
 Desde octubre 2025, las consultas de productos migran de `price_lookup.py` (DEPRECATED) a tool-calling:
 
 - **Provider**: OpenAI decide cuándo invocar `get_product_info` o `get_product_full_info`
-- **MCP Server**: `POST http://mcp_products:8001/invoke_tool`
+- **MCP Servers**: Streamable HTTP en `/mcp`; Growen descubre `tools/list` y ejecuta `tools/call`.
 - **Roles**: `admin|colaborador` acceden a tool avanzada; otros solo `get_product_info`
 - **Endpoints afectados**: `POST /chat`, `WS /ws`, `POST /telegram/webhook/*`
 
-> ⚠️ **Estado (2025-11-19)**: El router `ai/router.py` requiere refactorización asíncrona. Ver "Etapa 0" en `Roadmap.md`.
+> **Estado (2026-07-14)**: Router asíncrono y descubrimiento MCP implementados sobre Python 3.14.6. El retiro legacy depende de la ventana de observación documentada.
 
 ### Consideraciones de Diseño
 

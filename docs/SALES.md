@@ -166,6 +166,16 @@ Nueva migración `20251130_sales_channels_and_costs.py`:
 
 Actualizar `MIGRATIONS_NOTES.md` si se ajustan más cambios estructurales.
 
+## Evolución Fase 4 (2026-07-17)
+
+El flujo canónico crea un borrador con `POST /sales`, calcula previamente con `POST /sales/quote` y confirma con `POST /sales/{id}/confirm`. La creación admite `Idempotency-Key`; todas las mutaciones exigen rol y CSRF. Las cantidades aceptan como máximo dos decimales y los totales usan `Decimal` con redondeo comercial.
+
+Los pedidos pueden reservar stock mediante `/reserve` y liberarlo con `/release-reservation`. Las reservas vencidas se excluyen inmediatamente de la disponibilidad y se marcan `EXPIRED` durante la siguiente operación transaccional. La confirmación consume reservas y actualiza stock y ledger en la misma transacción.
+
+Las ventas identificadas generan cuenta corriente append-only. Confirmación crea el cargo; pagos, devoluciones y anulaciones crean créditos compensatorios. Los reportes `/sales/reports/margin` y `/sales/reports/channels` exponen margen, cobertura de costo y distribución comercial.
+
+Configuración: `SALES_RATE_LIMIT_BACKEND`, `SALES_RATE_LIMIT_PER_MINUTE`, `SALES_RESERVATION_TTL_MINUTES`, `SALES_CREDIT_LIMIT_ENFORCED`, `SALES_ALLOW_NEGATIVE_STOCK` y `SALES_ATTACHMENTS_MAX_MB`.
+
 ## Testing
 Pruebas actuales:
 - `test_sales_metrics_and_limits.py`: métricas y rate limiting.

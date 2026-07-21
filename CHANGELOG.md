@@ -4,7 +4,110 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-07-20 — Migración de Stock a Vue preparada para smoke
+
+- Se incorporaron vistas Vue para Stock y Faltantes con filtros persistidos en URL, búsqueda cancelable, paginación, permisos por rol y descargas mediante blobs.
+- El stock manual acepta dos decimales, usa control optimista con `expected_stock`, bloquea la fila y registra `manual_adjustment` en ledger junto con auditoría atómica.
+- Faltantes acepta cantidades decimales, bloquea el producto y registra saldo/delta independientes; la UI advierte y confirma saldos negativos.
+- `GET /stock/export.csv` y `GET /stock/export.pdf` quedaron operativos; XLSX, CSV y PDF comparten consulta, filtros y reglas de precio/categoría/SKU. PDF usa ReportLab sin dependencia nueva.
+- Productos Vue incorpora enriquecimiento masivo, completar precios faltantes, generación de catálogo e histórico/descarga de catálogos.
+- El módulo permanece `legacy/pending`: React sigue atendiendo producción hasta activar Productos/Catálogos Vue y completar smoke visual por rol.
+- Validación: 65/65 Vitest, 12/12 pytest funcionales y contrato CSRF aislado, typecheck y builds Vue/React aprobados. El rerun conjunto posterior expuso el conflicto heredado del fixture SQLite compartido, no una falla funcional del endpoint.
+
+## 2026-07-20 — Recuperación operativa del batch canónico
+
+- DB y Redis conservan bindings loopback mediante `host_access` sin retirar el aislamiento de la red `backend`.
+- Los jobs canónicos `FAILED` sin filas procesadas se reencolan idempotentemente con la misma clave y bloqueo transaccional.
+- Vue ofrece **Reintentar lote** para fallos de infraestructura previos al procesamiento.
+- Se agregaron regresiones de red Compose y reencolado batch; aprobaron suites focales backend y typecheck Vue.
+- Las operaciones Compose del panel se ejecutan mediante `asyncio.to_thread`; los fallos revierten la sesión antes de persistir `ServiceLog`.
+- El worker `catalog` emite eventos NDJSON por actor, job e ítem con duración y resultado; `state.json` referencia logs de procesos reutilizados.
+- `start-dev.ps1 -WithCatalogWorker` inicia/verifica Redis+Dramatiq y reconcilia DB cuando Compose figura activo sin puerto host.
+- El inicio administrativo de `catalog_worker` verifica Redis y lo inicia mediante Compose cuando falta.
+- El worker local deja de usar pipes sin lector: persiste stdout/stderr en `logs/worker_catalog.log`; el launcher advierte si compite con Dramatiq Docker.
+- Se crearon la skill canónica `diagnose-local-services`, su adaptador y controles adicionales en `create-service`.
+- Se agregó `docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md`.
+
+## 2026-07-20 — Retrospectiva de taxonomía, tags y QA agéntico
+
+- Se documentaron entregas, fallos, soluciones y límites verificables de la convivencia entre taxonomía plana y tags.
+- Testing formaliza el montaje con Vuetify real, los polyfills JSDOM y la distinción entre rerun focal y suite consolidada.
+- La skill Vue exige buscar consumidores antes de cambiar contratos, revisar el impacto de auto-imports y ejecutar smoke autenticado con navegador cuando esté disponible.
+- La skill de migraciones clasifica `alembic check` por objetos del cambio y exige head y objetos concretos en la prueba PostgreSQL limpia.
+- Se corrigieron referencias heredadas que aún presentaban categoría/subcategoría como jerarquía funcional.
+
+## 2026-07-18 — Taxonomía plana y tags en Productos Vue
+
+- Categoría y subcategoría pasan a ser clasificaciones planas e independientes mediante `categories.kind`; `parent_id` permanece como compatibilidad temporal.
+- Productos internos incorporan `subcategory_id`; los canónicos requieren ambos tipos y exportan `Categoría > Subcategoría`.
+- Vue recupera creación escribible de ambas taxonomías y gestión de tags individual, masiva y por fila del wizard.
+- El batch persiste `tag_names`, combina tags comunes/particulares e inserta tags y relaciones idempotentes en la transacción canónica.
+- `/catalog/search` busca por tags con AND entre términos; las tres tools MCP de Productos devuelven `tags`.
+- Alembic agrega unicidad normalizada por tipo/nombre y aborta ante colisiones sin fusionar datos.
+- El alta inline normaliza los valores `Decimal` del audit para que una falla de serialización no deje la sesión en rollback pendiente.
+
+## 2026-07-18 — Finalización del panel administrativo Vue
+
+- Servicios Vue incorpora previsualización y limpieza de logs físicos con retención, eliminación de carpetas completas `logs/dev/<ejecución>` y protección de ejecuciones activas e historiales auditables.
+- Workers diferencia el borrado de `ServiceLog` en PostgreSQL; Imágenes limpia conjuntamente `ImageJobLog`, NDJSON y snapshots.
+- `cleanup_logs.py`, `clean_all_logs.ps1`, `clear_logs.py` y `clear_backend_log.py` se alinean con la estructura vigente de `start-dev.ps1`; se retiró la afirmación incorrecta de que `docker logs --tail 0` trunca Docker.
+- Se activaron en Vue Drive Sync, Scheduler, Conocimiento, Imágenes administrativas, Diagnóstico de catálogos, Dashboard técnico y Chat Inbox.
+- Las revisiones `20260718_admin_operations_v1` y `20260718_admin_jsonb_v2` incorporan ejecuciones y elementos de Drive, configuración/historial del Scheduler, tareas RAG, eventos de Catálogos, feedback de Chat y versiones/evaluaciones de prompts con metadatos JSONB.
+- Todas las mutaciones administrativas aplican sesión, rol y CSRF; Drive autentica el WebSocket antes de aceptar conexiones.
+- Catálogos elimina la purga automática y expone logs persistentes descargables en NDJSON/CSV.
+- Chat incorpora asignación, tags, acciones masivas, clasificación, métricas y promoción reversible de prompts con aprobación admin.
+- Se documentó operación, errores, smoke y rollback en `docs/ADMIN_VUE_OPERATIONS.md`.
+
+## 2026-07-18 — QA de Productos y conocimiento agéntico
+
+- Se documentó el cierre técnico del catálogo Vue, alta masiva canónica y creación inline de categorías.
+- Las guías distinguen `GET /catalog/next-seq` heredado de `POST /canonical-products/sku-preview`; ambos son no reservantes.
+- Testing documenta la sintaxis focal de Vitest y la necesidad de ejecutar `vue-tsc` para opciones discriminadas de componentes.
+- QA frontend incorpora preflight de Chrome, alcance de la validación HTTP y auditoría npm bajo entornos restringidos.
+- El workflow vuelve a identificar `start-dev.ps1` y Vue 5176 como inicio canónico, diferenciándolo del launcher React heredado.
+- Se agregó la skill canónica `vue-module-migration` y su adaptador temporal para estandarizar futuros cortes React → Vue.
+- Se agregó `docs/RETROSPECTIVE_PRODUCTS_20260718.md`.
+
+## 2026-07-17 — QA de Compras, sesión y Proveedores
+
+- El marker `no_auth_override` deja de desactivar CSRF y representa el ciclo real de autenticación.
+- La regresión de sesión valida login, `/auth/me` y una mutación protegida.
+- Los mocks iAVaL se alinearon con `AIRouter.run_async`.
+- Se documentaron la carrera de procesos pytest paralelos, la deuda de `TestClient` y los prerrequisitos locales de OCR.
+- Se agregó `docs/RETROSPECTIVE_PURCHASES_20260717.md` como registro técnico de la entrega.
+
+## 2026-07-16 — Compras Vue e ingesta transaccional Santa Planta
+
+- Compras crea productos y ofertas faltantes durante la confirmación, nunca durante el borrador.
+- Confirmación y rollback registran movimientos `purchase`/`purchase_rollback` en `stock_ledger`.
+- Se agregaron snapshots documentales, hash SHA-256, costo bruto/neto, bonificación e historial por producto.
+- El importador admite PDF, JPG y PNG, deduplica idempotentemente por remito o hash y conserva el original.
+- Vue incorpora listado, importación, revisión, confirmación, impacto e historial básico de productos.
+- Migración: `20260716_purchase_ingestion_v2`.
+- Se corrigió la cookie de autenticación: el navegador recibe el SID crudo y el servidor conserva/verifica sólo su hash, evitando 403 falsos tras iniciar sesión.
+- Compras reemplaza el ID manual por un selector buscable y habilita alta rápida; `/proveedores` queda activo en Vue con búsqueda y creación básica.
+
 ## [Unreleased]
+### Added
+- MCP real mediante SDK oficial, Streamable HTTP en `/mcp`, descubrimiento dinámico y cliente central.
+- Seguridad MCP compartida con JWT Bearer, issuer/audience por servidor, rotación por `kid`, revocación JTI, rate limiting Redis y auditoría seudonimizada.
+- Bootstrap Python 3.14.6, modos MCP en `start-dev.ps1`, detención segura y quality gate local/CI manual.
+- Skills canónicas descubribles bajo `.agents/skills/`.
+- Dependencias `mcp>=1.27,<2` y `PyJWT>=2.8,<3`, documentadas para API y servidores MCP.
+- Locks reproducibles con hashes, SBOM CycloneDX y auditoría local con Ruff, Bandit y `pip-audit`.
+
+### Changed
+- OpenAI usa cliente asíncrono en `generate_async` y obtiene schemas desde MCP.
+- `/invoke_tool` queda deprecado durante la ventana de compatibilidad.
+- Los puertos Docker quedan ligados a loopback; los contenedores MCP son read-only, sin capabilities y sin privilegios adicionales.
+- El workflow manual usa permisos mínimos y GitHub Actions fijadas a commits inmutables.
+- Las sesiones de chat persisten identificadores hasheados y las salidas de tools externas se tratan como datos no confiables y acotados.
+
+### Security
+- Se retiraron `python-jose/ecdsa` y `PyPDF2` al detectarse vulnerabilidades; JWT usa PyJWT y PDF usa `pypdf`.
+- Web Search limita destinos, redirects, tiempos, tamaño y consultas con material sensible.
+- El bypass de roles por headers queda disponible únicamente bajo entorno de tests.
+
 ### Added
 - **Estilización de nombres de productos canónicos** (Title Case):
   - Función `stylize_product_name()` en `db/text_utils.py` convierte nombres en mayúsculas a formato legible.

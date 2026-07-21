@@ -5,6 +5,16 @@
 
 # Endpoints de productos (UI)
 
+## Taxonomía tipada y tags (2026-07-18)
+
+- `GET /categories` y `GET /categories/search` aceptan `kind=category|subcategory`.
+- `POST /categories` recibe `{name, kind}`; `parent_id` se acepta temporalmente e infiere subcategoría si falta `kind`.
+- `POST /products` y `PATCH /products/{id}` admiten `category_id` y `subcategory_id`; en altas individuales son opcionales. El alta también admite `tag_names`.
+- `POST /canonical-products/batch-job` persiste `tag_names` por ítem y exige IDs cuyos tipos sean correctos, sin relación padre-hijo.
+- La idempotencia devuelve el lote existente sin duplicarlo. Si ese lote está `FAILED` con cero ítems procesados, una nueva solicitud con el mismo `client_request_id` lo restablece a `QUEUED` y vuelve a despacharlo; esto recupera fallos previos de Redis sin crear otro lote.
+- `GET /catalog/search` aplica AND entre términos y permite que cada término coincida por nombre, descripción, SKU o tag.
+- Las mutaciones de tags viven bajo `/tags`, requieren `colaborador|admin` y CSRF; la lectura admite usuarios autenticados.
+
 ## GET /products
 Lista de productos (ofertas de proveedores vinculadas a productos internos) con filtros.
 
@@ -51,11 +61,11 @@ Tags:
 ---
 
 ## GET /stock/export.xlsx
-Exporta un XLS con columnas: `NOMBRE DE PRODUCTO`, `PRECIO DE VENTA`, `CATEGORIA`, `SKU`.
+Exporta un XLS con columnas: `NOMBRE DE PRODUCTO`, `PRECIO DE VENTA`, `CATEGORIA`, `SKU PROPIO`.
 
 Reglas de datos:
 - Nombre y precio: si el item tiene canónico, se usa el nombre y precio del canónico. Si no, se usa la información del proveedor/interno.
-- Categoría: preferir taxonomía del canónico. Si hay categoría y subcategoría, mostrar `Categoria > Subcategoria`. Si sólo hay categoría, `Categoria > Categoria`. Si no hay canónico, se usa el path del producto interno.
+- Categoría: preferir taxonomía del canónico. Si hay categoría y subcategoría, mostrar `Categoria > Subcategoria`; si sólo existe una clasificación, se muestra una sola vez. Si no hay canónico, se usa la taxonomía del producto interno.
 ## GET /debug/enrich/{id}
 Solo administradores. Endpoint de diagnóstico para el flujo de enriquecimiento IA. No persiste cambios.
 
@@ -84,10 +94,12 @@ Estilos aplicados:
 ---
 
 ## GET /stock/export.csv
-Exporta un CSV con las mismas columnas y reglas que el XLS: `NOMBRE DE PRODUCTO`, `PRECIO DE VENTA`, `CATEGORIA`, `SKU`.
+Exporta un CSV con las mismas columnas y reglas que el XLS: `NOMBRE DE PRODUCTO`, `PRECIO DE VENTA`, `CATEGORIA`, `SKU PROPIO`.
 
 Notas:
 - Misma lógica de selección (canónico primero; fallback a proveedor/interno).
+- Codificación UTF-8 con BOM para compatibilidad con Excel.
+- Admite `q`, `supplier_id`, `category_id`, `stock`, `type`, `created_since_days`, `sort_by` y `order`.
 ---
 
 ## POST /products/{id}/enrich
@@ -184,12 +196,22 @@ Respuesta:
 ---
 
 ## GET /stock/export.pdf
-Actualmente devuelve 501 (no implementado). Para habilitar PDF con estilo oscuro sugerimos integrar WeasyPrint o ReportLab y reutilizar la misma selección de datos del XLS/CSV.
+Genera `stock.pdf` mediante ReportLab en A4 horizontal, con encabezado oscuro, tabla paginada y las mismas filas/columnas que XLSX y CSV. No requiere WeasyPrint.
 
-Mientras tanto, utilice `/stock/export.xlsx` o `/stock/export.csv`.
+Admite `q`, `supplier_id`, `category_id`, `stock`, `type`, `created_since_days`, `sort_by` y `order`. Los roles permitidos son `cliente`, `proveedor`, `colaborador` y `admin`.
+
+## PATCH /products/{id}/stock
+
+Requiere `colaborador` o `admin` y CSRF. Acepta `{ "stock": 10.25, "expected_stock": 10.00 }`; ambos valores admiten hasta dos decimales. `expected_stock` es opcional para compatibilidad con React e intents.
+
+La fila se bloquea hasta finalizar la transacción. Si el saldo leído cambió, responde 409 con `detail.message` y `detail.current_stock`, sin sobrescribir. Un ajuste exitoso crea exactamente un `StockLedger` con `source_type=manual_adjustment`, delta/saldo decimal y metadatos de valores anterior/nuevo y usuario, además del `AuditLog` correspondiente.
+
+## /stock/shortages
+
+`POST /stock/shortages`, `GET /stock/shortages` y `GET /stock/shortages/stats` requieren `colaborador` o `admin`; el POST también requiere CSRF global. La cantidad admite hasta dos decimales, el producto se bloquea al descontar y se permite saldo negativo con advertencia. No se incorpora conciliación en este corte.
 
 ## GET /catalog/next-seq
-Devuelve la próxima secuencia por categoría para proponer SKUs canónicos.
+Devuelve una estimación no reservante de la próxima secuencia por categoría para clientes heredados.
 
 Query:
 - category_id (opcional): si se omite, cuenta global (o 1) según implementación.
@@ -200,7 +222,9 @@ Respuesta:
 ```
 
 Uso típico:
-- La UI usa `next_seq` para previsualizar un SKU con la regla `XXX_####_YYY` (derivada de nombres de categoría/subcategoría). La generación y validación final ocurre en el backend al crear/editar el canónico.
+- React heredado puede usar `next_seq` para una vista previa con la regla `XXX_####_YYY`.
+- Vue usa `POST /canonical-products/sku-preview`, que permite previsualizar todas las filas del lote sin reservar números.
+- Ninguna vista previa debe persistirse como SKU definitivo. La asignación final ocurre en backend mediante `generate_canonical_sku()` dentro de la transacción de creación.
 
 ---
 

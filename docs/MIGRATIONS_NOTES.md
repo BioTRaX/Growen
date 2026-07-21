@@ -1,3 +1,95 @@
+<!-- NG-HEADER: Nombre de archivo: MIGRATIONS_NOTES.md -->
+<!-- NG-HEADER: Ubicación: docs/MIGRATIONS_NOTES.md -->
+<!-- NG-HEADER: Descripción: Notas técnicas sobre fixes recientes en migraciones Alembic -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
+# Notas de migraciones
+
+## 2026-07-18 — `20260718_product_taxonomy_tags_v1`
+
+Revisión posterior a `20260718_admin_jsonb_v2`. Agrega `categories.kind`, `products.subcategory_id` y `canonical_batch_job_items.tag_names`; incorpora índices únicos funcionales por `kind + lower(name)` y `lower(tags.name)`. Migra raíces a `category`, descendientes a `subcategory` y mueve productos asociados a una categoría hija hacia `subcategory_id`, resolviendo su raíz histórica para `category_id`.
+
+El preflight aborta si detecta colisiones normalizadas y no fusiona registros. El downgrade también aborta si existen subcategorías planas o tags batch que perderían significado. Orden de despliegue: Alembic, API/worker, Vue y MCP Products.
+
+Verificación local: upgrade incremental `20260718_admin_jsonb_v2` → `20260718_product_taxonomy_tags_v1`, head único y cadena completa aprobada sobre una base PostgreSQL temporal vacía, eliminada al finalizar.
+
+`alembic check` conserva drift histórico ya documentado en Mercado, defaults, proveedores e índices legacy; el reporte filtrado no detectó operaciones nuevas sobre `categories.kind`, `products.subcategory_id`, `canonical_batch_job_items.tag_names` ni los índices normalizados de esta revisión.
+
+Para revisiones futuras, la salida de `alembic check` debe clasificarse por objeto: primero los objetos creados o modificados por la revisión y luego el drift histórico ajeno. La prueba de PostgreSQL vacío debe verificar tanto el head esperado como columnas, índices y constraints del cambio. Una rerun focal posterior a un fix no debe reportarse como si se hubiera repetido toda la selección consolidada.
+
+## 2026-07-18 — `20260718_admin_operations_v1` y `20260718_admin_jsonb_v2`
+
+Revisión posterior a `20260717_sales_customers_v4`. Agrega `drive_sync_runs/items`, `scheduler_settings/runs`, `knowledge_index_tasks`, `catalog_generation_runs/events`, `chat_message_feedback`, `ai_prompt_versions/evaluations` y metadatos de clasificación/revisión en `chat_sessions`.
+
+La segunda revisión alinea los metadatos con `JSONBCompat` sobre PostgreSQL. Ambas son focales y no modifican tablas comerciales de otras ramas. El downgrade se bloquea porque eliminaría o degradaría historial operativo y feedback: el rollback del frontend se hace por runtime. Validar con `alembic heads`, `tests/test_migrations_fresh_postgres.py` y PostgreSQL con la extensión `vector`.
+
+Verificación local: la cadena desde una base PostgreSQL vacía alcanzó `20260718_admin_jsonb_v2` y aprobó `tests/test_migrations_fresh_postgres.py`. `alembic check` sigue reportando drift histórico no introducido por estas revisiones —principalmente Mercado, proveedores, defaults e índices legacy— y se conserva como trabajo separado en `Roadmap.md`.
+
+## 2026-07-17 — `20260717_canonical_batch_tracking`
+
+Revisión posterior a `c923732e1cab`. Agrega `canonical_batch_jobs` y `canonical_batch_job_items` para persistir idempotencia, progreso y errores parciales del alta masiva canónica. La migración sincroniza `sku_sequences.next_seq` con los SKU históricos válidos antes de habilitar el generador transaccional común.
+
+El downgrade elimina exclusivamente las dos tablas de seguimiento; no elimina productos canónicos ni retrocede secuencias. Antes del despliegue se debe aplicar la migración, luego actualizar API/worker y finalmente Vue. La prueba PostgreSQL de cadena limpia valida las tablas y asignaciones simultáneas del mismo prefijo.
+
+Verificación local: upgrade del esquema de desarrollo aprobado, auditoría con 16 checks correctos y cadena limpia sobre PostgreSQL temporal aprobada, incluyendo 12 asignaciones concurrentes sin SKU duplicados.
+
+## 2026-07-17 — `c923732e1cab` historial de precios sin archivo
+
+La confirmación de una compra validada fallaba con HTTP 409 después de preparar stock y productos porque PostgreSQL conservaba `supplier_price_history.file_fk NOT NULL`, mientras el modelo ya permitía `NULL` y la confirmación registra historial por `purchase_id`/`purchase_line_id` sin archivo de proveedor.
+
+- `upgrade()` cambia exclusivamente `supplier_price_history.file_fk` a nullable y es idempotente.
+- `downgrade()` restaura `NOT NULL` sólo si no existen filas sin archivo; en caso contrario aborta con un mensaje accionable para evitar pérdida de trazabilidad.
+- La prueba PostgreSQL de cadena limpia verifica la nulabilidad y espera el nuevo head.
+- `scripts/audit_schema.py` audita este contrato y carga `.env` cuando no se pasa `--url`.
+- `scripts/check_schema.py` anonimiza la contraseña de `DB_URL`.
+
+Verificación local: 13 pruebas Python aprobadas, 1 integración PostgreSQL opt-in omitida, 32 pruebas Vue aprobadas, build Vue aprobado, migración aplicada y auditoría PostgreSQL con 11 checks correctos.
+
+## 2026-07-16 — `20260716_purchase_ingestion_v2`
+
+Revisión posterior a `20260714_schema_integrity`. Agrega metadatos documentales a compras y adjuntos, importes/confianza por línea, referencias de compra en historial de precios e índices por producto/proveedor/fecha. Las FK históricas de `purchase_lines` cambian de `CASCADE` a `SET NULL` para preservar el remito ante una baja de catálogo.
+
+No recalcula stock ni crea movimientos para compras anteriores. Downgrade elimina las columnas nuevas y restaura las FK anteriores; antes de usarlo debe exportarse la trazabilidad nueva.
+
+Verificación local: PostgreSQL alcanzó el head nuevo. `alembic check` continúa reportando drift histórico ajeno a esta revisión, principalmente en Mercado, defaults e índices legacy.
+
+## 2026-07-14 — Cadena PostgreSQL completa desde base vacía
+
+### Contexto
+
+El primer arranque sobre PostgreSQL vacío fallaba en `cf0f6e70fe89_add_rag_knowledge_tables.py` con `psycopg.errors.UndefinedObject` al ejecutar `DROP INDEX ux_customers_document_number`. La revisión, aunque estaba nombrada como alta de tablas RAG, contenía cientos de operaciones autogeneradas ajenas al objetivo y potencialmente destructivas.
+
+### Correcciones
+
+- `cf0f6e70fe89` se conserva en el grafo como no-op documentado. No cambiaron su `revision`, `down_revision` ni el merge histórico.
+- `b2d22a7ce889` permanece como implementación manual de `knowledge_sources` y `knowledge_chunks`.
+- `fa50a5cba1bb` continúa fusionando ambas ramas.
+- Se agregó `20260714_schema_integrity`, posterior a `a1b2c3d4e5f6`, para garantizar de forma idempotente:
+  - índice único parcial `ux_customers_document_number`;
+  - constraint `ck_returns_status`;
+  - índice `ix_returns_created_at`.
+- La migración de integridad valida duplicados de documentos y estados de devolución inválidos antes de crear objetos, con errores accionables en vez de alterar datos silenciosamente.
+- `c308b8798a79` reemplazó símbolos Unicode decorativos por etiquetas ASCII para evitar `UnicodeEncodeError` bajo CP1252 en Windows.
+- `scripts/audit_schema.py` ahora anonimiza la contraseña de `DB_URL` en su salida.
+
+### Prueba automatizada
+
+`tests/test_migrations_fresh_postgres.py` crea una base temporal con prefijo `growen_migration_test_`, habilita pgvector, ejecuta `alembic upgrade head`, verifica tablas RAG, head, índices y constraints, y elimina la base en `finally`.
+
+```powershell
+$env:MIGRATION_TEST_POSTGRES_URL="postgresql+psycopg://<usuario>:<password>@127.0.0.1:5433/growen"
+.\.venv\Scripts\python.exe -m pytest tests/test_migrations_fresh_postgres.py -v -p no:randomly
+```
+
+No incorporar esa URL al repositorio; debe provenir del entorno local o de secretos de CI.
+
+### Resultado verificado
+
+- Test sobre base temporal vacía: aprobado.
+- Base local vacía migrada con `alembic upgrade head`: aprobada.
+- Único head y revisión actual: `20260714_schema_integrity`.
+- Tablas públicas resultantes: 53.
+- `scripts/audit_schema.py`: 10 checks, sin objetos faltantes.
+
 ### 2025-09-27 Unificación fallback admin
 
 Se unificó el fallback de password del usuario `admin` a `admin1234` en:
@@ -8,11 +100,6 @@ Se unificó el fallback de password del usuario `admin` a `admin1234` en:
 Motivo: eliminar confusión que causaba intentos de login fallidos según qué componente hubiese creado el usuario primero. El fallback solo aplica en entorno `dev` cuando `ADMIN_PASS` mantiene el placeholder `REEMPLAZAR_ADMIN_PASS`. En otros entornos el arranque falla explícitamente.
 
 Acción recomendada: definir siempre `ADMIN_PASS` explícito en `.env` para evitar dependencia de contraseñas públicas de desarrollo.
-<!-- NG-HEADER: Nombre de archivo: MIGRATIONS_NOTES.md -->
-<!-- NG-HEADER: Ubicación: docs/MIGRATIONS_NOTES.md -->
-<!-- NG-HEADER: Descripción: Notas técnicas sobre fixes recientes en migraciones Alembic -->
-<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
-# Notas de migraciones (Ajustes Sept 2025)
 
 ## Contexto del problema
 Durante la reinstalación del entorno se detectaron dos bloqueos principales al ejecutar `alembic upgrade head`:
@@ -327,6 +414,12 @@ Notas y consideraciones:
 - Los artefactos del backup (crudo y lógico) se conservan bajo `backups/pg/raw-YYYYMMDD-HHMMSS/` para auditoría y eventual rollback.
 - Los mensajes "does not exist" de `pg_restore` ocurren al pasar `-c` (clean); se podrían atenuar con `--if-exists`, pero no impidieron la restauración completa.
 - Se validó que la variable `alembic_version` tenga `VARCHAR(255)` y que el `env.py` cargue `.env` con `override=True`, mitigando issues históricos documentados en esta página.
+
+## Revisión `20260717_sales_customers_v4`
+
+La revisión es incremental sobre `20260717_canonical_batch_tracking`. Convierte cantidades y stock a `Numeric(14,2)`, agrega costos adicionales persistidos, idempotencia, límite de crédito, snapshots de costo, `stock_reservations` y `customer_account_entries`.
+
+El upgrade conserva los valores existentes y reconstruye la cuenta corriente desde ventas confirmadas/entregadas, pagos y devoluciones. El downgrade aborta si existen datos Fase 4 o cantidades fraccionarias, evitando truncamiento silencioso. Verificar con `alembic heads`, upgrade limpio y upgrade incremental en PostgreSQL antes del despliegue.
 
 Checklist de cierre:
 

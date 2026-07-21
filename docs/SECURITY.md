@@ -17,13 +17,26 @@
 - Asignar el mínimo de permisos necesarios a cada rol.
 - Consultar documentación funcional para detalles específicos.
 
+## Contrato de sesión y CSRF
+
+- `create_session()` genera un SID aleatorio crudo, persiste únicamente `hash_session_id(sid)` y devuelve ambos valores por separado.
+- La cookie `growen_session` contiene el SID crudo; `current_session()` lo hashea una sola vez para consultar la base.
+- Nunca enviar `Session.id` al navegador: ese campo ya contiene el hash persistido.
+- `csrf_token` es legible por el frontend y debe coincidir con `X-CSRF-Token` en toda mutación protegida.
+- Todo cambio en este ciclo requiere una prueba con `@pytest.mark.no_auth_override`; los overrides globales de tests no prueban cookies, resolución de rol ni CSRF reales.
+
 ## Salida a Internet (IA y MCP Web Search)
 - Las llamadas externas de IA están controladas por flags de entorno:
 	- `ai_allow_external` (configuración global): si es `false`, se bloquean integraciones externas.
 	- `AI_USE_WEB_SEARCH`: habilita la búsqueda web MCP durante el enriquecimiento de productos.
 - La búsqueda web MCP (MVP) consulta un motor público (DuckDuckGo HTML por defecto) y retorna títulos/URLs/snippets. Recomendación para producción: usar un proveedor con SLA y caching.
+- Products y Web Search exigen `Authorization: Bearer <JWT>` con issuer, audience, sujeto, rol, expiración y JTI.
+- El rol procede de la sesión autenticada y no se acepta como argumento de la tool.
+- El cliente filtra el catálogo por rol y cada servidor vuelve a autorizar la invocación.
+- Los logs MCP no incluyen tokens, prompts completos ni argumentos sensibles.
+- El rate limiter MCP usa Redis en Compose; el modo por proceso queda reservado a desarrollo y tests.
 - Solo roles `admin` y `colaborador` pueden invocar el enriquecimiento IA y, por ende, la búsqueda web cuando la flag está activa.
-- Auditoría: se registran `web_search_query` y `web_search_hits` por cada enriquecimiento, además del `prompt_hash` y archivos de fuentes.
+- Auditoría: se registran `web_search_query_hash` y `web_search_hits` por cada enriquecimiento, además del `prompt_hash`; no se persiste el texto completo de la consulta.
 
 ## Cifrado y PDFs (Plan ARC4)
 Durante la importación de remitos PDF (ej. proveedor Santa Planta) se observó un `CryptographyDeprecationWarning` relacionado con ARC4. Aunque la aplicación no solicita explícitamente RC4/ARC4, algunas librerías pueden intentar compatibilidad retro.
@@ -76,4 +89,24 @@ Durante la importación de remitos PDF (ej. proveedor Santa Planta) se observó 
 ## Excepciones CSRF controladas
 - `POST /bug-report` no requiere CSRF por diseño para permitir reportes sin sesión. Solo escribe en un log local (`logs/BugReport.log`) sin tocar datos de negocio.
 - El frontend advierte no incluir datos sensibles en el comentario. Se envían como contexto la URL actual, el User-Agent y hora local en GMT-3.
+
+## Endurecimiento agéntico y MCP
+
+- Las cabeceras `X-User-Roles` y `X-User-Id` solo se aceptan con `ENV=test`; fuera de tests no otorgan identidad.
+- No existen claves MCP predecibles. Products y Web Search usan claves, audiences y `kid` independientes, TTL máximo y revocación por `jti`.
+- El catálogo de tools aplica deny-by-default. Una tool nueva no se entrega al modelo hasta contar con una política de roles explícita.
+- Los resultados de Web Search se consideran contenido externo no confiable: se limitan tamaño, profundidad, caracteres invisibles, esquemas URL y hosts de salida.
+- Las consultas con patrones de secretos no se envían a buscadores externos. `trust_env` y redirects están deshabilitados.
+- Las tools actuales son de lectura. Toda futura tool con escritura debe requerir política explícita, autorización de servidor y confirmación humana para efectos materiales.
+- Los SID se almacenan hasheados. Los logs no incluyen SID, JWT, parámetros MCP ni prompts completos.
+- El rate limiting MCP y la revocación usan Redis en Compose y fallan cerrados. El modo memoria solo se admite en desarrollo y tests.
+- La autenticación JWT interna no sustituye OAuth para acceso remoto; los puertos de desarrollo se publican solo en loopback.
+
+## Dependencias y cadena de suministro
+
+- Python soportado: 3.14.6 o revisión de seguridad posterior de la serie 3.14.
+- Los locks por servicio incluyen hashes y las imágenes usan `pip --require-hashes`.
+- `scripts/check-quality.ps1` ejecuta Ruff, Bandit, `pip-audit`, pruebas, detección básica de secretos y genera un SBOM CycloneDX reproducible.
+- `python-jose/ecdsa` y `PyPDF2` fueron retirados al detectarse vulnerabilidades; JWT usa PyJWT y PDF usa `pypdf`.
+- La clave OpenAI local detectada durante la auditoría fue eliminada y debe rotarse antes de configurar un valor nuevo.
 

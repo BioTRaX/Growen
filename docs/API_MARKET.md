@@ -5,6 +5,10 @@
 
 # API del Módulo Mercado
 
+## Scheduler persistente (2026-07-18)
+
+`scheduler_settings` conserva habilitación, zona horaria, hora, intervalo, antigüedad, límite y prioridad. Las variables de entorno sólo siembran la fila singleton inicial. `scheduler_runs` registra ejecuciones manuales y automáticas; un advisory lock PostgreSQL impide que dos réplicas ejecuten simultáneamente el job automático.
+
 Este documento describe los endpoints del módulo "Mercado" que permite comparar precios de productos con valores de referencia del mercado.
 
 ## Endpoints
@@ -1420,7 +1424,7 @@ POST /market/products/123/discover-sources
 
 - **Dependencias**:
   - Requiere servicio `mcp_web_search` activo
-  - Variable `MCP_WEB_SEARCH_URL` (default: `http://mcp_web_search:8002/invoke_tool`)
+  - Variable `MCP_WEB_SEARCH_URL` (default Docker: `http://mcp_web_search:8002/mcp`)
   
 - **Rate limiting**: Considerar limitar llamadas por usuario/producto (ej. 1 descubrimiento cada 5 minutos)
 

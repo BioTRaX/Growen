@@ -1,59 +1,30 @@
 <!-- NG-HEADER: Nombre de archivo: CATEGORIES.md -->
 <!-- NG-HEADER: Ubicación: docs/CATEGORIES.md -->
-<!-- NG-HEADER: Descripción: Guía de categorías (creación manual, niveles, asociación a productos) -->
+<!-- NG-HEADER: Descripción: Guía de categorías y subcategorías planas de productos. -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
-# Categorías: creación y uso
+# Categorías y subcategorías
 
-Este documento describe cómo crear categorías manualmente (2 niveles: Categoria y SubCategoria), cómo se almacenan y cómo asociarlas a productos.
+## Modelo vigente
 
-## Modelo
+`categories.kind` diferencia `category` y `subcategory`. Son dos clasificaciones planas e independientes: el mismo nombre puede existir una vez en cada tipo y la unicidad se evalúa con `lower(name)`. `parent_id` se conserva únicamente para compatibilidad con datos y clientes legacy; no restringe las nuevas selecciones.
 
-- Tabla `categories` con jerarquía simple por `parent_id`.
-- Nivel 1: `Categoria` (`parent_id = null`).
-- Nivel 2: `SubCategoria` (`parent_id = id de la Categoria`). En el formulario de canónicos, la "Subcategoría" puede seleccionarse de manera independiente como una categoría secundaria; el campo "padre" es opcional al crear una nueva subcategoría desde la UI.
-- Los productos (`products.category_id`) referencian la categoría final (nivel 2 o nivel 1 si no hay subcategoría).
+Los productos internos guardan `category_id` y `subcategory_id`, ambos opcionales. Los canónicos requieren ambos IDs con el tipo correcto porque alimentan el SKU y la exportación `Categoría > Subcategoría`. Los tags son otra dimensión, múltiple y opcional; no reemplazan la taxonomía.
 
-## Endpoints existentes
+## Endpoints
 
-- Listar categorías
-  - GET /categories
-  - Roles: cliente, proveedor, colaborador, admin
-  - Respuesta: `[{ id, name, parent_id, path }]` con `path` tipo `Categoria>SubCategoria`.
+- `GET /categories?kind=category|subcategory`: lista plana filtrable.
+- `GET /categories/search?q=...&kind=...`: búsqueda parcial por nombre y tipo.
+- `POST /categories`: recibe `{ "name": "Sustratos", "kind": "subcategory" }`; requiere `colaborador|admin` y CSRF.
+- `parent_id` todavía puede enviarse. Si falta `kind`, un `parent_id` presente infiere `subcategory`; esta compatibilidad es temporal.
+- `POST /products` y `PATCH /products/{id}` aceptan `category_id` y `subcategory_id` independientemente.
 
-- Crear categoría
-  - POST /categories
-  - Roles: colaborador, admin (requiere CSRF)
-  - Body: `{ "name": "Sustratos", "parent_id": null }` para Categoria; `{ "name": "Premium", "parent_id": 1 }` para SubCategoria.
-  - Reglas: unicidad por (name, parent_id); valida `parent_id` existente.
+## Flujo Vue
 
-## Próximos endpoints (plan)
+Los dos autocompletes usan `v-model:search`, aceptan escritura y ofrecen **Agregar “…”** cuando el nombre normalizado no existe en su tipo. El alta individual permite omitir ambos campos. El wizard canónico exige completarlos y no filtra subcategorías por padre.
 
-- Actualizar producto (categoría)
-  - PATCH /products/{product_id}
-  - Body: `{ "category_id": 123 }`
-  - Reglas: `category_id` debe existir; registrar en `AuditLog` (action: `product_update.category`).
+## Migración y operación
 
-- Exportación XLS de Stock
-  - GET /stock/export.xlsx
-  - Roles: colaborador, admin
-  - Parámetros: mismos filtros que `GET /products` (`q`, `supplier_id`, `category_id`, `stock`, `page_size` ignorado; exporta todo el match razonable con límite seguro p.ej. 10k filas).
-  - Columnas: `PRODUCTO`, `PRECIO_VENTA`, `CATEGORIA`, `SKU_PROPIO`.
+Alembic head `20260718_product_taxonomy_tags_v1` migra raíces legacy a `category`, descendientes a `subcategory`, agrega `products.subcategory_id` y crea los índices normalizados. La revisión audita colisiones y aborta con diagnóstico; no fusiona datos automáticamente.
 
-## Flujo UI (plan)
-
-- En `/productos` agregar botones:
-  - "Nueva categoría": modal con input `name` crea nivel 1.
-  - "Nueva subcategoría": modal con selector `Categoria` padre + `name` crea nivel 2.
-  - Los listados se refrescan al crear.
-
-- En ficha `/productos/:id` agregar selector de `Categoria/SubCategoria` con guardado (PATCH producto).
-
-- En `/stock` agregar botón oscuro "Descargar XLS" que descarga el archivo respetando filtros vigentes.
-
-## Consideraciones
-
-- i18n: nombres libres (permitir acentos y espacios). Evitar duplicados por nivel.
-- Auditoría: registrar siempre cambios de categoría del producto.
-- Permisos: creación limitada a `colaborador|admin`; lectura abierta a todos los roles internos.
-- Rendimiento: cachear listado de categorías en frontend; invalidar tras crear.
+La creación está limitada a `colaborador|admin`; la lectura admite todos los roles autenticados. React permanece como fallback temporal, pero su selector jerárquico no define el contrato nuevo.

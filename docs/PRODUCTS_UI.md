@@ -5,7 +5,48 @@
 
 # UI de Productos y Canónicos
 
-# UI de Productos y Canónicos
+## Taxonomía plana y tags (2026-07-18)
+
+Categoría y subcategoría son dos listas independientes identificadas por `kind=category|subcategory`. Sus autocompletes usan un valor numérico estable y `v-model:search`: aceptan escritura real y muestran **Agregar “…”** cuando no existe una coincidencia normalizada dentro del mismo tipo. El mismo nombre puede existir una vez en cada tipo; `parent_id` ya no filtra la selección.
+
+En el alta individual ambas clasificaciones y los tags son opcionales. En un canónico, categoría y subcategoría son obligatorias porque generan el SKU y la exportación `Categoría > Subcategoría`. El wizard permite tags comunes en Preparar y particulares en Completar; el batch recibe la unión normalizada. El borrador vigente usa `growen.products.mass-canonical.v3:<userId>` y migra v2 agregando listas vacías.
+
+Staff puede editar todos los tags desde el detalle y agregarlos de forma aditiva a una selección en `/productos`. React permanece como fallback hasta completar el smoke de paridad.
+
+## Alta masiva canónica Vue (2026-07-17)
+
+Los roles `colaborador` y `admin` pueden seleccionar hasta 100 filas pendientes en `/productos` y abrir **Crear canónicos**. Se omiten, con aviso, filas ya canonizadas, sin oferta de proveedor o duplicadas.
+
+El wizard recorre Preparar, Completar, Revisar y Procesar. Nombre, categoría y subcategoría tipadas son obligatorios; marca y tags son opcionales. Ambos selectores son independientes. La UI obtiene un SKU provisional desde `POST /canonical-products/sku-preview`, pero no lo reenvía como definitivo. El worker asigna el SKU transaccional, crea el canónico, la equivalencia y los tags como una unidad y expone progreso mediante `GET /canonical-products/batch-jobs/{job_id}`.
+
+Los borradores usan `growen.products.mass-canonical.v3:<userId>`, vencen a los 30 días y conservan un job activo. La primera carga migra v2 o convierte una sesión React válida desde `mass_cannon_session`. Los lotes parciales muestran el error por fila y permiten corregir y reenviar únicamente los fallidos.
+
+Si el primer despacho falla antes de procesar ítems —por ejemplo, porque Redis no está disponible—, el wizard muestra **Reintentar lote** y repite la solicitud con el mismo identificador idempotente. El backend reencola el lote `FAILED` existente en lugar de devolverlo sin trabajo o crear un duplicado.
+
+En desarrollo, iniciar Growen con `.\scripts\start-dev.ps1 -WithCatalogWorker` antes de usar este wizard. El launcher comprueba Redis y el consumidor Dramatiq; la creación individual mediante `POST /canonical-products` sigue siendo síncrona y no requiere esos servicios.
+
+## Catálogo operativo y mutaciones Vue (2026-07-17)
+
+La ruta `/productos` dispone de búsqueda con debounce, filtros de proveedor, categoría, stock, recientes y tipo, además de paginación configurable. Los filtros se guardan como parámetros de URL y se restauran al regresar desde el detalle.
+
+La tabla muestra nombre preferido, SKU, proveedor, precio efectivo, stock, categoría y estado canónico. El precio efectivo respeta la regla del backend: precio canónico y, si falta, precio del proveedor.
+
+Para `colaborador` y `admin` se recuperaron las operaciones principales:
+
+- Alta de producto interno y oferta de proveedor con stock inicial, precios, categoría, subcategoría y tags opcionales. Ambas taxonomías son buscables y creables por tipo. Si el producto interno se crea pero falla el vínculo, el diálogo conserva el contexto y permite corregir proveedor o SKU y reintentar.
+- Edición de stock con hasta dos decimales entre 0 y 1.000.000.000; Vue envía el saldo leído como `expected_stock` y muestra el conflicto 409 sin sobrescribir.
+- Edición del precio de venta efectivo: actualiza el canónico cuando existe y la oferta del proveedor como fallback.
+- Selección por fila, borrado individual y masivo con confirmación. El backend bloquea productos con stock o referencias de compras y devuelve un resumen parcial.
+
+La barra lateral agrupa bajo **Productos**:
+
+- Catálogo: operativo en Vue.
+- Stock: vistas `/stock` y `/stock/shortages` implementadas para validación en Vue; el manifiesto conserva `legacy/pending` hasta activar Productos/Catálogos y completar el smoke por rol.
+- Imágenes: ruta `/imagenes-productos` visible sólo para `colaborador` y `admin`, pendiente de migración.
+
+El listado admite `cliente`, `proveedor`, `colaborador` y `admin`. El detalle `/productos/:id` admite también `guest`; el historial confirmado de compras, remitos y movimientos de stock se muestra únicamente a staff.
+
+Esta vista no sustituye todavía la administración avanzada React de imágenes, detalle enriquecido, mercado, equivalencias y preferencias de columnas. Enriquecimiento masivo, completar precios y catálogos ya están disponibles en Vue.
 
 ## Listado de Productos
 
@@ -65,7 +106,7 @@
     - Endpoint: `GET /stock/export-tiendanegocio.xlsx` (roles: colaborador/admin).
     - Columnas: SKU, Nombre, Precio (precio efectivo canónico→proveedor), Oferta (vacío), Stock, Visibilidad (Visible), Descripción, Peso/Alto/Ancho/Profundidad (si están cargados), Variantes (vacías), Categoría jerárquica.
   - Respetan los mismos filtros activos (texto, proveedor, categoría, stock) y el orden por defecto (`sort_by=updated_at&order=desc`).
-  - El PDF se abre en una nueva pestaña y puede visualizarse o descargarse según el navegador (requiere dependencias de WeasyPrint en el backend; ver `docs/dependencies.md`).
+  - El PDF se abre desde un blob en una nueva pestaña y revoca su URL temporal; el backend usa ReportLab incluido en el proyecto, sin dependencia nueva.
   - XLSX: Encabezado con fondo oscuro y texto en blanco/negrita; la primera columna (“NOMBRE DE PRODUCTO”) se exporta en negrita por fila y se ajusta un ancho adecuado de forma automática.
 
 ## Detalle de Producto
@@ -82,9 +123,10 @@
  - Metadatos de enriquecimiento: el backend expone `last_enriched_at` (ISO UTC) y `enriched_by` (id de usuario) para trazabilidad; la UI puede mostrarlos en una sección de “Actividad reciente” (opcional).
 
 ## Acciones masivas
-- En el listado de Stock (`/stock`), al seleccionar múltiples productos aparece el botón “Enriquecer N producto(s) con IA)”.
+- En Productos Vue (`/productos`), al seleccionar múltiples productos aparece el botón “Enriquecer”. Stock Vue no incorpora selección ni operaciones avanzadas.
   - Llama `POST /products/enrich-multiple` con `{ ids: [...], force?: boolean }` (límite de 20 IDs por solicitud).
   - La UI limpia la selección y refresca el listado al finalizar.
+- Productos Vue también permite completar precios faltantes por proveedor, generar un catálogo desde la selección y consultar, ver, descargar o eliminar (admin) el histórico.
 
 ## Flags y comportamiento IA
 - El enriquecimiento IA puede adjuntar resultados de búsqueda web (MCP) al prompt cuando:
@@ -93,10 +135,13 @@
 - Auditoría: se registran `web_search_query` y `web_search_hits` cuando la búsqueda web está activa.
 
 ## Alta/Edición de Producto Canónico
+
+> Esta sección describe el formulario React heredado. El wizard Vue vigente se documenta al inicio de este archivo.
+
 - Campos: `name`, `brand`, `sku_custom` (opcional), `category_id`, `subcategory_id`.
 - Botón "Auto" de SKU:
   - Consulta `GET /catalog/next-seq?category_id=...` para proponer un SKU de forma `XXX_####_YYY`.
-  - La UI muestra una vista previa; la generación y validación final se hacen en backend.
+  - Es una vista previa no reservante; la generación y validación final se hacen en backend.
 - Selección de categoría/subcategoría:
   - Subcategoría se filtra por la categoría elegida.
   - Botones "Nueva" abren modales para crear categorías en línea (padre nulo) o subcategorías (con padre).

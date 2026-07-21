@@ -5,6 +5,12 @@
 
 # Gestión de imágenes
 
+## Separación de operación y revisión Vue (2026-07-18)
+
+- `/admin/imagenes-operacion`: sólo admin; crawler, configuración, prueba, logs/SSE, snapshots y disparo de jobs. El start/stop de Playwright y workers permanece en Servicios.
+- `/imagenes-productos`: colaborador/admin; cola de revisión, selector, portada, WebP, quitar fondo, watermark, logo y procesamiento por selección.
+- `/admin/imagenes` y `/admin/imagenes-productos` se conservan como aliases hacia revisión.
+
 El crawler puede operar en dos modos:
 - **Stock**: descarga imágenes desde fuentes de stock aprobadas.
 - **Base completa**: recorre toda la base de datos para identificar imágenes faltantes.

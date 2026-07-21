@@ -30,8 +30,11 @@ docker compose up -d db
 
 **Puertos expuestos**:
 - PostgreSQL: `5433` (mapeado para evitar colisión con Postgres local si existe)
+- Redis: `6379` cuando se inicia para workers locales
 - MCP Products: `8100`
 - MCP Web Search: `8102`
+
+PostgreSQL y Redis participan de dos redes Compose: `backend`, interna para el tráfico entre contenedores, y `host_access`, usada exclusivamente para conservar los bindings loopback requeridos por la API y los workers locales. No quitar `host_access` mientras el desarrollo use `127.0.0.1:5433` o `127.0.0.1:6379`: Docker Engine no publica puertos de un contenedor conectado únicamente a una red `internal`.
 
 ### 2. Configurar Entorno Local
 
@@ -45,10 +48,11 @@ DB_PASS=tu_password_aqui
 DB_NAME=growen
 
 # O usar DB_URL completa
-# DB_URL=postgresql+psycopg://growen:password@localhost:5433/growen
+# DB_URL=postgresql+psycopg://<usuario>:<password>@localhost:5433/growen
 
 # Servicios externos (si usas Docker)
-MCP_WEB_SEARCH_URL=http://localhost:8102/invoke_tool
+MCP_PRODUCTS_URL=http://localhost:8100/mcp
+MCP_WEB_SEARCH_URL=http://localhost:8102/mcp
 AI_USE_WEB_SEARCH=1
 
 # Scheduler (deshabilitado en dev local)
@@ -61,20 +65,13 @@ REDIS_URL=redis://localhost:6379/0
 DEBUG_SQL=0  # Cambia a 1 para ver queries SQL
 ```
 
-### 3. Activar Virtual Environment
+### 3. Crear o reparar el entorno Python 3.14.6+
 
 ```powershell
-# Si no existe, crear
-python -m venv .venv
+.\scripts\bootstrap-dev.ps1
 
-# Activar
-.\.venv\Scripts\Activate.ps1
-
-# Instalar dependencias
-pip install -r requirements.txt
-
-# Verificar instalación
-python scripts/check_admin_user.py
+# Si existe una venv rota o de otra versión
+.\scripts\bootstrap-dev.ps1 -RecreateVenv
 ```
 
 ### 4. Levantar Backend + Frontend
@@ -82,21 +79,53 @@ python scripts/check_admin_user.py
 **Opción recomendada (automática):**
 
 ```powershell
-./start.bat
+.\scripts\start-dev.ps1
+
+# Incluye Redis + Dramatiq para altas canónicas masivas
+.\scripts\start-dev.ps1 -WithCatalogWorker
 ```
 
-`start.bat` orquesta validaciones, migraciones y arranque de API + frontend para desarrollo local.
+`start-dev.ps1` orquesta validaciones, migraciones y arranque local de API, MCP Products y Vue. Con `-WithCatalogWorker` también levanta Redis y Dramatiq mediante el perfil `optional`, verifica el puerto host `6379` y confirma ambos servicios Compose en ejecución.
 
 **Opción manual (más control):**
 
 ```powershell
 # Terminal 1: API local
-python -m uvicorn services.api:app --reload --port 8000 --log-level info
+.\.venv\Scripts\python.exe -m uvicorn services.api:app --reload --port 8000 --log-level info
 
-# Terminal 2: Frontend
-cd frontend
+# Terminal 2: Frontend Vue
+cd frontend-vue
 npm run dev
 ```
+
+### 5. Primer arranque del frontend Vue durante la migración
+
+El frontend Vue se ejecuta en paralelo y no reemplaza todavía al contenedor ni al directorio React. El método oficial de trabajo diario es el script único, ejecutado desde la raíz:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
+```
+
+El script utiliza Docker para PostgreSQL. Después aplica migraciones y levanta API, MCP Products y Vue como procesos locales. `-WithCatalogWorker` agrega Redis y Dramatiq; `-McpMode All` agrega Web Search; `-McpMode Off` omite MCP y `-CheckOnly` no inicia servicios ni aplica migraciones. Si `db` figura `running` pero no publica `127.0.0.1:5433`, el launcher ejecuta `docker compose up -d db` para reconciliar la configuración antes del timeout final.
+
+Verificaciones y diagnóstico:
+
+- API: `http://127.0.0.1:8000/health`.
+- MCP Products: `http://127.0.0.1:8100/mcp`.
+- MCP Web Search opcional: `http://127.0.0.1:8102/mcp`.
+- Login Vue: `http://127.0.0.1:5176/login`.
+- Logs por ejecución: `logs/dev/<fecha-hora>/`.
+- `start-dev.log` contiene la secuencia general; los archivos `*.stdout.log` y `*.stderr.log` separan la salida de API y Vue.
+- Los archivos stdout/stderr se crean en la ejecución que inicia cada proceso. Si API, MCP o Vue se reutilizan, continúan escribiendo en los logs de su ejecución original; el nuevo `state.json` los marca como reutilizados y agrega `*_log_source_hint` cuando puede localizar ese origen.
+- Para el worker Docker, `state.json` registra `catalog_worker_log_command`; los eventos NDJSON `actor_received`, `job_claimed`, `item_started`, `item_succeeded|item_failed` y `job_finished` incluyen IDs y duración.
+- El worker `catalog_worker` iniciado desde Administración escribe stdout/stderr en `logs/worker_catalog.log`; no usa pipes sin lector. Si convive con Dramatiq Docker, cada mensaje lo consume sólo uno de ellos. `start-dev.ps1` advierte esta competencia y registra los PID locales en `catalog_worker_competing_local_pids`.
+- `start-dev.ps1` exporta `GROWEN_DEV_RUN_LOG_DIR` a los procesos hijos. Servicios → Mantenimiento de logs y `scripts/cleanup_logs.py` usan ese dato más los PID de `state.json` para proteger ejecuciones activas y eliminan las ejecuciones antiguas como carpetas completas. Ver `docs/LOG_CLEANUP.md`.
+- Si un servicio local ya responde correctamente, se reutiliza. Un puerto ocupado por un servicio no saludable detiene el arranque con código de error.
+- El servicio Compose `frontend` continúa correspondiendo a React; no es necesario levantarlo para trabajar en Vue.
+- Una pantalla Vue oscura que permanece cargando suele indicar que `/auth/me` no pudo alcanzar la API.
+- Estado detallado y fases: `docs/FRONTEND_MIGRATION_VUE.md`.
+
+Los comandos individuales se conservan en las secciones de troubleshooting para diagnóstico, no como flujo normal de inicio.
 
 ## Desarrollo LAN (Compartir con otros dispositivos)
 
@@ -143,7 +172,7 @@ La API también debe escuchar en `0.0.0.0`. `start.bat` ya lo hace por defecto.
 
 ```powershell
 # Con --host 0.0.0.0 para aceptar conexiones externas
-python -m uvicorn services.api:app --reload --host 0.0.0.0 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn services.api:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### 4. Verificar Firewall
@@ -179,16 +208,16 @@ Desde el otro dispositivo en la misma red, abrir:
 
 ### Iniciar Sesión de Trabajo
 
-**Opción 1: Usando start.bat (Recomendado)**
+**Opción 1: Usando start-dev.ps1 (Recomendado)**
 ```powershell
 # Ejecuta directamente para desarrollo local
-.\start.bat
+.\scripts\start-dev.ps1
 
 # El script automáticamente:
 # - Levanta DB Docker (puerto 5433)
 # - Inicia API local con hot-reload (puerto 8000)
-# - Hace build del frontend si es necesario
 # - Ejecuta migraciones Alembic
+# - Inicia MCP Products y Vue (puerto 5176)
 ```
 
 **Opción 2: Manual (más control)**
@@ -197,15 +226,15 @@ Desde el otro dispositivo en la misma red, abrir:
 docker compose up -d db
 
 # Terminal 2: API local con hot-reload
-python -m uvicorn services.api:app --reload --port 8000 --log-level info
+.\.venv\Scripts\python.exe -m uvicorn services.api:app --reload --port 8000 --log-level info
 
 # Terminal 3: Frontend local (desarrollo)
-cd frontend
+cd frontend-vue
 npm run dev
 ```
 
 **URLs de desarrollo**:
-- Frontend: `http://127.0.0.1:5173` (Vite dev server)
+- Frontend Vue: `http://127.0.0.1:5176` (Vite dev server)
 - API: `http://127.0.0.1:8000` (uvicorn local)
 - Swagger: `http://127.0.0.1:8000/docs`
 
@@ -242,29 +271,29 @@ SET ALLOW_SQLITE_FALLBACK=1
    - Refrescas navegador
 
 2. **Probar cambios**
-   - Frontend en `5173` conecta a API local `8000`
+   - Frontend Vue en `5176` conecta a API local `8000` mediante `/api`
    - Logs en tiempo real en terminal
    - Debugger disponible (breakpoints)
 
 3. **Ejecutar tests**
    ```powershell
    # Tests unitarios (rápidos)
-   pytest tests/test_auth.py -v
+   .\.venv\Scripts\python.exe -m pytest tests/test_auth.py -v
    
    # Tests de integración (usan DB Docker)
-   pytest tests/test_market_api.py -v
+   .\.venv\Scripts\python.exe -m pytest tests/test_market_api.py -v
    
    # Suite completa (cuando terminas feature)
-   pytest -q
+   .\.venv\Scripts\python.exe -m pytest -q
    ```
 
 4. **Workers manuales** (solo cuando necesitas)
    ```powershell
    # Procesar una imagen específica
-   python -c "from workers.images import process_image; import asyncio; asyncio.run(process_image(product_id=123))"
+   .\.venv\Scripts\python.exe -c "from workers.images import process_image; import asyncio; asyncio.run(process_image(product_id=123))"
    
    # Actualizar precio de un producto
-   python scripts/run_market_update.ps1 -ProductId 456
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run_market_update.ps1 -ProductId 456
    ```
 
 ## Testing de Integración (Docker)
@@ -285,7 +314,7 @@ docker compose up -d
 SET USE_DOCKER_STACK=1
 .\start.bat
 
-# El script verifica que API (8000), DB (5433) y Frontend (5173) respondan
+# Este flujo pertenece al launcher heredado. Para Vue, validar API 8000, DB 5433 y frontend 5176 con scripts/start-dev.ps1 -CheckOnly.
 # No inicia servicios, solo valida
 ```
 
@@ -323,21 +352,25 @@ docker compose down
 Agrega a tu `$PROFILE` (edita con `notepad $PROFILE`):
 
 ```powershell
-# Navegación rápida
-function gw { cd C:\Proyectos\NiceGrow\Growen }
+# Ajustar una vez a la ubicación local del clon
+$GrowenRoot = 'C:\ruta\al\repositorio\Growen'
 
-# Desarrollo rápido
+function gw { Set-Location $GrowenRoot }
+
+# Inicio oficial de desarrollo
 function dev-start {
-    docker compose up -d db
-    python -m uvicorn services.api:app --reload --port 8000
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $GrowenRoot 'scripts\start-dev.ps1')
 }
 
-function dev-stop {
+# Detener sólo la DB después de cerrar los procesos locales
+function dev-db-stop {
+    Push-Location $GrowenRoot
     docker compose stop db
+    Pop-Location
 }
 
 function dev-test {
-    pytest -q
+    & (Join-Path $GrowenRoot '.venv\Scripts\python.exe') -m pytest -q
 }
 
 # Docker completo
@@ -391,7 +424,7 @@ pytest-watch -c  # -c para clear screen
 
 ```powershell
 # Terminal 1: API
-python -m uvicorn services.api:app --reload
+.\.venv\Scripts\python.exe -m uvicorn services.api:app --reload
 
 # Terminal 2: Frontend
 cd frontend
@@ -422,14 +455,14 @@ Antes de hacer commit/push:
 
 ```powershell
 # 1. Tests locales pasan
-pytest -q
+.\.venv\Scripts\python.exe -m pytest -q
 
 # 2. Linting OK
 ruff check .
 black --check .
 
 # 3. No hay imports rotos
-python verify_imports.py
+.\.venv\Scripts\python.exe verify_imports.py
 
 # 4. (Opcional) Test Docker completo
 docker compose up -d --build
@@ -468,7 +501,7 @@ Usar `scripts/start_api_noquickedit.ps1` que deshabilita QuickEdit automáticame
 Si no necesitas ver los logs en tiempo real:
 ```powershell
 # API en background con logs a archivo
-Start-Process -NoNewWindow -FilePath python -ArgumentList "-m uvicorn services.api:app --reload --port 8000" -RedirectStandardOutput "logs\api_stdout.log" -RedirectStandardError "logs\api_stderr.log"
+Start-Process -NoNewWindow -FilePath .\.venv\Scripts\python.exe -ArgumentList "-m uvicorn services.api:app --reload --port 8000" -RedirectStandardOutput "logs\api_stdout.log" -RedirectStandardError "logs\api_stderr.log"
 
 # Ver logs cuando quieras
 Get-Content logs\api_stdout.log -Tail 50 -Wait
@@ -483,10 +516,11 @@ Get-Content logs\api_stdout.log -Tail 50 -Wait
 
 ### Problema: "DB connection refused"
 
-**Causa**: PostgreSQL Docker no arrancó
+**Causa**: PostgreSQL Docker no arrancó o está saludable sólo dentro de una red interna sin publicar `5433` al host.
 ```powershell
-# Verificar (contenedor se llama growen-db)
+# Verificar el servicio y el binding efectivo
 docker compose ps db
+docker port growen-postgres
 
 # Logs
 docker compose logs db --tail 20
@@ -494,6 +528,8 @@ docker compose logs db --tail 20
 # Reiniciar
 docker compose restart db
 ```
+
+Si `docker compose ps db` muestra `healthy` pero omite `127.0.0.1:5433->5432/tcp`, comprobar `docker inspect growen-postgres` y los listeners de Windows. `db` debe participar en `backend` y `host_access`: Docker no publica puertos de un contenedor conectado únicamente a una red `internal`. No eliminar el volumen `pgdata` para reparar este caso.
 
 ### Problema: "Redis connection refused"
 
@@ -511,6 +547,18 @@ docker compose logs redis --tail 20
 # Reiniciar
 docker compose restart redis
 ```
+
+Para el alta canónica batch también debe existir un consumidor de la cola `catalog`; un Redis saludable por sí solo no procesa jobs. Iniciar el entorno con `start-dev.ps1 -WithCatalogWorker`, verificar `docker compose --profile optional ps dramatiq` y el estado persistido en `canonical_batch_jobs`. Un HTTP 202 sólo confirma recepción/idempotencia, no finalización. Desde Administración, iniciar `catalog_worker` ahora inicia/verifica primero Redis y falla explícitamente si el broker no publica el puerto host.
+
+Evitar dos consumidores de desarrollo para la misma cola. Si `state.json` informa `catalog_worker_competing_local_pids`, revisar tanto `logs/worker_catalog.log` como `docker compose --profile optional logs dramatiq` y detener de forma coordinada el modo que no se utilizará; no asumir que la ausencia de un evento en Docker implica que el job no fue consumido.
+
+### Problema: la ejecución nueva no contiene logs de la API
+
+`start-dev.ps1` puede reutilizar una API saludable iniciada por un run anterior. En ese caso el proceso continúa escribiendo en el `api.stderr.log` de la ejecución que lo creó, mientras la carpeta nueva registra que fue reutilizado. Consultar `api_log_source_hint` y correlacionar timestamps/PID de `state.json`; no asumir que un log nuevo vacío significa que la petición no llegó.
+
+### Seguridad al inspeccionar Compose
+
+No incluir la salida completa de `docker compose config` en reportes: Compose expande valores de `.env`. Preferir `docker compose config --quiet`, `docker compose config --services`, `docker compose ps`, `docker port` e inspecciones focales sin variables de entorno.
 
 ### Problema: "Port 8000 already in use"
 
@@ -579,7 +627,12 @@ feature/nueva-funcionalidad
 1. Desarrollar en `feature/*` con API local
 2. Tests pasan → merge a `develop`
 3. Testing Docker en `develop` → todo OK
-4. PR a `main` → CI/CD → deploy
+4. Ejecutar localmente `scripts/check-quality.ps1`.
+5. Si se necesita una validación remota limpia, lanzar manualmente `Quality gate manual` en GitHub Actions.
+
+El workflow remoto usa `workflow_dispatch`: no tiene triggers de `push` ni `pull_request`, por lo que no consume créditos automáticamente. CI significa repetir instalación, lint, tests y build en un runner limpio para detectar dependencias implícitas o diferencias respecto de la máquina local.
+
+Las instalaciones oficiales usan locks con hashes. `scripts/update-locks.ps1` regenera los locks por servicio y `scripts/generate-sbom.ps1` actualiza el inventario CycloneDX. Ambos deben ejecutarse al cambiar dependencias y luego validarse con `scripts/check-quality.ps1`.
 
 ## Recursos Útiles
 
@@ -596,15 +649,23 @@ feature/nueva-funcionalidad
 **Comandos Esenciales**:
 ```powershell
 # Día a día (OPCIÓN 1 - Recomendada)
-.\start.bat                                      # API local + DB Docker (todo automático)
+.\scripts\start-dev.ps1                         # DB + API + Products MCP + Vue
 
 # Día a día (OPCIÓN 2 - Manual)
 docker compose up -d db                          # Infra
-python -m uvicorn services.api:app --reload      # API local
-cd frontend && npm run dev                        # Frontend local
+.\.venv\Scripts\python.exe -m uvicorn services.api:app --reload --port 8000
+cd frontend-vue && npm run dev                    # Frontend Vue local
+
+# Quality gate Vue aislado
+cd frontend-vue
+npm run typecheck
+npm test
+npm run test:e2e
+npm run build
+npm audit --audit-level=high
 
 # Antes de commit
-pytest -q                                         # Tests
+.\.venv\Scripts\python.exe -m pytest -q          # Tests
 SET USE_DOCKER_STACK=1 && .\start.bat            # Validar stack Docker
 docker compose down                               # Limpiar
 ```

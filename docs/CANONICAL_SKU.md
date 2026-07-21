@@ -19,6 +19,14 @@ Regex formal:
 ^[A-Z]{3}_[0-9]{4}_[A-Z0-9]{3}$
 ```
 
+Esta es la expresión contractual única: los separadores son guiones bajos y la secuencia tiene siempre cuatro dígitos.
+
+### Asignación concurrente
+
+Desde `20260717_canonical_batch_tracking`, el alta individual y el batch comparten `db/sku_generator.py`. PostgreSQL inicializa la fila por prefijo con `INSERT ... ON CONFLICT DO NOTHING`, la bloquea mediante `SELECT ... FOR UPDATE`, valida el límite `9999` y actualiza la secuencia dentro de la transacción que crea el canónico. La restricción única de `canonical_products.sku_custom` permanece como defensa final.
+
+`POST /canonical-products/sku-preview` y el legado `GET /catalog/next-seq` no reservan números. Sus valores son orientativos y nunca deben persistirse automáticamente como SKU definitivo.
+
 Estructura: `PPP_NNNN_SSS`
 - `PPP`: Prefijo de 3 letras derivado de `category_name` normalizado.
 - `NNNN`: Secuencia incremental (relleno con ceros a 4 dígitos) aislada por prefijo.

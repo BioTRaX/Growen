@@ -1,3 +1,8 @@
+<!-- NG-HEADER: Nombre de archivo: MCP_DIAGNOSTICS.md -->
+<!-- NG-HEADER: Ubicación: docs/MCP_DIAGNOSTICS.md -->
+<!-- NG-HEADER: Descripción: Diagnóstico de conectividad del servidor MCP Web Search. -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
+
 # Diagnóstico de Conectividad MCP Web Search
 
 ## Problema
@@ -67,7 +72,7 @@ docker exec -it growen-api-1 python scripts/diagnose_mcp_connection.py
 1. ✅ **Resolución DNS**: Verifica que `mcp_web_search` resuelva a una IP
 2. ✅ **Conexión TCP**: Verifica que el puerto 8002 esté escuchando
 3. ✅ **Endpoint `/health`**: Verifica que el servicio responda
-4. ✅ **Endpoint `/invoke_tool`**: Prueba una búsqueda web de ejemplo
+4. ✅ **Endpoint `/mcp`**: Inicializa una sesión, descubre tools y prueba una búsqueda
 
 ### 2. Script PowerShell (Windows)
 
@@ -204,7 +209,7 @@ async with httpx.AsyncClient(timeout=30.0) as client:  # Aumentar de 10.0 a 30.0
 ```yaml
 api:
   environment:
-    MCP_WEB_SEARCH_URL: "http://mcp_web_search:8002/invoke_tool"
+    MCP_WEB_SEARCH_URL: "http://mcp_web_search:8002/mcp"
     AI_USE_WEB_SEARCH: "1"
 ```
 
@@ -212,7 +217,7 @@ api:
 
 ```bash
 # Si ejecutas la API fuera de Docker
-MCP_WEB_SEARCH_URL=http://localhost:8102/invoke_tool
+MCP_WEB_SEARCH_URL=http://localhost:8102/mcp
 AI_USE_WEB_SEARCH=1
 ```
 
