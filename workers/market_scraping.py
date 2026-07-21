@@ -10,9 +10,14 @@ import os
 import sys
 import logging
 import asyncio
-from datetime import datetime
+import json
+import hashlib
+import threading
+import time
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 
 # FIX: Windows ProactorEventLoop no soporta psycopg async
 # Debe ejecutarse ANTES de cualquier import que use asyncio
@@ -23,7 +28,11 @@ import dramatiq  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy import select
 
-from db.models import CanonicalProduct, MarketSource
+# Inicializa el RedisBroker antes de registrar los actores de este módulo.
+from services import jobs as _jobs_bootstrap  # noqa: F401
+from db.models import CanonicalProduct, MarketSource, MarketUpdateSourceResult
+from services.market.jobs import claim_item, complete_item
+from services.market.pricing import persist_source_observation, recompute_market_reference
 from workers.scraping import scrape_static_price
 from workers.scraping.static_scraper import NetworkError, PriceNotFoundError
 from agent_core.config import settings
@@ -36,6 +45,57 @@ logger.setLevel(logging.INFO)
 DB_URL = os.getenv("DB_URL") or settings.db_url
 engine = create_async_engine(DB_URL, future=True)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+_CURRENT_ITEM_ID: int | None = None
+
+
+def _redis_client():
+    import redis
+    return redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+
+
+def _domain_lock(url: str):
+    hostname = (urlparse(url).hostname or "unknown").lower()
+    digest = hashlib.sha256(hostname.encode("utf-8")).hexdigest()[:24]
+    return _redis_client().lock(
+        f"growen:market_worker:domain:{digest}",
+        timeout=90,
+        blocking_timeout=60,
+    )
+
+
+def _structured_event(event: str, **fields: Any) -> None:
+    print(json.dumps({
+        "timestamp": datetime.now(UTC).isoformat(),
+        "service": "market_worker",
+        "event": event,
+        **fields,
+    }, ensure_ascii=False, default=str), flush=True)
+
+
+def _heartbeat_loop() -> None:
+    if os.getenv("MARKET_HEARTBEAT_ENABLED", "0") != "1":
+        return
+    client = _redis_client()
+    while True:
+        try:
+            client.set(
+                "growen:market_worker:heartbeat",
+                json.dumps({
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "queue": "market",
+                    "current_item_id": _CURRENT_ITEM_ID,
+                    "version": "market-v1",
+                }),
+                ex=120,
+            )
+        except Exception as exc:
+            logger.warning("No se pudo publicar heartbeat de Mercado: %s", exc)
+        time.sleep(30)
+
+
+if os.getenv("MARKET_HEARTBEAT_ENABLED", "0") == "1":
+    threading.Thread(target=_heartbeat_loop, name="market-heartbeat", daemon=True).start()
 
 
 async def scrape_market_source(
@@ -156,7 +216,7 @@ async def scrape_market_source(
                                 # Refrescar el objeto source para asegurar que está sincronizado con la BD
                                 await db.refresh(source)
                                 source.source_type = "dynamic"
-                                await db.commit()
+                                await db.flush()
                                 logger.info(
                                     f"[scraping] ✓ source_type actualizado a 'dynamic' para {source_label}"
                                 )
@@ -369,7 +429,7 @@ async def update_market_prices_for_product(product_id: int, db: AsyncSession) ->
         sources_updated = 0
         sources_failed = 0
         errors = []
-        successful_prices = []
+        successful_prices: list[Decimal] = []
         
         logger.info(
             f"[scraping] ═══════════════════════════════════════════════════════════"
@@ -397,7 +457,14 @@ async def update_market_prices_for_product(product_id: int, db: AsyncSession) ->
                 if price is not None:
                     # Éxito: actualizar precio
                     source.last_price = price
-                    successful_prices.append(float(price))
+                    source.currency = currency or source.currency or "ARS"
+                    if source.currency == "ARS":
+                        successful_prices.append(price)
+                    else:
+                        logger.warning(
+                            f"[scraping] Fuente '{source.source_name}' expresada en {source.currency}; "
+                            "se persiste pero se excluye del promedio ARS hasta contar con conversión FX"
+                        )
                     sources_updated += 1
                     
                     if usado_fallback:
@@ -472,8 +539,9 @@ async def update_market_prices_for_product(product_id: int, db: AsyncSession) ->
         # 4. Calcular market_price_reference (promedio de precios obtenidos)
         market_price_ref = None
         if successful_prices:
-            avg_price = sum(successful_prices) / len(successful_prices)
-            market_price_ref = Decimal(str(round(avg_price, 2)))
+            previous_market_price = product.market_price_reference
+            avg_price = sum(successful_prices, Decimal("0")) / Decimal(len(successful_prices))
+            market_price_ref = avg_price.quantize(Decimal("0.01"))
             product.market_price_reference = market_price_ref
             product.market_price_updated_at = datetime.utcnow()
             
@@ -490,7 +558,8 @@ async def update_market_prices_for_product(product_id: int, db: AsyncSession) ->
                     db=db,
                     product_id=product_id,
                     new_market_price=market_price_ref,
-                    currency="ARS"  # TODO: Obtener currency de las fuentes
+                    currency="ARS",
+                    previous_market_price=previous_market_price,
                 )
                 
                 if alerts_created:
@@ -556,8 +625,10 @@ async def update_market_prices_for_product(product_id: int, db: AsyncSession) ->
             f"[scraping] ═══════════════════════════════════════════════════════════"
         )
         
+        completed_successfully = sources_updated > 0
         return {
-            "success": True,
+            "success": completed_successfully,
+            "status": "completed" if sources_failed == 0 else ("partial" if sources_updated else "failed"),
             "product_id": product_id,
             "product_name": product_name,
             "sources_total": sources_total,
@@ -593,6 +664,167 @@ async def update_market_prices_for_product(product_id: int, db: AsyncSession) ->
         }
 
 
+async def process_market_item(item_id: int) -> dict[str, Any]:
+    """Procesa un item persistente y guarda resultados por fuente exactamente una vez."""
+    global _CURRENT_ITEM_ID
+    _CURRENT_ITEM_ID = item_id
+    _structured_event("item_received", item_id=item_id)
+    async with SessionLocal() as db:
+        item = await claim_item(db, item_id)
+        if not item:
+            _structured_event("item_skipped", item_id=item_id, reason="not_queued")
+            _CURRENT_ITEM_ID = None
+            return {"item_id": item_id, "status": "skipped"}
+        product = await db.get(CanonicalProduct, item.product_id)
+        if not product:
+            await complete_item(
+                db, item_id, status="failed", sources_total=0, sources_succeeded=0,
+                sources_failed=0, market_price_reference=None,
+                error_code="product_not_found", error_message="Producto no encontrado",
+            )
+            _CURRENT_ITEM_ID = None
+            return {"item_id": item_id, "status": "failed"}
+        sources = list((await db.execute(
+            select(MarketSource).where(
+                MarketSource.product_id == product.id,
+                MarketSource.is_active.is_(True),
+                MarketSource.validation_status != "rejected",
+                MarketSource.currency == "ARS",
+                MarketSource.source_type != "manual",
+                MarketSource.url.is_not(None),
+            ).order_by(MarketSource.is_mandatory.desc(), MarketSource.id)
+        )).scalars())
+        succeeded = 0
+        failed = 0
+        errors: list[str] = []
+        previous_reference = product.market_price_reference
+        try:
+            for source in sources:
+                started = time.monotonic()
+                source_result = MarketUpdateSourceResult(item_id=item.id, source_id=source.id, status="running")
+                db.add(source_result)
+                await db.flush()
+                domain_lock = _domain_lock(source.url or "")
+                if not domain_lock.acquire():
+                    price, currency, error, used_browser = None, None, "dominio ocupado", False
+                else:
+                    try:
+                        price, currency, error, used_browser = await scrape_market_source(source, product.name, db)
+                    finally:
+                        try:
+                            domain_lock.release()
+                        except Exception:
+                            logger.warning("El lock del dominio expiró antes de liberarse")
+                source_result.duration_ms = int((time.monotonic() - started) * 1000)
+                source_result.used_browser = used_browser
+                source_result.completed_at = datetime.utcnow()
+                if price is not None and (currency or "ARS").upper() == "ARS":
+                    observation = await persist_source_observation(
+                        db,
+                        product_id=product.id,
+                        source=source,
+                        price=price,
+                        capture_method="dynamic" if used_browser or source.source_type == "dynamic" else "static",
+                        job_id=item.job_id,
+                        job_item_id=item.id,
+                    )
+                    source_result.status = "succeeded"
+                    source_result.observation_id = observation.id
+                    succeeded += 1
+                    _structured_event(
+                        "source_succeeded", item_id=item.id, product_id=product.id,
+                        source_id=source.id, duration_ms=source_result.duration_ms,
+                    )
+                else:
+                    failed += 1
+                    source_result.status = "failed"
+                    if price is not None and (currency or "ARS").upper() != "ARS":
+                        source.validation_status = "rejected"
+                        source.is_active = False
+                        source.ars_confirmed = False
+                        source_result.error_code = "currency_not_ars"
+                        source_result.error_message = "La fuente devolvió una moneda distinta de ARS"
+                    else:
+                        source_result.error_code = "scrape_failed"
+                        source_result.error_message = (error or "No se pudo obtener el precio")[:1000]
+                        source.last_error_at = datetime.utcnow()
+                        source.last_error_code = source_result.error_code
+                        source.last_error_message = source_result.error_message
+                    errors.append(source_result.error_message or "Error de fuente")
+                    _structured_event(
+                        "source_failed", item_id=item.id, product_id=product.id,
+                        source_id=source.id, error_code=source_result.error_code,
+                    )
+                await db.flush()
+
+            reference, coverage, snapshot = await recompute_market_reference(
+                db,
+                product_id=product.id,
+                job_id=item.job_id,
+                job_item_id=item.id,
+            )
+            if reference is not None:
+                try:
+                    from services.market.alerts import detect_price_alerts
+                    await detect_price_alerts(
+                        db=db,
+                        product_id=product.id,
+                        new_market_price=reference,
+                        currency="ARS",
+                        previous_market_price=previous_reference,
+                    )
+                except Exception as exc:
+                    logger.exception("No se pudieron generar alertas del item %s: %s", item.id, exc)
+            status = "succeeded" if failed == 0 and reference is not None else "partial" if reference is not None else "failed"
+            await complete_item(
+                db,
+                item.id,
+                status=status,
+                sources_total=len(sources),
+                sources_succeeded=succeeded,
+                sources_failed=failed,
+                market_price_reference=reference,
+                error_code=None if status != "failed" else "no_effective_prices",
+                error_message="; ".join(errors[:5]) if errors else None,
+            )
+            _structured_event(
+                "item_finished", item_id=item.id, product_id=product.id, status=status,
+                sources_total=len(sources), sources_succeeded=succeeded,
+                sources_failed=failed, effective_sources=coverage.effective,
+                reference_observation_id=snapshot.id if snapshot else None,
+            )
+            return {"item_id": item.id, "status": status, "market_price_reference": float(reference) if reference else None}
+        except Exception as exc:
+            await db.rollback()
+            await complete_item(
+                db,
+                item.id,
+                status="failed",
+                sources_total=len(sources),
+                sources_succeeded=succeeded,
+                sources_failed=max(failed, len(sources) - succeeded),
+                market_price_reference=None,
+                error_code="unexpected_error",
+                error_message=str(exc),
+            )
+            _structured_event("item_failed", item_id=item.id, product_id=product.id, error=str(exc))
+            raise
+        finally:
+            _CURRENT_ITEM_ID = None
+
+
+@dramatiq.actor(
+    queue_name="market",
+    max_retries=3,
+    min_backoff=1000,
+    max_backoff=10000,
+    time_limit=300000,
+)
+def process_market_item_task(item_id: int) -> None:
+    """Actor productivo para jobs persistentes de Mercado."""
+    asyncio.run(process_market_item(item_id))
+
+
 @dramatiq.actor(queue_name="market", max_retries=3, time_limit=300000)  # 5 min timeout
 def refresh_market_prices_task(product_id: int) -> None:
     """
@@ -616,6 +848,10 @@ def refresh_market_prices_task(product_id: int) -> None:
                 )
             else:
                 logger.error(f"Actualización fallida para producto {product_id}: {result.get('error')}")
+                raise RuntimeError(
+                    result.get("error")
+                    or f"No se pudo actualizar ninguna fuente del producto {product_id}"
+                )
             
             return result
     

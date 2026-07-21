@@ -1,32 +1,44 @@
 #!/usr/bin/env python
-"""Script temporal para verificar tablas de mercado."""
-from sqlalchemy import create_engine, text
-from urllib.parse import quote_plus
+# NG-HEADER: Nombre de archivo: check_market_tables.py
+# NG-HEADER: Ubicación: check_market_tables.py
+# NG-HEADER: Descripción: Verifica tablas y conteos del dominio Mercado sin exponer credenciales.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 
-pw = quote_plus('GrowenBot=01')
-engine = create_engine(f'postgresql+psycopg://growen:{pw}@127.0.0.1:5433/growen')
+"""Verifica las tablas del dominio Mercado usando la configuración segura del proyecto."""
 
-print("\n=== VERIFICACIÓN DE TABLAS DE MERCADO ===\n")
+import asyncio
 
-with engine.connect() as conn:
-    # Listar tablas market_*
-    result = conn.execute(text(
-        "SELECT table_name FROM information_schema.tables "
-        "WHERE table_schema = 'public' AND table_name LIKE 'market%' "
-        "ORDER BY table_name"
-    ))
-    tables = [row[0] for row in result]
-    
-    if tables:
-        print(f"✅ Tablas encontradas: {', '.join(tables)}\n")
-        
-        # Contar registros en cada tabla
-        for table in tables:
-            count_result = conn.execute(text(f"SELECT COUNT(*) FROM {table}"))
-            count = count_result.scalar()
-            print(f"   {table}: {count:,} registros")
-    else:
-        print("❌ NO SE ENCONTRARON TABLAS DE MERCADO")
-        print("\nVerificando si existieron antes (buscando en migraciones)...")
+from sqlalchemy import inspect, text
+from sqlalchemy.ext.asyncio import create_async_engine
 
-print("\n" + "="*50)
+from agent_core.config import settings
+
+
+async def main() -> None:
+    engine = create_async_engine(settings.db_url, future=True)
+
+    try:
+        async with engine.connect() as connection:
+            table_names = await connection.run_sync(
+                lambda sync_connection: inspect(sync_connection).get_table_names()
+            )
+            tables = sorted(name for name in table_names if name.startswith("market"))
+
+            print("\n=== VERIFICACIÓN DE TABLAS DE MERCADO ===\n")
+            if not tables:
+                print("No se encontraron tablas del dominio Mercado.")
+                return
+
+            print(f"Tablas encontradas: {', '.join(tables)}\n")
+            for table in tables:
+                quoted_table = connection.dialect.identifier_preparer.quote(table)
+                count = await connection.scalar(text(f"SELECT COUNT(*) FROM {quoted_table}"))
+                print(f"   {table}: {count:,} registros")
+    finally:
+        await engine.dispose()
+
+    print("\n" + "=" * 50)
+
+
+if __name__ == "__main__":
+    asyncio.run(main(), loop_factory=asyncio.SelectorEventLoop)

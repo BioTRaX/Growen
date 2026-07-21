@@ -25,6 +25,7 @@ from sqlalchemy import (
     Index,
     Enum,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -436,6 +437,10 @@ class MarketSource(Base):
     __table_args__ = (
         Index("idx_market_sources_product_id", "product_id"),
         UniqueConstraint("product_id", "url", name="uq_market_sources_product_url"),
+        CheckConstraint(
+            "source_type IS NULL OR source_type IN ('static','dynamic','manual')",
+            name="ck_market_sources_source_type",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -443,17 +448,39 @@ class MarketSource(Base):
         ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
     )
     source_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    url: Mapped[str] = mapped_column(String(500), nullable=False)
+    url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     last_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
     last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    is_mandatory: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    # Campos adicionales para gestión de scraping
-    currency: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, default="ARS")
-    source_type: Mapped[Optional[str]] = mapped_column(
-        Enum("static", "dynamic", name="source_type_enum"), nullable=True, default="static"
+    is_mandatory: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
     )
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    validation_status: Mapped[str] = mapped_column(
+        String(24), default="warning", server_default="warning", nullable=False
+    )
+    ars_confirmed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    argentina_delivery_confirmed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    validation_detail: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    last_success_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # Campos adicionales para gestión de scraping
+    currency: Mapped[Optional[str]] = mapped_column(
+        String(10), nullable=True, default="ARS", server_default="ARS"
+    )
+    source_type: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, default="static", server_default="static"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        default=datetime.utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now()
+    )
 
     product: Mapped["CanonicalProduct"] = relationship(back_populates="market_sources")
 
@@ -482,17 +509,158 @@ class MarketPriceHistory(Base):
         ForeignKey("market_sources.id", ondelete="SET NULL"), nullable=True
     )
     price: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False)
-    currency: Mapped[str] = mapped_column(String(10), default="ARS", nullable=False)
+    currency: Mapped[str] = mapped_column(
+        String(10), default="ARS", server_default="ARS", nullable=False
+    )
     # Metadatos adicionales para auditoría
     source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     source_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     # Diferencia porcentual con el precio anterior (calculado al insertar)
     price_change_pct: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
+    observation_type: Mapped[str] = mapped_column(
+        String(16), default="source", server_default="source", nullable=False
+    )
+    capture_method: Mapped[str] = mapped_column(
+        String(16), default="static", server_default="static", nullable=False
+    )
+    job_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("market_update_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    job_item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("market_update_items.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        default=datetime.utcnow, server_default=func.now(), nullable=False
+    )
 
     # Relaciones
     product: Mapped["CanonicalProduct"] = relationship(back_populates="price_history")
     source: Mapped[Optional["MarketSource"]] = relationship()
+
+
+class MarketUpdateJob(Base):
+    """Solicitud auditable de actualización de uno o más productos de Mercado."""
+
+    __tablename__ = "market_update_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','partial','succeeded','failed','cancelled')",
+            name="ck_market_update_jobs_status",
+        ),
+        Index("ix_market_update_jobs_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trigger: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    correlation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    config_snapshot: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    total_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    processed_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    success_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    error_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    items: Mapped[list["MarketUpdateItem"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan", order_by="MarketUpdateItem.id"
+    )
+
+
+class MarketUpdateItem(Base):
+    """Estado terminal e idempotencia de una actualización por producto."""
+
+    __tablename__ = "market_update_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','partial','succeeded','failed','cancelled')",
+            name="ck_market_update_items_status",
+        ),
+        Index("ix_market_update_items_job_status", "job_id", "status"),
+        Index("ix_market_update_items_product_created", "product_id", "created_at"),
+        Index(
+            "uq_market_update_items_active_product",
+            "product_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+            sqlite_where=text("status IN ('queued', 'running')"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("market_update_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sources_total: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sources_succeeded: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sources_failed: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    market_price_reference: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    job: Mapped["MarketUpdateJob"] = relationship(back_populates="items")
+    source_results: Mapped[list["MarketUpdateSourceResult"]] = relationship(
+        back_populates="item", cascade="all, delete-orphan", order_by="MarketUpdateSourceResult.id"
+    )
+
+
+class MarketUpdateSourceResult(Base):
+    """Resultado de scraping o captura manual de una fuente dentro de un job."""
+
+    __tablename__ = "market_update_source_results"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','succeeded','failed','skipped')",
+            name="ck_market_update_source_results_status",
+        ),
+        Index("ix_market_update_source_results_item_status", "item_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("market_update_items.id", ondelete="CASCADE"), nullable=False
+    )
+    source_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("market_sources.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    http_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    used_browser: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    observation_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("market_price_history.id", ondelete="SET NULL"), nullable=True
+    )
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    retryable: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    item: Mapped["MarketUpdateItem"] = relationship(back_populates="source_results")
 
 
 class ProductEquivalence(Base):
@@ -1140,7 +1308,8 @@ class MarketAlert(Base):
     severity: Mapped[str] = mapped_column(
         Enum("low", "medium", "high", "critical", name="alert_severity_enum"),
         nullable=False,
-        default="medium"
+        default="medium",
+        server_default="medium",
     )
     
     # Valores involucrados
@@ -1152,22 +1321,41 @@ class MarketAlert(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     
     # Estado de la alerta
-    resolved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    resolved: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     resolved_by: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     resolution_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    job_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("market_update_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    job_item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("market_update_items.id", ondelete="SET NULL"), nullable=True
+    )
+    source_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("market_sources.id", ondelete="SET NULL"), nullable=True
+    )
+    observation_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("market_price_history.id", ondelete="SET NULL"), nullable=True
+    )
     
     # Notificaciones enviadas
-    email_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    email_sent: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     email_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
     # Timestamps
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        default=datetime.utcnow, server_default=func.now(), nullable=False
+    )
     updated_at: Mapped[datetime] = mapped_column(
         default=datetime.utcnow, 
         onupdate=datetime.utcnow, 
+        server_default=func.now(),
         nullable=False
     )
     

@@ -153,6 +153,40 @@ services:
     networks:
       - backend
       - egress
+  market_worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.market-worker
+    container_name: growen-market-worker
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      MARKET_HEARTBEAT_ENABLED: "1"
+      MARKET_CONCURRENCY: ${MARKET_CONCURRENCY:-4}
+      MARKET_PRICE_FRESHNESS_DAYS: ${MARKET_PRICE_FRESHNESS_DAYS:-7}
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    profiles: ["optional"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{.Name}}"
+    networks:
+      - backend
+      - egress
   scheduler:
     image: alpine:3.19
     command: ["sh","-c","sleep infinity"]

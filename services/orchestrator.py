@@ -53,17 +53,20 @@ def _has_docker() -> bool:
       - Cannot connect to the Docker daemon
 
     To avoid surfacing these failures to the UI, proactively check engine
-    health via `docker info` with a short timeout. If it fails, behave as if
+    health via `docker info` with a bounded timeout. Docker Desktop on Windows
+    can legitimately need several seconds to answer even when containers are
+    healthy, so the timeout is configurable and defaults to eight seconds. If it fails, behave as if
     Docker isn't available and fall back to the lazy in-process registry.
     """
     if not (shutil.which("docker") and COMPOSE_FILE.exists()):
         return False
     try:
+        timeout_s = max(1.0, float(os.getenv("DOCKER_PROBE_TIMEOUT_S", "8")))
         proc = subprocess.run(
             ["docker", "info", "-f", "{{.ServerVersion}}"],
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=timeout_s,
         )
         if proc.returncode != 0:
             return False
@@ -174,11 +177,20 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
             except Exception as e:
                 return ServiceStatus(name=name, status="failed", ok=False, detail=str(e))
     
-    # Manejo especial para market_worker (proceso local, no Docker)
+    # Worker Mercado: contenedor dedicado con Chromium.
     if name == "market_worker":
         current = status_service(name)
         if current.status == "running":
             return ServiceStatus(name=name, status="running", ok=True, detail="noop: already running")
+        if not _has_docker():
+            return ServiceStatus(name=name, status="failed", ok=False, detail="Docker no disponible")
+        redis_ok, redis_detail = _ensure_local_redis()
+        if not redis_ok:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=redis_detail)
+        proc = _compose(["--profile", "optional", "up", "-d", "--build", "--no-deps", "market_worker"])
+        ok = proc.returncode == 0
+        detail = (proc.stdout or proc.stderr or "docker compose sin salida").strip()
+        return ServiceStatus(name=name, status="running" if ok else "failed", ok=ok, detail=detail[-1000:])
         
         script_path = ROOT / "scripts" / "start_worker_market.cmd"
         if not script_path.exists():
@@ -189,8 +201,8 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
             _MARKET_WORKER_PROC = subprocess.Popen(
                 [str(script_path)],
                 cwd=str(ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
             )
             return ServiceStatus(name=name, status="running", ok=True, detail=f"Started with PID {_MARKET_WORKER_PROC.pid}")
@@ -317,6 +329,15 @@ def stop_service(name: str, correlation_id: str) -> ServiceStatus:
     
     # Manejo especial para market_worker
     if name == "market_worker":
+        if _has_docker():
+            proc = _compose(["--profile", "optional", "stop", "market_worker"])
+            ok = proc.returncode == 0
+            return ServiceStatus(
+                name=name,
+                status="stopped" if ok else "failed",
+                ok=ok,
+                detail=(proc.stdout or proc.stderr or "docker compose sin salida").strip()[-1000:],
+            )
         if _MARKET_WORKER_PROC is None or _MARKET_WORKER_PROC.poll() is not None:
             # Proceso no existe o ya terminó
             # Buscar por nombre de proceso como fallback
@@ -476,6 +497,22 @@ def status_service(name: str) -> ServiceStatus:
     
     # Manejo especial para market_worker
     if name == "market_worker":
+        if _has_docker():
+            proc = _compose(["--profile", "optional", "ps", "market_worker"])
+            output = (proc.stdout or proc.stderr or "").lower()
+            running = proc.returncode == 0 and any(token in output for token in ("running", "up", "healthy"))
+            if "unhealthy" in output:
+                status = "degraded"
+            elif any(token in output for token in ("starting", "restarting")):
+                status = "starting"
+            else:
+                status = "running" if running else "stopped"
+            return ServiceStatus(
+                name=name,
+                status=status,
+                ok=status not in {"degraded"},
+                detail=(proc.stdout or proc.stderr or "Not running").strip()[-1000:],
+            )
         # Verificar proceso global primero
         if _MARKET_WORKER_PROC is not None and _MARKET_WORKER_PROC.poll() is None:
             return ServiceStatus(name=name, status="running", ok=True, detail=f"Running PID {_MARKET_WORKER_PROC.pid}")

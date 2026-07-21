@@ -37,7 +37,7 @@ import sys
 import os
 import asyncio
 import argparse
-from datetime import datetime
+from datetime import UTC, datetime
 
 # Agregar directorio raíz al path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -97,7 +97,7 @@ async def main():
     print("=" * 70)
     print("ACTUALIZACIÓN AUTOMÁTICA DE PRECIOS DE MERCADO")
     print("=" * 70)
-    print(f"Ejecutado: {datetime.utcnow().isoformat()}Z")
+    print(f"Ejecutado: {datetime.now(UTC).isoformat()}")
     print()
     
     # Modo status only

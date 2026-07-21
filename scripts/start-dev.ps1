@@ -11,6 +11,7 @@ param(
     [ValidateSet('Core', 'All', 'Off')]
     [string]$McpMode = 'Core',
     [switch]$WithCatalogWorker,
+    [switch]$WithMarketWorker,
     [switch]$CheckOnly
 )
 
@@ -427,6 +428,30 @@ function Ensure-CatalogWorker {
     Write-DevLog 'Redis y Dramatiq están disponibles para la cola catalog.' 'OK'
 }
 
+function Ensure-MarketWorker {
+    if (-not $WithMarketWorker) {
+        return
+    }
+    Invoke-LoggedNativeCommand -FilePath 'docker' `
+        -ArgumentList @('compose', 'up', '-d', 'redis') `
+        -LogPath $databaseLog `
+        -Description 'Iniciando Redis para el worker Mercado'
+    Invoke-LoggedNativeCommand -FilePath 'docker' `
+        -ArgumentList @('compose', '--profile', 'optional', 'up', '-d', '--build', '--no-deps', 'market_worker') `
+        -LogPath $databaseLog `
+        -Description 'Compilando e iniciando el worker Docker de Mercado'
+    if (-not (Wait-TcpPort -HostName '127.0.0.1' -Port 6379 -TimeoutSec 30)) {
+        throw "Redis no respondió para el worker Mercado. Ver: $databaseLog"
+    }
+    $running = Invoke-NativeProcess -FilePath 'docker' `
+        -ArgumentList @('compose', '--profile', 'optional', 'ps', '--services', '--status', 'running')
+    $runningNames = @($running.Stdout | ForEach-Object { "$_".Trim() })
+    if ($running.ExitCode -ne 0 -or $runningNames -notcontains 'market_worker') {
+        throw "El worker Mercado no quedó en ejecución. Ver: $databaseLog"
+    }
+    Write-DevLog 'Worker Docker Mercado disponible para la cola market.' 'OK'
+}
+
 function Invoke-DatabaseMigrations {
     Invoke-LoggedNativeCommand -FilePath $python `
         -ArgumentList @('-m', 'alembic', 'upgrade', 'head') `
@@ -526,7 +551,7 @@ try {
     Write-DevLog "Inicio del entorno de desarrollo. Raíz: $root"
     Assert-DevelopmentPrerequisites
     if ($CheckOnly) {
-        Write-DevLog "Configuración válida. MCP mode: $McpMode. Catalog worker: $([bool]$WithCatalogWorker). No se iniciaron servicios ni migraciones." 'OK'
+        Write-DevLog "Configuración válida. MCP mode: $McpMode. Catalog worker: $([bool]$WithCatalogWorker). Market worker: $([bool]$WithMarketWorker). No se iniciaron servicios ni migraciones." 'OK'
         exit 0
     }
 
@@ -540,6 +565,7 @@ try {
     Ensure-FrontendDependencies
     Ensure-DevelopmentDatabase
     Ensure-CatalogWorker
+    Ensure-MarketWorker
     Invoke-DatabaseMigrations
 
     $apiProcess = Start-DevelopmentApi
@@ -578,6 +604,9 @@ try {
         catalog_worker_health = if ($WithCatalogWorker) { 'running' } else { 'off' }
         catalog_worker_log_command = if ($WithCatalogWorker) { 'docker compose --profile optional logs -f dramatiq redis' } else { $null }
         catalog_worker_competing_local_pids = if ($WithCatalogWorker) { @($localCatalogWorkerPids) } else { @() }
+        market_worker_mode = if ($WithMarketWorker) { 'docker-compose' } else { 'off' }
+        market_worker_health = if ($WithMarketWorker) { 'running' } else { 'off' }
+        market_worker_log_command = if ($WithMarketWorker) { 'docker compose --profile optional logs -f market_worker redis' } else { $null }
         mcp_mode = $McpMode
         mcp_products_url = if ($McpMode -in @('Core', 'All')) { 'http://127.0.0.1:8100/mcp' } else { $null }
         mcp_products_pid = if ($mcpProductsProcess) { $mcpProductsProcess.Id } else { $null }

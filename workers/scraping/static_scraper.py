@@ -19,6 +19,7 @@ Uso:
 """
 
 import logging
+import json
 import re
 from decimal import Decimal, InvalidOperation
 from typing import Optional, Tuple
@@ -265,6 +266,28 @@ def extract_price_generic(soup: BeautifulSoup) -> Optional[str]:
         Texto del precio o None si no se encontró
     """
     logger.debug("Usando extractor genérico")
+
+    # Los datos estructurados describen el producto principal y no mezclan
+    # carrito, cuotas, productos relacionados ni carruseles promocionales.
+    structured_price = extract_price_structured_data(soup)
+    if structured_price:
+        return structured_price
+
+    # Antes de recorrer clases genéricas, priorizar contenedores del producto.
+    for selector in [
+        "meta[property='product:price:amount']",
+        "[itemprop='price'][content]",
+        "main p.price",
+        ".summary p.price",
+        "article p.price",
+    ]:
+        element = soup.select_one(selector)
+        if not element:
+            continue
+        value = element.get("content") or element.get_text(strip=True)
+        if value and re.search(r"\d", value):
+            currency = element.get("content") and "ARS " or ""
+            return f"{currency}{value}"
     
     # Recolectar múltiples candidatos
     price_candidates = []
@@ -319,4 +342,45 @@ def extract_price_generic(soup: BeautifulSoup) -> Optional[str]:
             logger.debug(f"Precio encontrado con regex: {match}")
             return match
     
+    return None
+
+
+def extract_price_structured_data(soup: BeautifulSoup) -> Optional[str]:
+    """Extrae el Offer del Product principal desde JSON-LD de Schema.org."""
+
+    def walk(value):
+        if isinstance(value, dict):
+            yield value
+            for child in value.values():
+                yield from walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from walk(child)
+
+    for script in soup.select("script[type='application/ld+json']"):
+        try:
+            payload = json.loads(script.string or script.get_text() or "")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        for node in walk(payload):
+            node_type = node.get("@type")
+            node_types = node_type if isinstance(node_type, list) else [node_type]
+            if "Product" not in node_types:
+                continue
+            offers = node.get("offers") or []
+            if isinstance(offers, dict):
+                offers = [offers]
+            for offer in offers:
+                if not isinstance(offer, dict):
+                    continue
+                candidates = [offer]
+                specifications = offer.get("priceSpecification") or []
+                if isinstance(specifications, dict):
+                    specifications = [specifications]
+                candidates.extend(item for item in specifications if isinstance(item, dict))
+                for candidate in candidates:
+                    price = candidate.get("price")
+                    currency = candidate.get("priceCurrency") or offer.get("priceCurrency") or "ARS"
+                    if price is not None and str(currency).upper() == "ARS":
+                        return f"ARS {price}"
     return None

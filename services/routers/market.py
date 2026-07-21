@@ -6,9 +6,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from decimal import Decimal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel, Field, field_validator, HttpUrl
@@ -18,15 +19,33 @@ from sqlalchemy.orm import selectinload
 import logging
 import traceback
 
-from db.models import CanonicalProduct, Category, ProductEquivalence, SupplierProduct, MarketSource, MarketAlert, Product
-from db.text_utils import stylize_product_name
+from db.models import (
+    CanonicalProduct,
+    Category,
+    ProductEquivalence,
+    SupplierProduct,
+    MarketSource,
+    MarketAlert,
+    MarketPriceHistory,
+    MarketUpdateItem,
+    MarketUpdateJob,
+    Product,
+)
 from db.session import get_session
-from services.auth import require_roles, require_csrf
+from services.auth import SessionData, current_session, require_roles, require_csrf
+from services.market.jobs import complete_item, create_update_job, job_payload
+from services.market.pricing import AUTOMATIC_FRESHNESS_DAYS, compare_sale_to_market, persist_source_observation, recompute_market_reference
+from services.market.source_validation import initial_validation, validate_public_url
 
 # Logger para errores del módulo
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/market", tags=["market"])
+
+
+def _market_product_name(product: CanonicalProduct) -> str:
+    """Devuelve el nombre canónico; el SKU se expone en su campo propio."""
+    return product.name or f"Producto {product.id}"
 
 
 # Schemas de respuesta
@@ -43,6 +62,13 @@ class MarketProductItem(BaseModel):
     last_market_update: Optional[str] = Field(None, description="Fecha de última actualización del mercado (ISO 8601)")
     has_active_alerts: bool = Field(False, description="Indica si hay alertas activas de precio")
     active_alerts_count: int = Field(0, description="Número de alertas activas")
+    price_delta_pct: Optional[float] = None
+    price_position: str = "unavailable"
+    comparison_label: str = "Sin comparación"
+    effective_sources_count: int = 0
+    stale_sources_count: int = 0
+    warning_sources_count: int = 0
+    last_job_status: Optional[str] = None
     category_id: Optional[int] = Field(None, description="ID de categoría")
     category_name: Optional[str] = Field(None, description="Nombre de categoría")
     supplier_id: Optional[int] = Field(None, description="ID del proveedor principal")
@@ -90,9 +116,8 @@ async def list_market_products(
     """
     Lista productos del módulo Mercado con filtros opcionales.
     
-    La lógica de "preferred_name" se determina de la siguiente manera:
-    1. Si existe nombre personalizado (sku_custom), usar ese nombre
-    2. Si no, usar el nombre base del producto canónico
+    `preferred_name` siempre representa el nombre base del producto canónico.
+    `sku_custom` y `ng_sku` se exponen separadamente como `product_sku`.
     
     El precio de venta proviene del campo `sale_price` del producto canónico.
     
@@ -115,12 +140,54 @@ async def list_market_products(
         .subquery()
     )
     
-    # Query principal con join de alertas
+    freshness_threshold = datetime.utcnow() - timedelta(days=AUTOMATIC_FRESHNESS_DAYS)
+    source_aggregate = (
+        select(
+            MarketSource.product_id.label("product_id"),
+            func.min(MarketSource.last_price).label("market_min"),
+            func.max(MarketSource.last_price).label("market_max"),
+            func.count().filter(
+                MarketSource.last_price.is_not(None),
+                or_(MarketSource.source_type == "manual", MarketSource.last_success_at >= freshness_threshold),
+            ).label("effective_count"),
+            func.count().filter(
+                MarketSource.last_price.is_not(None),
+                MarketSource.source_type != "manual",
+                or_(MarketSource.last_success_at.is_(None), MarketSource.last_success_at < freshness_threshold),
+            ).label("stale_count"),
+            func.count().filter(MarketSource.validation_status == "warning").label("warning_count"),
+        )
+        .where(
+            MarketSource.is_active.is_(True),
+            MarketSource.validation_status != "rejected",
+            MarketSource.currency == "ARS",
+        )
+        .group_by(MarketSource.product_id)
+        .subquery()
+    )
+    latest_job_status = (
+        select(MarketUpdateItem.status)
+        .where(MarketUpdateItem.product_id == CanonicalProduct.id)
+        .order_by(MarketUpdateItem.created_at.desc())
+        .limit(1)
+        .correlate(CanonicalProduct)
+        .scalar_subquery()
+    )
+
+    # Query principal con agregados; evita consultas por producto.
     query = select(
         CanonicalProduct,
-        func.coalesce(alert_subquery.c.alert_count, 0).label("alert_count")
+        func.coalesce(alert_subquery.c.alert_count, 0).label("alert_count"),
+        source_aggregate.c.market_min,
+        source_aggregate.c.market_max,
+        func.coalesce(source_aggregate.c.effective_count, 0),
+        func.coalesce(source_aggregate.c.stale_count, 0),
+        func.coalesce(source_aggregate.c.warning_count, 0),
+        latest_job_status.label("last_job_status"),
     ).outerjoin(
         alert_subquery, CanonicalProduct.id == alert_subquery.c.product_id
+    ).outerjoin(
+        source_aggregate, CanonicalProduct.id == source_aggregate.c.product_id
     ).options(
         selectinload(CanonicalProduct.category),
         selectinload(CanonicalProduct.subcategory),
@@ -190,8 +257,7 @@ async def list_market_products(
         prod = row[0]  # CanonicalProduct
         alert_count = row[1] if len(row) > 1 else 0  # alert_count
         
-        # preferred_name: usar nombre estilizado del producto canónico
-        preferred_name = stylize_product_name(prod.name) or prod.name or f"Producto {prod.id}"
+        preferred_name = _market_product_name(prod)
         
         # SKU: priorizar sku_custom, luego ng_sku, finalmente el ID
         product_sku = prod.sku_custom or prod.ng_sku or f"ID-{prod.id}"
@@ -226,37 +292,9 @@ async def list_market_products(
                 if hasattr(sp, 'internal_product_id') and sp.internal_product_id:
                     internal_product_id = sp.internal_product_id
         
-        # Si no encontramos Product interno desde equivalencias precargadas, buscar directamente
-        if internal_product_id is None:
-            product_query = (
-                select(Product.id)
-                .join(SupplierProduct, SupplierProduct.internal_product_id == Product.id)
-                .join(ProductEquivalence, ProductEquivalence.supplier_product_id == SupplierProduct.id)
-                .where(ProductEquivalence.canonical_product_id == prod.id)
-                .limit(1)
-            )
-            internal_product_id = await db.scalar(product_query)
-        
-        # Calcular market_price_min, market_price_max desde market_sources
-        market_price_min_val = None
-        market_price_max_val = None
-        
-        # Consultar precios de fuentes del producto
-        query_prices = (
-            select(MarketSource.last_price)
-            .where(
-                and_(
-                    MarketSource.product_id == prod.id,
-                    MarketSource.last_price.isnot(None)
-                )
-            )
-        )
-        result_prices = await db.execute(query_prices)
-        prices = [float(p) for p in result_prices.scalars().all() if p is not None]
-        
-        if prices:
-            market_price_min_val = min(prices)
-            market_price_max_val = max(prices)
+        market_price_min_val = float(row[2]) if row[2] is not None else None
+        market_price_max_val = float(row[3]) if row[3] is not None else None
+        comparison = compare_sale_to_market(prod.sale_price, prod.market_price_reference)
         
         # Usar market_price_updated_at del producto como last_market_update
         last_market_update_val = None
@@ -275,6 +313,13 @@ async def list_market_products(
             last_market_update=last_market_update_val,
             has_active_alerts=(alert_count > 0),
             active_alerts_count=int(alert_count),
+            price_delta_pct=float(comparison.delta_pct) if comparison.delta_pct is not None else None,
+            price_position=comparison.position,
+            comparison_label=comparison.label,
+            effective_sources_count=int(row[4] or 0),
+            stale_sources_count=int(row[5] or 0),
+            warning_sources_count=int(row[6] or 0),
+            last_job_status=row[7],
             category_id=category_id_val,
             category_name=category_name_val,
             supplier_id=supplier_id_val,
@@ -299,12 +344,18 @@ class MarketSourceItem(BaseModel):
     """Fuente de precio de mercado individual"""
     id: int = Field(description="ID de la fuente")
     source_name: str = Field(description="Nombre de la tienda o sitio")
-    url: str = Field(description="URL de la fuente")
+    url: Optional[str] = Field(None, description="URL de la fuente")
     currency: Optional[str] = Field(None, description="Moneda del precio (ARS, USD, etc.)")
     source_type: Optional[str] = Field(None, description="Tipo de fuente: 'static' o 'dynamic'")
     last_price: Optional[float] = Field(None, description="Último precio obtenido")
     last_checked_at: Optional[str] = Field(None, description="Timestamp de última actualización (ISO 8601)")
     is_mandatory: bool = Field(description="Indica si es fuente obligatoria")
+    is_active: bool = True
+    validation_status: str = "warning"
+    ars_confirmed: Optional[bool] = None
+    argentina_delivery_confirmed: Optional[bool] = None
+    last_error_code: Optional[str] = None
+    last_error_message: Optional[str] = None
     created_at: str = Field(description="Fecha de creación (ISO 8601)")
     updated_at: str = Field(description="Fecha de última modificación (ISO 8601)")
 
@@ -387,6 +438,12 @@ async def get_product_sources(
             last_price=float(source.last_price) if source.last_price else None,
             last_checked_at=source.last_checked_at.isoformat() if source.last_checked_at else None,
             is_mandatory=source.is_mandatory,
+            is_active=source.is_active,
+            validation_status=source.validation_status,
+            ars_confirmed=source.ars_confirmed,
+            argentina_delivery_confirmed=source.argentina_delivery_confirmed,
+            last_error_code=source.last_error_code,
+            last_error_message=source.last_error_message,
             source_type=source.source_type,
             currency=source.currency,
             created_at=source.created_at.isoformat(),
@@ -406,8 +463,7 @@ async def get_product_sources(
     market_price_min_val = min(prices) if prices else None
     market_price_max_val = max(prices) if prices else None
     
-    # preferred_name: usar nombre estilizado del producto canónico
-    product_name = stylize_product_name(product.name) or product.name or f"Producto {product.id}"
+    product_name = _market_product_name(product)
     
     return ProductSourcesResponse(
         product_id=product.id,
@@ -501,8 +557,7 @@ async def update_product_sale_price(
     await db.commit()
     await db.refresh(product)
     
-    # preferred_name: usar nombre estilizado del producto canónico
-    product_name = stylize_product_name(product.name) or product.name or f"Producto {product.id}"
+    product_name = _market_product_name(product)
     
     return UpdateSalePriceResponse(
         product_id=product.id,
@@ -538,7 +593,7 @@ class UpdateMarketReferenceResponse(BaseModel):
     product_name: str
     market_price_reference: float
     previous_market_price: Optional[float]
-    market_price_updated_at: str
+    market_price_updated_at: Optional[str]
 
 
 @router.patch(
@@ -564,6 +619,7 @@ async def update_product_market_reference(
     product_id: int,
     payload: UpdateMarketReferenceRequest,
     db: AsyncSession = Depends(get_session),
+    session_data: SessionData = Depends(current_session),
 ):
     """
     Actualiza manualmente el precio de mercado de referencia de un producto.
@@ -590,7 +646,78 @@ async def update_product_market_reference(
             status_code=404,
             detail=f"Producto con ID {product_id} no encontrado"
         )
+
+    # Compatibilidad temporal del endpoint deprecado: cero significa retirar la
+    # referencia vigente. No se registra como observación porque nunca puede
+    # participar de un promedio de mercado.
+    if payload.market_price_reference == 0:
+        previous_market_price = (
+            float(product.market_price_reference)
+            if product.market_price_reference is not None
+            else None
+        )
+        product.market_price_reference = None
+        product.market_price_updated_at = None
+        product.updated_at = datetime.utcnow()
+        await db.commit()
+        return UpdateMarketReferenceResponse(
+            product_id=product.id,
+            product_name=_market_product_name(product),
+            market_price_reference=0.0,
+            previous_market_price=previous_market_price,
+            market_price_updated_at=None,
+        )
     
+    manual_source = await db.scalar(select(MarketSource).where(
+        MarketSource.product_id == product_id,
+        MarketSource.source_type == "manual",
+        MarketSource.url.is_(None),
+        MarketSource.source_name == "Carga manual general",
+    ))
+    if not manual_source:
+        manual_source = MarketSource(
+            product_id=product_id,
+            source_name="Carga manual general",
+            url=None,
+            currency="ARS",
+            source_type="manual",
+            validation_status="warning",
+            ars_confirmed=True,
+            validation_detail={"origin": "legacy_market_reference_endpoint"},
+            created_by_user_id=session_data.user.id if session_data.user else None,
+        )
+        db.add(manual_source)
+        await db.flush()
+    previous_market_price = float(product.market_price_reference) if product.market_price_reference else None
+    await persist_source_observation(
+        db,
+        product_id=product_id,
+        source=manual_source,
+        price=Decimal(str(payload.market_price_reference)),
+        capture_method="manual",
+        created_by_user_id=session_data.user.id if session_data.user else None,
+    )
+    reference, _, _ = await recompute_market_reference(
+        db,
+        product_id=product_id,
+        created_by_user_id=session_data.user.id if session_data.user else None,
+    )
+    product.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(product)
+    return UpdateMarketReferenceResponse(
+        product_id=product.id,
+        product_name=_market_product_name(product),
+        market_price_reference=float(reference),
+        previous_market_price=previous_market_price,
+        market_price_updated_at=(
+            product.market_price_updated_at.isoformat()
+            if product.market_price_updated_at
+            else None
+        ),
+    )
+
+    # Compatibilidad histórica inalcanzable: se conserva hasta retirar el fallback React.
     # 2. Guardar precio anterior para respuesta
     previous_market_price = float(product.market_price_reference) if product.market_price_reference else None
     
@@ -604,7 +731,7 @@ async def update_product_market_reference(
     await db.refresh(product)
     
     # 5. Calcular nombre preferido: usar nombre estilizado del producto canónico
-    preferred_name = stylize_product_name(product.name) or product.name or f"Producto {product.id}"
+    preferred_name = _market_product_name(product)
     
     return UpdateMarketReferenceResponse(
         product_id=product.id,
@@ -623,6 +750,9 @@ class RefreshMarketResponse(BaseModel):
     message: str = Field(description="Mensaje descriptivo")
     product_id: int = Field(description="ID del producto")
     job_id: Optional[str] = Field(None, description="ID del job encolado (si disponible)")
+    market_job_id: Optional[str] = None
+    item_id: Optional[int] = None
+    deduplicated: bool = False
 
 
 @router.post(
@@ -651,6 +781,7 @@ class RefreshMarketResponse(BaseModel):
 async def refresh_market_prices(
     product_id: int,
     db: AsyncSession = Depends(get_session),
+    session_data: SessionData = Depends(current_session),
 ):
     """
     Dispara actualización asíncrona de precios de mercado de un producto.
@@ -667,6 +798,45 @@ async def refresh_market_prices(
         HTTPException 502: Error al comunicarse con el servicio de scraping
         HTTPException 500: Error interno del servidor
     """
+    from workers.market_scraping import process_market_item_task
+
+    persistent = await create_update_job(
+        db,
+        [product_id],
+        trigger="manual",
+        requested_by_user_id=session_data.user.id if session_data.user else None,
+        correlation_id=str(uuid4()),
+    )
+    queued_item = persistent.items[0]
+    if queued_item.status == "not_found":
+        raise HTTPException(status_code=404, detail=f"Producto con ID {product_id} no encontrado")
+    if queued_item.item_id is not None and not queued_item.deduplicated:
+        try:
+            process_market_item_task.send(queued_item.item_id)
+        except Exception as exc:
+            await complete_item(
+                db,
+                queued_item.item_id,
+                status="failed",
+                sources_total=0,
+                sources_succeeded=0,
+                sources_failed=0,
+                market_price_reference=None,
+                error_code="broker_enqueue_failed",
+                error_message=str(exc),
+            )
+            raise HTTPException(status_code=500, detail="Error interno al encolar la actualización") from exc
+    return RefreshMarketResponse(
+        status=queued_item.status,
+        message="Trabajo activo reutilizado" if queued_item.deduplicated else "Actualización encolada",
+        product_id=product_id,
+        job_id=queued_item.job_id,
+        market_job_id=queued_item.job_id,
+        item_id=queued_item.item_id,
+        deduplicated=queued_item.deduplicated,
+    )
+
+    # Compatibilidad histórica conservada temporalmente; el retorno anterior usa jobs persistentes.
     # 1. Verificar que el producto existe
     query_product = select(CanonicalProduct).where(CanonicalProduct.id == product_id)
     result = await db.execute(query_product)
@@ -733,6 +903,8 @@ class BatchRefreshMarketItem(BaseModel):
     status: str = Field(description="Estado: 'enqueued', 'not_found', 'error'")
     message: str = Field(description="Mensaje descriptivo")
     job_id: Optional[str] = Field(None, description="ID del job encolado (si disponible)")
+    item_id: Optional[int] = None
+    deduplicated: bool = False
 
 
 class BatchRefreshMarketResponse(BaseModel):
@@ -774,6 +946,7 @@ class BatchRefreshMarketResponse(BaseModel):
 async def batch_refresh_market_prices(
     request: BatchRefreshMarketRequest,
     db: AsyncSession = Depends(get_session),
+    session_data: SessionData = Depends(current_session),
 ):
     """
     Dispara actualización asíncrona de precios de mercado para múltiples productos.
@@ -805,6 +978,59 @@ async def batch_refresh_market_prices(
             detail="Máximo 100 productos por request"
         )
     
+    from workers.market_scraping import process_market_item_task
+
+    persistent = await create_update_job(
+        db,
+        product_ids,
+        trigger="batch",
+        requested_by_user_id=session_data.user.id if session_data.user else None,
+        correlation_id=str(uuid4()),
+    )
+    persistent_results: list[BatchRefreshMarketItem] = []
+    for queued_item in persistent.items:
+        if queued_item.item_id is not None and not queued_item.deduplicated:
+            try:
+                process_market_item_task.send(queued_item.item_id)
+            except Exception as exc:
+                await complete_item(
+                    db,
+                    queued_item.item_id,
+                    status="failed",
+                    sources_total=0,
+                    sources_succeeded=0,
+                    sources_failed=0,
+                    market_price_reference=None,
+                    error_code="broker_enqueue_failed",
+                    error_message=str(exc),
+                )
+                persistent_results.append(BatchRefreshMarketItem(
+                    product_id=queued_item.product_id,
+                    status="error",
+                    message="No se pudo encolar la actualización",
+                    job_id=queued_item.job_id,
+                    item_id=queued_item.item_id,
+                    deduplicated=False,
+                ))
+                continue
+        item_status = "not_found" if queued_item.status == "not_found" else ("deduplicated" if queued_item.deduplicated else "enqueued")
+        persistent_results.append(BatchRefreshMarketItem(
+            product_id=queued_item.product_id,
+            status=item_status,
+            message="Producto no encontrado" if item_status == "not_found" else "Trabajo activo reutilizado" if queued_item.deduplicated else "Actualización encolada",
+            job_id=queued_item.job_id,
+            item_id=queued_item.item_id,
+            deduplicated=queued_item.deduplicated,
+        ))
+    return BatchRefreshMarketResponse(
+        total_requested=len(product_ids),
+        enqueued=sum(item.status == "enqueued" for item in persistent_results),
+        not_found=sum(item.status == "not_found" for item in persistent_results),
+        errors=0,
+        results=persistent_results,
+    )
+
+    # Compatibilidad histórica conservada temporalmente; el retorno anterior usa jobs persistentes.
     # Importar la tarea del worker
     try:
         from workers.market_scraping import refresh_market_prices_task
@@ -881,6 +1107,153 @@ async def batch_refresh_market_prices(
     )
 
 
+# ==================== Jobs, histórico y observaciones ====================
+
+@router.get(
+    "/jobs/{job_id}",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+    summary="Consultar un job persistente de Mercado",
+)
+async def get_market_job(job_id: str, db: AsyncSession = Depends(get_session)):
+    payload = await job_payload(db, job_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Job de Mercado no encontrado")
+    return payload
+
+
+@router.get(
+    "/jobs",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+    summary="Listar jobs recientes de Mercado",
+)
+async def list_market_jobs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_session),
+):
+    total = await db.scalar(select(func.count()).select_from(MarketUpdateJob)) or 0
+    jobs = list((await db.execute(
+        select(MarketUpdateJob)
+        .order_by(MarketUpdateJob.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )).scalars())
+    return {
+        "items": [{
+            "id": job.id,
+            "trigger": job.trigger,
+            "status": job.status,
+            "total_items": job.total_items,
+            "processed_items": job.processed_items,
+            "success_count": job.success_count,
+            "error_count": job.error_count,
+            "created_at": job.created_at.isoformat(),
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        } for job in jobs],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+@router.get(
+    "/products/{product_id}/history",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+    summary="Obtener histórico de precios de Mercado",
+)
+async def get_market_history(
+    product_id: int,
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+    db: AsyncSession = Depends(get_session),
+):
+    if not await db.get(CanonicalProduct, product_id):
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    end = date_to or datetime.utcnow()
+    start = date_from or end - timedelta(days=90)
+    oldest = datetime.utcnow() - timedelta(days=365 * 3)
+    if start < oldest:
+        raise HTTPException(status_code=422, detail="El histórico máximo disponible es de tres años")
+    if start >= end:
+        raise HTTPException(status_code=422, detail="El rango de fechas es inválido")
+    observations = list((await db.execute(
+        select(MarketPriceHistory)
+        .where(
+            MarketPriceHistory.product_id == product_id,
+            MarketPriceHistory.created_at >= start,
+            MarketPriceHistory.created_at <= end,
+        )
+        .order_by(MarketPriceHistory.created_at, MarketPriceHistory.id)
+    )).scalars())
+    return {
+        "product_id": product_id,
+        "date_from": start.isoformat(),
+        "date_to": end.isoformat(),
+        "items": [{
+            "id": item.id,
+            "source_id": item.source_id,
+            "source_name": item.source_name,
+            "price": float(item.price),
+            "currency": item.currency,
+            "observation_type": item.observation_type,
+            "capture_method": item.capture_method,
+            "created_at": item.created_at.isoformat(),
+        } for item in observations],
+    }
+
+
+class ManualObservationRequest(BaseModel):
+    price: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    note: Optional[str] = Field(None, max_length=500)
+
+
+@router.post(
+    "/sources/{source_id}/observations",
+    status_code=201,
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+    summary="Registrar una observación manual auditable",
+)
+async def create_manual_market_observation(
+    source_id: int,
+    payload: ManualObservationRequest,
+    db: AsyncSession = Depends(get_session),
+    session_data: SessionData = Depends(current_session),
+):
+    source = await db.get(MarketSource, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Fuente no encontrada")
+    if not source.is_active or source.validation_status == "rejected":
+        raise HTTPException(status_code=409, detail="La fuente no está habilitada para aportar al promedio")
+    if (source.currency or "ARS").upper() != "ARS":
+        raise HTTPException(status_code=422, detail="Mercado sólo admite observaciones en ARS")
+    observation = await persist_source_observation(
+        db,
+        product_id=source.product_id,
+        source=source,
+        price=payload.price,
+        capture_method="manual",
+        created_by_user_id=session_data.user.id if session_data.user else None,
+    )
+    if payload.note:
+        detail = dict(source.validation_detail or {})
+        detail["last_manual_note"] = payload.note
+        source.validation_detail = detail
+    reference, coverage, snapshot = await recompute_market_reference(
+        db,
+        product_id=source.product_id,
+        created_by_user_id=session_data.user.id if session_data.user else None,
+    )
+    await db.commit()
+    return {
+        "observation_id": observation.id,
+        "product_id": source.product_id,
+        "source_id": source.id,
+        "market_price_reference": float(reference) if reference is not None else None,
+        "reference_observation_id": snapshot.id if snapshot else None,
+        "effective_sources_count": coverage.effective,
+    }
+
+
 # ==================== POST /products/{id}/sources ====================
 
 class AddSourceRequest(BaseModel):
@@ -890,9 +1263,9 @@ class AddSourceRequest(BaseModel):
         min_length=3,
         max_length=200
     )
-    url: str = Field(
+    url: Optional[str] = Field(
+        default=None,
         description="URL de la fuente (debe ser válida y única por producto)",
-        min_length=10,
         max_length=500
     )
     is_mandatory: bool = Field(
@@ -908,6 +1281,7 @@ class AddSourceRequest(BaseModel):
         default="static",
         description="Tipo de fuente: 'static' (HTML estático) o 'dynamic' (requiere JavaScript)"
     )
+    attested_argentina_delivery: bool = False
     
     @field_validator('source_name')
     @classmethod
@@ -925,9 +1299,11 @@ class AddSourceRequest(BaseModel):
     
     @field_validator('url')
     @classmethod
-    def validate_url(cls, v: str) -> str:
+    def validate_url(cls, v: Optional[str]) -> Optional[str]:
         """Valida formato de URL"""
         from urllib.parse import urlparse
+        if v is None:
+            return None
         
         v_stripped = v.strip()
         
@@ -958,8 +1334,8 @@ class AddSourceRequest(BaseModel):
     @classmethod
     def validate_source_type(cls, v: Optional[str]) -> Optional[str]:
         """Valida que source_type sea 'static' o 'dynamic'"""
-        if v is not None and v not in ['static', 'dynamic']:
-            raise ValueError("source_type debe ser 'static' o 'dynamic'")
+        if v is not None and v not in ['static', 'dynamic', 'manual']:
+            raise ValueError("source_type debe ser 'static', 'dynamic' o 'manual'")
         return v
     
     @field_validator('currency')
@@ -972,7 +1348,7 @@ class AddSourceRequest(BaseModel):
         v_upper = v.strip().upper()
         
         # Lista de monedas comunes aceptadas
-        valid_currencies = ['ARS', 'USD', 'EUR', 'BRL', 'CLP', 'UYU', 'PYG', 'BOB', 'MXN', 'COP', 'PEN']
+        valid_currencies = ['ARS']
         
         if v_upper not in valid_currencies:
             raise ValueError(
@@ -987,13 +1363,15 @@ class AddSourceResponse(BaseModel):
     id: int
     product_id: int
     source_name: str
-    url: str
+    url: Optional[str]
     is_mandatory: bool
     currency: Optional[str]
     source_type: Optional[str]
     last_price: Optional[float]
     last_checked_at: Optional[str]
     created_at: str
+    validation_status: str
+    is_active: bool
 
 
 @router.post(
@@ -1021,6 +1399,7 @@ async def add_market_source(
     product_id: int,
     payload: AddSourceRequest,
     db: AsyncSession = Depends(get_session),
+    session_data: SessionData = Depends(current_session),
 ):
     """
     Agrega una nueva fuente de precio de mercado a un producto.
@@ -1049,20 +1428,25 @@ async def add_market_source(
         )
     
     # 2. Verificar que la URL no esté duplicada para este producto
-    query_duplicate = select(MarketSource).where(
-        and_(
+    if payload.source_type != "manual" and not payload.url:
+        raise HTTPException(status_code=422, detail="Las fuentes automáticas requieren URL")
+    if payload.url:
+        try:
+            validate_public_url(payload.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        existing_source = await db.scalar(select(MarketSource).where(
             MarketSource.product_id == product_id,
-            MarketSource.url == payload.url
-        )
+            MarketSource.url == payload.url,
+        ))
+        if existing_source:
+            raise HTTPException(status_code=409, detail="Ya existe esa URL para el producto")
+
+    validation = initial_validation(
+        currency=payload.currency or "ARS",
+        manual=payload.source_type == "manual",
+        attested_argentina_delivery=payload.attested_argentina_delivery,
     )
-    result_duplicate = await db.execute(query_duplicate)
-    existing_source = result_duplicate.scalar_one_or_none()
-    
-    if existing_source:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Ya existe una fuente con la URL {payload.url} para este producto"
-        )
     
     # 3. Crear nueva fuente
     new_source = MarketSource(
@@ -1074,6 +1458,12 @@ async def add_market_source(
         source_type=payload.source_type,
         last_price=None,
         last_checked_at=None,
+        is_active=validation.status != "rejected",
+        validation_status=validation.status,
+        ars_confirmed=validation.ars_confirmed,
+        argentina_delivery_confirmed=validation.argentina_delivery_confirmed,
+        validation_detail=validation.detail,
+        created_by_user_id=session_data.user.id if session_data.user else None,
     )
     
     db.add(new_source)
@@ -1091,6 +1481,8 @@ async def add_market_source(
         last_price=float(new_source.last_price) if new_source.last_price else None,
         last_checked_at=new_source.last_checked_at.isoformat() if new_source.last_checked_at else None,
         created_at=new_source.created_at.isoformat(),
+        validation_status=new_source.validation_status,
+        is_active=new_source.is_active,
     )
 
 
@@ -1167,9 +1559,16 @@ class UpdateMarketSourceRequest(BaseModel):
     @classmethod
     def validate_source_type(cls, v: Optional[str]) -> Optional[str]:
         """Valida que source_type sea 'static' o 'dynamic'"""
-        if v is not None and v not in ['static', 'dynamic']:
-            raise ValueError("source_type debe ser 'static' o 'dynamic'")
+        if v is not None and v not in ['static', 'dynamic', 'manual']:
+            raise ValueError("source_type debe ser 'static', 'dynamic' o 'manual'")
         return v
+
+    @field_validator('currency')
+    @classmethod
+    def validate_currency(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v.strip().upper() != "ARS":
+            raise ValueError("El módulo Mercado sólo admite precios en ARS")
+        return v.strip().upper() if v else v
 
 
 @router.patch(
@@ -1226,6 +1625,10 @@ async def update_market_source(
     
     # 2. Verificar URL duplicada si se está cambiando
     if request.url and request.url != source.url:
+        try:
+            validate_public_url(request.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         query_duplicate = select(MarketSource).where(
             MarketSource.product_id == source.product_id,
             MarketSource.url == request.url,
@@ -1246,9 +1649,10 @@ async def update_market_source(
         source.url = request.url
     
     if request.last_price is not None:
-        from decimal import Decimal
-        source.last_price = Decimal(str(request.last_price))
-        source.last_checked_at = datetime.utcnow()
+        raise HTTPException(
+            status_code=422,
+            detail="Use POST /market/sources/{id}/observations para registrar precios manuales auditables",
+        )
     
     if request.is_mandatory is not None:
         source.is_mandatory = request.is_mandatory
@@ -1274,7 +1678,42 @@ async def update_market_source(
         "is_mandatory": source.is_mandatory,
         "currency": source.currency,
         "source_type": source.source_type,
+        "is_active": source.is_active,
+        "validation_status": source.validation_status,
     }
+
+
+@router.post(
+    "/sources/{source_id}/revalidate",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+    summary="Revalidar una fuente de Mercado",
+)
+async def revalidate_market_source(source_id: int, db: AsyncSession = Depends(get_session)):
+    source = await db.get(MarketSource, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Fuente no encontrada")
+    if source.url:
+        try:
+            validate_public_url(source.url)
+        except ValueError as exc:
+            source.validation_status = "rejected"
+            source.is_active = False
+            source.last_error_code = "unsafe_url"
+            source.last_error_message = str(exc)
+            await db.commit()
+            return {"source_id": source.id, "validation_status": "rejected", "detail": str(exc)}
+    validation = initial_validation(
+        currency=source.currency or "ARS",
+        manual=source.source_type == "manual",
+        attested_argentina_delivery=bool(source.argentina_delivery_confirmed),
+    )
+    source.validation_status = validation.status
+    source.is_active = validation.status != "rejected"
+    source.ars_confirmed = validation.ars_confirmed
+    source.argentina_delivery_confirmed = validation.argentina_delivery_confirmed
+    source.validation_detail = validation.detail
+    await db.commit()
+    return {"source_id": source.id, "validation_status": source.validation_status, "detail": source.validation_detail}
 
 
 # ==================== POST /products/{id}/discover-sources ====================

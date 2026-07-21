@@ -13,17 +13,17 @@ set "LOG_DIR=%ROOT%logs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >NUL 2>&1
 set "LOG_FILE=%LOG_DIR%\worker_market.log"
 
-if not defined REDIS_URL set "REDIS_URL=redis://localhost:6379/0"
+if not defined REDIS_URL set "REDIS_URL=redis://127.0.0.1:6379/0"
 
-echo [WORKER] starting Dramatiq market worker with hot-reload (broker: %REDIS_URL%)
-echo [WORKER] starting Dramatiq market worker with hot-reload (broker: %REDIS_URL%) >> "%LOG_FILE%" 2>&1
+echo [WORKER] starting Dramatiq market worker with hot-reload
+echo [WORKER] starting Dramatiq market worker with hot-reload >> "%LOG_FILE%" 2>&1
 
 REM Cambiar al directorio raíz
 cd /d "%ROOT%"
 
 REM Ejecutar con watchmedo para hot-reload automático
 echo [HOT-RELOAD] Monitoreando cambios en workers/, services/
-"%VENV%\watchmedo.exe" auto-restart --directory=./workers --directory=./services --pattern=*.py --recursive -- "%VENV%\python.exe" -m dramatiq workers.market_scraping --processes 1 --threads 2 --queues market
+"%VENV%\watchmedo.exe" auto-restart --directory=./workers --directory=./services --pattern=*.py --recursive -- "%VENV%\python.exe" -m dramatiq workers.market_scraping --processes 1 --threads 2 --queues market >> "%LOG_FILE%" 2>&1
 
 endlocal
 exit /b %ERRORLEVEL%

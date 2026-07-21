@@ -1,0 +1,15 @@
+# NG-HEADER: Nombre de archivo: requirements-market-worker.txt
+# NG-HEADER: Ubicación: requirements-market-worker.txt
+# NG-HEADER: Descripción: Dependencias mínimas del worker Docker de Mercado con Chromium.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+dramatiq[redis]>=2.2.0,<3
+playwright>=1.61.0,<2
+beautifulsoup4>=4.15.0,<5
+requests>=2.32.0,<3
+sqlalchemy>=2.0.46,<3
+psycopg[binary]>=3.3.3,<4
+pgvector>=0.4.2,<1
+pydantic-settings>=2.12.0,<3
+python-dotenv>=1.2.1,<2
+redis>=6.4.0,<7

@@ -17,7 +17,7 @@ except Exception:  # pragma: no cover - entorno sin dramatiq
 
 
 if _dramatiq_available:
-	_redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+	_redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
 	try:
 		if os.getenv("RUN_INLINE_JOBS", "0") == "1":
 			# Development mode: avoid touching Redis entirely

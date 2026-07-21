@@ -1,4 +1,9 @@
 @echo off
+REM NG-HEADER: Nombre de archivo: start_worker_all.cmd
+REM NG-HEADER: Ubicación: scripts/start_worker_all.cmd
+REM NG-HEADER: Descripción: Launcher local de workers Dramatiq por cola o en modo combinado.
+REM NG-HEADER: Lineamientos: Ver AGENTS.md
+
 setlocal ENABLEDELAYEDEXPANSION
 
 REM Script unificado para iniciar workers de Dramatiq
@@ -10,13 +15,13 @@ set "VENV=%ROOT%.venv\Scripts"
 set "LOG_DIR=%ROOT%logs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >NUL 2>&1
 
-if not defined REDIS_URL set "REDIS_URL=redis://localhost:6379/0"
+if not defined REDIS_URL set "REDIS_URL=redis://127.0.0.1:6379/0"
 
 set "MODE=%~1"
 if "%MODE%"=="" set "MODE=all"
 
 echo [WORKER] Starting Dramatiq worker(s) in mode: %MODE%
-echo [WORKER] Redis broker: %REDIS_URL%
+echo [WORKER] Redis broker configured
 
 if /i "%MODE%"=="images" (
     echo [WORKER] Starting images worker only...
@@ -40,7 +45,7 @@ if /i "%MODE%"=="all" (
     echo [WORKER] Starting combined worker (images + market + drive_sync queues)...
     set "LOG_FILE=%LOG_DIR%\worker_all.log"
     
-    echo [WORKER] starting Dramatiq worker for all queues (broker: %REDIS_URL%) >> "!LOG_FILE!" 2>&1
+    echo [WORKER] starting Dramatiq worker for all queues >> "!LOG_FILE!" 2>&1
     
     REM Iniciar worker multi-queue: procesa 'images', 'market' y 'drive_sync'
     "%VENV%\python.exe" -m dramatiq services.jobs.images workers.market_scraping services.jobs.drive_sync --processes 1 --threads 3 --queues images,market,drive_sync 1>>"!LOG_FILE!" 2>&1

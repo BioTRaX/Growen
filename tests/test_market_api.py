@@ -280,8 +280,8 @@ async def test_market_products_requires_collab_or_admin(client_viewer: AsyncClie
 
 
 @pytest.mark.asyncio
-async def test_market_products_preferred_name_custom_sku(client_collab: AsyncClient, db: AsyncSession):
-    """Test: preferred_name usa sku_custom si existe"""
+async def test_market_products_separates_canonical_name_and_custom_sku(client_collab: AsyncClient, db: AsyncSession):
+    """El nombre canónico y el SKU personalizado ocupan campos distintos."""
     p1 = CanonicalProduct(
         name="Producto Original",
         ng_sku="NG001",
@@ -302,9 +302,9 @@ async def test_market_products_preferred_name_custom_sku(client_collab: AsyncCli
     
     assert data["total"] == 2
     
-    # p1 debe usar sku_custom como preferred_name
     item_custom = next(item for item in data["items"] if item["product_id"] == p1.id)
-    assert item_custom["preferred_name"] == "CUSTOM_SKU_001"
+    assert item_custom["preferred_name"] == "Producto Original"
+    assert item_custom["product_sku"] == "CUSTOM_SKU_001"
     
     # p2 debe usar name como preferred_name
     item_normal = next(item for item in data["items"] if item["product_id"] == p2.id)
@@ -514,7 +514,7 @@ async def test_get_product_sources_with_data(client_collab: AsyncClient, db: Asy
 
 @pytest.mark.asyncio
 async def test_get_product_sources_preferred_name(client_collab: AsyncClient, db: AsyncSession):
-    """Test: Usa sku_custom como preferred_name si existe"""
+    """El detalle usa el nombre canónico aunque exista SKU personalizado."""
     product = CanonicalProduct(
         name="Nombre Original",
         sku_custom="CUSTOM_001",
@@ -528,8 +528,7 @@ async def test_get_product_sources_preferred_name(client_collab: AsyncClient, db
     assert resp.status_code == 200
     data = resp.json()
     
-    # Debe usar sku_custom como product_name
-    assert data["product_name"] == "CUSTOM_001"
+    assert data["product_name"] == "Nombre Original"
 
 
 @pytest.mark.asyncio
@@ -735,7 +734,7 @@ async def test_update_sale_price_from_null(client_collab: AsyncClient, db: Async
 
 @pytest.mark.asyncio
 async def test_update_sale_price_preferred_name(client_collab: AsyncClient, db: AsyncSession):
-    """Test: Usa sku_custom en respuesta si existe"""
+    """La mutación devuelve el nombre canónico aunque exista SKU personalizado."""
     from decimal import Decimal
     
     product = CanonicalProduct(
@@ -755,7 +754,7 @@ async def test_update_sale_price_preferred_name(client_collab: AsyncClient, db: 
     
     assert resp.status_code == 200
     data = resp.json()
-    assert data["product_name"] == "CUSTOM_SKU_001"
+    assert data["product_name"] == "Nombre Original"
 
 
 # ==================== Tests PATCH /products/{id}/market-reference ====================
@@ -890,7 +889,7 @@ async def test_update_market_reference_from_null(client_collab: AsyncClient, db:
 
 @pytest.mark.asyncio
 async def test_update_market_reference_preferred_name(client_collab: AsyncClient, db: AsyncSession):
-    """Test: Usa sku_custom en respuesta si existe"""
+    """La compatibilidad legacy también devuelve el nombre canónico."""
     from decimal import Decimal
     
     product = CanonicalProduct(
@@ -910,7 +909,7 @@ async def test_update_market_reference_preferred_name(client_collab: AsyncClient
     
     assert resp.status_code == 200
     data = resp.json()
-    assert data["product_name"] == "CUSTOM_SKU_002"
+    assert data["product_name"] == "Nombre Original"
 
 
 # ==================== Tests POST /products/{id}/refresh-market ====================
@@ -950,7 +949,7 @@ async def test_refresh_market_prices_success(client_collab: AsyncClient, db: Asy
     
     # Patchear la tarea del worker
     import workers.market_scraping
-    monkeypatch.setattr(workers.market_scraping.refresh_market_prices_task, 'send', mock_send)
+    monkeypatch.setattr(workers.market_scraping.process_market_item_task, 'send', mock_send)
     
     # Ejecutar endpoint
     resp = await client_collab.post(f"/market/products/{product.id}/refresh-market")
@@ -959,10 +958,11 @@ async def test_refresh_market_prices_success(client_collab: AsyncClient, db: Asy
     data = resp.json()
     
     # Validar respuesta
-    assert data["status"] == "processing"
+    assert data["status"] == "queued"
     assert data["product_id"] == product.id
     assert "actualización" in data["message"].lower()
-    assert "job_id" in data  # Puede ser None o string
+    assert data["job_id"] == data["market_job_id"]
+    assert data["item_id"] is not None
 
 
 @pytest.mark.asyncio
@@ -992,14 +992,14 @@ async def test_refresh_market_prices_no_sources(client_collab: AsyncClient, db: 
         return MockMessage()
     
     import workers.market_scraping
-    monkeypatch.setattr(workers.market_scraping.refresh_market_prices_task, 'send', mock_send)
+    monkeypatch.setattr(workers.market_scraping.process_market_item_task, 'send', mock_send)
     
     # Ejecutar endpoint (debe aceptar aunque no tenga fuentes)
     resp = await client_collab.post(f"/market/products/{product.id}/refresh-market")
     
     assert resp.status_code == 202
     data = resp.json()
-    assert data["status"] == "processing"
+    assert data["status"] == "queued"
     assert data["product_id"] == product.id
 
 
@@ -1184,11 +1184,8 @@ async def test_add_source_with_currency_and_type(client_collab: AsyncClient, db:
         }
     )
     
-    assert resp.status_code == 201
-    data = resp.json()
-    assert data["currency"] == "USD"
-    assert data["source_type"] == "dynamic"
-    assert data["is_mandatory"] is True
+    assert resp.status_code == 422
+    assert "ARS" in resp.json()["detail"][0]["msg"]
 
 
 @pytest.mark.asyncio

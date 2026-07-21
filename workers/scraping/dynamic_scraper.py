@@ -78,6 +78,24 @@ def _get_playwright_executor():
     return _playwright_executor
 
 
+def _run_playwright_in_thread(
+    url: str,
+    selector: Optional[str],
+    timeout: int,
+    wait_for_selector_timeout: int,
+) -> dict:
+    """Ejecuta Playwright con ProactorEventLoop y conserva el contexto del proceso."""
+    with asyncio.Runner(loop_factory=asyncio.ProactorEventLoop) as runner:
+        return runner.run(
+            _scrape_with_playwright_impl(
+                url,
+                selector,
+                timeout,
+                wait_for_selector_timeout,
+            )
+        )
+
+
 class DynamicScrapingError(Exception):
     """Error genérico de scraping dinámico."""
     pass
@@ -323,87 +341,19 @@ async def scrape_dynamic_price(
         >>> print(f"{result['price']} {result['currency']}")
         Decimal('1250.00') ARS
     """
-    # En Windows, ejecutar Playwright en un proceso separado usando multiprocessing
-    # Esto evita problemas con event loops y file descriptors
+    # El worker usa SelectorEventLoop para psycopg. Playwright necesita
+    # ProactorEventLoop en Windows, por lo que se ejecuta en un thread dedicado.
+    # A diferencia de multiprocessing, conserva excepciones tipadas, logs y mocks.
     if sys.platform == 'win32':
-        from multiprocessing import Process, Queue
-        
-        # Ejecutar en proceso separado usando Queue para comunicación
-        queue = Queue()
-        process = Process(target=_run_playwright_worker, args=(queue, url, selector, timeout, wait_for_selector_timeout))
-        logger.info(f"[scraping] Iniciando proceso separado para Playwright en Windows: {url}")
-        process.start()
-        process.join(timeout=60)  # Timeout de 60 segundos
-        
-        if process.is_alive():
-            logger.error("[scraping] Timeout: proceso de Playwright no terminó en 60 segundos")
-            process.terminate()
-            process.join()
-            raise DynamicScrapingError("Timeout ejecutando Playwright en proceso separado")
-        
-        if not queue.empty():
-            result = queue.get()
-            if 'error' in result:
-                logger.warning(f"[scraping] Error en proceso de Playwright: {result['error']}, intentando fallback con OpenAI/MCP")
-                try:
-                    ai_result = await _scrape_price_with_ai_fallback(url)
-                    if ai_result and 'price' in ai_result:
-                        logger.info(f"[scraping] ✓ Precio extraído con fallback AI: {ai_result['price']} {ai_result.get('currency', 'ARS')}")
-                        return ai_result
-                except Exception as ai_error:
-                    logger.warning(f"[scraping] Fallback AI también falló: {ai_error}")
-                # Si AI falla, lanzar el error original de Playwright
-                raise DynamicScrapingError(result['error'])
-            # Convertir price de string a Decimal
-            result['price'] = Decimal(result['price'])
-            currency = result.get('currency', 'ARS')
-            
-            # Validar que el precio sea razonable
-            if not _is_price_valid(result['price'], currency):
-                min_price = MIN_PRICE_BY_CURRENCY.get(currency.upper(), Decimal('0'))
-                logger.warning(
-                    f"[scraping] Precio extraído ({result['price']} {currency}) es menor al mínimo válido "
-                    f"({min_price} {currency}), intentando fallback con OpenAI/MCP"
-                )
-                try:
-                    ai_result = await _scrape_price_with_ai_fallback(url)
-                    if ai_result and 'price' in ai_result:
-                        ai_currency = ai_result.get('currency', 'ARS')
-                        # Validar también el precio de AI
-                        if _is_price_valid(ai_result['price'], ai_currency):
-                            logger.info(f"[scraping] ✓ Precio extraído con fallback AI: {ai_result['price']} {ai_currency}")
-                            return ai_result
-                        else:
-                            ai_min_price = MIN_PRICE_BY_CURRENCY.get(ai_currency.upper(), Decimal('0'))
-                            logger.warning(
-                                f"[scraping] Precio de AI ({ai_result['price']} {ai_currency}) también es menor al mínimo válido "
-                                f"({ai_min_price} {ai_currency})"
-                            )
-                except Exception as ai_error:
-                    logger.warning(f"[scraping] Fallback AI también falló: {ai_error}")
-                # Si AI falla o también es inválido, lanzar error
-                raise DynamicScrapingError(
-                    f"Precio extraído ({result['price']} {currency}) es menor al mínimo válido ({min_price} {currency})"
-                )
-            
-            logger.info(f"[scraping] Proceso de Playwright completado exitosamente: {result['price']} {result['currency']}")
-            return result
-        else:
-            logger.warning("[scraping] No se recibió resultado del proceso de Playwright (queue vacía), intentando fallback con OpenAI/MCP")
-            try:
-                ai_result = await _scrape_price_with_ai_fallback(url)
-                if ai_result and 'price' in ai_result:
-                    currency = ai_result.get('currency', 'ARS')
-                    # Validar también el precio de AI
-                    if _is_price_valid(ai_result['price'], currency):
-                        logger.info(f"[scraping] ✓ Precio extraído con fallback AI: {ai_result['price']} {currency}")
-                        return ai_result
-                    else:
-                        min_price = MIN_PRICE_BY_CURRENCY.get(currency.upper(), Decimal('0'))
-                        logger.warning(f"[scraping] Precio de AI ({ai_result['price']} {currency}) es menor al mínimo válido ({min_price} {currency})")
-            except Exception as ai_error:
-                logger.warning(f"[scraping] Fallback AI también falló: {ai_error}")
-            raise DynamicScrapingError("No se recibió resultado del proceso de Playwright")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            _get_playwright_executor(),
+            _run_playwright_in_thread,
+            url,
+            selector,
+            timeout,
+            wait_for_selector_timeout,
+        )
     else:
         # En Linux/Mac, usar async directamente
         return await _scrape_with_playwright_impl(url, selector, timeout, wait_for_selector_timeout)
@@ -701,6 +651,22 @@ async def extract_price_from_page(page: Page, domain: str) -> Optional[str]:
     # Por ahora usa estrategia genérica
     
     logger.debug(f"Usando extractor genérico para dominio: {domain}")
+
+    # Reutilizar primero el extractor HTML determinista. JSON-LD Product/Offer
+    # es más confiable que el primer nodo visual con clase "price", que puede
+    # pertenecer al carrito, cuotas o recomendaciones.
+    try:
+        content = await page.content()
+        if isinstance(content, str):
+            from bs4 import BeautifulSoup
+            from workers.scraping.static_scraper import extract_price_generic
+
+            structured_or_scoped = extract_price_generic(BeautifulSoup(content, "html.parser"))
+            if structured_or_scoped:
+                logger.debug("Precio encontrado en HTML estructurado o contenedor principal")
+                return structured_or_scoped
+    except Exception as exc:
+        logger.debug(f"No se pudo analizar HTML estructurado: {exc}")
     
     # Estrategia genérica: buscar elementos comunes de precio
     selectors = [

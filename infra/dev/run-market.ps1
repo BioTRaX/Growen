@@ -3,14 +3,13 @@
 # NG-HEADER: Descripción: Script para correr worker Market Scraping con hot-reload (watchmedo)
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 
-Write-Host "🔄 Starting Market Scraping worker with hot-reload..." -ForegroundColor Cyan
-Write-Host "   Watching: ./workers, ./services" -ForegroundColor Gray
-Write-Host "   Press Ctrl+C to stop" -ForegroundColor Gray
-Write-Host ""
+$projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$workerScript = Join-Path $projectRoot "scripts\start_worker_market.cmd"
 
-watchmedo auto-restart `
-    --directory=./workers `
-    --directory=./services `
-    --pattern="*.py" `
-    --recursive `
-    -- python -m workers.market_scraping
+if (-not (Test-Path $workerScript)) {
+    throw "No se encontró el launcher canónico: $workerScript"
+}
+
+Write-Host "Iniciando worker Mercado con el launcher canónico..." -ForegroundColor Cyan
+& $workerScript
+exit $LASTEXITCODE

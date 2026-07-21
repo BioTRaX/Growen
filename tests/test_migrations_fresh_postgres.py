@@ -175,7 +175,23 @@ def test_alembic_upgrade_head_from_empty_postgres() -> None:
             "chat_message_feedback",
             "ai_prompt_versions",
             "ai_prompt_evaluations",
+            "market_alerts",
+            "market_update_jobs",
+            "market_update_items",
+            "market_update_source_results",
         } <= tables
+
+        market_source_columns = {column["name"] for column in schema.get_columns("market_sources")}
+        assert {
+            "is_active",
+            "validation_status",
+            "ars_confirmed",
+            "argentina_delivery_confirmed",
+            "created_by_user_id",
+        } <= market_source_columns
+        assert {item["name"] for item in schema.get_indexes("market_update_items")} >= {
+            "uq_market_update_items_active_product"
+        }
 
         chat_session_columns = {column["name"] for column in schema.get_columns("chat_sessions")}
         assert {"channel", "assigned_user_id", "detected_intent", "sentiment", "classification_model", "problem_signals"} <= chat_session_columns
@@ -221,7 +237,7 @@ def test_alembic_upgrade_head_from_empty_postgres() -> None:
 
         with target_engine.connect() as connection:
             versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            assert versions == ["20260718_product_taxonomy_tags_v1"]
+            assert versions == ["20260721_market_observability_v1"]
     finally:
         if target_engine is not None:
             target_engine.dispose()

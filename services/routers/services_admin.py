@@ -124,6 +124,22 @@ async def list_services(db: AsyncSession = Depends(get_session)) -> Dict[str, An
         await _ensure_row(db, name)
     await db.commit()
     rows = (await db.execute(select(Service))).scalars().all()
+
+    # Mercado se ejecuta en un contenedor dedicado y puede haber sido iniciado
+    # fuera del panel (launcher o Docker Desktop). Reconciliar su estado real
+    # evita mostrar indefinidamente un fallo persistido de una operación vieja.
+    market_row = next((row for row in rows if row.name == "market_worker"), None)
+    if market_row is not None:
+        live = await asyncio.to_thread(_status, "market_worker")
+        if market_row.status != live.status:
+            market_row.status = live.status
+            if live.status == "running":
+                market_row.started_at = market_row.started_at or datetime.utcnow()
+                market_row.last_error = None
+            elif live.status in {"stopped", "failed"}:
+                market_row.started_at = None
+            await db.commit()
+
     items = [
         {
             "id": r.id,

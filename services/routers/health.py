@@ -15,8 +15,10 @@ Incluye verificaciones de:
 """
 
 import os
+import json
 import socket
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import shutil
@@ -46,6 +48,57 @@ def _status(ok: bool, detail: str | None = None) -> Dict[str, Any]:
     if detail:
         out["detail"] = detail
     return out
+
+
+def _dramatiq_health_details(client: Any, prefix: str = "dramatiq") -> Dict[str, Any]:
+    """Lee las estructuras reales de RedisBroker usadas por Dramatiq 2.x."""
+    queues_info: Dict[str, Dict[str, Any]] = {}
+    for queue_name in ["images", "market", "drive_sync", "catalog"]:
+        ready_key = f"{prefix}:{queue_name}"
+        delayed_key = f"{ready_key}.DQ"
+        ready = int(client.llen(ready_key))
+        delayed = int(client.zcard(delayed_key))
+        queues_info[queue_name] = {
+            "exists": bool(client.exists(ready_key) or client.exists(delayed_key)),
+            "size": ready + delayed,
+            "ready": ready,
+            "delayed": delayed,
+        }
+
+    heartbeat_key = f"{prefix}:__heartbeats__"
+    heartbeat_ttl_ms = int(os.getenv("DRAMATIQ_HEARTBEAT_TTL_MS", "60000"))
+    active_after = int(time.time() * 1000) - heartbeat_ttl_ms
+    workers_count = int(client.zcount(heartbeat_key, active_after, "+inf"))
+    market_worker = _market_worker_health(client)
+    return {
+        "queues": queues_info,
+        "workers": {"count": workers_count},
+        "market_worker": market_worker,
+    }
+
+
+def _market_worker_health(client: Any) -> Dict[str, Any]:
+    get_value = getattr(client, "get", None)
+    if get_value is None:
+        return {"ok": False, "detail": "cliente Redis sin lectura de heartbeat"}
+    raw = get_value("growen:market_worker:heartbeat")
+    if not raw:
+        return {"ok": False, "detail": "heartbeat ausente"}
+    try:
+        payload = json.loads(raw)
+        timestamp = datetime.fromisoformat(payload["timestamp"])
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
+        age_seconds = max(0.0, (datetime.now(UTC) - timestamp).total_seconds())
+        return {
+            "ok": payload.get("queue") == "market" and age_seconds <= 90,
+            "age_seconds": round(age_seconds, 2),
+            "queue": payload.get("queue"),
+            "current_item_id": payload.get("current_item_id"),
+            "version": payload.get("version"),
+        }
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        return {"ok": False, "detail": f"heartbeat inválido: {exc}"}
 
 
 @router.get("")
@@ -180,6 +233,8 @@ async def health_service(name: str) -> Dict[str, Any]:
         return {"service": name, "ok": ok, "deps": {"pillow": pillow_ok, "rembg": rembg_ok, "opencv": cv_ok}, "hints": hints}
     if name == "dramatiq":
         return await health_dramatiq()
+    if name == "market_worker":
+        return await health_market_worker()
     return {"service": name, "ok": False, "detail": "servicio desconocido"}
 
 
@@ -264,34 +319,41 @@ async def health_dramatiq() -> Dict[str, Any]:
     try:
         import redis  # type: ignore
 
-        url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
         client = redis.from_url(url, decode_responses=True)  # type: ignore[attr-defined]
         broker_ok = bool(client.ping())
         prefix = os.getenv("DRAMATIQ_REDIS_PREFIX", "dramatiq")
-        
-        # Verificar múltiples colas
-        queues_info = {}
-        for queue_name in ["images", "market", "drive_sync", "catalog"]:
-            q_name = f"{prefix}:queue:{queue_name}"
-            q_exists = bool(client.exists(q_name))
-            q_len = int(client.llen(q_name)) if q_exists else 0
-            queues_info[queue_name] = {"exists": q_exists, "size": q_len}
-        
-        # Buscar workers registrados (heurística)
-        worker_keys = list(client.scan_iter(f"{prefix}:worker*"))
-        workers_count = len(worker_keys)
-        
-        # Verificar que haya al menos un worker activo
+        details = _dramatiq_health_details(client, prefix)
+        workers_count = details["workers"]["count"]
         has_workers = workers_count >= 1
         
         return {
             "ok": broker_ok and has_workers,
             "broker_ok": broker_ok,
-            "queues": queues_info,
-            "workers": {"count": workers_count, "keys": worker_keys[:10]},
+            **details,
         }
     except Exception as e:
         return _status(False, detail=str(e))
+
+
+@router.get("/market-worker")
+async def health_market_worker() -> Dict[str, Any]:
+    """Distingue broker disponible de consumidor Mercado activo."""
+    if os.getenv("RUN_INLINE_JOBS", "0") == "1":
+        return _status(False, detail="skipped: RUN_INLINE_JOBS=1")
+    try:
+        import redis  # type: ignore
+
+        client = redis.from_url(
+            os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True
+        )
+        broker_ok = bool(client.ping())
+        worker = _market_worker_health(client)
+        ready = int(client.llen("dramatiq:market"))
+        delayed = int(client.zcard("dramatiq:market.DQ"))
+        return {"ok": broker_ok and worker["ok"], "broker_ok": broker_ok, "worker": worker, "ready": ready, "delayed": delayed}
+    except Exception as exc:
+        return _status(False, detail=str(exc))
 
 
 @router.get("/summary")
@@ -349,26 +411,16 @@ async def health_summary(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
         try:
             import redis  # type: ignore
 
-            url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+            url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
             client = redis.from_url(url, decode_responses=True)  # type: ignore[attr-defined]
             broker_ok = bool(client.ping())
             prefix = os.getenv("DRAMATIQ_REDIS_PREFIX", "dramatiq")
-            
-            # Verificar múltiples colas
-            queues_info = {}
-            for queue_name in ["images", "market", "drive_sync", "catalog"]:
-                q_name = f"{prefix}:queue:{queue_name}"
-                q_exists = bool(client.exists(q_name))
-                q_len = int(client.llen(q_name)) if q_exists else 0
-                queues_info[queue_name] = {"exists": q_exists, "size": q_len}
-            
-            worker_keys = list(client.scan_iter(f"{prefix}:worker*"))
-            workers_count = len(worker_keys)
+            details = _dramatiq_health_details(client, prefix)
+            workers_count = details["workers"]["count"]
             dramatiq_details = {
                 "ok": broker_ok and (workers_count >= 1),
                 "broker_ok": broker_ok,
-                "queues": queues_info,
-                "workers": {"count": workers_count, "keys": worker_keys[:10]},
+                **details,
             }
         except Exception as e:
             dramatiq_details = _status(False, detail=str(e))

@@ -29,6 +29,17 @@ class FakeSession:
         self.rollbacks += 1
 
 
+class FakeListSession(FakeSession):
+    def __init__(self, rows: list[object]) -> None:
+        super().__init__()
+        self.rows = rows
+
+    async def execute(self, _statement):
+        return SimpleNamespace(
+            scalars=lambda: SimpleNamespace(all=lambda: self.rows)
+        )
+
+
 def service_row() -> SimpleNamespace:
     return SimpleNamespace(
         status="stopped",
@@ -124,3 +135,53 @@ def test_local_worker_redirects_output_to_persistent_log(monkeypatch, tmp_path) 
     assert log_path == tmp_path / "logs" / "worker_catalog.log"
     assert captured["stdout"] is not orchestrator.subprocess.PIPE
     assert captured["stderr"] is orchestrator.subprocess.STDOUT
+
+
+def test_docker_probe_allows_normal_desktop_latency(monkeypatch, tmp_path) -> None:
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text("services: {}", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(orchestrator, "COMPOSE_FILE", compose_file)
+    monkeypatch.setattr(orchestrator.shutil, "which", lambda _name: "docker.exe")
+    monkeypatch.delenv("DOCKER_PROBE_TIMEOUT_S", raising=False)
+
+    def fake_run(*_args, **kwargs):
+        captured["timeout"] = kwargs["timeout"]
+        return SimpleNamespace(returncode=0, stdout="29.6.1", stderr="")
+
+    monkeypatch.setattr(orchestrator.subprocess, "run", fake_run)
+
+    assert orchestrator._has_docker() is True
+    assert captured["timeout"] == 8.0
+
+
+@pytest.mark.asyncio
+async def test_list_reconciles_market_worker_started_outside_panel(monkeypatch) -> None:
+    market = SimpleNamespace(
+        id=9,
+        name="market_worker",
+        status="failed",
+        auto_start=False,
+        started_at=None,
+        uptime_s=0,
+        meta={},
+        last_error="Docker no disponible",
+    )
+    db = FakeListSession([market])
+
+    async def fake_ensure_row(_db, _name):
+        return market
+
+    async def fake_to_thread(func, *args, **kwargs):
+        assert func is services_admin._status
+        return ServiceStatus(name="market_worker", status="running", ok=True, detail="healthy")
+
+    monkeypatch.setattr(services_admin, "_ensure_row", fake_ensure_row)
+    monkeypatch.setattr(services_admin.asyncio, "to_thread", fake_to_thread)
+
+    response = await services_admin.list_services(db=db)
+
+    assert response["items"][0]["status"] == "running"
+    assert market.last_error is None
+    assert market.started_at is not None

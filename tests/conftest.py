@@ -31,6 +31,8 @@ os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ.setdefault("CANONICAL_SKU_STRICT", "0")
 os.environ.setdefault("SALES_RATE_LIMIT_DISABLED", "0")  # mantener activo pero limpiar bucket por test
 os.environ.setdefault("AUTH_ENABLED", "true")
+# Las pruebas nunca deben publicar trabajos en el Redis local del desarrollador.
+os.environ["RUN_INLINE_JOBS"] = "1"
 
 # Recargar módulo de sesión para que tome DB_URL
 import db.session as _session  # type: ignore
