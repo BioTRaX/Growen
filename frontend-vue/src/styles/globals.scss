@@ -1,0 +1,18 @@
+/* NG-HEADER: Nombre de archivo: globals.scss */
+/* NG-HEADER: Ubicación: frontend-vue/src/styles/globals.scss */
+/* NG-HEADER: Descripción: Estilos globales mínimos del frontend Vue. */
+/* NG-HEADER: Lineamientos: Ver AGENTS.md */
+@use './settings' as settings;
+
+html {
+  overflow-y: auto;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+.v-card {
+  box-shadow: settings.$growen-shadow-panel;
+}

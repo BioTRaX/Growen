@@ -157,11 +157,16 @@ export default function PdfImportModal({ open, onClose, onSuccess }: Props) {
             <div>
               {errorMsg}
               {errorCid ? (
-                <span>
-                  {' '}(ID:{' '}
-                  <a href={`/purchases/logs/by-correlation/${errorCid}`} target='_blank' rel='noopener noreferrer'>
-                    {errorCid}
-                  </a>)
+                <span style={{ marginLeft: 6 }}>
+                  (ID: <code>{errorCid}</code>)
+                  <button
+                    className='btn-secondary'
+                    style={{ marginLeft: 6 }}
+                    type='button'
+                    onClick={() => void navigator.clipboard.writeText(errorCid)}
+                  >
+                    Copiar ID
+                  </button>
                 </span>
               ) : null}
             </div>

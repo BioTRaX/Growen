@@ -7,7 +7,11 @@ import { useNavigate } from "react-router-dom"
 import { PATHS } from "../routes/paths"
 import { useTheme } from "../theme/ThemeProvider"
 
-export default function AppToolbar() {
+type AppToolbarProps = {
+  showUpload?: boolean
+}
+
+export default function AppToolbar({ showUpload = false }: AppToolbarProps) {
   const { state, logout } = useAuth()
   const navigate = useNavigate()
   const { toggle, name } = useTheme()
@@ -33,7 +37,7 @@ export default function AppToolbar() {
         color: "var(--text-color)",
       }}
     >
-      {!isGuest && canUpload && (
+      {!isGuest && canUpload && showUpload && (
         <button className="btn-dark btn-lg" onClick={() => window.dispatchEvent(new Event("open-upload"))}>
           Adjuntar Excel
         </button>

@@ -14,7 +14,7 @@ export default function Dashboard() {
   const { state } = useAuth()
   return (
     <>
-      <AppToolbar />
+      <AppToolbar showUpload />
       {state.role !== 'guest' && (
         <div className="panel" style={{ margin: 16, padding: 12, display: 'flex', gap: 8 }}>
           {/* Solo staff puede ver Compras/Clientes/Ventas */}

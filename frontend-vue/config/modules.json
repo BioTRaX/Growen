@@ -1,0 +1,273 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "id": "dashboard",
+      "title": "Inicio",
+      "icon": "mdi-view-dashboard-outline",
+      "group": "Inicio",
+      "roles": ["cliente", "proveedor", "colaborador", "admin"],
+      "capabilities": [],
+      "state": "partial",
+      "runtime": "legacy",
+      "routes": [
+        { "path": "/", "name": "home", "title": "Inicio", "component": "dashboard", "roles": ["cliente", "proveedor", "colaborador", "admin"] },
+        { "path": "/guest", "name": "guest", "title": "Inicio", "component": "dashboard", "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"], "navigation": false }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "products",
+      "title": "Catálogo",
+      "icon": "mdi-format-list-bulleted",
+      "group": "Productos",
+      "roles": ["cliente", "proveedor", "colaborador", "admin"],
+      "capabilities": [],
+      "state": "partial",
+      "runtime": "legacy",
+      "routes": [
+        { "path": "/productos", "name": "products", "title": "Productos", "component": "products", "roles": ["cliente", "proveedor", "colaborador", "admin"] },
+        { "path": "/productos/:id", "name": "product-detail", "title": "Detalle de producto", "component": "product-detail", "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"], "navigation": false },
+        { "path": "/productos/:id/imagen", "name": "product-image", "title": "Imagen de producto", "component": "pending", "roles": ["colaborador", "admin"], "navigation": false }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "stock",
+      "title": "Stock",
+      "icon": "mdi-warehouse",
+      "group": "Productos",
+      "roles": ["cliente", "proveedor", "colaborador", "admin"],
+      "capabilities": [],
+      "state": "pending",
+      "runtime": "legacy",
+      "routes": [
+        { "path": "/stock", "name": "stock", "title": "Stock", "component": "stock", "roles": ["cliente", "proveedor", "colaborador", "admin"] },
+        { "path": "/stock/shortages", "name": "stock-shortages", "title": "Faltantes", "component": "stock-shortages", "roles": ["colaborador", "admin"], "navigation": false }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "market",
+      "title": "Mercado",
+      "icon": "mdi-chart-line",
+      "group": "Operaciones",
+      "roles": ["colaborador", "admin"],
+      "capabilities": [],
+      "state": "pending",
+      "runtime": "legacy",
+      "routes": [{ "path": "/mercado", "name": "market", "title": "Mercado", "component": "pending", "roles": ["colaborador", "admin"] }],
+      "aliases": []
+    },
+    {
+      "id": "purchases",
+      "title": "Compras",
+      "icon": "mdi-cart-arrow-down",
+      "group": "Operaciones",
+      "roles": ["colaborador", "admin"],
+      "capabilities": [],
+      "state": "partial",
+      "runtime": "legacy",
+      "routes": [
+        { "path": "/compras", "name": "purchases", "title": "Compras", "component": "purchases", "roles": ["colaborador", "admin"] },
+        { "path": "/compras/nueva", "name": "purchase-new", "title": "Nueva compra", "component": "purchase-new", "roles": ["colaborador", "admin"], "navigation": false },
+        { "path": "/compras/:id", "name": "purchase-detail", "title": "Detalle de compra", "component": "purchase-detail", "roles": ["colaborador", "admin"], "navigation": false }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "suppliers",
+      "title": "Proveedores",
+      "icon": "mdi-truck-outline",
+      "group": "Operaciones",
+      "roles": ["colaborador", "admin"],
+      "capabilities": [],
+      "state": "partial",
+      "runtime": "legacy",
+      "routes": [
+        { "path": "/proveedores", "name": "suppliers", "title": "Proveedores", "component": "suppliers", "roles": ["colaborador", "admin"] },
+        { "path": "/proveedores/:id", "name": "supplier-detail", "title": "Detalle de proveedor", "component": "pending", "roles": ["colaborador", "admin"], "navigation": false }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "customers",
+      "title": "Clientes",
+      "icon": "mdi-account-group-outline",
+      "group": "Operaciones",
+      "roles": ["colaborador", "admin"],
+      "capabilities": [],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [
+        { "path": "/clientes", "name": "customers", "title": "Clientes", "component": "customers", "roles": ["colaborador", "admin"] },
+        { "path": "/clientes/:id", "name": "customer-detail", "title": "Detalle de cliente", "component": "customer-detail", "roles": ["colaborador", "admin"], "navigation": false }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "sales",
+      "title": "Ventas",
+      "icon": "mdi-cash-register",
+      "group": "Operaciones",
+      "roles": ["colaborador", "admin"],
+      "capabilities": [],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [
+        { "path": "/ventas", "name": "sales", "title": "Ventas", "component": "sales", "roles": ["colaborador", "admin"] },
+        { "path": "/ventas/nueva", "name": "sale-new", "title": "Nueva venta", "component": "sale-new", "roles": ["colaborador", "admin"], "navigation": false },
+        { "path": "/ventas/:id", "name": "sale-detail", "title": "Detalle de venta", "component": "sale-detail", "roles": ["colaborador", "admin"], "navigation": false }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "images",
+      "title": "Imágenes",
+      "icon": "mdi-image-multiple-outline",
+      "group": "Productos",
+      "roles": ["colaborador", "admin"],
+      "capabilities": ["images.review"],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/imagenes-productos", "name": "product-images", "title": "Imágenes de productos", "component": "product-images", "roles": ["colaborador", "admin"] }],
+      "aliases": ["/admin/imagenes", "/admin/imagenes-productos"]
+    },
+    {
+      "id": "admin-drive-sync",
+      "title": "Drive Sync",
+      "icon": "mdi-google-drive",
+      "group": "Administración",
+      "roles": ["admin"],
+      "capabilities": ["drive.manage"],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/admin/drive-sync", "name": "admin-drive-sync", "title": "Drive Sync", "component": "admin-drive-sync", "roles": ["admin"] }],
+      "aliases": []
+    },
+    {
+      "id": "admin-scheduler",
+      "title": "Scheduler",
+      "icon": "mdi-calendar-clock",
+      "group": "Administración",
+      "roles": ["admin"],
+      "capabilities": ["scheduler.manage"],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/admin/scheduler", "name": "admin-scheduler", "title": "Scheduler", "component": "admin-scheduler", "roles": ["admin"] }],
+      "aliases": []
+    },
+    {
+      "id": "admin-knowledge",
+      "title": "Conocimiento",
+      "icon": "mdi-brain",
+      "group": "Administración",
+      "roles": ["admin"],
+      "capabilities": ["knowledge.manage"],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/admin/conocimiento", "name": "admin-knowledge", "title": "Conocimiento", "component": "admin-knowledge", "roles": ["admin"] }],
+      "aliases": ["/admin/cerebro"]
+    },
+    {
+      "id": "admin-image-operations",
+      "title": "Operación de imágenes",
+      "icon": "mdi-image-sync-outline",
+      "group": "Administración",
+      "roles": ["admin"],
+      "capabilities": ["images.jobs.read", "images.jobs.manage"],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/admin/imagenes-operacion", "name": "admin-image-operations", "title": "Operación de imágenes", "component": "admin-image-operations", "roles": ["admin"] }],
+      "aliases": []
+    },
+    {
+      "id": "admin-catalog-diagnostics",
+      "title": "Diagnóstico de catálogos",
+      "icon": "mdi-file-search-outline",
+      "group": "Administración",
+      "roles": ["colaborador", "admin"],
+      "capabilities": [],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/admin/catalogos/diagnostico", "name": "admin-catalog-diagnostics", "title": "Diagnóstico de catálogos", "component": "admin-catalog-diagnostics", "roles": ["colaborador", "admin"] }],
+      "aliases": []
+    },
+    {
+      "id": "admin-technical-dashboard",
+      "title": "Dashboard técnico",
+      "icon": "mdi-monitor-dashboard",
+      "group": "Administración",
+      "roles": ["colaborador", "admin"],
+      "capabilities": [],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/admin/dashboard", "name": "admin-technical-dashboard", "title": "Dashboard técnico", "component": "admin-technical-dashboard", "roles": ["colaborador", "admin"] }],
+      "aliases": []
+    },
+    {
+      "id": "admin-chat-inbox",
+      "title": "Chat Inbox",
+      "icon": "mdi-message-text-clock-outline",
+      "group": "Administración",
+      "roles": ["colaborador", "admin"],
+      "capabilities": ["chat.review"],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/admin/chats", "name": "admin-chat-inbox", "title": "Chat Inbox", "component": "admin-chat-inbox", "roles": ["colaborador", "admin"] }],
+      "aliases": []
+    },
+    {
+      "id": "admin-users",
+      "title": "Usuarios",
+      "icon": "mdi-account-cog-outline",
+      "group": "Administración",
+      "roles": ["admin"],
+      "capabilities": ["users.manage"],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/admin/usuarios", "name": "admin-users", "title": "Usuarios", "component": "admin-users", "roles": ["admin"] }],
+      "aliases": []
+    },
+    {
+      "id": "admin-backups",
+      "title": "Backups",
+      "icon": "mdi-database-arrow-up-outline",
+      "group": "Administración",
+      "roles": ["admin"],
+      "capabilities": ["backups.manage"],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/admin/backups", "name": "admin-backups", "title": "Backups", "component": "admin-backups", "roles": ["admin"] }],
+      "aliases": []
+    },
+    {
+      "id": "admin-services",
+      "title": "Servicios",
+      "icon": "mdi-server-network",
+      "group": "Administración",
+      "roles": ["colaborador", "admin"],
+      "capabilities": ["services.control"],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [
+        { "path": "/admin/servicios", "name": "admin-services", "title": "Servicios", "component": "admin-services", "roles": ["colaborador", "admin"] },
+        { "path": "/admin/servicios/workers", "name": "admin-workers", "title": "Workers", "component": "admin-workers", "roles": ["colaborador", "admin"], "navigation": false },
+        { "path": "/admin/servicios/mcp-tools", "name": "admin-mcp", "title": "MCP Tools", "component": "admin-mcp", "roles": ["admin"], "navigation": false }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "admin",
+      "title": "Administración",
+      "icon": "mdi-cog-outline",
+      "group": "Administración",
+      "roles": ["colaborador", "admin"],
+      "capabilities": [],
+      "state": "pending",
+      "runtime": "legacy",
+      "routes": [{ "path": "/admin/:pathMatch(.*)*", "name": "admin", "title": "Administración", "component": "pending", "roles": ["colaborador", "admin"], "navigation": false }],
+      "aliases": []
+    }
+  ]
+}
