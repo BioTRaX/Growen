@@ -61,10 +61,12 @@ async def test_create_product_with_new_inline_subcategory():
         assert prod_resp.status_code == 200
         pdata = prod_resp.json()
         cat_list = (await client.get("/categories")).json()
-        new_cat = next(c for c in cat_list if c["id"] == pdata["category_id"])
+        assert pdata["category_id"] == parent_id
+        new_cat = next(c for c in cat_list if c["id"] == pdata["subcategory_id"])
         assert new_cat["name"] == "Boosters"
         assert new_cat["parent_id"] == parent_id
-        assert new_cat["path"].endswith("Nutrientes>Boosters") or new_cat["path"] == "Nutrientes>Boosters"
+        assert new_cat["kind"] == "subcategory"
+        assert new_cat["path"] == "Boosters"
 
 
 async def test_update_prices():

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.session import get_session
 from services.rag.search import get_rag_search_service
+from services.auth import require_csrf, require_roles
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,11 @@ class RAGSearchResponse(BaseModel):
 router = APIRouter(prefix="/api/v1/rag", tags=["RAG"])
 
 
-@router.post("/search", response_model=RAGSearchResponse)
+@router.post(
+    "/search",
+    response_model=RAGSearchResponse,
+    dependencies=[Depends(require_roles("admin")), Depends(require_csrf)],
+)
 async def search_knowledge(
     request: RAGSearchRequest,
     session: AsyncSession = Depends(get_session),

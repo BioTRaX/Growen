@@ -8,7 +8,12 @@ from ai.types import Task
 from agent_core.config import Settings
 
 
-def test_router_openai_when_allowed():
+def test_router_openai_when_allowed(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "ai.providers.openai_provider.OpenAIProvider.generate",
+        lambda self, prompt: ["openai:stub"],
+    )
     router = AIRouter(Settings())
     assert "openai" in router.available_providers()
     out = router.run(Task.CONTENT.value, "hola")

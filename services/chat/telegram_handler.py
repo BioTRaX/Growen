@@ -206,8 +206,8 @@ async def handle_telegram_message(
             # Obtener el schema de herramientas para consulta de productos
             provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
             tools_schema = None
-            if hasattr(provider, '_build_tools_schema'):
-                tools_schema = provider._build_tools_schema(user_role)
+            if hasattr(provider, 'build_tools_schema'):
+                tools_schema = await provider.build_tools_schema(user_role)
             
             logger.debug(f"Preparando llamada a AIRouter con task={Task.SHORT_ANSWER.value}, intent=product_lookup")
             

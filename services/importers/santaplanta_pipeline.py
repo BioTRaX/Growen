@@ -179,9 +179,7 @@ def _extract_expected_counts_and_totals(text: str) -> Dict[str, Any]:
             out["expected_items"] = int(m_items.group(1))
         m_total = re.search(r"Importe\s+Total:?\s*\$?\s*([\d\.,]+)", text, flags=re.I)
         if m_total:
-            raw = m_total.group(1).replace('.', '').replace(',', '.')
-            from decimal import Decimal as _D
-            out["importe_total"] = _D(raw)
+            out["importe_total"] = _parse_money(m_total.group(1))
     except Exception:
         pass
     return out
@@ -434,6 +432,46 @@ def _parse_money(token: str) -> Decimal:
         return Decimal(number)
     except Exception:
         return Decimal(0)
+
+
+def _parse_santa_planta_text_rows(text: str, events: List[Dict[str, Any]]) -> List[ParsedLine]:
+    """Parsea el layout textual estable emitido por Crystal Reports."""
+    money = r"\d{1,3}(?:\.\d{3})*,\d{2}"
+    row_re = re.compile(
+        rf"^(?P<sku>\d{{1,10}})\s+\*(?P<title>.+?)\s+(?P<qty>\d+)\s+"
+        rf"(?P<gross>{money})\s+(?P<discount>{money})\s+(?P<net>{money})\s+"
+        rf"(?P<subtotal>{money})\s+(?P<vat>{money})\s+(?P<with_vat>{money})\s+(?P<total>{money})$"
+    )
+    parsed: List[ParsedLine] = []
+    in_products = False
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if "Código Producto/Servicio" in line:
+            in_products = True
+            continue
+        if not in_products:
+            continue
+        if line.startswith("Cantidad De Items"):
+            break
+        match = row_re.match(line)
+        if match:
+            parsed.append(ParsedLine(
+                supplier_sku=match.group("sku"),
+                title=match.group("title").strip(),
+                qty=Decimal(match.group("qty")),
+                unit_cost_bonif=_parse_money(match.group("net")),
+                pct_bonif=_parse_money(match.group("discount")),
+                subtotal=_parse_money(match.group("subtotal")),
+                iva=_parse_money(match.group("vat")),
+                total=_parse_money(match.group("total")),
+            ))
+        elif parsed and line and not re.match(r"^\d+\s+\*", line):
+            parsed[-1].title = f"{parsed[-1].title} {line}".strip()
+    if parsed:
+        events.append({"level": "INFO", "stage": "pdfplumber", "event": "crystal_text_rows", "details": {"count": len(parsed)}})
+    return parsed
+
+
 def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = True, force_ocr: bool = False, debug: bool = False) -> ParsedResult:
     """Pipeline limpio (reconstruido) para parsear remito Santa Planta.
 
@@ -479,12 +517,15 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
     expected_items = int(exp_footer.get("expected_items") or 0) or None
     importe_total = exp_footer.get("importe_total")
     ev.append({"level": "INFO", "stage": "footer", "event": "expected_from_footer", "details": {"expected_items": expected_items, "importe_total": (float(importe_total) if importe_total is not None else None)}})
+    crystal_lines = _parse_santa_planta_text_rows(text_all, ev)
 
     # 4. Intento pdfplumber tablas
     attempts: List[ImportAttempt] = []
     from time import perf_counter
     t0 = perf_counter()
     result.lines = _try_pdfplumber_tables(data, result.debug, ev)
+    if crystal_lines and (expected_items is None or len(crystal_lines) == expected_items):
+        result.lines = crystal_lines
     t1 = perf_counter()
     try:
         attempts.append(ImportAttempt(

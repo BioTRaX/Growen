@@ -31,6 +31,7 @@ from sqlalchemy.orm import selectinload
 
 from db.models import Session as DBSess
 from db.session import SessionLocal
+from services.auth import hash_session_id
 from services.chat.history import save_message, get_recent_history
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
@@ -166,7 +167,7 @@ async def ws_chat(socket: WebSocket) -> None:
             res = await db.execute(
                 select(DBSess)
                 .options(selectinload(DBSess.user))
-                .where(DBSess.id == sid, DBSess.expires_at > datetime.utcnow())
+                .where(DBSess.id == hash_session_id(sid), DBSess.expires_at > datetime.utcnow())
             )
             sess = res.scalar_one_or_none()
 
@@ -235,8 +236,8 @@ async def ws_chat(socket: WebSocket) -> None:
                     
                     # Obtener el schema de herramientas para consulta de productos
                     tools_schema = None
-                    if hasattr(provider, '_build_tools_schema'):
-                        tools_schema = provider._build_tools_schema(role)
+                    if hasattr(provider, 'build_tools_schema'):
+                        tools_schema = await provider.build_tools_schema(role)
                     
                     if tools_schema:
                         try:

@@ -1,3 +1,8 @@
+#!/usr/bin/env python
+# NG-HEADER: Nombre de archivo: ctx_logger.py
+# NG-HEADER: Ubicación: services/logging/ctx_logger.py
+# NG-HEADER: Descripción: Logging estructurado, snapshots y limpieza verificable del crawler de imágenes.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
 """Structured logging helpers for image crawling.
@@ -121,19 +126,24 @@ def save_snapshot_image(correlation_id: str, slug: str, data: bytes, ext: str = 
         return None
 
 
-def clean_logs() -> None:
-    try:
-        if NDJSON_PATH.exists():
-            NDJSON_PATH.unlink()
-    except Exception:
-        pass
-    try:
-        import shutil
+def clean_logs() -> dict[str, Any]:
+    """Elimina artefactos físicos del crawler y devuelve un resultado verificable."""
+    import shutil
 
-        if TMP_DIR.exists():
-            shutil.rmtree(TMP_DIR)
-    except Exception:
-        pass
+    deleted: list[str] = []
+    errors: list[dict[str, str]] = []
+    for path, kind in ((NDJSON_PATH, "file"), (TMP_DIR, "directory")):
+        try:
+            if not path.exists():
+                continue
+            if kind == "directory":
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            deleted.append(str(path))
+        except OSError as exc:
+            errors.append({"path": str(path), "error": str(exc)})
+    return {"ok": not errors, "deleted": deleted, "errors": errors}
 
 
 async def log_event(

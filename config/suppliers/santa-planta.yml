@@ -34,3 +34,21 @@ defaults:
   stock_qty: 0
   min_qty: 0
 category_map: {}
+
+remito:
+  number_pattern: "^0001-\\d{8}$"
+  allowed_mime_types:
+    - "application/pdf"
+    - "image/jpeg"
+    - "image/png"
+  currency: "ARS"
+  decimal_separator: ","
+  thousands_separator: "."
+  min_lines_warning: 1
+  min_classic_confidence: 0.55
+  total_tolerance_abs: 0.11
+  sku_min_length: 1
+  sku_max_length: 100
+  preserve_title_patterns:
+    - "PACK X \\d+ U"
+    - "-?\\d+% DESC"

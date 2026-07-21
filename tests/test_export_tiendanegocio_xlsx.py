@@ -17,7 +17,7 @@ from openpyxl import load_workbook
 
 from services.api import app
 from services.auth import current_session, require_csrf, SessionData
-from db.models import Product, Supplier, SupplierProduct, ProductEquivalence, CanonicalProduct
+from db.models import Category, Product, Supplier, SupplierProduct, ProductEquivalence, CanonicalProduct
 
 client = TestClient(app)
 app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
@@ -28,9 +28,11 @@ async def _seed_basic():
     from db.session import SessionLocal
     async with SessionLocal() as s:  # type: ignore
         sup = Supplier(slug="acme", name="ACME")
-        s.add(sup)
+        category = Category(name="Cultivo", kind="category")
+        subcategory = Category(name="Interior", kind="subcategory")
+        s.add_all([sup, category, subcategory])
         await s.flush()
-        p = Product(sku_root="SKU1", title="Producto X", stock=7)
+        p = Product(sku_root="SKU1", title="Producto X", stock=7, category_id=category.id, subcategory_id=subcategory.id)
         # agregar datos técnicos
         p.weight_kg = 0.5
         p.height_cm = 10
@@ -42,7 +44,7 @@ async def _seed_basic():
         sp.current_sale_price = 123.45
         s.add(sp)
         await s.flush()
-        cp = CanonicalProduct(name="Canon X", sku_custom="AAA_0001_BBB")
+        cp = CanonicalProduct(name="Canon X", sku_custom="AAA_0001_BBB", category_id=category.id, subcategory_id=subcategory.id)
         cp.sale_price = 99.99
         s.add(cp)
         await s.flush()
@@ -97,3 +99,4 @@ async def test_export_tiendanegocio_headers_and_values():
     assert int(ws.cell(row=found, column=5).value) == 7
     # Visibilidad
     assert ws.cell(row=found, column=6).value == "Visible"
+    assert ws.cell(row=found, column=18).value == "Cultivo > Interior"

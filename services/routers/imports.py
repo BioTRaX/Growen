@@ -41,39 +41,48 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-async def _get_or_create_category_path(db: AsyncSession, path: str) -> Category:
-    """Crea la jerarquía de categorías completa y devuelve la última."""
-    parent_id: int | None = None
-    parent: Category | None = None
-    for name in [p.strip() for p in path.split(">") if p.strip()]:
-        stmt = select(Category).where(
-            Category.name == name, Category.parent_id == parent_id
-        )
-        res = await db.execute(stmt)
-        cat = res.scalar_one_or_none()
-        if not cat:
-            cat = Category(name=name, parent_id=parent_id)
-            db.add(cat)
-            await db.flush()
-        parent_id = cat.id
-        parent = cat
-    if not parent:
+async def _get_or_create_category_path(db: AsyncSession, path: str) -> tuple[Category, Category | None]:
+    """Convierte un path legado en dos clasificaciones planas."""
+    names = [p.strip() for p in path.split(">") if p.strip()]
+    if not names:
         raise ValueError("category_path vacío")
-    return parent
+    category = await db.scalar(select(Category).where(
+        func.lower(Category.name) == names[0].lower(), Category.kind == "category"
+    ))
+    if not category:
+        category = Category(name=names[0], parent_id=None, kind="category")
+        db.add(category)
+        await db.flush()
+    subcategory = None
+    if len(names) > 1:
+        subcategory = await db.scalar(select(Category).where(
+            func.lower(Category.name) == names[-1].lower(), Category.kind == "subcategory"
+        ))
+        if not subcategory:
+            subcategory = Category(name=names[-1], parent_id=category.id, kind="subcategory")
+            db.add(subcategory)
+            await db.flush()
+    return category, subcategory
 
 
 async def _upsert_product(
-    db: AsyncSession, code: str, title: str, category: Category
+    db: AsyncSession, code: str, title: str, category: Category, subcategory: Category | None
 ) -> Product:
     res = await db.execute(select(Product).where(Product.sku_root == code))
     prod = res.scalar_one_or_none()
     if not prod:
-        prod = Product(sku_root=code, title=title, category_id=category.id)
+        prod = Product(
+            sku_root=code,
+            title=title,
+            category_id=category.id,
+            subcategory_id=subcategory.id if subcategory else None,
+        )
         db.add(prod)
         await db.flush()
     else:
         prod.title = title
         prod.category_id = category.id
+        prod.subcategory_id = subcategory.id if subcategory else None
     return prod
 
 
@@ -486,8 +495,8 @@ async def commit_import(
             result["unchanged"] += 1
             continue
 
-        cat = await _get_or_create_category_path(db, data["categoria_path"])
-        prod = await _upsert_product(db, data["codigo"], data["nombre"], cat)
+        category, subcategory = await _get_or_create_category_path(db, data["categoria_path"])
+        prod = await _upsert_product(db, data["codigo"], data["nombre"], category, subcategory)
 
         stmt = select(SupplierProduct).where(
             SupplierProduct.supplier_id == job.supplier_id,

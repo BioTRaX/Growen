@@ -5,6 +5,8 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
+from decimal import Decimal
+import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -12,8 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, case, literal
 
 from db.session import get_session
-from db.models import Customer, Sale, AuditLog
+from db.models import Customer, CustomerAccountEntry, Return, Sale, SalePayment, AuditLog
 from services.auth import require_roles, require_csrf, current_session, SessionData
+from services.sales.domain import account_balance, add_account_entry, money
+from services.sales.schemas import AccountAdjustmentInput
 
 router = APIRouter(prefix="/customers", tags=["customers"])
 
@@ -81,11 +85,18 @@ async def list_customers(
     page_size: int = 50,
     kind: Optional[str] = Query(None, description="Filtrar por tipo de cliente"),
     only_active: bool = Query(True, description="Solo clientes activos"),
+    order: str = Query("name", pattern="^(name|-name|created_at|-created_at)$"),
     db: AsyncSession = Depends(get_session),
 ):
     page = max(1, int(page or 1))
     page_size = min(200, max(1, int(page_size or 50)))
-    stmt = select(Customer).order_by(Customer.name.asc())
+    ordering = {
+        "name": Customer.name.asc(),
+        "-name": Customer.name.desc(),
+        "created_at": Customer.created_at.asc(),
+        "-created_at": Customer.created_at.desc(),
+    }[order]
+    stmt = select(Customer).order_by(ordering)
     if only_active:
         stmt = stmt.where(Customer.is_active == True)
     if q:
@@ -120,6 +131,7 @@ async def list_customers(
             "kind": c.kind,
             "notes": c.notes,
             "is_active": bool(getattr(c, "is_active", True)),
+            "credit_limit": float(c.credit_limit) if c.credit_limit is not None else None,
         }
 
     return {
@@ -131,7 +143,12 @@ async def list_customers(
 
 
 @router.post("", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
-async def create_customer(payload: dict, db: AsyncSession = Depends(get_session)):
+async def create_customer(
+    payload: dict,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+):
     name = (payload.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name es obligatorio")
@@ -157,15 +174,25 @@ async def create_customer(payload: dict, db: AsyncSession = Depends(get_session)
         province=(payload.get("province") or None),
         notes=(payload.get("notes") or None),
         kind=kind_norm,
+        credit_limit=(money(payload.get("credit_limit")) if payload.get("credit_limit") is not None else None),
     )
     db.add(c)
+    await db.flush()
+    _audit(db, "customer_create", "customers", c.id, {"name": c.name}, sess, request)
     await db.commit()
     await db.refresh(c)
     return {"id": c.id}
 
 
+@router.patch("/{cid}", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
 @router.put("/{cid}", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
-async def update_customer(cid: int, payload: dict, db: AsyncSession = Depends(get_session)):
+async def update_customer(
+    cid: int,
+    payload: dict,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+):
     c = await db.get(Customer, cid)
     if not c:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
@@ -194,6 +221,25 @@ async def update_customer(cid: int, payload: dict, db: AsyncSession = Depends(ge
         c.kind = kind_norm
     if "is_active" in payload:
         c.is_active = bool(payload.get("is_active"))
+    if "credit_limit" in payload:
+        c.credit_limit = money(payload.get("credit_limit")) if payload.get("credit_limit") is not None else None
+    _audit(db, "customer_update", "customers", c.id, {"fields": sorted(payload)}, sess, request)
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/{cid}/reactivate", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
+async def reactivate_customer(
+    cid: int,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+):
+    customer = await db.get(Customer, cid)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    customer.is_active = True
+    _audit(db, "customer_reactivate", "customers", cid, {}, sess, request)
     await db.commit()
     return {"status": "ok"}
 
@@ -293,6 +339,48 @@ async def quick_search_customers(q: str, limit: int = Query(20, ge=1, le=100), d
     return {"query": term, "items": items, "count": len(items)}
 
 
+@router.get("/segments", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def customer_segments(db: AsyncSession = Depends(get_session)):
+    rows = (
+        await db.execute(
+            select(
+                Customer.id,
+                Customer.name,
+                func.count(Sale.id),
+                func.coalesce(func.sum(Sale.total_amount), 0),
+                func.max(Sale.sale_date),
+            )
+            .outerjoin(
+                Sale,
+                (Sale.customer_id == Customer.id) & Sale.status.in_(["CONFIRMADA", "ENTREGADA"]),
+            )
+            .where(Customer.is_active == True)
+            .group_by(Customer.id, Customer.name)
+            .order_by(func.sum(Sale.total_amount).desc().nulls_last())
+        )
+    ).all()
+    items = []
+    now = __import__("datetime").datetime.utcnow()
+    for customer_id, name, frequency, amount, last_sale in rows:
+        recency_days = (now - last_sale).days if last_sale else None
+        segment = "nuevo"
+        if frequency >= 5 and recency_days is not None and recency_days <= 90:
+            segment = "frecuente"
+        elif recency_days is not None and recency_days > 180:
+            segment = "inactivo"
+        elif Decimal(str(amount or 0)) >= Decimal("100000"):
+            segment = "alto_valor"
+        items.append({
+            "customer_id": customer_id,
+            "name": name,
+            "segment": segment,
+            "recency_days": recency_days,
+            "frequency": int(frequency or 0),
+            "amount": float(amount or 0),
+        })
+    return {"items": items, "total": len(items)}
+
+
 @router.get("/{cid}", dependencies=[Depends(require_roles("colaborador", "admin"))])
 async def get_customer(cid: int, db: AsyncSession = Depends(get_session)):
     """Obtener un cliente específico con su total bruto de compras."""
@@ -305,6 +393,25 @@ async def get_customer(cid: int, db: AsyncSession = Depends(get_session)):
         Sale.status.in_(["CONFIRMADA", "ENTREGADA"])
     )
     total_bruto = await db.scalar(total_stmt) or 0
+    returns_total = await db.scalar(
+        select(func.coalesce(func.sum(Return.total_amount), 0))
+        .join(Sale, Sale.id == Return.sale_id)
+        .where(Sale.customer_id == cid, Return.status == "REGISTRADA")
+    ) or 0
+    paid_total = await db.scalar(
+        select(func.coalesce(func.sum(SalePayment.amount), 0))
+        .join(Sale, Sale.id == SalePayment.sale_id)
+        .where(Sale.customer_id == cid)
+    ) or 0
+    sale_stats = (
+        await db.execute(
+            select(func.count(Sale.id), func.avg(Sale.total_amount), func.max(Sale.sale_date)).where(
+                Sale.customer_id == cid,
+                Sale.status.in_(["CONFIRMADA", "ENTREGADA"]),
+            )
+        )
+    ).one()
+    balance = await account_balance(db, cid)
     return {
         "id": c.id,
         "name": c.name,
@@ -320,4 +427,94 @@ async def get_customer(cid: int, db: AsyncSession = Depends(get_session)):
         "notes": c.notes,
         "is_active": bool(getattr(c, "is_active", True)),
         "total_compras_bruto": float(total_bruto),
+        "credit_limit": float(c.credit_limit) if c.credit_limit is not None else None,
+        "metrics": {
+            "gross_sales": float(total_bruto),
+            "returns_total": float(returns_total),
+            "net_sales": float(Decimal(str(total_bruto)) - Decimal(str(returns_total))),
+            "paid_total": float(paid_total),
+            "account_balance": float(balance),
+            "sale_count": int(sale_stats[0] or 0),
+            "average_ticket": float(sale_stats[1] or 0),
+            "last_sale_at": sale_stats[2].isoformat() if sale_stats[2] else None,
+        },
     }
+
+
+@router.get("/{cid}/account", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def get_customer_account(
+    cid: int,
+    page: int = 1,
+    page_size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_session),
+):
+    customer = await db.get(Customer, cid)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    page = max(1, page)
+    base = select(CustomerAccountEntry).where(CustomerAccountEntry.customer_id == cid)
+    total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = (
+        await db.execute(
+            base.order_by(CustomerAccountEntry.occurred_at.desc(), CustomerAccountEntry.id.desc())
+            .limit(page_size)
+            .offset((page - 1) * page_size)
+        )
+    ).scalars().all()
+    balance = await account_balance(db, cid)
+    credit_available = None
+    if customer.credit_limit is not None:
+        credit_available = max(Decimal("0"), Decimal(str(customer.credit_limit)) - balance)
+    return {
+        "balance": float(balance),
+        "credit_limit": float(customer.credit_limit) if customer.credit_limit is not None else None,
+        "credit_available": float(credit_available) if credit_available is not None else None,
+        "items": [
+            {
+                "id": row.id,
+                "entry_type": row.entry_type,
+                "amount": float(row.amount),
+                "source_type": row.source_type,
+                "source_id": row.source_id,
+                "note": row.note,
+                "occurred_at": row.occurred_at.isoformat(),
+            }
+            for row in rows
+        ],
+        "total": int(total),
+        "page": page,
+        "pages": (int(total) + page_size - 1) // page_size if total else 0,
+    }
+
+
+@router.post(
+    "/{cid}/account/adjustments",
+    dependencies=[Depends(require_roles("admin")), Depends(require_csrf)],
+)
+async def create_customer_account_adjustment(
+    cid: int,
+    payload: AccountAdjustmentInput,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+):
+    customer = await db.get(Customer, cid)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    entry_type = "ADJUSTMENT_DEBIT" if payload.kind == "debit" else "ADJUSTMENT_CREDIT"
+    amount = payload.amount if payload.kind == "debit" else -payload.amount
+    entry = await add_account_entry(
+        db,
+        customer_id=cid,
+        entry_type=entry_type,
+        amount=amount,
+        source_type="adjustment",
+        source_id=secrets.randbits(63),
+        user_id=getattr(sess, "user_id", None),
+        correlation_id=getattr(sess, "session_id", None),
+        note=payload.reason,
+    )
+    await db.flush()
+    _audit(db, "customer_account_adjustment", "customers", cid, {"entry_id": entry.id}, sess, request)
+    await db.commit()
+    return {"id": entry.id, "balance": float(await account_balance(db, cid))}

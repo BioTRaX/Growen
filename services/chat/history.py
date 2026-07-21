@@ -63,6 +63,7 @@ async def get_or_create_session(
         new_session = ChatSession(
             session_id=session_id,
             user_identifier=user_identifier,
+            channel=session_id.split(":", 1)[0] if ":" in session_id else "web",
             status="new",
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
@@ -132,12 +133,17 @@ async def save_message(
             role = "user"
         
         # Crear el mensaje
+        message_meta = dict(metadata or {})
+        if role == "assistant":
+            from ai.prompt_registry import selected_metadata
+            for key, value in selected_metadata().items():
+                message_meta.setdefault(key, value)
         message = ChatMessage(
             session_id=session_id,
             role=role,
             content=content,
             created_at=datetime.utcnow(),
-            meta=metadata or {}
+            meta=message_meta
         )
         session.add(message)
         await session.flush()

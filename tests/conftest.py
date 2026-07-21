@@ -17,6 +17,14 @@ if str(project_root) not in sys.path:
 
 # -------- Entorno base de tests --------
 # DB en memoria y flags por defecto que suavizan validaciones durante tests
+os.environ["ENV"] = "test"
+os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
+os.environ.setdefault("ADMIN_PASS", "test-admin-password")
+os.environ.setdefault("ALLOWED_ORIGINS", "http://testserver")
+os.environ.setdefault("MCP_SECRET_KEY", "test-mcp-secret-key-not-for-production")
+os.environ.setdefault("MCP_PRODUCTS_SECRET_KEY", "test-products-key-not-for-production")
+os.environ.setdefault("MCP_WEB_SEARCH_SECRET_KEY", "test-web-key-not-for-production")
+os.environ["OPENAI_API_KEY"] = ""
 os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
 # En el entorno de tests usamos modo NO estricto por defecto para no exigir category_name
 # en creaciones simples y mantener compatibilidad con payloads legacy.
@@ -46,8 +54,11 @@ Base = _base.Base
 
 
 @pytest_asyncio.fixture(scope="function", autouse=True)
-async def db_session():
+async def db_session(request):
     """DB limpia por test (SQLite memoria compartida). Retorna sesión para usar en fixtures/tests."""
+    if request.node.get_closest_marker("no_db"):
+        yield None
+        return
     engine = _session.engine
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -121,16 +132,25 @@ app.dependency_overrides[require_csrf] = lambda: None
 @pytest.fixture(autouse=True)
 def _force_admin_and_disable_csrf(request):
     """Reafirma overrides por test para evitar contaminación entre módulos.
-    Se desactiva si el test tiene marker 'no_auth_override'."""
+    El marker ``no_auth_override`` ejecuta autenticación y CSRF reales."""
+    original_session = app.dependency_overrides.get(current_session)
+    original_csrf = app.dependency_overrides.get(require_csrf)
     
     # Skip override si el test pide auth real
     if "no_auth_override" in request.keywords:
-        # Limpiar override para que use auth real
+        # Limpiar ambos overrides: mantener CSRF simulado ocultaría fallos del
+        # ciclo login -> cookie -> mutación autenticada.
         app.dependency_overrides.pop(current_session, None)
-        app.dependency_overrides[require_csrf] = lambda: None
+        app.dependency_overrides.pop(require_csrf, None)
         yield
-        # Restaurar default después del test
-        app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
+        if original_session is not None:
+            app.dependency_overrides[current_session] = original_session
+        else:
+            app.dependency_overrides.pop(current_session, None)
+        if original_csrf is not None:
+            app.dependency_overrides[require_csrf] = original_csrf
+        else:
+            app.dependency_overrides.pop(require_csrf, None)
         return
     
     # Comportamiento normal: forzar admin

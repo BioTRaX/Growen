@@ -11,6 +11,7 @@ Security: admin/colaborador only for mutating actions.
 """
 
 import os
+import asyncio
 import socket
 import time
 import uuid
@@ -32,6 +33,7 @@ from agent_core.config import settings
 import shutil
 import subprocess
 from services.integrations.notion_client import NotionWrapper, load_notion_settings  # type: ignore
+from services.logging.log_cleanup import build_cleanup_plan, execute_cleanup_plan
 
 
 router = APIRouter(prefix="/admin/services", tags=["admin","services"])
@@ -51,6 +53,19 @@ KNOWN_SERVICES = [
 ]
 
 
+@router.get("/logs/cleanup-preview", dependencies=[Depends(require_roles("admin"))])
+async def preview_physical_log_cleanup(keep_days: int = Query(7, ge=0, le=3650)) -> Dict[str, Any]:
+    """Previsualiza la limpieza física sin modificar archivos."""
+    return build_cleanup_plan(keep_days=keep_days)
+
+
+@router.post("/logs/cleanup", dependencies=[Depends(require_roles("admin")), Depends(require_csrf)])
+async def clean_physical_logs(keep_days: int = Query(7, ge=0, le=3650)) -> Dict[str, Any]:
+    """Elimina logs físicos antiguos y directorios completos de ejecuciones finalizadas."""
+    plan = build_cleanup_plan(keep_days=keep_days)
+    return {"plan": plan, "result": execute_cleanup_plan(plan)}
+
+
 def _cid() -> str:
     return uuid.uuid4().hex
 
@@ -63,6 +78,39 @@ async def _ensure_row(db: AsyncSession, name: str) -> Service:
     db.add(row)
     await db.flush()
     return row
+
+
+async def _record_operation_failure(
+    db: AsyncSession,
+    *,
+    service: str,
+    action: str,
+    correlation_id: str,
+    error: Exception,
+) -> None:
+    """Registra un fallo sin reemplazar la excepción original por una sesión abortada."""
+    try:
+        await db.rollback()
+    except Exception:
+        pass
+    try:
+        db.add(ServiceLog(
+            service=service,
+            correlation_id=correlation_id,
+            action=action,
+            host=socket.gethostname(),
+            pid=None,
+            duration_ms=None,
+            ok=False,
+            level="ERROR",
+            error=str(error)[:500],
+        ))
+        await db.commit()
+    except Exception:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 @router.get("", dependencies=[Depends(require_roles("admin", "colaborador"))])
@@ -114,7 +162,7 @@ async def status(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str
     if name not in KNOWN_SERVICES:
         raise HTTPException(status_code=404, detail="Servicio desconocido")
     row = await _ensure_row(db, name)
-    st = _status(name)
+    st = await asyncio.to_thread(_status, name)
     row.status = st.status
     # If stopped, store final uptime and clear started_at
     if st.status != "running":
@@ -363,7 +411,7 @@ async def start(name: str, mode: Optional[str] = Query(None, description="Modo d
     cid = _cid()
     t0 = time.perf_counter()
     try:
-        st = _start(name, correlation_id=cid, mode=mode)
+        st = await asyncio.to_thread(_start, name, correlation_id=cid, mode=mode)
         dur = int((time.perf_counter() - t0) * 1000)
         row.status = st.status
         if st.ok:
@@ -380,9 +428,14 @@ async def start(name: str, mode: Optional[str] = Query(None, description="Modo d
         await db.commit()
         return {"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid, "detail": st.detail}
     except Exception as e:
-        db.add(ServiceLog(service=name, correlation_id=cid, action="start", host=socket.gethostname(), pid=None, duration_ms=None, ok=False, level="ERROR", error=str(e)))
-        await db.commit()
-        raise HTTPException(status_code=500, detail=str(e))
+        await _record_operation_failure(
+            db,
+            service=name,
+            action="start",
+            correlation_id=cid,
+            error=e,
+        )
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/{name}/stop", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
@@ -393,20 +446,30 @@ async def stop(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, 
     await _ensure_row(db, name)
     cid = _cid()
     t0 = time.perf_counter()
-    st = _stop(name, correlation_id=cid)
-    dur = int((time.perf_counter() - t0) * 1000)
-    # update persisted uptime and clear started_at
-    row = await _ensure_row(db, name)
-    if row.started_at:
-        try:
-            row.uptime_s = int((datetime.utcnow() - row.started_at).total_seconds())
-        except Exception:
-            pass
-    row.started_at = None
-    row.status = st.status
-    db.add(ServiceLog(service=name, correlation_id=cid, action="stop", host=socket.gethostname(), pid=None, duration_ms=dur, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
-    await db.commit()
-    return {"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid, "detail": st.detail}
+    try:
+        st = await asyncio.to_thread(_stop, name, correlation_id=cid)
+        dur = int((time.perf_counter() - t0) * 1000)
+        # update persisted uptime and clear started_at
+        row = await _ensure_row(db, name)
+        if row.started_at:
+            try:
+                row.uptime_s = int((datetime.utcnow() - row.started_at).total_seconds())
+            except Exception:
+                pass
+        row.started_at = None
+        row.status = st.status
+        db.add(ServiceLog(service=name, correlation_id=cid, action="stop", host=socket.gethostname(), pid=None, duration_ms=dur, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
+        await db.commit()
+        return {"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid, "detail": st.detail}
+    except Exception as e:
+        await _record_operation_failure(
+            db,
+            service=name,
+            action="stop",
+            correlation_id=cid,
+            error=e,
+        )
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/panic-stop", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
@@ -415,9 +478,19 @@ async def panic_stop(db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
     out: List[Dict[str, Any]] = []
     for name in KNOWN_SERVICES:
         cid = _cid()
-        st = _stop(name, correlation_id=cid)
-        db.add(ServiceLog(service=name, correlation_id=cid, action="stop", host=socket.gethostname(), pid=None, duration_ms=None, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
-        out.append({"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid})
+        try:
+            st = await asyncio.to_thread(_stop, name, correlation_id=cid)
+            db.add(ServiceLog(service=name, correlation_id=cid, action="stop", host=socket.gethostname(), pid=None, duration_ms=None, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
+            out.append({"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid})
+        except Exception as exc:
+            await _record_operation_failure(
+                db,
+                service=name,
+                action="stop",
+                correlation_id=cid,
+                error=exc,
+            )
+            out.append({"name": name, "status": "failed", "ok": False, "correlation_id": cid})
     await db.commit()
     return {"stopped": out}
 
@@ -484,10 +557,10 @@ async def stream_logs(name: str, db: AsyncSession = Depends(get_session), last_i
 
 @router.delete("/{name}/logs", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def delete_service_logs(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
-    """Elimina todos los logs (ServiceLog) de un servicio y archivos de log físicos si aplica.
-    
-    Solo se permite cuando el servicio está detenido para evitar conflictos.
-    Para telegram_polling_worker, también elimina el archivo worker_telegram_polling.log.
+    """Elimina el historial ``ServiceLog`` de un servicio detenido.
+
+    Los archivos físicos y las carpetas de ``start-dev.ps1`` se administran por
+    separado mediante ``/admin/services/logs/cleanup``.
     """
     if name not in KNOWN_SERVICES:
         raise HTTPException(status_code=404, detail="Servicio desconocido")
@@ -502,54 +575,22 @@ async def delete_service_logs(name: str, db: AsyncSession = Depends(get_session)
     
     # Eliminar todos los ServiceLog del servicio
     from sqlalchemy import delete
-    from pathlib import Path
-    cid = _cid()
-    file_deleted = False
-    file_error = None
-    
     try:
         result = await db.execute(delete(ServiceLog).where(ServiceLog.service == name))
         deleted_count = result.rowcount or 0
         await db.commit()
-        
-        # Eliminar archivo físico de log si es telegram_polling_worker
-        if name == "telegram_polling_worker":
-            try:
-                log_file_path = Path(__file__).resolve().parent.parent / "logs" / "worker_telegram_polling.log"
-                if log_file_path.exists():
-                    # Intentar eliminar el archivo
-                    try:
-                        log_file_path.unlink()
-                        file_deleted = True
-                    except PermissionError:
-                        # Si el archivo está abierto, intentar truncarlo
-                        try:
-                            with open(log_file_path, 'w', encoding='utf-8') as f:
-                                f.truncate(0)
-                            file_deleted = True
-                        except Exception as truncate_err:
-                            file_error = f"No se pudo eliminar/truncar archivo: {truncate_err}"
-                    except Exception as file_err:
-                        file_error = f"Error eliminando archivo: {file_err}"
-            except Exception as e:
-                file_error = f"Error accediendo archivo: {e}"
         
         # No registrar log de eliminación ya que acabamos de eliminar todos los logs
         # (y 'delete_logs' no está en la lista de acciones permitidas del constraint)
         # Si necesitamos auditoría, se puede agregar a otra tabla o crear migración para extender el constraint
         
         message = f"Se eliminaron {deleted_count} logs del servicio {name}"
-        if name == "telegram_polling_worker":
-            if file_deleted:
-                message += " y se eliminó el archivo de log físico"
-            elif file_error:
-                message += f" (advertencia: {file_error})"
-        
         return {
             "name": name,
             "deleted_count": deleted_count,
             "ok": True,
-            "message": message
+            "message": message,
+            "scope": "database",
         }
     except Exception as e:
         await db.rollback()

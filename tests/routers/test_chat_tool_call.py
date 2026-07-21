@@ -1,13 +1,9 @@
-"""Tests del flujo de tool-calling en /chat.
-
-Simula una respuesta inicial de OpenAI con tool_calls y luego la invocación al
-servidor MCP de productos. Se mockea el cliente OpenAI y la llamada httpx.
-"""
-
 # NG-HEADER: Nombre de archivo: test_chat_tool_call.py
 # NG-HEADER: Ubicacion: tests/routers/test_chat_tool_call.py
 # NG-HEADER: Descripcion: Pruebas flujo tool-calling chat -> MCP productos
 # NG-HEADER: Lineamientos: Ver AGENTS.md
+
+"""Tests del flujo de tool-calling en /chat con OpenAI y el cliente MCP."""
 
 from __future__ import annotations
 
@@ -16,8 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-import respx
-from httpx import AsyncClient, ASGITransport, Response
+from httpx import AsyncClient, ASGITransport
 
 from services.api import app
 
@@ -58,7 +53,9 @@ def _build_openai_final_response(content: str):
 
 
 @pytest.fixture
-def mock_openai_cycle():
+def mock_openai_cycle(monkeypatch):
+    monkeypatch.setenv("AI_DISABLE_OLLAMA", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     # Primera llamada devuelve tool_call; segunda llamada devuelve texto final
     first = _build_openai_tool_call_response("get_product_info", {"sku": "SKU123"})
     second = _build_openai_final_response("El producto SKU123 cuesta 100.")
@@ -71,7 +68,7 @@ def mock_openai_cycle():
             calls = []
 
             @staticmethod
-            def create(**kwargs):  # noqa: D401
+            async def create(**kwargs):  # noqa: D401
                 # Decide cuál devolver según cuántas llamadas previas hubo
                 if not hasattr(_Chat.completions, "_counter"):
                     _Chat.completions._counter = 0
@@ -84,16 +81,19 @@ def mock_openai_cycle():
         def __init__(self, *_, **__):
             self.chat = _Chat()
 
-    with patch("ai.providers.openai_provider.OpenAI", _Client):
+    async def schemas(_role):
+        return [{"type": "function", "function": {"name": "get_product_info", "description": "info", "parameters": {"type": "object"}}}]
+
+    async def call_tool(**_kwargs):
+        return {"sku": "SKU123", "sale_price": 100}
+
+    with patch("ai.providers.openai_provider.AsyncOpenAI", _Client), \
+         patch("agent_core.mcp_client.mcp_client_manager.openai_tools", schemas), \
+         patch("agent_core.mcp_client.mcp_client_manager.call_tool", call_tool):
         yield
 
 
-@respx.mock
 async def test_chat_tool_call_flow(mock_openai_cycle):
-    # Mock endpoint MCP
-    respx.post("http://mcp_products:8001/invoke_tool").mock(
-        return_value=Response(200, json={"tool_name": "get_product_info", "result": {"sku": "SKU123", "sale_price": 100}})
-    )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         # Simula texto que parsea como consulta de producto (‘SKU123?’ u otro trigger)
         r = await ac.post("/chat", json={"text": "Precio SKU123"})

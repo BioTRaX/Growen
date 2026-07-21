@@ -8,8 +8,19 @@ from services import api
 from db.session import SessionLocal
 from sqlalchemy import select
 from db.models import Product, StockShortage, StockLedger
+from services.auth import require_csrf
+from services.routers.stock_shortages import router as shortages_router
 
 client = TestClient(api.app)
+api.app.dependency_overrides[require_csrf] = lambda: None
+
+
+@pytest.mark.no_db
+def test_create_shortage_declares_csrf_dependency():
+    """El alta mantiene CSRF como autoridad de backend además del interceptor Vue."""
+    route = next(route for route in shortages_router.routes if route.path == "/shortages" and "POST" in route.methods)
+    dependencies = {dependency.call for dependency in route.dependant.dependencies}
+    assert require_csrf in dependencies
 
 
 def _create_product(title: str, stock: int, price: float) -> int:
@@ -73,6 +84,31 @@ async def test_create_shortage_records_ledger():
         ledger = rows[0]
         assert ledger.delta == -3
         assert ledger.balance_after == 27  # 30 - 3
+
+
+@pytest.mark.asyncio
+async def test_create_shortage_accepts_decimal_quantity():
+    """Las cantidades fraccionarias se conservan en producto y ledger."""
+    pid = _create_product("Prod Decimal Short", 10, 80)
+
+    response = client.post("/stock/shortages", json={
+        "product_id": pid,
+        "quantity": 1.25,
+        "reason": "UNKNOWN",
+    })
+
+    assert response.status_code == 200, response.text
+    assert response.json()["new_stock"] == 8.75
+    async with SessionLocal() as session:
+        product = await session.get(Product, pid)
+        ledger = await session.scalar(
+            select(StockLedger)
+            .where(StockLedger.product_id == pid, StockLedger.source_type == "shortage")
+            .order_by(StockLedger.id.desc())
+        )
+        assert float(product.stock) == 8.75
+        assert float(ledger.delta) == -1.25
+        assert float(ledger.balance_after) == 8.75
 
 
 @pytest.mark.asyncio

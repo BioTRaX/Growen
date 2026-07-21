@@ -35,10 +35,9 @@ def test_create_validate_confirm_and_duplication():
     assert r.status_code == 200
     assert r.json()["unmatched"] == 0
 
-    # Confirmar
+    # Confirmar una compra vacía queda bloqueado por el nuevo lifecycle.
     r = client.post(f"/purchases/{pid}/confirm?debug=1")
-    assert r.status_code == 200
-    assert r.json().get("already_confirmed") in (None, False)
+    assert r.status_code in (409, 422)
 
     # Idempotencia (mismo remito)
     r = client.post("/purchases", json=payload)
@@ -91,6 +90,11 @@ def test_confirm_idempotent_and_autolink_flow():
     )
     assert r.status_code == 200
 
+    # La confirmación requiere validación explícita.
+    validated = client.post(f"/purchases/{pid}/validate")
+    assert validated.status_code == 200
+    assert validated.json()["unmatched"] == 0
+
     # Confirmar: debe autovincular la lÃ­nea al supplier_item y sumar stock 3 al producto
     r1 = client.post(f"/purchases/{pid}/confirm")
     assert r1.status_code == 200
@@ -103,6 +107,48 @@ def test_confirm_idempotent_and_autolink_flow():
     r2 = client.post(f"/purchases/{pid}/confirm")
     assert r2.status_code == 200
     assert r2.json().get("already_confirmed") is True
+
+
+def test_confirm_creates_unknown_product_and_exposes_history():
+    supplier = client.post("/suppliers", json={"slug": "sp_new", "name": "Santa Planta Nueva"})
+    assert supplier.status_code in (200, 201)
+    supplier_id = supplier.json()["id"]
+    purchase = client.post("/purchases", json={"supplier_id": supplier_id, "remito_number": "R-NEW-1", "remito_date": "2026-07-16"})
+    purchase_id = purchase.json()["id"]
+    updated = client.put(f"/purchases/{purchase_id}", json={"lines": [{
+        "supplier_sku": "SKU-CAMBIADO",
+        "title": "Maceta Pack X 100 U -20% Desc",
+        "qty": 100,
+        "unit_cost": 193.80,
+        "line_discount": 20,
+    }]})
+    assert updated.status_code == 200
+
+    validation = client.post(f"/purchases/{purchase_id}/validate")
+    assert validation.status_code == 200
+    assert validation.json()["unmatched"] == 1
+    detail = client.get(f"/purchases/{purchase_id}").json()
+    assert detail["status"] == "VALIDADA"
+    assert detail["lines"][0]["state"] == "PENDIENTE_CREACION"
+
+    confirmed = client.post(f"/purchases/{purchase_id}/confirm")
+    assert confirmed.status_code == 200
+    created = confirmed.json()["created_products"]
+    assert len(created) == 1
+    product_id = created[0]["product_id"]
+
+    impact = client.get(f"/purchases/{purchase_id}/impact")
+    assert impact.status_code == 200
+    assert impact.json()["items"][0]["stock"] == 100
+    assert impact.json()["movements"][0]["delta"] == 100
+
+    history = client.get(f"/products/{product_id}/purchase-history")
+    assert history.status_code == 200
+    assert history.json()["items"][0]["supplier_sku"] == "SKU-CAMBIADO"
+    assert history.json()["items"][0]["discount_pct"] == 20
+
+    immutable = client.put(f"/purchases/{purchase_id}", json={"note": "no permitido"})
+    assert immutable.status_code == 409
 
 
 def test_cancel_requires_note():

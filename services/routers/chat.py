@@ -438,8 +438,8 @@ async def chat_endpoint(
             # El provider OpenAI construye el schema basado en el rol del usuario
             provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
             tools_schema = None
-            if hasattr(provider, '_build_tools_schema'):
-                tools_schema = provider._build_tools_schema(user_role)
+            if hasattr(provider, 'build_tools_schema'):
+                tools_schema = await provider.build_tools_schema(user_role)
             
             answer = await ai_router.run_async(
                 task=Task.SHORT_ANSWER.value,

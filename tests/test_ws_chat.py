@@ -15,6 +15,7 @@ from services.api import app
 from db.base import Base
 from db.session import engine, SessionLocal
 from db.models import User, Session as DBSess
+from services.auth import hash_session_id
 
 
 async def _init_db() -> None:
@@ -63,7 +64,7 @@ def test_ws_with_session(monkeypatch) -> None:
             db.add(user)
             await db.flush()
             sess = DBSess(
-                id="sid1",
+                id=hash_session_id("sid1"),
                 user_id=user.id,
                 role=user.role,
                 csrf_token="tok",

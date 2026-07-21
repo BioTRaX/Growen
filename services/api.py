@@ -54,6 +54,7 @@ from .routers import (
     services_admin,
     backups_admin,
     admin_chat,
+    chat_quality,
     customers,
     sales,
     reports,
@@ -360,6 +361,8 @@ from services.routers import catalogs as catalogs_router  # import after logger 
 from services.routers import products_stock  # nuevo router historial stock
 from services.routers import admin_scheduler  # router admin scheduler
 from services.routers import tags  # router de tags
+app.include_router(catalogs_router.diagnostics_router)
+app.include_router(catalogs_router.static_router)
 app.include_router(catalogs_router.router)
 app.include_router(catalog.router)
 app.include_router(imports.router)
@@ -389,6 +392,7 @@ from services.routers import mcp_admin  # MCP servers admin
 app.include_router(mcp_admin.router)
 app.include_router(backups_admin.router)
 app.include_router(admin_chat.router)  # Admin chat sessions
+app.include_router(chat_quality.router)  # Feedback, clasificación y prompts supervisados
 app.include_router(admin_scheduler.router)  # Admin scheduler control
 from services.routers import knowledge as knowledge_admin  # Knowledge Base admin
 app.include_router(knowledge_admin.router)
@@ -586,6 +590,23 @@ async def _init_inmemory_db():
                 await conn.run_sync(Base.metadata.create_all)
     except Exception:
         logger.exception("No se pudo inicializar el esquema en memoria")
+
+    # Hidratar prompts activos desde PostgreSQL y restaurar el scheduler persistente.
+    try:
+        from ai.prompt_registry import ActivePrompt as _ActivePrompt, replace_active as _replace_active
+        from db.models import AIPromptVersion as _AIPromptVersion, SchedulerSetting as _SchedulerSetting
+        from services.jobs.market_scheduler import start_scheduler as _start_market_scheduler
+        from sqlalchemy import select as _select
+        async with SessionLocal() as _settings_session:  # type: ignore
+            _prompts = (await _settings_session.execute(
+                _select(_AIPromptVersion).where(_AIPromptVersion.status == "active")
+            )).scalars().all()
+            _replace_active([_ActivePrompt(p.id, p.prompt_key, p.version, p.content) for p in _prompts])
+            _scheduler_setting = await _settings_session.get(_SchedulerSetting, 1)
+            if _scheduler_setting and _scheduler_setting.enabled:
+                _start_market_scheduler(force=True)
+    except Exception:
+        logger.exception("No se pudo restaurar la configuración administrativa persistente")
     # Auto-start optional services flagged as auto_start (best-effort, non-blocking)
     try:
         from db.models import Service
@@ -671,10 +692,27 @@ try:
     FE_DIST = ROOT / "frontend" / "dist"
     INDEX_HTML = FE_DIST / "index.html"
     ASSETS_DIR = FE_DIST / "assets"
+    VUE_DIST = ROOT / "frontend-vue" / "dist"
+    VUE_INDEX_HTML = VUE_DIST / "index.html"
+    VUE_ROUTE_PREFIXES = {
+        value.strip().strip("/")
+        for value in os.getenv("FRONTEND_VUE_ROUTES", "").split(",")
+        if value.strip().strip("/")
+    }
 
     if ASSETS_DIR.exists():
         # Serve bundled assets (JS/CSS/images) from /assets
         app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
+    if VUE_DIST.exists():
+        # Vite genera referencias /vue-assets/assets/*; montar el dist completo
+        # permite conservar React y Vue sin colisiones de nombres.
+        app.mount("/vue-assets", StaticFiles(directory=str(VUE_DIST)), name="vue-assets")
+
+    def _spa_index_for(path: str) -> Path:
+        prefix = path.strip("/").split("/", 1)[0] if path.strip("/") else ""
+        if prefix in VUE_ROUTE_PREFIXES and VUE_INDEX_HTML.exists():
+            return VUE_INDEX_HTML
+        return INDEX_HTML
 
     # Static media (user/product images, attachments)
     MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", str(ROOT / "Devs" / "Imagenes")))
@@ -718,15 +756,17 @@ try:
             # Explicitmente dejamos pasar 404 (estas rutas deberAan matchear antes)
             blocked = (
                 full_path.startswith("assets")
+                or full_path.startswith("vue-assets")
                 or full_path.startswith("media")
                 or full_path.startswith("api")
                 or full_path.startswith("docs")
                 or full_path.startswith("redoc")
                 or full_path.startswith("openapi")
             )
-            if blocked or not INDEX_HTML.exists():
+            selected_index = _spa_index_for(full_path)
+            if blocked or not selected_index.exists():
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
-            resp = FileResponse(str(INDEX_HTML))
+            resp = FileResponse(str(selected_index))
             resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             resp.headers["Pragma"] = "no-cache"
             resp.headers["Expires"] = "0"

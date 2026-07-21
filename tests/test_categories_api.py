@@ -1,74 +1,40 @@
 #!/usr/bin/env python
 # NG-HEADER: Nombre de archivo: test_categories_api.py
 # NG-HEADER: Ubicación: tests/test_categories_api.py
-# NG-HEADER: Descripción: Pruebas para POST /categories (unicidad y validación de parent)
+# NG-HEADER: Descripción: Pruebas de categorías y subcategorías planas, tipadas y creables.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-import os
-from fastapi.testclient import TestClient
-
-os.environ.setdefault("DB_URL", "sqlite+aiosqlite:///:memory:")
-
-from services.api import app  # noqa: E402
-from services.auth import current_session, require_csrf, SessionData  # noqa: E402
+import pytest
 
 
-client = TestClient(app)
+@pytest.mark.asyncio
+async def test_same_normalized_name_is_unique_per_kind(client) -> None:
+    category = await client.post("/categories", json={"name": " Cultivo ", "kind": "category"})
+    subcategory = await client.post("/categories", json={"name": "Cultivo", "kind": "subcategory"})
+    assert category.status_code == 200, category.text
+    assert subcategory.status_code == 200, subcategory.text
+    assert category.json()["kind"] == "category"
+    assert subcategory.json()["kind"] == "subcategory"
+    assert category.json()["path"] == subcategory.json()["path"] == "Cultivo"
 
-# Forzar rol admin y desactivar CSRF en tests
-app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
-app.dependency_overrides[require_csrf] = lambda: None
-
-
-def test_create_category_basic_and_uniqueness() -> None:
-    # Crear raíz "Grow" (idempotente: si existe, reutilizarla)
-    r = client.post("/categories", json={"name": "Grow"})
-    if r.status_code == 200:
-        root = r.json()
-    else:
-        # Ya existe: buscarla en la lista
-        assert r.status_code == 409
-        lr = client.get("/categories")
-        assert lr.status_code == 200
-        data = lr.json()
-        root = next((c for c in data if c.get("name") == "Grow" and c.get("parent_id") is None), None)
-        assert root, "Root category 'Grow' should exist for this test"
-    assert root["name"] == "Grow"
-    assert root["parent_id"] is None
-
-    # Crear hijo único "Sustratos" bajo raíz
-    r = client.post("/categories", json={"name": "Sustratos", "parent_id": root["id"]})
-    if r.status_code == 200:
-        child = r.json()
-    else:
-        # Si ya existe por ejecuciones previas, validar conflicto y tomar existente
-        assert r.status_code == 409
-        lr = client.get("/categories")
-        assert lr.status_code == 200
-        data = lr.json()
-        child = next((c for c in data if c.get("name") == "Sustratos" and c.get("parent_id") == root["id"]), None)
-        assert child, "Child category should exist under root"
-    assert child["parent_id"] == root["id"]
-    assert child["path"].endswith(">Sustratos") or child["path"] == "Grow>Sustratos"
-
-    # Intentar duplicar en mismo nivel -> 409
-    r = client.post("/categories", json={"name": "Sustratos", "parent_id": root["id"]})
-    assert r.status_code == 409
-    assert "existe" in r.json().get("detail", "").lower()
-
-    # Mismo nombre en otro nivel debe permitirse. Si ya existe previamente en raíz, aceptamos 409 como idempotencia del entorno
-    r = client.post("/categories", json={"name": "Sustratos"})
-    if r.status_code == 200:
-        data = r.json()
-        assert data["name"] == "Sustratos" and data["parent_id"] is None
-    else:
-        assert r.status_code == 409
-        lr = client.get("/categories")
-        assert lr.status_code == 200
-        cats = lr.json()
-        assert any(c.get("name") == "Sustratos" and c.get("parent_id") is None for c in cats)
+    duplicate = await client.post("/categories", json={"name": "cultivo", "kind": "category"})
+    assert duplicate.status_code == 409
 
 
-def test_create_category_invalid_parent() -> None:
-    r = client.post("/categories", json={"name": "Iluminacion", "parent_id": 999999})
-    assert r.status_code == 400
-    assert "parent_id" in r.json().get("detail", "")
+@pytest.mark.asyncio
+async def test_list_and_search_filter_by_kind(client) -> None:
+    await client.post("/categories", json={"name": "Riego", "kind": "category"})
+    await client.post("/categories", json={"name": "Riego", "kind": "subcategory"})
+    listed = await client.get("/categories", params={"kind": "subcategory"})
+    searched = await client.get("/categories/search", params={"q": "rie", "kind": "category"})
+    assert listed.status_code == searched.status_code == 200
+    assert listed.json() and all(row["kind"] == "subcategory" for row in listed.json())
+    assert searched.json() and all(row["kind"] == "category" for row in searched.json())
+
+
+@pytest.mark.asyncio
+async def test_legacy_parent_infers_subcategory_but_is_not_selection_rule(client) -> None:
+    root = (await client.post("/categories", json={"name": "Legacy", "kind": "category"})).json()
+    child = await client.post("/categories", json={"name": "Legacy Sub", "parent_id": root["id"]})
+    assert child.status_code == 200
+    assert child.json()["kind"] == "subcategory"
+    assert child.json()["parent_id"] == root["id"]

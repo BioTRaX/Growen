@@ -7,19 +7,21 @@
 from __future__ import annotations
 
 import os
+import csv
+from decimal import Decimal
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Literal
 import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form
 from datetime import datetime as _dt
 from fastapi.responses import JSONResponse, StreamingResponse
-from io import BytesIO
+from io import BytesIO, StringIO
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
-from pydantic import BaseModel, ValidationError
-from sqlalchemy import func, select, or_, and_, update
+from pydantic import BaseModel, ValidationError, Field, field_validator
+from sqlalchemy import func, select, or_, and_, update, exists
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
@@ -37,7 +39,12 @@ from db.models import (
     ProductEquivalence,
     CanonicalProduct,
     AuditLog,
+    Purchase,
     PurchaseLine,
+    PurchaseAttachment,
+    StockLedger,
+    Tag,
+    ProductTag,
 )
 from db.session import get_session
 from db.text_utils import stylize_product_name
@@ -54,13 +61,72 @@ router = APIRouter(tags=["catalog"])
 
 # Tamaño de página por defecto para el historial de precios
 DEFAULT_PRICE_HISTORY_PAGE_SIZE = int(os.getenv("PRICE_HISTORY_PAGE_SIZE", "20"))
+
+
+@router.get("/products/{product_id}/purchase-history", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def product_purchase_history(product_id: int, session: AsyncSession = Depends(get_session)):
+    """Historial confirmado de compras y movimientos para un producto."""
+    product = await session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    rows = (
+        await session.execute(
+            select(PurchaseLine, Purchase, Supplier)
+            .join(Purchase, Purchase.id == PurchaseLine.purchase_id)
+            .join(Supplier, Supplier.id == Purchase.supplier_id)
+            .where(PurchaseLine.product_id == product_id, Purchase.status == "CONFIRMADA")
+            .order_by(Purchase.remito_date.desc(), PurchaseLine.id.desc())
+        )
+    ).all()
+    items = []
+    for line, purchase, supplier in rows:
+        attachment = await session.scalar(
+            select(PurchaseAttachment)
+            .where(PurchaseAttachment.purchase_id == purchase.id)
+            .order_by(PurchaseAttachment.id.asc())
+        )
+        discount = float(line.line_discount or 0)
+        gross = float(line.unit_cost or 0)
+        items.append({
+            "purchase_id": purchase.id,
+            "purchase_line_id": line.id,
+            "date": purchase.remito_date.isoformat(),
+            "supplier": {"id": supplier.id, "name": supplier.name},
+            "remito_number": purchase.remito_number,
+            "supplier_sku": line.supplier_sku,
+            "supplier_title": line.title,
+            "quantity": int(line.qty or 0),
+            "gross_unit_cost": gross,
+            "discount_pct": discount,
+            "net_unit_cost": round(gross * (1 - discount / 100), 2),
+            "attachment_url": f"/purchases/{purchase.id}/attachments/{attachment.id}/file" if attachment else None,
+        })
+    movements = (
+        await session.execute(
+            select(StockLedger)
+            .where(StockLedger.product_id == product_id, StockLedger.source_type.in_(("purchase", "purchase_rollback")))
+            .order_by(StockLedger.created_at.desc())
+        )
+    ).scalars().all()
+    return {
+        "product_id": product.id,
+        "product_name": product.title,
+        "items": items,
+        "movements": [{
+            "type": movement.source_type,
+            "source_id": movement.source_id,
+            "delta": movement.delta,
+            "balance_after": movement.balance_after,
+            "created_at": movement.created_at.isoformat(),
+        } for movement in movements],
+    }
 # ------------------------------- Productos (mínimo para tests) -------------------------------
 from pydantic import BaseModel as _PydModel
 
 
 class _ProductCreate(_PydModel):
     title: str
-    initial_stock: int = 0
+    initial_stock: Decimal = Decimal("0")
     supplier_id: Optional[int] = None
     supplier_sku: Optional[str] = None
     sku: Optional[str] = None
@@ -332,11 +398,11 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
 
     # Inventario opcional
     if payload.initial_stock and payload.initial_stock > 0:
-        inv = Inventory(variant_id=var.id, stock_qty=int(payload.initial_stock))
+        inv = Inventory(variant_id=var.id, stock_qty=payload.initial_stock)
         session.add(inv)
 
     # Guardar stock agregado también en Product.stock para compatibilidad
-    prod.stock = int(payload.initial_stock or 0)
+    prod.stock = Decimal(str(payload.initial_stock or 0))
 
     # Crear SupplierProduct asociado si hay supplier_id
     if supplier is not None:
@@ -450,7 +516,7 @@ async def update_variant_sku(
 ):
     """Actualiza el SKU interno de una variante con validación de formato y unicidad.
 
-    - Regex permitida: [A-Za-z0-9._\-]{2,50}
+    - Regex permitida: [A-Za-z0-9._\\-]{2,50}
     - Unicidad global en `Variant.sku` (existe constraint de DB adicional)
     - Auditoría en `AuditLog` (action: variant.sku.update)
     """
@@ -582,6 +648,12 @@ async def catalog_search(
                 CanonicalProduct.sku_custom.ilike(w_like),
                 CanonicalProduct.ng_sku.ilike(w_like),
                 Product.description_html.ilike(w_like),
+                exists(
+                    select(1)
+                    .select_from(ProductTag)
+                    .join(Tag, Tag.id == ProductTag.tag_id)
+                    .where(ProductTag.product_id == Product.id, Tag.name.ilike(w_like))
+                ),
             ]
             and_conditions.append(or_(*or_conditions))
         
@@ -612,7 +684,6 @@ async def catalog_search(
     tags_map: dict[int, list[str]] = {}
     if product_ids:
         try:
-            from db.models import Tag, ProductTag
             tag_result = (
                 await session.execute(
                     select(ProductTag.product_id, Tag.name)
@@ -1016,6 +1087,7 @@ async def variants_lookup(
             "description": None,
             "technical_specs": None,
             "usage_instructions": None,
+            "tags": [],
         }
 
     # 2. Buscar por SKU canónico en Product (Product.canonical_sku) - preferido
@@ -1131,7 +1203,7 @@ class _ProductsDeleteReq(_PydModel):
 
 @router.delete(
     "/catalog/products",
-    dependencies=[Depends(require_csrf)],
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
 )
 async def delete_products_guarded(payload: _ProductsDeleteReq, session: AsyncSession = Depends(get_session)):
     """Elimina productos si no tienen stock ni referencias en compras.
@@ -1462,7 +1534,7 @@ async def create_supplier(
 ):
     """Crea un nuevo proveedor validando formato y unicidad de ``slug``."""
 
-    if request.headers.get("content-type") != "application/json":
+    if not (request.headers.get("content-type") or "").lower().startswith("application/json"):
         raise HTTPException(
             status_code=415, detail="Content-Type debe ser application/json"
         )
@@ -1960,19 +2032,23 @@ def _build_category_path(cat: Category, lookup: dict[int, Category]) -> str:
     ],
 )
 async def list_categories(
+    kind: Literal["category", "subcategory"] | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> List[dict]:
     """Lista categorías con su jerarquía completa."""
 
-    result = await session.execute(select(Category))
+    stmt = select(Category)
+    if kind:
+        stmt = stmt.where(Category.kind == kind)
+    result = await session.execute(stmt.order_by(Category.name.asc()))
     cats = result.scalars().all()
-    lookup = {c.id: c for c in cats}
     return [
         {
             "id": c.id,
             "name": c.name,
             "parent_id": c.parent_id,
-            "path": _build_category_path(c, lookup),
+            "kind": c.kind,
+            "path": c.name,
         }
         for c in cats
     ]
@@ -1981,6 +2057,7 @@ async def list_categories(
 class CategoryCreate(BaseModel):
     name: str
     parent_id: int | None = None
+    kind: Literal["category", "subcategory"] | None = None
 
 
 @router.post(
@@ -1992,9 +2069,10 @@ async def create_category(payload: CategoryCreate, session: AsyncSession = Depen
 
     Respuesta incluye `id`, `name`, `parent_id` y `path` completo.
     """
-    name = (payload.name or "").strip()
+    name = " ".join((payload.name or "").strip().split())
     if not name:
         raise HTTPException(status_code=400, detail="name requerido")
+    kind = payload.kind or ("subcategory" if payload.parent_id else "category")
     # Verificar padre válido (si viene)
     if payload.parent_id:
         parent = await session.get(Category, payload.parent_id)
@@ -2002,12 +2080,12 @@ async def create_category(payload: CategoryCreate, session: AsyncSession = Depen
             raise HTTPException(status_code=400, detail="parent_id inválido")
     # Unicidad (name, parent_id)
     exists = await session.scalar(
-        select(Category).where(Category.name == name, Category.parent_id == payload.parent_id)
+        select(Category).where(Category.kind == kind, func.lower(Category.name) == name.lower())
     )
     if exists:
         raise HTTPException(status_code=409, detail="La categoría ya existe en ese nivel")
     # Crear
-    cat = Category(name=name, parent_id=payload.parent_id)
+    cat = Category(name=name, parent_id=payload.parent_id, kind=kind)
     session.add(cat)
     await session.commit()
     await session.refresh(cat)
@@ -2022,8 +2100,7 @@ async def create_category(payload: CategoryCreate, session: AsyncSession = Depen
             break
         parts.append(p.name)
         parent_id = p.parent_id
-    path = ">".join(reversed(parts))
-    return {"id": cat.id, "name": cat.name, "parent_id": cat.parent_id, "path": path}
+    return {"id": cat.id, "name": cat.name, "parent_id": cat.parent_id, "kind": cat.kind, "path": cat.name}
 
 
 @router.get(
@@ -2033,21 +2110,24 @@ async def create_category(payload: CategoryCreate, session: AsyncSession = Depen
     ],
 )
 async def search_categories(
-    q: str, session: AsyncSession = Depends(get_session)
+    q: str,
+    kind: Literal["category", "subcategory"] | None = None,
+    session: AsyncSession = Depends(get_session),
 ) -> List[dict]:
     """Busca categorías por nombre o path parcial."""
 
-    result = await session.execute(
-        select(Category).where(Category.name.ilike(f"%{q}%"))
-    )
+    stmt = select(Category).where(Category.name.ilike(f"%{q}%"))
+    if kind:
+        stmt = stmt.where(Category.kind == kind)
+    result = await session.execute(stmt.order_by(Category.name.asc()))
     cats = result.scalars().all()
-    lookup = {c.id: c for c in cats}
     return [
         {
             "id": c.id,
             "name": c.name,
             "parent_id": c.parent_id,
-            "path": _build_category_path(c, lookup),
+            "kind": c.kind,
+            "path": c.name,
         }
         for c in cats
     ]
@@ -2102,12 +2182,13 @@ async def generate_categories(
         # Crear jerarquía faltante
         parent_id = None
         for name in path.split(">"):
+            kind = "category" if parent_id is None else "subcategory"
             q = select(Category).where(
-                Category.name == name, Category.parent_id == parent_id
+                func.lower(Category.name) == name.lower(), Category.kind == kind
             )
             cat = await session.scalar(q)
             if not cat:
-                cat = Category(name=name, parent_id=parent_id)
+                cat = Category(name=name, parent_id=parent_id, kind=kind)
                 session.add(cat)
                 await session.flush()
             parent_id = cat.id
@@ -2197,6 +2278,134 @@ async def _category_path(session: AsyncSession, category_id: int | None) -> str 
         parts.append(cat.name)
         current_id = cat.parent_id
     return ">".join(reversed(parts)) if parts else None
+
+
+async def _taxonomy_path(
+    session: AsyncSession,
+    category_id: int | None,
+    subcategory_id: int | None,
+) -> str | None:
+    """Compone las dos taxonomías planas sin depender de parent_id."""
+    category = await session.get(Category, category_id) if category_id else None
+    subcategory = await session.get(Category, subcategory_id) if subcategory_id else None
+    parts = [value.name for value in (category, subcategory) if value]
+    return " > ".join(parts) if parts else None
+
+
+async def _stock_export_records(
+    session: AsyncSession,
+    *,
+    supplier_id: int | None,
+    category_id: int | None,
+    q: str | None,
+    stock: str | None,
+    created_since_days: int | None,
+    sort_by: str,
+    order: str,
+    product_type: str | None,
+) -> list[dict]:
+    """Construye el conjunto canónico compartido por las exportaciones de Stock."""
+    try:
+        sort_by_enum = ProductSortBy(sort_by)
+        order_enum = SortOrder(order)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="ordenamiento inválido") from exc
+
+    sp = SupplierProduct
+    p = Product
+    s = Supplier
+    eq = ProductEquivalence
+    cp = CanonicalProduct
+    stmt = (
+        select(sp, p, s, eq, cp)
+        .join(s, sp.supplier_id == s.id)
+        .join(p, sp.internal_product_id == p.id)
+        .outerjoin(eq, eq.supplier_product_id == sp.id)
+        .outerjoin(cp, cp.id == eq.canonical_product_id)
+    )
+    if supplier_id is not None:
+        stmt = stmt.where(sp.supplier_id == supplier_id)
+    if category_id is not None:
+        stmt = stmt.where(p.category_id == category_id)
+    if q:
+        stmt = stmt.where(or_(p.title.ilike(f"%{q}%"), sp.title.ilike(f"%{q}%")))
+    if stock:
+        try:
+            operator, raw_value = stock.split(":", 1)
+            value = Decimal(raw_value)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="stock inválido (use gt:0 o eq:0)") from exc
+        if operator == "gt":
+            stmt = stmt.where(p.stock > value)
+        elif operator == "eq":
+            stmt = stmt.where(p.stock == value)
+        else:
+            raise HTTPException(status_code=400, detail="stock inválido (op debe ser gt o eq)")
+    if created_since_days is not None:
+        if created_since_days < 0 or created_since_days > 365:
+            raise HTTPException(status_code=400, detail="created_since_days fuera de rango (0-365)")
+        from datetime import datetime, timedelta
+        stmt = stmt.where(p.created_at >= datetime.utcnow() - timedelta(days=created_since_days))
+    if product_type and product_type != "all":
+        stmt = stmt.where(
+            eq.canonical_product_id.is_not(None)
+            if product_type == "canonical"
+            else eq.canonical_product_id.is_(None)
+        )
+
+    sort_map = {
+        ProductSortBy.updated_at: sp.last_seen_at,
+        ProductSortBy.precio_venta: sp.current_sale_price,
+        ProductSortBy.precio_compra: sp.current_purchase_price,
+        ProductSortBy.name: p.title,
+        ProductSortBy.created_at: p.created_at,
+    }
+    sort_column = sort_map[sort_by_enum]
+    stmt = stmt.order_by(sort_column.asc() if order_enum == SortOrder.asc else sort_column.desc())
+    rows = (await session.execute(stmt)).all()
+
+    product_ids = list({product.id for _, product, *_ in rows})
+    skus_by_product: dict[int, str | None] = {}
+    if product_ids:
+        variant_rows = (
+            await session.execute(
+                select(Variant.product_id, Variant.sku)
+                .where(Variant.product_id.in_(product_ids))
+                .order_by(Variant.product_id, Variant.id)
+            )
+        ).all()
+        for product_id, sku in variant_rows:
+            skus_by_product.setdefault(product_id, sku)
+
+    records: dict[int, dict] = {}
+    for supplier_product, product, _supplier, _equivalence, canonical in rows:
+        existing = records.get(product.id)
+        canonical_price = float(canonical.sale_price) if canonical and canonical.sale_price is not None else None
+        if existing:
+            if existing["canonical_sale_price"] is None and canonical_price is not None:
+                existing["canonical_sale_price"] = canonical_price
+            continue
+        records[product.id] = {
+            "product_id": product.id,
+            "name": canonical.name if canonical and canonical.name else product.title,
+            "supplier_sale_price": float(supplier_product.current_sale_price) if supplier_product.current_sale_price is not None else None,
+            "canonical_sale_price": canonical_price,
+            "category_id": canonical.category_id if canonical and canonical.category_id else product.category_id,
+            "subcategory_id": canonical.subcategory_id if canonical and canonical.subcategory_id else product.subcategory_id,
+            "sku": (canonical.sku_custom or canonical.ng_sku) if canonical else skus_by_product.get(product.id),
+            "stock": float(product.stock or 0),
+        }
+
+    exported: list[dict] = []
+    for record in records.values():
+        exported.append({
+            "name": stylize_product_name(record["name"]),
+            "sale_price": record["canonical_sale_price"] if record["canonical_sale_price"] is not None else record["supplier_sale_price"],
+            "category": await _taxonomy_path(session, record["category_id"], record["subcategory_id"]),
+            "sku": record["sku"],
+            "stock": record["stock"],
+        })
+    return exported
 
 
 @router.get(
@@ -2393,7 +2602,7 @@ async def list_products(
 
     items = []
     for sp_obj, p_obj, s_obj, eq_obj, cp_obj in rows:
-        cat_path = await _category_path(session, p_obj.category_id)
+        cat_path = await _taxonomy_path(session, p_obj.category_id, p_obj.subcategory_id)
         # Estilizar nombre: Title Case con unidades preservadas
         raw_name = cp_obj.name if (cp_obj and getattr(cp_obj, "name", None)) else p_obj.title
         preferred_name = stylize_product_name(raw_name)
@@ -2417,6 +2626,8 @@ async def list_products(
                 "compra_minima": float(sp_obj.min_purchase_qty)
                 if sp_obj.min_purchase_qty is not None
                 else None,
+                "category_id": p_obj.category_id,
+                "subcategory_id": p_obj.subcategory_id,
                 "category_path": cat_path,
                 "stock": p_obj.stock,
                 "updated_at": sp_obj.last_seen_at.isoformat()
@@ -2469,119 +2680,17 @@ async def export_stock_xlsx(
     Respeta los mismos filtros que /products. El precio de venta prioriza el canónico si existe;
     de lo contrario usa el precio de venta del proveedor.
     """
-    # Reutilizar lógica de filtros sin paginar
-    try:
-        sort_by_enum = ProductSortBy(sort_by)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="sort_by inválido")
-
-    try:
-        order_enum = SortOrder(order)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="order inválido")
-
-    sp = SupplierProduct
-    p = Product
-    s = Supplier
-    eq = ProductEquivalence
-    cp = CanonicalProduct
-
-    stmt = (
-        select(sp, p, s, eq, cp)
-        .join(s, sp.supplier_id == s.id)
-        .join(p, sp.internal_product_id == p.id)
-        .outerjoin(eq, eq.supplier_product_id == sp.id)
-        .outerjoin(cp, cp.id == eq.canonical_product_id)
+    records = await _stock_export_records(
+        session,
+        supplier_id=supplier_id,
+        category_id=category_id,
+        q=q,
+        stock=stock,
+        created_since_days=created_since_days,
+        sort_by=sort_by,
+        order=order,
+        product_type=type,
     )
-
-    if supplier_id is not None:
-        stmt = stmt.where(sp.supplier_id == supplier_id)
-    if category_id is not None:
-        stmt = stmt.where(p.category_id == category_id)
-    if q:
-        stmt = stmt.where(or_(p.title.ilike(f"%{q}%"), sp.title.ilike(f"%{q}%")))
-    if stock:
-        try:
-            op, val = stock.split(":", 1)
-            val_i = int(val)
-        except Exception:
-            raise HTTPException(status_code=400, detail="stock inválido (use gt:0 o eq:0)")
-        if op == "gt":
-            stmt = stmt.where(p.stock > val_i)
-        elif op == "eq":
-            stmt = stmt.where(p.stock == val_i)
-        else:
-            raise HTTPException(status_code=400, detail="stock inválido (op debe ser gt o eq)")
-    if created_since_days is not None:
-        if created_since_days < 0 or created_since_days > 365:
-            raise HTTPException(status_code=400, detail="created_since_days fuera de rango (0-365)")
-        from datetime import datetime, timedelta
-        cutoff = datetime.utcnow() - timedelta(days=created_since_days)
-        stmt = stmt.where(p.created_at >= cutoff)
-
-    # Filtro por tipo (canónicos|proveedor|todos)
-    if type and type != "all":
-        if type == "canonical":
-            stmt = stmt.where(eq.canonical_product_id.is_not(None))
-        elif type == "supplier":
-            stmt = stmt.where(eq.canonical_product_id.is_(None))
-
-    sort_map = {
-        ProductSortBy.updated_at: sp.last_seen_at,
-        ProductSortBy.precio_venta: sp.current_sale_price,
-        ProductSortBy.precio_compra: sp.current_purchase_price,
-        ProductSortBy.name: p.title,
-        ProductSortBy.created_at: p.created_at,
-    }
-    sort_col = sort_map[sort_by_enum]
-    sort_col = sort_col.asc() if order_enum == SortOrder.asc else sort_col.desc()
-    stmt = stmt.order_by(sort_col)
-
-    result = await session.execute(stmt)
-    rows = result.all()
-
-    # Agregar helper para obtener el primer SKU de cada producto sin consultas N+1
-    product_ids = list({p_obj.id for _, p_obj, *_ in rows})
-    skus_by_product: dict[int, str | None] = {}
-    if product_ids:
-        vs = (
-            await session.execute(
-                select(Variant.product_id, Variant.sku)
-                .where(Variant.product_id.in_(product_ids))
-                .order_by(Variant.product_id.asc(), Variant.id.asc())
-            )
-        ).all()
-        for pid, sku in vs:
-            if pid not in skus_by_product:
-                skus_by_product[pid] = sku
-
-    # Armar un mapa por producto tomando el primer row encontrado
-    by_product: dict[int, dict] = {}
-    for sp_obj, p_obj, s_obj, eq_obj, cp_obj in rows:
-        if p_obj.id in by_product:
-            # Si no hay precio canónico aún y esta fila sí tiene, actualizar
-            if by_product[p_obj.id]["canonical_sale_price"] is None and (cp_obj and cp_obj.sale_price is not None):
-                by_product[p_obj.id]["canonical_sale_price"] = float(cp_obj.sale_price)
-            continue
-        # Calcular campos canónicos si existen
-        canonical_name = cp_obj.name if cp_obj and getattr(cp_obj, "name", None) else None
-        canonical_sku = None
-        if cp_obj:
-            canonical_sku = cp_obj.sku_custom or cp_obj.ng_sku
-        canonical_cat_id = getattr(cp_obj, "category_id", None) if cp_obj else None
-        canonical_subcat_id = getattr(cp_obj, "subcategory_id", None) if cp_obj else None
-
-        by_product[p_obj.id] = {
-            "product_id": p_obj.id,
-            "name": p_obj.title,
-            "category_id": p_obj.category_id,
-            "supplier_sale_price": float(sp_obj.current_sale_price) if sp_obj.current_sale_price is not None else None,
-            "canonical_sale_price": float(cp_obj.sale_price) if (cp_obj and cp_obj.sale_price is not None) else None,
-            "canonical_name": canonical_name,
-            "canonical_sku": canonical_sku,
-            "canonical_category_id": canonical_cat_id,
-            "canonical_subcategory_id": canonical_subcat_id,
-        }
 
     # Crear workbook
     wb = Workbook()
@@ -2601,23 +2710,11 @@ async def export_stock_xlsx(
     max_name_len = 0
     max_cat_len = 0
     max_sku_len = 0
-    for pid, rec in by_product.items():
-        # Preferir datos canónicos si están disponibles
-        # Nombre: estilizado con Title Case
-        name = stylize_product_name(rec.get("canonical_name") or rec["name"])
-        # Categoría: priorizar subcategoría canónica si existe; luego categoría canónica; si no, categoría del producto interno
-        can_subcat_id = rec.get("canonical_subcategory_id")
-        can_cat_id = rec.get("canonical_category_id")
-        if can_subcat_id:
-            cat_path = await _category_path(session, can_subcat_id)
-        elif can_cat_id:
-            cat_path = await _category_path(session, can_cat_id)
-        else:
-            cat_path = await _category_path(session, rec["category_id"])  # puede ser None
-        # Precio
-        precio = rec["canonical_sale_price"] if rec["canonical_sale_price"] is not None else rec["supplier_sale_price"]
-        # SKU
-        sku = rec.get("canonical_sku") or skus_by_product.get(pid)
+    for rec in records:
+        name = rec["name"]
+        cat_path = rec["category"]
+        precio = rec["sale_price"]
+        sku = rec["sku"]
         ws.append([
             name,
             float(precio) if precio is not None else None,
@@ -2657,6 +2754,111 @@ async def export_stock_xlsx(
     if cid:
         headers["X-Correlation-Id"] = cid
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
+
+
+@router.get(
+    "/stock/export.csv",
+    dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))],
+)
+async def export_stock_csv(
+    supplier_id: Optional[int] = None,
+    category_id: Optional[int] = None,
+    q: Optional[str] = None,
+    stock: Optional[str] = None,
+    created_since_days: Optional[int] = None,
+    sort_by: str = "updated_at",
+    order: str = "desc",
+    type: Optional[str] = Query(None, pattern="^(all|canonical|supplier)$"),
+    session: AsyncSession = Depends(get_session),
+):
+    records = await _stock_export_records(
+        session,
+        supplier_id=supplier_id,
+        category_id=category_id,
+        q=q,
+        stock=stock,
+        created_since_days=created_since_days,
+        sort_by=sort_by,
+        order=order,
+        product_type=type,
+    )
+    output = StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(["NOMBRE DE PRODUCTO", "PRECIO DE VENTA", "CATEGORIA", "SKU PROPIO"])
+    for record in records:
+        writer.writerow([record["name"], record["sale_price"], record["category"] or "", record["sku"] or ""])
+    content = output.getvalue().encode("utf-8-sig")
+    return StreamingResponse(
+        iter([content]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="stock.csv"'},
+    )
+
+
+@router.get(
+    "/stock/export.pdf",
+    dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))],
+)
+async def export_stock_pdf(
+    supplier_id: Optional[int] = None,
+    category_id: Optional[int] = None,
+    q: Optional[str] = None,
+    stock: Optional[str] = None,
+    created_since_days: Optional[int] = None,
+    sort_by: str = "updated_at",
+    order: str = "desc",
+    type: Optional[str] = Query(None, pattern="^(all|canonical|supplier)$"),
+    session: AsyncSession = Depends(get_session),
+):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    records = await _stock_export_records(
+        session,
+        supplier_id=supplier_id,
+        category_id=category_id,
+        q=q,
+        stock=stock,
+        created_since_days=created_since_days,
+        sort_by=sort_by,
+        order=order,
+        product_type=type,
+    )
+    buffer = BytesIO()
+    document = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=12 * mm, rightMargin=12 * mm, topMargin=12 * mm, bottomMargin=12 * mm)
+    styles = getSampleStyleSheet()
+    data = [["NOMBRE DE PRODUCTO", "PRECIO DE VENTA", "CATEGORIA", "SKU PROPIO"]]
+    for record in records:
+        price = "" if record["sale_price"] is None else f"$ {record['sale_price']:.2f}"
+        data.append([
+            Paragraph(str(record["name"]), styles["BodyText"]),
+            price,
+            Paragraph(str(record["category"] or ""), styles["BodyText"]),
+            str(record["sku"] or ""),
+        ])
+    table = Table(data, repeatRows=1, colWidths=[100 * mm, 35 * mm, 85 * mm, 45 * mm])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#333333")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#BBBBBB")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (1, 1), (1, -1), "RIGHT"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F4F4F4")]),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    document.build([Paragraph("Stock", styles["Title"]), Spacer(1, 5 * mm), table])
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'inline; filename="stock.pdf"'},
+    )
 
 
 @router.get(
@@ -2802,6 +3004,7 @@ async def export_stock_tiendanegocio_xlsx(
             "width_cm": float(p_obj.width_cm) if p_obj.width_cm is not None else None,
             "depth_cm": float(p_obj.depth_cm) if p_obj.depth_cm is not None else None,
             "category_id": p_obj.category_id,
+            "subcategory_id": p_obj.subcategory_id,
             "supplier_sale_price": float(sp_obj.current_sale_price) if sp_obj.current_sale_price is not None else None,
             "canonical_sale_price": float(cp_obj.sale_price) if (cp_obj and cp_obj.sale_price is not None) else None,
             "canonical_name": (cp_obj.name if (cp_obj and getattr(cp_obj, "name", None)) else None),
@@ -2864,12 +3067,11 @@ async def export_stock_tiendanegocio_xlsx(
         # Categoría jerárquica
         can_subcat_id = rec.get("canonical_subcategory_id")
         can_cat_id = rec.get("canonical_category_id")
-        if can_subcat_id:
-            cat_path = await _category_path(session, can_subcat_id)
-        elif can_cat_id:
-            cat_path = await _category_path(session, can_cat_id)
-        else:
-            cat_path = await _category_path(session, rec.get("category_id"))
+        cat_path = await _taxonomy_path(
+            session,
+            can_cat_id or rec.get("category_id"),
+            can_subcat_id or rec.get("subcategory_id"),
+        )
 
         ws.append([
             sku,
@@ -2904,13 +3106,27 @@ async def export_stock_tiendanegocio_xlsx(
 
 
 class StockUpdate(BaseModel):
-    stock: int
+    stock: Decimal
+    expected_stock: Optional[Decimal] = None
+
+    @field_validator("stock", "expected_stock")
+    @classmethod
+    def validate_stock_precision(cls, value: Decimal | None) -> Decimal | None:
+        if value is None:
+            return None
+        if value.as_tuple().exponent < -2:
+            raise ValueError("stock admite como máximo dos decimales")
+        if value < 0 or value > Decimal("1000000000"):
+            raise ValueError("stock fuera de rango")
+        return value.quantize(Decimal("0.01"))
 
 
 class ProductCreate(BaseModel):
     title: str
     category_id: Optional[int] = None
-    initial_stock: int = 0
+    subcategory_id: Optional[int] = None
+    tag_names: List[str] = Field(default_factory=list)
+    initial_stock: Decimal = Decimal("0")
     status: Optional[str] = None
     # Campos para creación de categoría en línea
     new_category_name: Optional[str] = None
@@ -2966,6 +3182,7 @@ async def create_product(
         raise HTTPException(status_code=400, detail=str(e))
 
     final_category_id = payload.category_id
+    final_subcategory_id = payload.subcategory_id
     created_category_id = None
 
     # Lógica de creación de categoría en línea
@@ -2977,32 +3194,46 @@ async def create_product(
         # Validar que el padre exista, si se proveyó
         if payload.new_category_parent_id:
             parent_cat = await session.get(Category, payload.new_category_parent_id)
-            if not parent_cat:
+            if not parent_cat or parent_cat.kind != "category":
                 raise HTTPException(status_code=400, detail="La categoría padre seleccionada no existe")
 
         # Buscar si ya existe una categoría con el mismo nombre y padre
+        legacy_kind = "subcategory" if payload.new_category_parent_id else "category"
         existing_cat = await session.scalar(
             select(Category).where(
-                Category.name == cat_name,
-                Category.parent_id == payload.new_category_parent_id
+                Category.kind == legacy_kind,
+                func.lower(Category.name) == cat_name.lower(),
             )
         )
 
         if existing_cat:
-            final_category_id = existing_cat.id
+            if legacy_kind == "subcategory":
+                final_category_id = payload.new_category_parent_id
+                final_subcategory_id = existing_cat.id
+            else:
+                final_category_id = existing_cat.id
         else:
             # Crear la nueva categoría
-            new_cat = Category(name=cat_name, parent_id=payload.new_category_parent_id)
+            new_cat = Category(name=cat_name, parent_id=payload.new_category_parent_id, kind=legacy_kind)
             session.add(new_cat)
             await session.flush() # Flush para obtener el ID
-            final_category_id = new_cat.id
+            if legacy_kind == "subcategory":
+                final_category_id = payload.new_category_parent_id
+                final_subcategory_id = new_cat.id
+            else:
+                final_category_id = new_cat.id
             created_category_id = new_cat.id
     
     # Validar categoría si se provee y no se creó una nueva
     if final_category_id is not None and not created_category_id:
         cat = await session.get(Category, final_category_id)
-        if not cat:
+        if not cat or cat.kind != "category":
             raise HTTPException(status_code=400, detail="category_id inválido")
+
+    if final_subcategory_id is not None:
+        subcategory = await session.get(Category, final_subcategory_id)
+        if not subcategory or subcategory.kind != "subcategory":
+            raise HTTPException(status_code=400, detail="subcategory_id inválido")
 
     sku_root = _gen_sku_root(payload.title)
     slug = _slugify(payload.title)
@@ -3015,11 +3246,18 @@ async def create_product(
         sku_root=sku_root,
         title=payload.title,
         category_id=final_category_id,
+        subcategory_id=final_subcategory_id,
         status=payload.status or "active",
         slug=slug,
         stock=initial_stock,
     )
     session.add(prod)
+    await session.flush()
+    if payload.tag_names:
+        from db.models import ProductTag
+        from services.routers.tags import get_or_create_tags
+        for tag in await get_or_create_tags(session, payload.tag_names):
+            session.add(ProductTag(product_id=prod.id, tag_id=tag.id))
     await session.commit()
     await session.refresh(prod)
     supplier_product_id = None
@@ -3137,9 +3375,11 @@ async def create_product(
         meta_log = {
             "title": prod.title,
             "category_id": prod.category_id,
+            "subcategory_id": prod.subcategory_id,
+            "tag_names": payload.tag_names,
             "created_category_id": created_category_id,
-            "initial_stock_requested": payload.initial_stock,
-            "initial_stock_final": initial_stock,
+            "initial_stock_requested": float(payload.initial_stock),
+            "initial_stock_final": float(initial_stock),
             "initial_stock_forced_zero": force_zero,
             "auto_link": bool(payload.supplier_id and payload.supplier_sku),
             "supplier_id": payload.supplier_id,
@@ -3181,7 +3421,8 @@ async def create_product(
         )
         await session.commit()
     except Exception:
-        pass
+        await session.rollback()
+        await session.refresh(prod)
     return {
         "id": prod.id,
         "title": prod.title,
@@ -3189,6 +3430,7 @@ async def create_product(
         "slug": prod.slug,
         "stock": prod.stock,
         "category_id": prod.category_id,
+        "subcategory_id": prod.subcategory_id,
         "status": prod.status,
         "supplier_product_id": supplier_product_id,
         "canonical_product_id": canonical_product_id,
@@ -3206,30 +3448,40 @@ async def update_product_stock(
     request: Request = None,
     sess: SessionData = Depends(current_session),
 ) -> dict:
-    if payload.stock < 0 or payload.stock > 1_000_000_000:
-        raise HTTPException(status_code=400, detail="stock fuera de rango")
-    prod = await session.get(Product, product_id)
+    prod = await session.scalar(
+        select(Product).where(Product.id == product_id).with_for_update()
+    )
     if not prod:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
-    old = int(prod.stock or 0)
-    prod.stock = payload.stock
-    await session.commit()
-    # audit
-    try:
-        session.add(
-            AuditLog(
-                action="product_stock_update",
-                table="products",
-                entity_id=product_id,
-                meta={"old": old, "new": prod.stock},
-                user_id=sess.user.id if sess and sess.user else None,
-                ip=(request.client.host if request and request.client else None),
-            )
+    old = Decimal(str(prod.stock or 0)).quantize(Decimal("0.01"))
+    if payload.expected_stock is not None and payload.expected_stock != old:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "El stock cambió desde la última lectura",
+                "current_stock": float(old),
+            },
         )
-        await session.commit()
-    except Exception:
-        pass
-    return {"product_id": product_id, "stock": prod.stock}
+    prod.stock = payload.stock
+    delta = payload.stock - old
+    session.add(StockLedger(
+        product_id=product_id,
+        source_type="manual_adjustment",
+        source_id=product_id,
+        delta=delta,
+        balance_after=payload.stock,
+        meta={"old": float(old), "new": float(payload.stock), "user_id": sess.user.id if sess and sess.user else None},
+    ))
+    session.add(AuditLog(
+        action="product_stock_update",
+        table="products",
+        entity_id=product_id,
+        meta={"old": float(old), "new": float(payload.stock), "delta": float(delta)},
+        user_id=sess.user.id if sess and sess.user else None,
+        ip=(request.client.host if request and request.client else None),
+    ))
+    await session.commit()
+    return {"product_id": product_id, "stock": float(payload.stock)}
 
 
 # ------------------------------ Producto por id ------------------------------
@@ -3292,7 +3544,7 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
                     canonical_name = stylize_product_name(cp.name)
     except Exception:
         pass
-    cat_path = await _category_path(session, prod.category_id)
+    cat_path = await _taxonomy_path(session, prod.category_id, prod.subcategory_id)
     # Convertir numéricos Decimal -> float para JSON
     weight_kg = float(prod.weight_kg) if getattr(prod, "weight_kg", None) is not None else None
     height_cm = float(prod.height_cm) if getattr(prod, "height_cm", None) is not None else None
@@ -3349,6 +3601,8 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
         "stock": prod.stock,
         "sku_root": prod.sku_root,
         "category_path": cat_path,
+        "category_id": prod.category_id,
+        "subcategory_id": prod.subcategory_id,
         "description_html": prod.description_html,
         "enrichment_sources_url": getattr(prod, "enrichment_sources_url", None),
         "last_enriched_at": (getattr(prod, "last_enriched_at", None).isoformat() if getattr(prod, "last_enriched_at", None) else None),
@@ -3416,6 +3670,7 @@ async def list_product_variants(product_id: int, session: AsyncSession = Depends
 class ProductUpdate(BaseModel):
     description_html: str | None = None
     category_id: int | None = None
+    subcategory_id: int | None = None
     weight_kg: float | None = None
     height_cm: float | None = None
     width_cm: float | None = None
@@ -3441,18 +3696,25 @@ async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncS
     prod = await session.get(Product, product_id)
     if not prod:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
-    data = payload.model_dump(exclude_none=True)
+    data = payload.model_dump(exclude_unset=True)
     old_desc = getattr(prod, "description_html", None)
     old_cat = getattr(prod, "category_id", None)
+    old_subcat = getattr(prod, "subcategory_id", None)
     if "description_html" in data:
         prod.description_html = data["description_html"]
     if "category_id" in data:
         # Validar existencia (permitir None para desasociar)
         if data["category_id"] is not None:
             cat = await session.get(Category, int(data["category_id"]))
-            if not cat:
+            if not cat or cat.kind != "category":
                 raise HTTPException(status_code=400, detail="category_id inválido")
         prod.category_id = int(data["category_id"]) if data["category_id"] is not None else None
+    if "subcategory_id" in data:
+        if data["subcategory_id"] is not None:
+            subcategory = await session.get(Category, int(data["subcategory_id"]))
+            if not subcategory or subcategory.kind != "subcategory":
+                raise HTTPException(status_code=400, detail="subcategory_id inválido")
+        prod.subcategory_id = int(data["subcategory_id"]) if data["subcategory_id"] is not None else None
     # Validaciones y asignaciones de campos técnicos
     def _nonneg_or_none(val, name: str):
         if val is None:
@@ -3493,6 +3755,7 @@ async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncS
                     "desc_len_old": (len(old_desc or "") if old_desc is not None else None),
                     "desc_len_new": (len(prod.description_html or "") if prod.description_html is not None else None),
                     **({"category_old": old_cat, "category_new": prod.category_id} if "category_id" in data else {}),
+                    **({"subcategory_old": old_subcat, "subcategory_new": prod.subcategory_id} if "subcategory_id" in data else {}),
                 },
                 user_id=sess.user.id if sess and sess.user else None,
                 ip=(request.client.host if request and request.client else None),
@@ -3681,7 +3944,11 @@ async def debug_enrich_product(
         role = getattr(getattr(sess, 'user', None), 'role', 'colaborador') or 'colaborador'
         provider = OpenAIProvider()
         if fv:
-            ctx = await provider.call_mcp_tool(tool_name="get_product_info", parameters={"sku": str(fv), "user_role": role})
+            ctx = await provider.call_mcp_tool(
+                tool_name="get_product_info",
+                parameters={"sku": str(fv)},
+                user_role=role,
+            )
             if isinstance(ctx, dict) and ctx:
                 extra_context = ctx
                 try:
@@ -3697,7 +3964,7 @@ async def debug_enrich_product(
             try:
                 import httpx as _httpx
                 mcp_url = get_mcp_web_search_url()
-                health_url = mcp_url.replace("/invoke_tool", "/health")
+                health_url = mcp_url.rsplit("/mcp", 1)[0] + "/health"
                 async with _httpx.AsyncClient(timeout=2.0) as _cli:
                     _h = await _cli.get(health_url)
                     web_health = "ok" if _h.status_code == 200 else f"bad_status_{_h.status_code}"
@@ -3706,7 +3973,14 @@ async def debug_enrich_product(
             if web_health == "ok":
                 web_query = title
                 try:
-                    wres = await provider.call_mcp_web_tool(tool_name="search_web", parameters={"query": web_query, "user_role": role, "max_results": int(_os.getenv("AI_WEB_SEARCH_MAX_RESULTS", "3"))})
+                    wres = await provider.call_mcp_web_tool(
+                        tool_name="search_web",
+                        parameters={
+                            "query": web_query,
+                            "max_results": int(_os.getenv("AI_WEB_SEARCH_MAX_RESULTS", "3")),
+                        },
+                        user_role=role,
+                    )
                     if isinstance(wres, dict) and wres:
                         items = wres.get("items") or []
                         if isinstance(items, list):
@@ -3871,7 +4145,11 @@ async def enrich_product(
             if fv:
                 role = getattr(getattr(sess, 'user', None), 'role', 'colaborador') or 'colaborador'
                 provider = OpenAIProvider()
-                res = await provider.call_mcp_tool(tool_name="get_product_info", parameters={"sku": str(fv), "user_role": role})
+                res = await provider.call_mcp_tool(
+                    tool_name="get_product_info",
+                    parameters={"sku": str(fv)},
+                    user_role=role,
+                )
                 if isinstance(res, dict) and res:
                     extra_context = res
         except Exception as e:
@@ -3904,7 +4182,7 @@ async def enrich_product(
         # Health check del servicio MCP Web Search
         import httpx as _httpx
         mcp_url = get_mcp_web_search_url()
-        health_url = mcp_url.replace("/invoke_tool", "/health")
+        health_url = mcp_url.rsplit("/mcp", 1)[0] + "/health"
         web_health = "unknown"
         
         try:
@@ -3945,9 +4223,9 @@ async def enrich_product(
                 tool_name="search_web",
                 parameters={
                     "query": web_query,
-                    "user_role": role,
                     "max_results": int(_os.getenv("AI_WEB_SEARCH_MAX_RESULTS", "5"))
-                }
+                },
+                user_role=role,
             )
             if isinstance(wres, dict) and wres:
                 items = wres.get("items") or []
@@ -3957,7 +4235,7 @@ async def enrich_product(
                 logger.info({
                     "event": "enrich.web_search.success",
                     "product_id": product_id,
-                    "query": web_query,
+                    "query_hash": hashlib.sha256(web_query.encode("utf-8")).hexdigest(),
                     "hits": web_hits,
                     "with_sources": bool(items),
                 })
@@ -3967,8 +4245,8 @@ async def enrich_product(
             logger.error({
                 "event": "enrich.web_search.execution_failed",
                 "product_id": product_id,
-                "query": web_query,
-                "error": str(e),
+                "query_hash": hashlib.sha256(web_query.encode("utf-8")).hexdigest(),
+                "error": type(e).__name__,
             })
             raise HTTPException(
                 status_code=502,
@@ -4277,7 +4555,11 @@ async def enrich_product(
                     "num_sources": (len(sources) if sources else 0),
                     "source_file": txt_url,
                     "prompt_hash": prompt_hash,
-                    "web_search_query": web_query,
+                    "web_search_query_hash": (
+                        hashlib.sha256(web_query.encode("utf-8")).hexdigest()
+                        if web_query
+                        else None
+                    ),
                     "web_search_hits": web_hits,
                     "used_canonical_title": used_canonical_title,
                 },

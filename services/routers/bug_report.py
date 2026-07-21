@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import logging
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -18,7 +19,7 @@ from typing import Any
 import base64
 import re
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from services.auth import current_session, SessionData
@@ -27,6 +28,9 @@ from services.integrations.notion_client import load_notion_settings  # type: ig
 from services.integrations.notion_sections import upsert_report_as_child  # type: ignore
 
 MAX_SCREENSHOT_BYTES = 1_200_000  # ~1.2 MB, defensa adicional en servidor
+_REPORT_WINDOW_SECONDS = 600
+_REPORT_LIMIT = 5
+_report_windows: dict[str, list[float]] = {}
 
 
 router = APIRouter(prefix="/bug-report", tags=["bug-report"])  # no requiere CSRF, solo escritura de logs
@@ -62,11 +66,11 @@ def _get_bug_logger() -> logging.Logger:
 
 
 class BugReportIn(BaseModel):  # type: ignore
-    message: str = Field(..., min_length=1, max_length=8000)
-    url: str | None = None
-    user_agent: str | None = None
-    stack: str | None = None
-    cid: str | None = None
+    message: str = Field(..., min_length=1, max_length=2000)
+    url: str | None = Field(default=None, max_length=2048)
+    user_agent: str | None = Field(default=None, max_length=512)
+    stack: str | None = Field(default=None, max_length=4000)
+    cid: str | None = Field(default=None, max_length=128)
     context: dict[str, Any] | None = None
     # Captura de pantalla opcional (data URL: image/png o image/jpeg)
     screenshot: str | None = None
@@ -79,6 +83,15 @@ async def post_bug_report(payload: BugReportIn, request: Request, sess: SessionD
     Responde 200 con un identificador simple para referencia.
     """
     logger = _get_bug_logger()
+    client_ip = getattr(request.client, "host", None) or "unknown"
+    now_monotonic = time.monotonic()
+    attempts = [stamp for stamp in _report_windows.get(client_ip, []) if now_monotonic - stamp < _REPORT_WINDOW_SECONDS]
+    if len(attempts) >= _REPORT_LIMIT:
+        raise HTTPException(status_code=429, detail="Demasiados reportes", headers={"Retry-After": "600"})
+    attempts.append(now_monotonic)
+    _report_windows[client_ip] = attempts
+    if payload.context and len(json.dumps(payload.context, ensure_ascii=False)) > 8_000:
+        raise HTTPException(status_code=422, detail="Contexto demasiado grande")
     try:
         # Construimos un registro JSON para facilitar parseo
         # Timestamp UTC y GMT-3 (Argentina) para trazabilidad
@@ -107,7 +120,9 @@ async def post_bug_report(payload: BugReportIn, request: Request, sess: SessionD
                 if m:
                     mime = m.group(1)
                     b64 = m.group(3)
-                    img = base64.b64decode(b64)
+                    if len(b64) > (MAX_SCREENSHOT_BYTES * 4 // 3) + 8:
+                        raise ValueError("screenshot codificado demasiado grande")
+                    img = base64.b64decode(b64, validate=True)
                     if len(img) > MAX_SCREENSHOT_BYTES:
                         record["screenshot_error"] = f"too_large>{MAX_SCREENSHOT_BYTES}"
                     else:
@@ -131,7 +146,7 @@ async def post_bug_report(payload: BugReportIn, request: Request, sess: SessionD
         # Notion: modo 'sections' crea subpáginas bajo Compras/Stock/App; 'cards' usa tarjetas con props
         try:
             cfg = load_notion_settings()
-            if cfg.enabled and cfg.errors_db:
+            if cfg.enabled and cfg.errors_db and sess.role != "guest":
                 url_val = record.get("url") or ""
                 if cfg.mode == "sections":
                     # Crear subpágina con título por fecha (incluye id del reporte si está disponible)

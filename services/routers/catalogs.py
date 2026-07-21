@@ -13,22 +13,25 @@ from typing import List, Dict, Any
 import re
 import html as html_mod
 import csv
+import uuid
 from io import StringIO
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Product, Image, Category, ProductEquivalence, SupplierProduct, CanonicalProduct
+from db.models import AuditLog, CanonicalProduct, CatalogGenerationEvent, CatalogGenerationRun, Category, Image, Product, ProductEquivalence, SupplierProduct
 from db.session import get_session
 from services.auth import require_roles, require_csrf, current_session, SessionData
 
 logger = logging.getLogger("growen.catalogs")
 
 router = APIRouter(prefix="/catalogs", tags=["catalogs"])
+diagnostics_router = APIRouter(prefix="/catalogs/diagnostics", tags=["catalog-diagnostics"])
+static_router = APIRouter(prefix="/catalogs", tags=["catalogs"])
 
 CATALOG_DIR = Path("./catalogos").resolve()
 PDF_PATH = CATALOG_DIR / "ultimo_catalogo.pdf"
@@ -170,12 +173,8 @@ def _maybe_expire_lock() -> None:
 
 
 def _clean_old_logs():
-    try:
-        detail_files = sorted(DETAIL_LOG_DIR.glob("catalog_*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for f in detail_files[MAX_DETAIL_LOGS:]:
-            f.unlink(missing_ok=True)  # type: ignore[arg-type]
-    except Exception:
-        logger.exception("No se pudieron limpiar logs detallados antiguos")
+    """Compatibilidad: el historial ya no se purga automáticamente."""
+    return None
 
 
 def _catalog_filename(ts: datetime) -> str:
@@ -189,17 +188,67 @@ def _list_catalog_files() -> list[Path]:
 
 
 def _apply_retention():
-    if RETENTION and RETENTION > 0:
-        files = _list_catalog_files()
-        for p in files[RETENTION:]:
-            try:
-                p.unlink(missing_ok=True)  # type: ignore[arg-type]
-            except Exception:
-                pass
+    """Compatibilidad: los artefactos sólo se eliminan mediante una acción admin auditada."""
+    return None
 
 
 @router.post("/generate", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def generate_catalog(data: CatalogGenerateIn, session: AsyncSession = Depends(get_session), session_data: SessionData = Depends(current_session)):
+    """Coordina una generación mediante PostgreSQL y conserva su historial."""
+    if not data.ids:
+        raise HTTPException(400, detail="No hay productos seleccionados")
+    if session.bind and session.bind.dialect.name == "postgresql":
+        await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": 68421703})
+    active = await session.scalar(select(CatalogGenerationRun).where(CatalogGenerationRun.status == "running").limit(1))
+    if active:
+        raise HTTPException(409, detail={"message": "Ya hay una generación en curso", "run_id": active.id})
+    run = CatalogGenerationRun(
+        id=uuid.uuid4().hex,
+        status="running",
+        requested_by_user_id=session_data.user.id if session_data.user else None,
+        product_count=len(data.ids),
+        started_at=datetime.utcnow(),
+    )
+    session.add(run)
+    await session.commit()
+    try:
+        result = await _generate_catalog_legacy(data, session, session_data)
+        run = await session.get(CatalogGenerationRun, run.id)
+        if run:
+            run.status = "completed"
+            run.artifact_filename = result["filename"]
+            run.duration_ms = int((datetime.utcnow() - (run.started_at or run.created_at)).total_seconds() * 1000)
+            run.completed_at = datetime.utcnow()
+            log_path = DETAIL_LOG_DIR / result["filename"].replace(".pdf", ".log")
+            if log_path.exists():
+                for sequence, line in enumerate(log_path.read_text(encoding="utf-8").splitlines(), start=1):
+                    try:
+                        payload = json.loads(line)
+                    except Exception:
+                        payload = {"raw": line}
+                    session.add(CatalogGenerationEvent(
+                        run_id=run.id,
+                        sequence=sequence,
+                        step=str(payload.get("step", "log")),
+                        level="INFO",
+                        payload=payload,
+                    ))
+            await session.commit()
+        return {**result, "run_id": run.id if run else None}
+    except Exception as exc:
+        await session.rollback()
+        failed = await session.get(CatalogGenerationRun, run.id)
+        if failed:
+            failed.status = "failed"
+            failed.error_message = str(exc)[:4000]
+            failed.completed_at = datetime.utcnow()
+            session.add(CatalogGenerationEvent(run_id=failed.id, sequence=1, step="failed", level="ERROR", payload={"error": str(exc)}))
+            await session.commit()
+        _active_generation.update({"running": False})
+        raise
+
+
+async def _generate_catalog_legacy(data: CatalogGenerateIn, session: AsyncSession, session_data: SessionData):
     _maybe_expire_lock()
     if not data.ids:
         raise HTTPException(400, detail="No hay productos seleccionados")
@@ -473,8 +522,12 @@ async def view_catalog(catalog_id: str):
     return FileResponse(str(path), media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{path.name}"'})
 
 
-@router.delete("/{catalog_id}", dependencies=[Depends(require_roles("admin", "colaborador"))])
-async def delete_catalog(catalog_id: str):
+@router.delete("/{catalog_id}", dependencies=[Depends(require_roles("admin")), Depends(require_csrf)])
+async def delete_catalog(
+    catalog_id: str,
+    session_data: SessionData = Depends(current_session),
+    session: AsyncSession = Depends(get_session),
+):
     path = _catalog_path_from_id(catalog_id)
     try:
         path.unlink()
@@ -506,6 +559,8 @@ async def delete_catalog(catalog_id: str):
                         PDF_PATH.write_bytes(new_latest.read_bytes())
     except Exception:
         logger.exception("Fallo al recalcular latest tras delete")
+    session.add(AuditLog(action="catalog_artifact_delete", table="catalog_generation_runs", entity_id=None, user_id=session_data.user.id if session_data.user else None, ip=None, meta={"catalog_id": catalog_id}))
+    await session.commit()
     return {"deleted": catalog_id}
 
 
@@ -521,21 +576,21 @@ async def download_catalog(catalog_id: str):
     return FileResponse(str(path), media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{path.name}"'})
 
 
-@router.get("/latest", dependencies=[Depends(require_roles("admin", "colaborador"))])
+@static_router.get("/latest", dependencies=[Depends(require_roles("admin", "colaborador"))])
 async def view_latest():
     if not PDF_PATH.exists():
         raise HTTPException(404, detail="Catálogo no encontrado")
     return FileResponse(str(PDF_PATH), media_type="application/pdf", headers={"Content-Disposition": 'inline; filename="ultimo_catalogo.pdf"'})
 
 
-@router.head("/latest", dependencies=[Depends(require_roles("admin", "colaborador"))])
+@static_router.head("/latest", dependencies=[Depends(require_roles("admin", "colaborador"))])
 async def head_latest():
     if not PDF_PATH.exists():
         raise HTTPException(404, detail="Catálogo no encontrado")
     return {}
 
 
-@router.get("/latest/download", dependencies=[Depends(require_roles("admin", "colaborador"))])
+@static_router.get("/latest/download", dependencies=[Depends(require_roles("admin", "colaborador"))])
 async def download_latest():
     if not PDF_PATH.exists():
         raise HTTPException(404, detail="Catálogo no encontrado")
@@ -544,25 +599,28 @@ async def download_latest():
 
 # ---- Diagnóstico ----
 
-@router.get("/diagnostics/status", dependencies=[Depends(require_roles("admin", "colaborador"))])
-async def catalog_status():
-    _maybe_expire_lock()
+@diagnostics_router.get("/status", dependencies=[Depends(require_roles("admin", "colaborador"))])
+async def catalog_status(session: AsyncSession = Depends(get_session)):
+    active = await session.scalar(select(CatalogGenerationRun).where(CatalogGenerationRun.status == "running").order_by(CatalogGenerationRun.started_at.desc()).limit(1))
+    total = int((await session.execute(select(func.count()).select_from(CatalogGenerationRun))).scalar() or 0)
     return {
-        "active_generation": _active_generation,
-        "detail_logs": len(list(DETAIL_LOG_DIR.glob('catalog_*.log'))),
-        "summaries": len(list(LOG_DIR.glob('summary_*.json')))
+        "active_generation": ({"running": True, "run_id": active.id, "started_at": active.started_at.isoformat() if active.started_at else None, "ids": active.product_count} if active else {"running": False}),
+        "runs": total,
     }
 
 
-@router.get("/diagnostics/config", dependencies=[Depends(require_roles("admin", "colaborador"))])
+@diagnostics_router.get("/config", dependencies=[Depends(require_roles("admin", "colaborador"))])
 async def catalog_config():
     """Devuelve configuración efectiva de diagnósticos (timeout de lock)."""
     source = "env" if os.getenv("CATALOG_LOCK_TIMEOUT") else "default"
     return {"lock_timeout_s": int(CATALOG_LOCK_TIMEOUT), "source": source}
 
 
-@router.post("/diagnostics/unlock", dependencies=[Depends(require_roles("admin")), Depends(require_csrf)])
-async def catalog_unlock():
+@diagnostics_router.post("/unlock", dependencies=[Depends(require_roles("admin")), Depends(require_csrf)])
+async def catalog_unlock(
+    session_data: SessionData = Depends(current_session),
+    session: AsyncSession = Depends(get_session),
+):
     """Desbloquea manualmente el estado de generación de catálogo.
 
     Útil si una generación falló y dejó el flag en memoria activo. No cancela trabajos reales,
@@ -570,35 +628,66 @@ async def catalog_unlock():
     """
     prev = dict(_active_generation)
     _active_generation.update({"running": False})
+    active_runs = (await session.execute(select(CatalogGenerationRun).where(CatalogGenerationRun.status == "running"))).scalars().all()
+    for run in active_runs:
+        run.status = "failed"
+        run.error_message = "Desbloqueada manualmente por un administrador"
+        run.completed_at = datetime.utcnow()
+        last_sequence = int((await session.execute(select(func.coalesce(func.max(CatalogGenerationEvent.sequence), 0)).where(CatalogGenerationEvent.run_id == run.id))).scalar() or 0)
+        session.add(CatalogGenerationEvent(run_id=run.id, sequence=last_sequence + 1, step="manual_unlock", level="WARNING", payload={"user_id": session_data.user.id if session_data.user else None}))
+    session.add(AuditLog(action="catalog_generation_unlock", table="catalog_generation_runs", entity_id=None, user_id=session_data.user.id if session_data.user else None, ip=None, meta={"run_ids": [run.id for run in active_runs]}))
+    await session.commit()
     logger.warning("[catalog] unlock requested: %s -> %s", prev, _active_generation)
     return {"status": "unlocked", "previous": prev, "active_generation": _active_generation}
 
 
-@router.get("/diagnostics/summaries", dependencies=[Depends(require_roles("admin", "colaborador"))])
-async def catalog_summaries(limit: int = Query(20, ge=1, le=200)):
-    _maybe_expire_lock()
-    files = sorted(LOG_DIR.glob('summary_*.json'), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
-    data = []
-    for f in files:
-        try:
-            data.append(json.loads(f.read_text(encoding='utf-8')))
-        except Exception:
-            data.append({"file": f.name, "error": "parse_error"})
+@diagnostics_router.get("/summaries", dependencies=[Depends(require_roles("admin", "colaborador"))])
+async def catalog_summaries(limit: int = Query(20, ge=1, le=200), session: AsyncSession = Depends(get_session)):
+    rows = (await session.execute(select(CatalogGenerationRun).order_by(CatalogGenerationRun.created_at.desc()).limit(limit))).scalars().all()
+    data = [{
+        "run_id": row.id,
+        "generated_at": (row.completed_at or row.created_at).isoformat(),
+        "file": row.artifact_filename or "",
+        "size": ((CATALOG_DIR / row.artifact_filename).stat().st_size if row.artifact_filename and (CATALOG_DIR / row.artifact_filename).exists() else 0),
+        "count": row.product_count,
+        "duration_ms": row.duration_ms or 0,
+        "status": row.status,
+        "error": row.error_message,
+    } for row in rows]
     return {"items": data, "total": len(data)}
 
 
-@router.get("/diagnostics/log/{catalog_id}", dependencies=[Depends(require_roles("admin", "colaborador"))])
-async def catalog_detail_log(catalog_id: str):
-    # catalog_id formato YYYYMMDD_HHMMSS
-    if not catalog_id or len(catalog_id) != 15:
-        raise HTTPException(400, detail="ID inválido")
-    log_path = DETAIL_LOG_DIR / f"catalog_{catalog_id}.log"
-    if not log_path.exists():
-        raise HTTPException(404, detail="Log no encontrado")
-    lines = []
-    for line in log_path.read_text(encoding='utf-8').splitlines():
-        try:
-            lines.append(json.loads(line))
-        except Exception:
-            lines.append({"raw": line})
+@diagnostics_router.get("/log/{run_id}", dependencies=[Depends(require_roles("admin", "colaborador"))])
+async def catalog_detail_log(run_id: str, session: AsyncSession = Depends(get_session)):
+    run = await session.get(CatalogGenerationRun, run_id)
+    if not run:
+        run = await session.scalar(select(CatalogGenerationRun).where(CatalogGenerationRun.artifact_filename == f"catalog_{run_id}.pdf"))
+    if not run:
+        raise HTTPException(404, detail="Ejecución no encontrada")
+    events = (await session.execute(select(CatalogGenerationEvent).where(CatalogGenerationEvent.run_id == run.id).order_by(CatalogGenerationEvent.sequence))).scalars().all()
+    lines = [{"ts": event.created_at.isoformat(), "step": event.step, "level": event.level, **(event.payload or {})} for event in events]
     return {"items": lines, "count": len(lines)}
+
+
+@diagnostics_router.get("/runs/{run_id}/download", dependencies=[Depends(require_roles("admin", "colaborador"))])
+async def download_catalog_run_log(
+    run_id: str,
+    format: str = Query("ndjson", pattern="^(ndjson|csv)$"),
+    session: AsyncSession = Depends(get_session),
+):
+    run = await session.get(CatalogGenerationRun, run_id)
+    if not run:
+        run = await session.scalar(select(CatalogGenerationRun).where(CatalogGenerationRun.artifact_filename == f"catalog_{run_id}.pdf"))
+    if not run:
+        raise HTTPException(404, detail="Ejecución no encontrada")
+    events = (await session.execute(select(CatalogGenerationEvent).where(CatalogGenerationEvent.run_id == run.id).order_by(CatalogGenerationEvent.sequence))).scalars().all()
+    rows = [{"run_id": run.id, "sequence": event.sequence, "timestamp": event.created_at.isoformat(), "step": event.step, "level": event.level, "payload": event.payload or {}} for event in events]
+    if format == "ndjson":
+        content = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + ("\n" if rows else "")
+        return StreamingResponse(iter([content.encode("utf-8")]), media_type="application/x-ndjson", headers={"Content-Disposition": f'attachment; filename="catalog-{run.id}.ndjson"'})
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["run_id", "sequence", "timestamp", "step", "level", "payload"])
+    for row in rows:
+        writer.writerow([row["run_id"], row["sequence"], row["timestamp"], row["step"], row["level"], json.dumps(row["payload"], ensure_ascii=False)])
+    return StreamingResponse(iter([output.getvalue().encode("utf-8")]), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="catalog-{run.id}.csv"'})

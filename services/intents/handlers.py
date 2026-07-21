@@ -159,11 +159,11 @@ def handle_import(args: List[str], opts: Dict[str, Any]) -> Dict[str, Any]:
             for row in rows:
                 if row.get("status") != "ok":
                     continue
-                cat = await imports_router._get_or_create_category_path(
+                category, subcategory = await imports_router._get_or_create_category_path(
                     session, row.get("categoria_path", "")
                 )
                 prod = await imports_router._upsert_product(
-                    session, row["codigo"], row["nombre"], cat
+                    session, row["codigo"], row["nombre"], category, subcategory
                 )
                 await imports_router._upsert_supplier_product(
                     session, supplier.id, row, prod

@@ -13,7 +13,7 @@ import asyncio
 from fastapi.responses import FileResponse
 import mimetypes
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, exists
+from sqlalchemy import delete, select, func, exists
 from pydantic import BaseModel
 
 from db.models import ImageJob, ImageJobLog
@@ -85,6 +85,15 @@ async def status(db: AsyncSession = Depends(get_session)):
         "name": job.name,
         "active": job.active,
         "mode": job.mode,
+        "settings": {
+            "active": job.active,
+            "mode": job.mode,
+            "retries": job.retries,
+            "rate_rps": float(job.rate_rps or 0),
+            "burst": job.burst,
+            "log_retention_days": job.log_retention_days,
+            "purge_ttl_days": job.purge_ttl_days,
+        },
         "running": running,
         "pending": pending,
         "ok": ok,
@@ -100,7 +109,7 @@ async def status(db: AsyncSession = Depends(get_session)):
     }
 
 
-@router.post("/probe", dependencies=[Depends(require_roles("admin"))])
+@router.post("/probe", dependencies=[Depends(require_csrf), Depends(require_roles("admin"))])
 async def probe(title: str, db: AsyncSession = Depends(get_session)):
     """Busca candidatos por título en Santa Planta y devuelve URLs e imagen detectada.
 
@@ -215,15 +224,22 @@ async def ndjson_file(limit: int = 200):
         raise HTTPException(status_code=500, detail=f"Could not read ndjson file: {e}")
 
 
-@router.post("/clean-logs", dependencies=[Depends(require_roles("admin"))])
-async def clean_logs_endpoint():
-    """Clean crawler logs and snapshots (calls ctx_logger.clean_logs)."""
+@router.post("/clean-logs", dependencies=[Depends(require_csrf), Depends(require_roles("admin"))])
+async def clean_logs_endpoint(db: AsyncSession = Depends(get_session)):
+    """Limpia el NDJSON, snapshots y el historial persistido del crawler."""
     try:
         from services.logging.ctx_logger import clean_logs
 
-        clean_logs()
-        return {"status": "ok"}
+        file_result = clean_logs()
+        result = await db.execute(delete(ImageJobLog).where(ImageJobLog.job_name == "imagenes_productos"))
+        await db.commit()
+        return {
+            "status": "ok" if file_result["ok"] else "partial",
+            "database_logs_deleted": result.rowcount or 0,
+            "files": file_result,
+        }
     except Exception as e:
+        await db.rollback()
         raise HTTPException(status_code=500, detail=f"Could not clean logs: {e}")
 
 
@@ -274,7 +290,7 @@ def _lazy_jobs():  # pragma: no cover - runtime only
         raise HTTPException(status_code=503, detail=f"jobs_backend_indisponible: {e}")
 
 
-@router.post("/trigger/crawl-missing", dependencies=[Depends(require_csrf), Depends(require_roles("admin", "colaborador"))])
+@router.post("/trigger/crawl-missing", dependencies=[Depends(require_csrf), Depends(require_roles("admin"))])
 async def trigger_crawl_missing(scope: str = Query("stock"), db: AsyncSession = Depends(get_session)):
     # Dev fallback: run inline if requested (no Redis needed)
     crawl_catalog_missing_images, _purge = _lazy_jobs()

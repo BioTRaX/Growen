@@ -17,6 +17,8 @@ from pydantic import BaseModel
 
 from services.auth import require_roles
 from agent_core.detect_mcp_url import is_running_in_docker, get_mcp_products_url, get_mcp_web_search_url
+from agent_core.mcp_client import mcp_client_manager
+from agent_core.config import settings
 
 logger = logging.getLogger("growen.mcp_admin")
 
@@ -51,6 +53,9 @@ class MCPServerStatus(BaseModel):
     healthy: bool
     lastCheck: str | None = None
     error: str | None = None
+    protocol: str = "mcp"
+    protocol_version: str
+    tool_count: int = 0
 
 
 class MCPHealthResponse(BaseModel):
@@ -117,6 +122,11 @@ async def mcp_health():
     }
     
     servers: List[MCPServerStatus] = []
+    discovered = await mcp_client_manager.list_tools("admin")
+    tool_counts = {
+        "mcp_products": sum(tool.server_name == "products" for tool in discovered),
+        "mcp_web_search": sum(tool.server_name == "web_search" for tool in discovered),
+    }
     
     for server_config in MCP_SERVERS:
         # Verificar si el contenedor Docker está corriendo
@@ -128,13 +138,12 @@ async def mcp_health():
         healthy = False
         health_error = None
         
-        if container_running:
-            healthy, health_error = await _check_health_endpoint(
-                server_config["health_url"]
-            )
+        resolved_url = detected_urls.get(server_config["name"])
+        health_url = resolved_url.rsplit("/mcp", 1)[0] + "/health" if resolved_url else server_config["health_url"]
+        healthy, health_error = await _check_health_endpoint(health_url)
         
         # Determinar estado final
-        if container_running:
+        if healthy or container_running:
             status = "running"
         elif docker_error:
             status = "error"
@@ -142,9 +151,6 @@ async def mcp_health():
             status = "stopped"
         
         error_msg = health_error or docker_error if not healthy else None
-        
-        # Obtener la URL resuelta para este servidor
-        resolved_url = detected_urls.get(server_config["name"])
         
         servers.append(
             MCPServerStatus(
@@ -157,6 +163,9 @@ async def mcp_health():
                 healthy=healthy,
                 lastCheck=datetime.utcnow().isoformat(),
                 error=error_msg,
+                protocol="mcp",
+                protocol_version=settings.mcp_protocol_version,
+                tool_count=tool_counts.get(server_config["name"], 0),
             )
         )
     

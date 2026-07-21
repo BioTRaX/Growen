@@ -5,7 +5,7 @@
 import pytest
 import types
 import json
-from httpx import AsyncClient, ASGITransport, Response, Request
+from httpx import AsyncClient, ASGITransport
 
 from services.api import app
 
@@ -35,13 +35,13 @@ class _FakeChat:
         self._idx = 0
     def completions(self):  # pragma: no cover - interface guard
         return self
-    def create(self, **kwargs):  # Simula dos llamadas consecutivas
+    async def create(self, **kwargs):  # Simula dos llamadas consecutivas
         out = self._sequence[self._idx]
         self._idx += 1
         return out
 
 class _FakeOpenAI:
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, **_kwargs):
         # Primera respuesta: modelo pide tool_call
         tool_call = _FakeToolCallFn(
             name="get_product_info",
@@ -59,30 +59,22 @@ class _FakeOpenAI:
 @pytest.fixture(autouse=True)
 def patch_openai(monkeypatch):
     import ai.providers.openai_provider as mod
-    monkeypatch.setattr(mod, "OpenAI", _FakeOpenAI)
+    monkeypatch.setattr(mod, "AsyncOpenAI", _FakeOpenAI)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_DISABLE_OLLAMA", "true")
 
 @pytest.fixture
 def patch_httpx(monkeypatch):
-    import httpx
-    original_post = httpx.AsyncClient.post
+    from agent_core.mcp_client import mcp_client_manager
 
-    async def _fake_post(self, url, json=None, **kwargs):  # noqa: A002
-        if str(url).endswith("/invoke_tool"):
-            payload = {
-                "tool_name": json.get("tool_name"),
-                "result": {
-                    "sku": json.get("parameters", {}).get("sku"),
-                    "name": "Maceta Test",
-                    "sale_price": 1000,
-                    "stock": 5,
-                    "currency": "ARS",
-                },
-            }
-            return Response(200, request=Request("POST", url), json=payload)
-        return await original_post(self, url, json=json, **kwargs)
+    async def schemas(_role):
+        return [{"type": "function", "function": {"name": "get_product_info", "description": "info", "parameters": {"type": "object"}}}]
 
-    monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
+    async def call_tool(**kwargs):
+        return {"sku": kwargs["arguments"].get("sku"), "name": "Maceta Test", "sale_price": 1000, "stock": 5, "currency": "ARS"}
+
+    monkeypatch.setattr(mcp_client_manager, "openai_tools", schemas)
+    monkeypatch.setattr(mcp_client_manager, "call_tool", call_tool)
 
 async def test_chat_http_product_tool_flow(patch_httpx):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from services.api import app
 from services.auth import current_session, SessionData
+from db.models import DriveSyncRun
 
 
 @pytest.fixture
@@ -24,8 +25,9 @@ def client():
 class TestDriveSyncEndpoints:
     """Tests para endpoints de sincronización Drive."""
 
-    @patch("workers.drive_sync.sync_drive_images")
-    async def test_start_sync_success(self, mock_sync, client):
+    @patch("services.routers.drive_sync.subscribe_to_progress", new_callable=AsyncMock)
+    @patch("services.routers.drive_sync.sync_drive_images_task.send")
+    async def test_start_sync_success(self, mock_send, _mock_subscribe, client):
         """Test iniciar sincronización exitosamente."""
         # Mock de sync_drive_images que simula progreso
         async def mock_sync_func(progress_callback=None):
@@ -34,7 +36,7 @@ class TestDriveSyncEndpoints:
                 progress_callback({"status": "processing", "current": 1, "total": 10, "sku": "ABC_1234_XYZ", "message": "Procesando..."})
             return {"processed": 5, "errors": 2, "no_sku": 3, "total": 10}
 
-        mock_sync.return_value = mock_sync_func()
+        mock_send.return_value = Mock(message_id="message-1")
 
         # Resetear estado global
         from services.routers import drive_sync as drive_sync_module
@@ -79,11 +81,11 @@ class TestDriveSyncEndpoints:
         assert data["status"] == "idle"
         assert data["sync_id"] is None
 
-    async def test_get_status_running(self, client):
+    async def test_get_status_running(self, client, db_session):
         """Test obtener estado cuando está en progreso."""
         from services.routers import drive_sync as drive_sync_module
-        drive_sync_module._sync_in_progress = True
-        drive_sync_module._current_sync_id = "test-sync-id"
+        db_session.add(DriveSyncRun(id="test-sync-id", status="running"))
+        await db_session.commit()
 
         response = client.get("/admin/drive-sync/status")
 
@@ -130,7 +132,7 @@ class TestDriveSyncWebSocket:
         from services.routers import drive_sync as drive_sync_module
         drive_sync_module._sync_in_progress = False
 
-        with client.websocket_connect("/admin/drive-sync/ws") as ws:
+        with client.websocket_connect("/admin/drive-sync/ws", headers={"X-User-Roles": "admin"}) as ws:
             # Debe recibir mensaje de estado inicial
             data = ws.receive_json()
             assert data["type"] == "drive_sync_status"
@@ -140,7 +142,7 @@ class TestDriveSyncWebSocket:
         """Test que el WebSocket recibe actualizaciones de progreso."""
         from services.routers import drive_sync as drive_sync_module
 
-        with client.websocket_connect("/admin/drive-sync/ws") as ws:
+        with client.websocket_connect("/admin/drive-sync/ws", headers={"X-User-Roles": "admin"}) as ws:
             # Enviar mensaje de progreso simulado
             progress_data = {
                 "status": "processing",
@@ -166,7 +168,7 @@ class TestDriveSyncWebSocket:
 
     def test_websocket_ping_pong(self, client):
         """Test que el WebSocket responde a pings."""
-        with client.websocket_connect("/admin/drive-sync/ws") as ws:
+        with client.websocket_connect("/admin/drive-sync/ws", headers={"X-User-Roles": "admin"}) as ws:
             # Enviar ping
             ws.send_json({"type": "ping"})
             # Debería recibir pong (aunque el servidor puede no responder inmediatamente)

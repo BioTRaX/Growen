@@ -7,7 +7,7 @@
 Heurístico y tolerante: intenta extraer número de remito, fecha y líneas con
 SKU proveedor, título, cantidad, precio unitario y descuento de línea (%).
 
-Se apoya en pdfplumber si está disponible; caso contrario, usa PyPDF2 como
+Se apoya en pdfplumber si está disponible; caso contrario, usa pypdf como
 fallback y recurre a expresiones regulares sobre el texto plano.
 """
 from __future__ import annotations
@@ -54,23 +54,7 @@ def _extract_text(data: bytes) -> str:
         log.info(f"Extracción con pypdf exitosa. Total caracteres: {len(full_text)}")
         return full_text
     except Exception as e:
-        log.warning(f"pypdf falló: {e}. Intentando con PyPDF2...")
-        pass
-    # Fallback 2: PyPDF2
-    try:
-        from PyPDF2 import PdfReader  # type: ignore
-
-        reader = PdfReader(io.BytesIO(data))
-        text = []
-        for i, page in enumerate(reader.pages):
-            page_text = page.extract_text() or ""
-            text.append(page_text)
-            log.debug(f"  - Página {i+1} (PyPDF2): {len(page_text)} caracteres extraídos.")
-        full_text = "\n".join(text)
-        log.info(f"Extracción con PyPDF2 exitosa. Total caracteres: {len(full_text)}")
-        return full_text
-    except Exception as e:
-        log.error(f"PyPDF2 también falló: {e}. No se pudo extraer texto del PDF.")
+        log.error(f"pypdf también falló: {e}. No se pudo extraer texto del PDF.")
         return ""
 
 

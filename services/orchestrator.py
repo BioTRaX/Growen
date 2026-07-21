@@ -1,3 +1,8 @@
+# NG-HEADER: Nombre de archivo: orchestrator.py
+# NG-HEADER: Ubicación: services/orchestrator.py
+# NG-HEADER: Descripción: Orquesta servicios locales y Docker con dependencias verificables.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
 from __future__ import annotations
 
 """Lightweight orchestrator for service containers (dev) with lazy fallback.
@@ -8,8 +13,10 @@ docker-compose.yml. If Docker is unavailable, falls back to a simple in-process
 """
 
 import os
+import socket
 import shutil
 import subprocess
+import time
 import psutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,6 +76,52 @@ def _compose(args: list[str]) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     cmd = ["docker", "compose", "-f", str(COMPOSE_FILE), *args]
     return subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+
+def _tcp_port_open(host: str, port: int, timeout: float = 0.75) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _ensure_local_redis(timeout_s: float = 15.0) -> tuple[bool, str]:
+    """Garantiza el broker host requerido antes de iniciar un worker local."""
+    if _tcp_port_open("127.0.0.1", 6379):
+        return True, "Redis ya disponible en 127.0.0.1:6379"
+    if not _has_docker():
+        return False, "Redis no está disponible y Docker no puede iniciarlo"
+
+    proc = _compose(["--profile", "optional", "up", "-d", "redis"])
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "docker compose falló").strip()
+        return False, f"No se pudo iniciar Redis: {detail[:300]}"
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _tcp_port_open("127.0.0.1", 6379):
+            return True, "Redis iniciado mediante Docker Compose"
+        time.sleep(0.25)
+    return False, "Redis inició en Compose pero no publicó 127.0.0.1:6379"
+
+
+def _start_process_with_log(command: list[str], log_name: str) -> tuple[subprocess.Popen, Path]:
+    """Inicia un proceso sin pipes huérfanos y conserva stdout/stderr en un archivo."""
+    log_path = ROOT / "logs" / log_name
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_stream = log_path.open("a", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(ROOT),
+            stdout=log_stream,
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
+        )
+    finally:
+        log_stream.close()
+    return process, log_path
 
 
 def start_service(name: str, correlation_id: str, mode: Optional[str] = None) -> ServiceStatus:
@@ -172,21 +225,26 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
         current = status_service(name)
         if current.status == "running":
             return ServiceStatus(name=name, status="running", ok=True, detail="noop: already running")
+
+        redis_ok, redis_detail = _ensure_local_redis()
+        if not redis_ok:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=redis_detail)
         
         script_path = ROOT / "scripts" / "start_worker_catalog.cmd"
         if not script_path.exists():
             return ServiceStatus(name=name, status="failed", ok=False, detail="Script not found")
         
         try:
-            # Ejecutar el script en background
-            _CATALOG_WORKER_PROC = subprocess.Popen(
+            _CATALOG_WORKER_PROC, log_path = _start_process_with_log(
                 [str(script_path)],
-                cwd=str(ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
+                "worker_catalog.log",
             )
-            return ServiceStatus(name=name, status="running", ok=True, detail=f"Started with PID {_CATALOG_WORKER_PROC.pid}")
+            return ServiceStatus(
+                name=name,
+                status="running",
+                ok=True,
+                detail=f"{redis_detail}; worker iniciado con PID {_CATALOG_WORKER_PROC.pid}; log: {log_path}",
+            )
         except Exception as e:
             return ServiceStatus(name=name, status="failed", ok=False, detail=str(e))
     

@@ -100,7 +100,7 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
 
     reset_login_attempts(ip)
     prev = await current_session(request, db)
-    sess, csrf = await create_session(
+    sess, sid, csrf = await create_session(
         db, user.role, request, user, prev_session=prev.session
     )
     resp = JSONResponse(
@@ -113,7 +113,7 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
             "supplier_id": user.supplier_id,
         }
     )
-    await set_session_cookies(resp, sess.id, csrf, request)
+    await set_session_cookies(resp, sid, csrf, request)
     logger.debug("[login:ok] tag=%s user_id=%s role=%s session=%s", t0, user.id, user.role, sess.id[:12])
     return resp
 
@@ -123,11 +123,11 @@ async def login_guest(request: Request, db: AsyncSession = Depends(get_session))
     t0 = secrets.token_hex(4)
     logger.debug("[guest:start] tag=%s ip=%s", t0, request.client.host if request.client else None)
     prev = await current_session(request, db)
-    sess, csrf = await create_session(
+    sess, sid, csrf = await create_session(
         db, "guest", request, prev_session=prev.session
     )
     resp = JSONResponse({"role": "guest"})
-    await set_session_cookies(resp, sess.id, csrf, request)
+    await set_session_cookies(resp, sid, csrf, request)
     logger.debug("[guest:ok] tag=%s session=%s", t0, sess.id[:12])
     return resp
 
@@ -135,11 +135,11 @@ async def login_guest(request: Request, db: AsyncSession = Depends(get_session))
 @router.post("/logout", dependencies=[Depends(require_csrf)])
 async def logout(request: Request, db: AsyncSession = Depends(get_session)):
     prev = await current_session(request, db)
-    new_sess, csrf = await create_session(
+    new_sess, sid, csrf = await create_session(
         db, "guest", request, prev_session=prev.session
     )
     resp = JSONResponse({"status": "ok"})
-    await set_session_cookies(resp, new_sess.id, csrf, request)
+    await set_session_cookies(resp, sid, csrf, request)
     return resp
 
 

@@ -17,7 +17,7 @@ Reglas:
 from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text, select
+from sqlalchemy import text
 from sqlalchemy.engine import Result
 
 from .sku_utils import normalize_code, build_canonical_sku, CANONICAL_SKU_REGEX
@@ -41,6 +41,14 @@ async def _lock_sequence_row(session: AsyncSession, category_code: str) -> int:
         current = row.scalar_one()
         return current
     # Postgres / otros: FOR UPDATE
+    if dialect == "postgresql":
+        await session.execute(
+            text(
+                "INSERT INTO sku_sequences(category_code, next_seq) VALUES (:c, 1) "
+                "ON CONFLICT (category_code) DO NOTHING"
+            ),
+            {"c": category_code},
+        )
     row: Result = await session.execute(text("SELECT next_seq FROM sku_sequences WHERE category_code = :c FOR UPDATE"), {"c": category_code})  # type: ignore[arg-type]
     r = row.first()
     if not r:
@@ -74,6 +82,8 @@ async def generate_canonical_sku(session: AsyncSession, category_name: str, subc
         except Exception:  # silencioso, si falla lo captará luego el lock
             pass
     seq = await _lock_sequence_row(session, prefix)
+    if seq > 9999:
+        raise CanonicalSkuGenerationError(f"Secuencia agotada para el prefijo {prefix}")
     sku = build_canonical_sku(prefix, seq, suffix)
     if not CANONICAL_SKU_REGEX.fullmatch(sku):  # defensivo
         raise CanonicalSkuGenerationError(f"SKU generado inválido: {sku}")

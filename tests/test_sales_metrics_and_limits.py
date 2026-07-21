@@ -48,6 +48,7 @@ def test_rate_limit_sales_creation(monkeypatch):
     # Parchear bucket para no interferir con otras ejecuciones.
     from services.routers import sales as mod
     mod._RL_BUCKET.clear()
+    client.cookies.set("csrf_token", "testtoken")
 
     # Necesitamos un producto para crear líneas (simplificado: omitimos persistencia real si la capa exige commit.)
     # Aquí simplemente se llama al endpoint repetidas veces sin items (aceptado por create_sale BORRADOR).

@@ -92,7 +92,7 @@ def upgrade() -> None:
     for row in rows:
         sku_upper = row.sku_root.upper()
         if sku_upper in duplicates:
-            print(f"  ⚠ Omitiendo producto ID {row.id}: SKU '{sku_upper}' duplicado")
+            print(f"  [WARN] Omitiendo producto ID {row.id}: SKU '{sku_upper}' duplicado")
             continue
         if is_canonical_sku(sku_upper):
             try:
@@ -102,9 +102,9 @@ def upgrade() -> None:
                 )
                 migrated_count += 1
             except Exception as e:
-                print(f"  ✗ Error actualizando producto ID {row.id}: {e}")
+                print(f"  [ERROR] Error actualizando producto ID {row.id}: {e}")
     
-    print(f"  ✓ Migrados {migrated_count} productos con sku_root canónico")
+    print(f"  [OK] Migrados {migrated_count} productos con sku_root canónico")
     bind.commit()
     
     # PASO 2: Generar SKUs canónicos para productos sin canonical_sku que tengan categoría
@@ -169,7 +169,7 @@ def upgrade() -> None:
         ).first()
         
         if existing:
-            print(f"  ⚠ SKU '{canonical_sku}' ya existe, incrementando secuencia...")
+            print(f"  [WARN] SKU '{canonical_sku}' ya existe, incrementando secuencia...")
             # Incrementar secuencia y reintentar
             bind.execute(
                 text("UPDATE sku_sequences SET next_seq = next_seq + 1 WHERE category_code = :code"),
@@ -191,12 +191,12 @@ def upgrade() -> None:
             )
             generated_count += 1
         except Exception as e:
-            print(f"  ✗ Error generando SKU para producto ID {prod.id}: {e}")
+            print(f"  [ERROR] Error generando SKU para producto ID {prod.id}: {e}")
             skipped_count += 1
     
-    print(f"  ✓ Generados {generated_count} SKUs canónicos")
+    print(f"  [OK] Generados {generated_count} SKUs canónicos")
     if skipped_count > 0:
-        print(f"  ⚠ Omitidos {skipped_count} productos por errores")
+        print(f"  [WARN] Omitidos {skipped_count} productos por errores")
     bind.commit()
     
     # PASO 3: Reportar productos que no pudieron migrarse
@@ -208,7 +208,7 @@ def upgrade() -> None:
     """)).scalar()
     
     if remaining > 0:
-        print(f"  ⚠ ADVERTENCIA: {remaining} productos sin canonical_sku (sin categoría o errores)")
+        print(f"  [WARN] ADVERTENCIA: {remaining} productos sin canonical_sku (sin categoría o errores)")
         print("  Estos productos requerirán categoría para generar SKU canónico")
         
         # Listar algunos ejemplos
@@ -224,7 +224,7 @@ def upgrade() -> None:
             for ex in examples:
                 print(f"    - ID {ex.id}: '{ex.title}' (sku_root: {ex.sku_root})")
     
-    print("\n✓ Migración completada")
+    print("\n[OK] Migración completada")
     print(f"  - Migrados desde sku_root: {migrated_count}")
     print(f"  - Generados nuevos: {generated_count}")
     print(f"  - Sin canonical_sku: {remaining}")

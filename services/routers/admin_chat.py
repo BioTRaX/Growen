@@ -17,12 +17,12 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, and_
+from sqlalchemy import String, and_, cast, desc, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from db.session import get_session
-from db.models import ChatSession, ChatMessage
-from services.auth import require_roles, SessionData
+from db.models import ChatMessage, ChatSession, User
+from services.auth import require_csrf, require_roles, SessionData
 
 router = APIRouter(prefix="/admin/chats", tags=["Admin - Chat"])
 
@@ -48,6 +48,13 @@ class ChatSessionOut(BaseModel):
     status: str
     tags: Optional[dict] = None
     admin_notes: Optional[str] = None
+    channel: str = "web"
+    assigned_user_id: Optional[int] = None
+    detected_intent: Optional[str] = None
+    sentiment: Optional[str] = None
+    classification_confidence: Optional[float] = None
+    classification_model: Optional[str] = None
+    problem_signals: Optional[list[str]] = None
     created_at: str
     last_message_at: Optional[str] = None
     updated_at: str
@@ -68,6 +75,7 @@ class ChatSessionUpdate(BaseModel):
     status: Optional[str] = Field(None, description="Status: 'new', 'reviewed', 'archived'")
     admin_notes: Optional[str] = Field(None, description="Notas administrativas")
     tags: Optional[dict] = Field(None, description="Tags JSON")
+    assigned_user_id: Optional[int] = Field(None, description="Usuario staff responsable")
 
 
 class ChatSessionsListResponse(BaseModel):
@@ -85,7 +93,13 @@ async def list_chat_sessions(
     page: int = Query(1, ge=1, description="Número de página"),
     page_size: int = Query(20, ge=1, le=100, description="Tamaño de página"),
     status: Optional[str] = Query(None, description="Filtrar por status (new, reviewed, archived)"),
+    q: Optional[str] = Query(None, min_length=1, max_length=200),
     user_identifier: Optional[str] = Query(None, description="Buscar por user_identifier (búsqueda parcial)"),
+    channel: Optional[str] = Query(None, max_length=24),
+    assigned_user_id: Optional[int] = Query(None),
+    detected_intent: Optional[str] = Query(None, max_length=64),
+    sentiment: Optional[str] = Query(None, max_length=24),
+    tag: Optional[str] = Query(None, max_length=100),
     date_from: Optional[str] = Query(None, description="Fecha desde (ISO format: YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="Fecha hasta (ISO format: YYYY-MM-DD)"),
     _session: SessionData = Depends(require_roles("admin", "colaborador")),
@@ -113,6 +127,21 @@ async def list_chat_sessions(
     # Aplicar filtro de user_identifier (búsqueda parcial)
     if user_identifier:
         filters.append(ChatSession.user_identifier.ilike(f"%{user_identifier}%"))
+    if q:
+        filters.append(or_(
+            ChatSession.user_identifier.ilike(f"%{q}%"),
+            ChatSession.admin_notes.ilike(f"%{q}%"),
+        ))
+    if channel:
+        filters.append(ChatSession.channel == channel)
+    if assigned_user_id is not None:
+        filters.append(ChatSession.assigned_user_id == assigned_user_id)
+    if detected_intent:
+        filters.append(ChatSession.detected_intent == detected_intent)
+    if sentiment:
+        filters.append(ChatSession.sentiment == sentiment)
+    if tag:
+        filters.append(cast(ChatSession.tags, String).ilike(f"%{tag}%"))
     
     # Aplicar filtros de fecha
     if date_from:
@@ -169,6 +198,13 @@ async def list_chat_sessions(
             "status": session.status,
             "tags": session.tags,
             "admin_notes": session.admin_notes,
+            "channel": session.channel,
+            "assigned_user_id": session.assigned_user_id,
+            "detected_intent": session.detected_intent,
+            "sentiment": session.sentiment,
+            "classification_confidence": float(session.classification_confidence) if session.classification_confidence is not None else None,
+            "classification_model": session.classification_model,
+            "problem_signals": session.problem_signals,
             "created_at": session.created_at.isoformat() if session.created_at else None,
             "last_message_at": session.last_message_at.isoformat() if session.last_message_at else None,
             "updated_at": session.updated_at.isoformat() if session.updated_at else None,
@@ -182,6 +218,16 @@ async def list_chat_sessions(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/stats")
+async def get_chat_stats_static(
+    session_data: SessionData = Depends(require_roles("admin", "colaborador")),
+    db: AsyncSession = Depends(get_session),
+):
+    """Declara la ruta estática antes de `/{session_id}` para evitar colisiones."""
+
+    return await get_chat_stats(session_data, db)
 
 
 @router.get("/{session_id}", response_model=ChatSessionDetailOut)
@@ -217,6 +263,13 @@ async def get_chat_session(
             status=session.status,
             tags=session.tags,
             admin_notes=session.admin_notes,
+            channel=session.channel,
+            assigned_user_id=session.assigned_user_id,
+            detected_intent=session.detected_intent,
+            sentiment=session.sentiment,
+            classification_confidence=float(session.classification_confidence) if session.classification_confidence is not None else None,
+            classification_model=session.classification_model,
+            problem_signals=session.problem_signals,
             created_at=session.created_at.isoformat() if session.created_at else None,
             last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
             updated_at=session.updated_at.isoformat() if session.updated_at else None,
@@ -247,7 +300,6 @@ class ChatStatsResponse(BaseModel):
     sessions_last_30_days: int
 
 
-@router.get("/stats", response_model=ChatStatsResponse)
 async def get_chat_stats(
     _session: SessionData = Depends(require_roles("admin", "colaborador")),
     db: AsyncSession = Depends(get_session),
@@ -334,7 +386,11 @@ async def get_chat_stats(
     )
 
 
-@router.patch("/{session_id}", response_model=ChatSessionOut)
+@router.patch(
+    "/{session_id}",
+    response_model=ChatSessionOut,
+    dependencies=[Depends(require_csrf)],
+)
 async def update_chat_session(
     session_id: str,
     update_data: ChatSessionUpdate,
@@ -361,10 +417,19 @@ async def update_chat_session(
     # Actualizar campos
     if update_data.status is not None:
         session.status = update_data.status
+        if update_data.status == "reviewed":
+            session.reviewed_at = datetime.utcnow()
+            session.reviewed_by_user_id = _session.user.id if _session.user else getattr(_session, "user_id", None)
     if update_data.admin_notes is not None:
         session.admin_notes = update_data.admin_notes
     if update_data.tags is not None:
         session.tags = update_data.tags
+    if "assigned_user_id" in update_data.model_fields_set and update_data.assigned_user_id is not None:
+        assignee = await db.get(User, update_data.assigned_user_id)
+        if not assignee or assignee.role not in {"admin", "colaborador"}:
+            raise HTTPException(status_code=400, detail="El responsable debe ser un usuario staff")
+    if "assigned_user_id" in update_data.model_fields_set:
+        session.assigned_user_id = update_data.assigned_user_id
     
     await db.commit()
     await db.refresh(session)
@@ -375,6 +440,13 @@ async def update_chat_session(
         status=session.status,
         tags=session.tags,
         admin_notes=session.admin_notes,
+        channel=session.channel,
+        assigned_user_id=session.assigned_user_id,
+        detected_intent=session.detected_intent,
+        sentiment=session.sentiment,
+        classification_confidence=float(session.classification_confidence) if session.classification_confidence is not None else None,
+        classification_model=session.classification_model,
+        problem_signals=session.problem_signals,
         created_at=session.created_at.isoformat() if session.created_at else None,
         last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
         updated_at=session.updated_at.isoformat() if session.updated_at else None,

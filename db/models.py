@@ -24,10 +24,12 @@ from sqlalchemy import (
     CheckConstraint,
     Index,
     Enum,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
+from .base import Base
 
 # RAG: Soporte vectorial para embeddings (Etapa 2)
 from pgvector.sqlalchemy import Vector
@@ -47,9 +49,6 @@ class JSONBCompat(TypeDecorator):
             return dialect.type_descriptor(JSONB())
         return dialect.type_descriptor(JSON())
 
-from .base import Base
-
-
 class Product(Base):
     __tablename__ = "products"
 
@@ -60,6 +59,7 @@ class Product(Base):
     title: Mapped[str] = mapped_column(String(200))
     brand_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+    subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"))
     description_html: Mapped[Optional[str]] = mapped_column(Text)
     # URL pública hacia archivo .txt con fuentes de enriquecimiento IA (si existe)
     enrichment_sources_url: Mapped[Optional[str]] = mapped_column(String(600), nullable=True)
@@ -81,7 +81,7 @@ class Product(Base):
     status: Mapped[Optional[str]] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
-    stock: Mapped[int] = mapped_column(Integer, default=0)
+    stock: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
 
     variants: Mapped[list["Variant"]] = relationship(back_populates="product")
     images: Mapped[list["Image"]] = relationship(back_populates="product")
@@ -118,8 +118,8 @@ class Inventory(Base):
         ForeignKey("variants.id", ondelete="CASCADE"), unique=True
     )
     warehouse: Mapped[Optional[str]] = mapped_column(String(100))
-    stock_qty: Mapped[int] = mapped_column(Integer, default=0)
-    min_qty: Mapped[Optional[int]] = mapped_column(Integer)
+    stock_qty: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
+    min_qty: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2))
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
     variant: Mapped["Variant"] = relationship(back_populates="inventory")
@@ -241,6 +241,11 @@ class Category(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
     parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+    kind: Mapped[str] = mapped_column(String(20), default="category", server_default="category", nullable=False)
+    __table_args__ = (
+        CheckConstraint("kind IN ('category', 'subcategory')", name="ck_categories_kind"),
+        Index("ux_categories_kind_lower_name", "kind", func.lower(name), unique=True),
+    )
 
 
 class Tag(Base):
@@ -248,6 +253,9 @@ class Tag(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
+    __table_args__ = (
+        Index("ux_tags_lower_name", func.lower(name), unique=True),
+    )
     products: Mapped[list["Product"]] = relationship(
         secondary="product_tags", back_populates="tags"
     )
@@ -377,6 +385,8 @@ class SupplierPriceHistory(Base):
     as_of_date: Mapped[date]
     purchase_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
     sale_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
+    purchase_id: Mapped[Optional[int]] = mapped_column(ForeignKey("purchases.id", ondelete="SET NULL"), nullable=True)
+    purchase_line_id: Mapped[Optional[int]] = mapped_column(ForeignKey("purchase_lines.id", ondelete="SET NULL"), nullable=True)
     delta_purchase_pct: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
     delta_sale_pct: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
@@ -510,6 +520,75 @@ class ProductEquivalence(Base):
     canonical_product: Mapped["CanonicalProduct"] = relationship(
         back_populates="equivalences"
     )
+
+
+class CanonicalBatchJob(Base):
+    """Cabecera persistente de un alta masiva de productos canónicos."""
+
+    __tablename__ = "canonical_batch_jobs"
+    __table_args__ = (
+        Index("ix_canonical_batch_jobs_status", "status"),
+        Index("ix_canonical_batch_jobs_created_by", "created_by_user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_request_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default="QUEUED", server_default="QUEUED", nullable=False)
+    total_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    processed_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    success_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    error_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    items: Mapped[list["CanonicalBatchJobItem"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan", order_by="CanonicalBatchJobItem.position"
+    )
+
+
+class CanonicalBatchJobItem(Base):
+    """Entrada y resultado individual de un alta masiva canónica."""
+
+    __tablename__ = "canonical_batch_job_items"
+    __table_args__ = (
+        UniqueConstraint("job_id", "position", name="uq_canonical_batch_job_position"),
+        Index("ix_canonical_batch_job_items_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("canonical_batch_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("supplier_products.id", ondelete="SET NULL"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    brand: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    category_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("categories.id", ondelete="SET NULL"), nullable=True
+    )
+    subcategory_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("categories.id", ondelete="SET NULL"), nullable=True
+    )
+    tag_names: Mapped[Optional[list]] = mapped_column(
+        JSONBCompat, nullable=True, default=list, server_default="[]"
+    )
+    requested_sku: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", server_default="PENDING", nullable=False)
+    canonical_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="SET NULL"), nullable=True
+    )
+    sku_custom: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    job: Mapped["CanonicalBatchJob"] = relationship(back_populates="items")
 
 
 class ImportJob(Base):
@@ -658,6 +737,11 @@ class Purchase(Base):
     status: Mapped[str] = mapped_column(String(16), default="BORRADOR")
     global_discount: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
     vat_rate: Mapped[Optional[Numeric]] = mapped_column(Numeric(5, 2), default=0)
+    documented_total: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), default="ARS", server_default="ARS")
+    import_profile: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    extraction_meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     note: Mapped[Optional[str]] = mapped_column(Text)
     created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
@@ -679,15 +763,20 @@ class PurchaseLine(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     purchase_id: Mapped[int] = mapped_column(ForeignKey("purchases.id", ondelete="CASCADE"))
-    supplier_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("supplier_products.id", ondelete="CASCADE"), nullable=True)
-    product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=True)
+    supplier_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("supplier_products.id", ondelete="SET NULL"), nullable=True)
+    product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id", ondelete="SET NULL"), nullable=True)
     supplier_sku: Mapped[Optional[str]] = mapped_column(String(120))
     title: Mapped[str] = mapped_column(String(300))
-    qty: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    qty: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
     unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     line_discount: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
+    line_vat_rate: Mapped[Optional[Numeric]] = mapped_column(Numeric(5, 2), nullable=True)
+    documented_subtotal: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
+    documented_total: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
+    extraction_confidence: Mapped[Optional[Numeric]] = mapped_column(Numeric(5, 4), nullable=True)
     state: Mapped[str] = mapped_column(String(24), default="OK")
     note: Mapped[Optional[str]] = mapped_column(Text)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     purchase: Mapped["Purchase"] = relationship(back_populates="lines")
     supplier_item: Mapped[Optional["SupplierProduct"]] = relationship()
@@ -700,8 +789,11 @@ class PurchaseAttachment(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     purchase_id: Mapped[int] = mapped_column(ForeignKey("purchases.id", ondelete="CASCADE"))
     filename: Mapped[str] = mapped_column(String(255))
+    original_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     mime: Mapped[Optional[str]] = mapped_column(String(100))
     size: Mapped[Optional[int]] = mapped_column(Integer)
+    sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    document_type: Mapped[str] = mapped_column(String(32), default="REMITO", server_default="REMITO")
     path: Mapped[str] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
@@ -802,6 +894,7 @@ class Customer(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     kind: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # cf/ri/minorista/mayorista
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    credit_limit: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -836,6 +929,8 @@ class Sale(Base):
     sale_kind: Mapped[str] = mapped_column(String(16), default="MOSTRADOR")  # MOSTRADOR|PEDIDO
     # Costos adicionales (envío, packaging, etc.) como JSON: [{"concept": "Envío", "amount": 500}, ...]
     additional_costs: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    additional_cost_total: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, unique=True)
     # Totales y descuentos
     discount_percent: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
     discount_amount: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
@@ -864,7 +959,7 @@ class SaleLine(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id", ondelete="CASCADE"))
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
-    qty: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    qty: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
     unit_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     line_discount: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)  # porcentaje lineal 0-100
     note: Mapped[Optional[str]] = mapped_column(Text)
@@ -874,6 +969,11 @@ class SaleLine(Base):
     subtotal: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
     tax: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
     total: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
+    unit_cost_snapshot: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
+    cost_supplier_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("supplier_products.id", ondelete="SET NULL"), nullable=True
+    )
+    global_discount_allocated: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
     supplier_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     state: Mapped[Optional[str]] = mapped_column(String(16), default="OK")  # OK/SIN_VINCULAR
 
@@ -947,7 +1047,7 @@ class ReturnLine(Base):
     return_id: Mapped[int] = mapped_column(ForeignKey("returns.id", ondelete="CASCADE"))
     sale_line_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sale_lines.id", ondelete="SET NULL"), nullable=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
-    qty: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    qty: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
     unit_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     subtotal: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -955,6 +1055,51 @@ class ReturnLine(Base):
     return_ref: Mapped["Return"] = relationship(back_populates="lines")
     sale_line: Mapped[Optional["SaleLine"]] = relationship()
     product: Mapped["Product"] = relationship()
+
+
+class StockReservation(Base):
+    __tablename__ = "stock_reservations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('ACTIVE','CONSUMED','RELEASED','EXPIRED')",
+            name="ck_stock_reservations_status",
+        ),
+        Index("ix_stock_reservations_product_status", "product_id", "status", "expires_at"),
+        Index("ix_stock_reservations_sale", "sale_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id", ondelete="CASCADE"))
+    sale_line_id: Mapped[int] = mapped_column(ForeignKey("sale_lines.id", ondelete="CASCADE"))
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
+    qty: Mapped[Numeric] = mapped_column(Numeric(14, 2))
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE")
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    released_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class CustomerAccountEntry(Base):
+    __tablename__ = "customer_account_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "entry_type IN ('SALE_CHARGE','PAYMENT','RETURN_CREDIT','ANNUL_CREDIT','ADJUSTMENT_DEBIT','ADJUSTMENT_CREDIT')",
+            name="ck_customer_account_entries_type",
+        ),
+        UniqueConstraint("source_type", "source_id", "entry_type", name="uq_customer_account_entry_source"),
+        Index("ix_customer_account_entries_customer_date", "customer_id", "occurred_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"))
+    entry_type: Mapped[str] = mapped_column(String(24))
+    amount: Mapped[Numeric] = mapped_column(Numeric(14, 2))
+    source_type: Mapped[str] = mapped_column(String(24))
+    source_id: Mapped[int] = mapped_column(Integer)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    correlation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
 
 class MarketAlert(Base):
@@ -1044,8 +1189,8 @@ class StockLedger(Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
     source_type: Mapped[str] = mapped_column(String(20))  # 'sale' | 'return' | futuro: 'adjust' | 'purchase'
     source_id: Mapped[int] = mapped_column(Integer)
-    delta: Mapped[int] = mapped_column(Integer)  # negativo venta, positivo devolución
-    balance_after: Mapped[int] = mapped_column(Integer)
+    delta: Mapped[Numeric] = mapped_column(Numeric(14, 2))  # negativo venta, positivo devolución
+    balance_after: Mapped[Numeric] = mapped_column(Numeric(14, 2))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
@@ -1072,7 +1217,7 @@ class StockShortage(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
     user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    quantity: Mapped[int] = mapped_column(Integer)  # Siempre positivo (reduce stock)
+    quantity: Mapped[Numeric] = mapped_column(Numeric(14, 2))  # Siempre positivo (reduce stock)
     reason: Mapped[str] = mapped_column(String(20))  # GIFT, PENDING_SALE, UNKNOWN
     status: Mapped[str] = mapped_column(String(16), default="OPEN")  # OPEN, RECONCILED
     observation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -1143,6 +1288,20 @@ class ChatSession(Base):
     status: Mapped[str] = mapped_column(String(20), default="new")  # 'new', 'reviewed', 'archived'
     tags: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
     admin_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    channel: Mapped[str] = mapped_column(String(24), default="web", server_default="web", nullable=False)
+    assigned_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    detected_intent: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    sentiment: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    classification_confidence: Mapped[Optional[Numeric]] = mapped_column(Numeric(5, 4), nullable=True)
+    classification_model: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    problem_signals: Mapped[Optional[list]] = mapped_column(JSONBCompat, nullable=True)
+    classified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    reviewed_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -1170,3 +1329,236 @@ class ChatMessage(Base):
     meta: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')  # Ej: {"tool_name": "...", "tokens": 123}
 
     session: Mapped["ChatSession"] = relationship(back_populates="messages")
+
+
+# --- Operaciones administrativas persistentes ---
+
+class DriveSyncRun(Base):
+    """Ejecución auditable de sincronización de imágenes desde Drive."""
+
+    __tablename__ = "drive_sync_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','cancel_requested','cancelled','completed','partial','failed')",
+            name="ck_drive_sync_runs_status",
+        ),
+        Index("ix_drive_sync_runs_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    parent_run_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("drive_sync_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    source_folder_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
+    initiated_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    total_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    processed_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    success_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    error_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    current_filename: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    cancel_requested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    items: Mapped[list["DriveSyncItem"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="DriveSyncItem.position"
+    )
+
+
+class DriveSyncItem(Base):
+    """Resultado de un archivo individual dentro de una sincronización."""
+
+    __tablename__ = "drive_sync_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','processing','processed','failed','skipped','cancelled')",
+            name="ck_drive_sync_items_status",
+        ),
+        UniqueConstraint("run_id", "position", name="uq_drive_sync_items_run_position"),
+        Index("ix_drive_sync_items_run_status", "run_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("drive_sync_runs.id", ondelete="CASCADE"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_file_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    sku: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", server_default="pending", nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default="{}")
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    run: Mapped["DriveSyncRun"] = relationship(back_populates="items")
+
+
+class SchedulerSetting(Base):
+    """Configuración singleton persistente del scheduler de mercado."""
+
+    __tablename__ = "scheduler_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), default="America/Argentina/Buenos_Aires", nullable=False)
+    start_hour: Mapped[str] = mapped_column(String(5), default="02:00", nullable=False)
+    interval_hours: Mapped[int] = mapped_column(Integer, default=24, nullable=False)
+    update_frequency_days: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    max_products_per_run: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    prioritize_mandatory: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SchedulerRun(Base):
+    """Historial de ejecuciones automáticas y manuales del scheduler."""
+
+    __tablename__ = "scheduler_runs"
+    __table_args__ = (Index("ix_scheduler_runs_status_created", "status", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trigger: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="queued", nullable=False)
+    initiated_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    products_enqueued: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sources_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duration_seconds: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 3), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    config_snapshot: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class KnowledgeIndexTask(Base):
+    """Seguimiento persistente de indexación del conocimiento RAG."""
+
+    __tablename__ = "knowledge_index_tasks"
+    __table_args__ = (Index("ix_knowledge_index_tasks_status_created", "status", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    target: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    result: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class CatalogGenerationRun(Base):
+    """Ejecución persistente de generación de catálogos."""
+
+    __tablename__ = "catalog_generation_runs"
+    __table_args__ = (Index("ix_catalog_generation_runs_status_created", "status", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(24), default="queued", nullable=False)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    product_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    artifact_filename: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class CatalogGenerationEvent(Base):
+    """Evento estructurado y descargable de una generación de catálogo."""
+
+    __tablename__ = "catalog_generation_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence", name="uq_catalog_generation_event_sequence"),
+        Index("ix_catalog_generation_events_run", "run_id", "sequence"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_generation_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    step: Mapped[str] = mapped_column(String(64), nullable=False)
+    level: Mapped[str] = mapped_column(String(16), default="INFO", nullable=False)
+    payload: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ChatMessageFeedback(Base):
+    """Evaluación humana de una respuesta del asistente."""
+
+    __tablename__ = "chat_message_feedback"
+    __table_args__ = (
+        UniqueConstraint("message_id", "reviewer_user_id", name="uq_chat_feedback_message_reviewer"),
+        Index("ix_chat_message_feedback_rating_created", "rating", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False)
+    rating: Mapped[str] = mapped_column(String(16), nullable=False)
+    categories: Mapped[Optional[list]] = mapped_column(JSONBCompat, nullable=True)
+    comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reviewer_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AIPromptVersion(Base):
+    """Versión auditable y reversible de un prompt por persona/tarea."""
+
+    __tablename__ = "ai_prompt_versions"
+    __table_args__ = (
+        UniqueConstraint("prompt_key", "version", name="uq_ai_prompt_key_version"),
+        Index("ix_ai_prompt_versions_key_status", "prompt_key", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    prompt_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="candidate", nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metrics: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    approved_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    activated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class AIPromptEvaluation(Base):
+    """Resultado reproducible de evaluar una versión candidata de prompt."""
+
+    __tablename__ = "ai_prompt_evaluations"
+    __table_args__ = (Index("ix_ai_prompt_evaluations_prompt_created", "prompt_version_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    prompt_version_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_prompt_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    dataset_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    composite_score: Mapped[Numeric] = mapped_column(Numeric(7, 4), nullable=False)
+    safety_passed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

@@ -38,10 +38,10 @@ ECHO = os.getenv("DEBUG_SQL", "0") == "1"
 db_url = os.getenv("DB_URL") or settings.db_url
 kwargs: dict = {"echo": ECHO, "pool_pre_ping": True, "future": True}
 if db_url.startswith("sqlite+") and ":memory:" in db_url:
-    # Usar una DB en memoria compartida y con nombre para múltiples conexiones
-    # Referencia: https://www.sqlite.org/inmemorydb.html (URI mode)
-    db_url = "sqlite+aiosqlite:///file:memdb1?mode=memory&cache=shared"
-    kwargs.update({"connect_args": {"uri": True}, "poolclass": StaticPool})
+    # StaticPool mantiene una sola conexión por proceso. Conservar ``:memory:``
+    # evita que las URI ``file:...`` se interpreten como archivos físicos en
+    # Windows y que procesos pytest simultáneos compitan por el mismo esquema.
+    kwargs.update({"poolclass": StaticPool})
 
 # Ajustes específicos para PostgreSQL (psycopg): timeout y application_name
 if db_url.startswith("postgresql+psycopg"):

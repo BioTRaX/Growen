@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import uuid
 from datetime import datetime
@@ -14,10 +15,13 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from db.models import KnowledgeIndexTask
 from db.session import get_session
-from services.auth import require_csrf, require_roles
+from db.session import SessionLocal
+from services.auth import SessionData, require_csrf, require_roles
 from services.rag.service import SUPPORTED_EXTENSIONS, KnowledgeService, get_knowledge_service
 
 logger = logging.getLogger(__name__)
@@ -40,35 +44,66 @@ class IndexResponse(BaseModel):
     message: str
 
 
-# --- Estado de tareas en memoria (simple) ---
-# En producción considerar Redis o DB para persistencia
-_tasks: Dict[str, Dict[str, Any]] = {}
+MAX_UPLOAD_BYTES = int(os.getenv("KNOWLEDGE_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+SUPPORTED_MIME_TYPES = {"text/plain", "text/markdown", "application/pdf", "application/octet-stream"}
 
 
-def _create_task(task_type: str, target: str) -> str:
+def _user_id(session: SessionData) -> int | None:
+    if session.user:
+        return session.user.id
+    value = getattr(session, "user_id", None)
+    return int(value) if value is not None else None
+
+
+async def _create_task(
+    db: AsyncSession,
+    task_type: str,
+    target: str,
+    requested_by_user_id: int | None,
+) -> str:
     """Crear una nueva tarea y retornar su ID."""
     task_id = uuid.uuid4().hex[:12]
-    _tasks[task_id] = {
-        "id": task_id,
-        "type": task_type,
-        "target": target,
-        "status": "pending",
-        "started_at": datetime.utcnow().isoformat(),
-        "completed_at": None,
-        "result": None,
-        "error": None,
-    }
+    db.add(KnowledgeIndexTask(
+        id=task_id,
+        task_type=task_type,
+        target=target,
+        status="pending",
+        requested_by_user_id=requested_by_user_id,
+    ))
+    await db.commit()
     return task_id
 
 
-def _update_task(task_id: str, status: str, result: Any = None, error: str | None = None):
+def _task_payload(task: KnowledgeIndexTask) -> dict[str, Any]:
+    return {
+        "id": task.id,
+        "type": task.task_type,
+        "target": task.target,
+        "status": task.status,
+        "progress": task.progress,
+        "started_at": task.started_at.isoformat() if task.started_at else None,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+        "result": task.result,
+        "error": task.error_message,
+    }
+
+
+async def _update_task(task_id: str, status: str, result: Any = None, error: str | None = None):
     """Actualizar estado de una tarea."""
-    if task_id in _tasks:
-        _tasks[task_id]["status"] = status
-        _tasks[task_id]["result"] = result
-        _tasks[task_id]["error"] = error
+    async with SessionLocal() as db:
+        task = await db.get(KnowledgeIndexTask, task_id)
+        if not task:
+            return
+        task.status = status
+        task.result = result
+        task.error_message = error
+        if status == "running":
+            task.started_at = task.started_at or datetime.utcnow()
+            task.progress = max(task.progress, 1)
         if status in ("completed", "failed"):
-            _tasks[task_id]["completed_at"] = datetime.utcnow().isoformat()
+            task.completed_at = datetime.utcnow()
+            task.progress = 100
+        await db.commit()
 
 
 # --- Tareas en background ---
@@ -77,7 +112,7 @@ async def _run_index_file(task_id: str, filepath: str, force_reindex: bool):
     """Ejecutar indexación de archivo en background."""
     from db.session import SessionLocal
     
-    _update_task(task_id, "running")
+    await _update_task(task_id, "running")
     
     try:
         service = get_knowledge_service()
@@ -89,20 +124,22 @@ async def _run_index_file(task_id: str, filepath: str, force_reindex: bool):
             )
             
             if result["success"]:
-                _update_task(task_id, "completed", result=result)
+                await _update_task(task_id, "completed", result=result)
             else:
-                _update_task(task_id, "failed", error=result.get("error"))
+                await _update_task(task_id, "failed", error=result.get("error"))
                 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error en tarea de indexación {task_id}: {e}")
-        _update_task(task_id, "failed", error=str(e))
+        await _update_task(task_id, "failed", error=str(e))
 
 
 async def _run_index_folder(task_id: str, force_reindex: bool):
     """Ejecutar indexación de carpeta en background."""
     from db.session import SessionLocal
     
-    _update_task(task_id, "running")
+    await _update_task(task_id, "running")
     
     try:
         service = get_knowledge_service()
@@ -111,16 +148,16 @@ async def _run_index_folder(task_id: str, force_reindex: bool):
                 session=session,
                 force_reindex=force_reindex
             )
-            _update_task(task_id, "completed", result=result)
+            await _update_task(task_id, "completed", result=result)
             
     except Exception as e:
         logger.error(f"Error en tarea de indexación de carpeta {task_id}: {e}")
-        _update_task(task_id, "failed", error=str(e))
+        await _update_task(task_id, "failed", error=str(e))
 
 
 # --- Endpoints ---
 
-@router.get("/files", dependencies=[Depends(require_roles("admin", "colaborador"))])
+@router.get("/files", dependencies=[Depends(require_roles("admin"))])
 async def list_files(
     db: AsyncSession = Depends(get_session)
 ) -> Dict[str, Any]:
@@ -143,7 +180,7 @@ async def list_files(
 
 @router.post(
     "/upload",
-    dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)]
+    dependencies=[Depends(require_roles("admin")), Depends(require_csrf)]
 )
 async def upload_file(
     file: UploadFile = File(...),
@@ -163,6 +200,8 @@ async def upload_file(
             status_code=400,
             detail=f"Extensión no soportada: {ext}. Soportadas: {list(SUPPORTED_EXTENSIONS)}"
         )
+    if file.content_type and file.content_type not in SUPPORTED_MIME_TYPES:
+        raise HTTPException(status_code=400, detail=f"MIME no soportado: {file.content_type}")
     
     service = get_knowledge_service()
     
@@ -177,7 +216,9 @@ async def upload_file(
     
     try:
         # Guardar archivo
-        content = await file.read()
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="El archivo supera el tamaño máximo permitido")
         
         with open(dest_path, "wb") as f:
             f.write(content)
@@ -192,6 +233,8 @@ async def upload_file(
             "message": f"Archivo {'actualizado' if overwrite else 'subido'} correctamente",
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error subiendo archivo {safe_filename}: {e}")
         raise HTTPException(status_code=500, detail=f"Error al guardar archivo: {str(e)}")
@@ -199,11 +242,13 @@ async def upload_file(
 
 @router.post(
     "/index",
-    dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)]
+    dependencies=[Depends(require_roles("admin")), Depends(require_csrf)]
 )
 async def index_knowledge(
     request: IndexRequest,
     background_tasks: BackgroundTasks,
+    session_data: SessionData = Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_session),
 ) -> IndexResponse:
     """
     Dispara indexación de conocimientos.
@@ -217,7 +262,7 @@ async def index_knowledge(
         - status: Estado inicial (pending)
     """
     if request.target == "folder":
-        task_id = _create_task("index_folder", "folder")
+        task_id = await _create_task(db, "index_folder", "folder", _user_id(session_data))
         background_tasks.add_task(
             _run_index_folder,
             task_id,
@@ -227,12 +272,15 @@ async def index_knowledge(
     else:
         # Validar que el archivo exista
         service = get_knowledge_service()
-        file_path = service.knowledge_path / request.target
+        root = service.knowledge_path.resolve()
+        file_path = (root / request.target).resolve()
+        if not file_path.is_relative_to(root):
+            raise HTTPException(status_code=400, detail="Ruta de conocimiento inválida")
         
         if not file_path.exists():
             raise HTTPException(status_code=404, detail=f"Archivo no encontrado: {request.target}")
         
-        task_id = _create_task("index_file", request.target)
+        task_id = await _create_task(db, "index_file", request.target, _user_id(session_data))
         background_tasks.add_task(
             _run_index_file,
             task_id,
@@ -248,36 +296,34 @@ async def index_knowledge(
     )
 
 
-@router.get("/tasks/{task_id}", dependencies=[Depends(require_roles("admin", "colaborador"))])
-async def get_task_status(task_id: str) -> Dict[str, Any]:
+@router.get("/tasks/{task_id}", dependencies=[Depends(require_roles("admin"))])
+async def get_task_status(task_id: str, db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
     """
     Obtener estado de una tarea de indexación.
     """
-    if task_id not in _tasks:
+    task = await db.get(KnowledgeIndexTask, task_id)
+    if not task:
         raise HTTPException(status_code=404, detail=f"Tarea no encontrada: {task_id}")
-    
-    return _tasks[task_id]
+    return _task_payload(task)
 
 
-@router.get("/tasks", dependencies=[Depends(require_roles("admin", "colaborador"))])
-async def list_tasks(limit: int = 20) -> Dict[str, Any]:
+@router.get("/tasks", dependencies=[Depends(require_roles("admin"))])
+async def list_tasks(limit: int = 20, db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
     """
     Listar tareas recientes de indexación.
     """
     # Ordenar por fecha de inicio descendente
-    sorted_tasks = sorted(
-        _tasks.values(),
-        key=lambda t: t["started_at"],
-        reverse=True
-    )[:limit]
+    tasks = list(await db.scalars(
+        select(KnowledgeIndexTask).order_by(desc(KnowledgeIndexTask.created_at)).limit(min(max(limit, 1), 100))
+    ))
     
     return {
-        "tasks": sorted_tasks,
-        "total": len(_tasks),
+        "tasks": [_task_payload(task) for task in tasks],
+        "total": len(tasks),
     }
 
 
-@router.get("/sources", dependencies=[Depends(require_roles("admin", "colaborador"))])
+@router.get("/sources", dependencies=[Depends(require_roles("admin"))])
 async def list_sources(
     db: AsyncSession = Depends(get_session)
 ) -> Dict[str, Any]:
@@ -295,7 +341,7 @@ async def list_sources(
 
 @router.delete(
     "/sources/{source_id}",
-    dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)]
+    dependencies=[Depends(require_roles("admin")), Depends(require_csrf)]
 )
 async def delete_source(
     source_id: int,
@@ -315,7 +361,7 @@ async def delete_source(
     return result
 
 
-@router.get("/status", dependencies=[Depends(require_roles("admin", "colaborador"))])
+@router.get("/status", dependencies=[Depends(require_roles("admin"))])
 async def get_status(
     db: AsyncSession = Depends(get_session)
 ) -> Dict[str, Any]:
@@ -333,9 +379,13 @@ async def get_status(
     status = await service.get_index_status(db)
     
     # Agregar info de tareas en curso
-    running_tasks = [t for t in _tasks.values() if t["status"] == "running"]
+    running_tasks = list(await db.scalars(
+        select(KnowledgeIndexTask)
+        .where(KnowledgeIndexTask.status == "running")
+        .order_by(desc(KnowledgeIndexTask.created_at))
+    ))
     status["tasks_running"] = len(running_tasks)
-    status["current_task"] = running_tasks[0] if running_tasks else None
+    status["current_task"] = _task_payload(running_tasks[0]) if running_tasks else None
     
     return status
 
@@ -354,7 +404,10 @@ async def delete_file(
     Solo disponible para rol admin.
     """
     service = get_knowledge_service()
-    file_path = service.knowledge_path / filename
+    root = service.knowledge_path.resolve()
+    file_path = (root / filename).resolve()
+    if not file_path.is_relative_to(root):
+        raise HTTPException(status_code=400, detail="Ruta de conocimiento inválida")
     
     if not file_path.exists():
         raise HTTPException(status_code=404, detail=f"Archivo no encontrado: {filename}")

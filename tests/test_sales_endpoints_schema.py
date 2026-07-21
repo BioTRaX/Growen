@@ -30,6 +30,7 @@ def test_sales_endpoints_present_in_openapi():
 
     # Ventas: listado y detalle
     assert _has_path(paths, "/sales", "get")
+    assert _has_path(paths, "/sales/quote", "post")
     assert _has_path(paths, "/sales/{sale_id}", "get")
 
     # Acciones sobre venta
@@ -44,6 +45,9 @@ def test_sales_endpoints_present_in_openapi():
     # Returns
     assert _has_path(paths, "/sales/{sale_id}/returns", "post")
     assert _has_path(paths, "/sales/{sale_id}/returns", "get")
+    assert _has_path(paths, "/sales/{sale_id}/reserve", "post")
+    assert _has_path(paths, "/sales/{sale_id}/release-reservation", "post")
+    assert _has_path(paths, "/sales/{sale_id}/attachments", "get")
 
     # Reportes
     assert _has_path(paths, "/reports/sales", "get")
@@ -52,6 +56,17 @@ def test_sales_endpoints_present_in_openapi():
     # Clientes: historial y soft delete
     assert _has_path(paths, "/customers/{cid}/sales", "get")
     assert _has_path(paths, "/customers/{cid}", "delete")
+    assert _has_path(paths, "/customers/{cid}", "patch")
+    assert _has_path(paths, "/customers/{cid}/reactivate", "post")
+    assert _has_path(paths, "/customers/{cid}/account", "get")
+
+    operation_ids = [
+        operation["operationId"]
+        for path in paths.values()
+        for operation in path.values()
+        if isinstance(operation, dict) and "operationId" in operation
+    ]
+    assert len(operation_ids) == len(set(operation_ids))
 
 
 def test_catalog_search_present_in_openapi():

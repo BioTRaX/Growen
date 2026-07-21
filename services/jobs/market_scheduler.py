@@ -23,16 +23,17 @@ from __future__ import annotations
 
 import os
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional, List
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
-from db.models import CanonicalProduct, MarketSource
+from db.models import CanonicalProduct, MarketSource, SchedulerRun, SchedulerSetting
 from workers.market_scraping import refresh_market_prices_task
 from agent_core.config import settings
 
@@ -166,18 +167,47 @@ async def schedule_market_updates() -> None:
     start_time = datetime.utcnow()
     logger.info("[MARKET SCHEDULER] Iniciando job de actualización automática de precios")
     
+    run_id = uuid.uuid4().hex
+    lock_connection = None
     try:
+        if engine.dialect.name == "postgresql":
+            lock_connection = await engine.connect()
+            lock_acquired = bool(
+                await lock_connection.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": 72419031})
+            )
+            if not lock_acquired:
+                logger.info("[MARKET SCHEDULER] Otra réplica posee el liderazgo; se omite la ejecución")
+                return
         async with SessionLocal() as session:
+            setting = await session.get(SchedulerSetting, 1)
+            run = SchedulerRun(
+                id=run_id,
+                trigger="automatic",
+                status="running",
+                started_at=start_time,
+                config_snapshot={
+                    "start_hour": setting.start_hour if setting else SCHEDULER_START_HOUR,
+                    "interval_hours": setting.interval_hours if setting else SCHEDULER_INTERVAL_HOURS,
+                    "update_frequency_days": setting.update_frequency_days if setting else UPDATE_FREQUENCY_DAYS,
+                    "max_products_per_run": setting.max_products_per_run if setting else MAX_PRODUCTS_PER_RUN,
+                },
+            )
+            session.add(run)
+            await session.commit()
             # 1. Obtener productos candidatos
             product_ids = await get_products_needing_update(
                 session,
-                max_products=MAX_PRODUCTS_PER_RUN,
-                days_threshold=UPDATE_FREQUENCY_DAYS,
-                prioritize_mandatory=PRIORITIZE_MANDATORY
+                max_products=setting.max_products_per_run if setting else MAX_PRODUCTS_PER_RUN,
+                days_threshold=setting.update_frequency_days if setting else UPDATE_FREQUENCY_DAYS,
+                prioritize_mandatory=setting.prioritize_mandatory if setting else PRIORITIZE_MANDATORY,
             )
             
             if not product_ids:
                 logger.info("[MARKET SCHEDULER] No hay productos pendientes de actualización")
+                run.status = "completed"
+                run.completed_at = datetime.utcnow()
+                run.duration_seconds = 0
+                await session.commit()
                 return
             
             logger.info(
@@ -238,13 +268,33 @@ async def schedule_market_updates() -> None:
                 f"MAX_PRODUCTS_PER_RUN={MAX_PRODUCTS_PER_RUN}, "
                 f"PRIORITIZE_MANDATORY={PRIORITIZE_MANDATORY}"
             )
+            run.status = "completed" if failed_count == 0 else "partial"
+            run.products_enqueued = enqueued_count
+            run.sources_total = total_sources
+            run.duration_seconds = duration
+            run.completed_at = datetime.utcnow()
+            await session.commit()
             
     except Exception as e:
         logger.error(
             f"[MARKET SCHEDULER] Error crítico en job de actualización: {e}",
             exc_info=True
         )
+        async with SessionLocal() as session:
+            run = await session.get(SchedulerRun, run_id)
+            if run:
+                run.status = "failed"
+                run.error_message = str(e)[:2000]
+                run.completed_at = datetime.utcnow()
+                await session.commit()
         raise
+    finally:
+        if lock_connection is not None:
+            try:
+                await lock_connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": 72419031})
+            finally:
+                await lock_connection.close()
+        _is_running_job = False
 
 
 def get_is_working() -> bool:
@@ -451,7 +501,12 @@ def update_scheduler_config(start_hour: str, interval_hours: int) -> None:
         logger.info(f"[MARKET SCHEDULER] Configuración actualizada: {start_hour} GMT-3, cada {interval_hours}h")
 
 
-def start_scheduler(start_hour: Optional[str] = None, interval_hours: Optional[int] = None) -> None:
+def start_scheduler(
+    start_hour: Optional[str] = None,
+    interval_hours: Optional[int] = None,
+    *,
+    force: bool = False,
+) -> None:
     """
     Inicia el scheduler si está habilitado por configuración.
     
@@ -461,7 +516,7 @@ def start_scheduler(start_hour: Optional[str] = None, interval_hours: Optional[i
         start_hour: Hora de inicio (override). Si None, usa SCHEDULER_START_HOUR
         interval_hours: Intervalo en horas (override). Si None, usa SCHEDULER_INTERVAL_HOURS
     """
-    if not SCHEDULER_ENABLED:
+    if not SCHEDULER_ENABLED and not force:
         logger.info("[MARKET SCHEDULER] Scheduler deshabilitado por configuración (MARKET_SCHEDULER_ENABLED=false)")
         return
     
