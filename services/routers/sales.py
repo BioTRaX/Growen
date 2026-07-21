@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Optional
 from datetime import datetime
+import logging
 import os
 import time
 from decimal import Decimal
@@ -34,6 +35,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import desc
 
 router = APIRouter(prefix="/sales", tags=["sales"])
+logger = logging.getLogger(__name__)
 
 # --- Cache simple in-memory para reportes agregados ---
 # Nota: proceso single-worker; si se despliega multi-proceso o distribuido conviene backend compartido (Redis).
@@ -1070,31 +1072,58 @@ async def annul_sale(sale_id: int, reason: str = Query(...), db: AsyncSession = 
         return {"status": s.status, "already": True}
     if s.status not in ("CONFIRMADA", "ENTREGADA"):
         raise HTTPException(status_code=400, detail="Solo se puede anular CONFIRMADA/ENTREGADA")
-    # Reponer stock por líneas
-    lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == s.id))).scalars().all()
+    # Reponer únicamente el saldo no devuelto de cada línea. La venta queda
+    # bloqueada durante el cálculo para serializar anulaciones/devoluciones.
+    lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == s.id).order_by(SaleLine.id))).scalars().all()
+    returned_rows = (
+        await db.execute(
+            select(ReturnLine.sale_line_id, func.coalesce(func.sum(ReturnLine.qty), 0))
+            .join(Return, Return.id == ReturnLine.return_id)
+            .where(Return.sale_id == s.id)
+            .group_by(ReturnLine.sale_line_id)
+        )
+    ).all()
+    returned_by_line = {int(line_id): Decimal(str(total)) for line_id, total in returned_rows}
+    product_ids = sorted({line.product_id for line in lines if line.product_id is not None})
+    locked_products = (
+        await db.execute(
+            select(Product).where(Product.id.in_(product_ids)).order_by(Product.id).with_for_update()
+        )
+    ).scalars().all() if product_ids else []
+    products = {product.id: product for product in locked_products}
     deltas: list[dict] = []
     for l in lines:
-        prod = await db.scalar(select(Product).where(Product.id == l.product_id).with_for_update())
+        prod = products.get(l.product_id)
         if not prod:
             continue
+        sold_qty = Decimal(str(l.qty or 0))
+        returned_qty = returned_by_line.get(l.id, Decimal("0"))
+        qty = sold_qty - returned_qty
+        if qty < 0:
+            raise HTTPException(status_code=409, detail={"code": "return_balance_invalid", "sale_line_id": l.id})
+        if qty == 0:
+            continue
         before = Decimal(str(prod.stock or 0))
-        qty = Decimal(str(l.qty))
         prod.stock = before + qty
-        deltas.append({"product_id": prod.id, "delta": float(qty), "new": float(prod.stock)})
+        deltas.append({"product_id": prod.id, "sale_line_id": l.id, "delta": float(qty), "new": float(prod.stock)})
         db.add(StockLedger(
             product_id=prod.id,
             source_type="annul",
             source_id=s.id,
             delta=qty,
             balance_after=prod.stock,
-            meta={"sale_line_id": l.id},
+            meta={"sale_line_id": l.id, "sold": float(sold_qty), "returned": float(returned_qty)},
         ))
     s.status = "ANULADA"
+    returned_amount = await db.scalar(
+        select(func.coalesce(func.sum(Return.total_amount), 0)).where(Return.sale_id == s.id)
+    ) or 0
+    remaining_credit = max(money(s.total_amount) - money(returned_amount), Decimal("0.00"))
     await add_account_entry(
         db,
         customer_id=s.customer_id,
         entry_type="ANNUL_CREDIT",
-        amount=-money(s.total_amount),
+        amount=-remaining_credit,
         source_type="annul",
         source_id=s.id,
         user_id=getattr(sess, "user_id", None),
@@ -1102,7 +1131,7 @@ async def annul_sale(sale_id: int, reason: str = Query(...), db: AsyncSession = 
         note=reason,
     )
     # Audit log con deltas de stock
-    _audit(db, "sale_annul", "sales", s.id, {"reason": reason, "stock_deltas": deltas, "elapsed_ms": 0}, sess, request)
+    _audit(db, "sale_annul", "sales", s.id, {"reason": reason, "stock_deltas": deltas, "returned_amount": float(money(returned_amount)), "credit_amount": float(remaining_credit), "elapsed_ms": 0}, sess, request)
     _report_cache_invalidate()  # anulación afecta métricas agregadas
     await db.commit()
     return {"status": s.status, "restored": deltas}
@@ -1164,25 +1193,38 @@ async def confirm_sale(sale_id: int, db: AsyncSession = Depends(get_session), se
     ).scalars().all()
     reservations_by_line = {row.sale_line_id: row for row in active_reservations}
 
-    missing = []
-    products: dict[int, Product] = {}
-    for l in lines:
-        p = await db.scalar(select(Product).where(Product.id == l.product_id).with_for_update())
-        if not p:
-            missing.append({"product_id": l.product_id, "reason": "no existe"})
-            continue
-        products[p.id] = p
-        reserved_elsewhere = await db.scalar(
-            select(func.coalesce(func.sum(StockReservation.qty), 0)).where(
-                StockReservation.product_id == p.id,
+    quantity_by_product: dict[int, Decimal] = {}
+    for line in lines:
+        quantity_by_product[line.product_id] = quantity_by_product.get(line.product_id, Decimal("0")) + Decimal(str(line.qty))
+    product_ids = sorted(quantity_by_product)
+    locked_products = (
+        await db.execute(
+            select(Product).where(Product.id.in_(product_ids)).order_by(Product.id).with_for_update()
+        )
+    ).scalars().all()
+    products = {product.id: product for product in locked_products}
+    reserved_rows = (
+        await db.execute(
+            select(StockReservation.product_id, func.coalesce(func.sum(StockReservation.qty), 0))
+            .where(
+                StockReservation.product_id.in_(product_ids),
                 StockReservation.status == "ACTIVE",
                 StockReservation.expires_at > datetime.utcnow(),
                 StockReservation.sale_id != s.id,
             )
-        ) or 0
-        available = Decimal(str(p.stock or 0)) - Decimal(str(reserved_elsewhere))
-        if available < Decimal(str(l.qty)):
-            missing.append({"product_id": p.id, "needed": float(l.qty), "have": float(available)})
+            .group_by(StockReservation.product_id)
+        )
+    ).all()
+    reserved_by_product = {product_id: Decimal(str(total)) for product_id, total in reserved_rows}
+    missing = []
+    for product_id, needed in quantity_by_product.items():
+        product = products.get(product_id)
+        if not product:
+            missing.append({"product_id": product_id, "reason": "no existe"})
+            continue
+        available = Decimal(str(product.stock or 0)) - reserved_by_product.get(product_id, Decimal("0"))
+        if available < needed:
+            missing.append({"product_id": product_id, "needed": float(needed), "have": float(available)})
     allow_negative_stock = os.getenv("SALES_ALLOW_NEGATIVE_STOCK", "false").lower() in ("1", "true", "yes")
     if missing and not allow_negative_stock:
         raise HTTPException(status_code=409, detail={"error": "stock_insuficiente", "items": missing})
@@ -1817,7 +1859,7 @@ async def create_return(sale_id: int, payload: dict, db: AsyncSession = Depends(
       - Guarda Return + ReturnLines + AuditLog return_create
     """
     t0 = time.perf_counter()
-    sale = await db.get(Sale, sale_id)
+    sale = await db.scalar(select(Sale).where(Sale.id == sale_id).with_for_update())
     if not sale:
         raise HTTPException(status_code=404, detail="Venta no encontrada")
     if sale.status not in ("CONFIRMADA", "ENTREGADA"):
@@ -1833,7 +1875,11 @@ async def create_return(sale_id: int, payload: dict, db: AsyncSession = Depends(
     line_ids = [int(it.get("sale_line_id")) for it in items if it.get("sale_line_id") is not None]
     if not line_ids:
         raise HTTPException(status_code=400, detail="Cada item debe incluir sale_line_id")
-    q_lines = (await db.execute(select(SaleLine).where(SaleLine.id.in_(line_ids)))).scalars().all()
+    q_lines = (
+        await db.execute(
+            select(SaleLine).where(SaleLine.id.in_(line_ids)).order_by(SaleLine.id).with_for_update()
+        )
+    ).scalars().all()
     lines_map = {l.id: l for l in q_lines if l.sale_id == sale.id}
     if len(lines_map) != len(line_ids):
         raise HTTPException(status_code=400, detail="Alguna sale_line no pertenece a la venta")
@@ -1857,6 +1903,14 @@ async def create_return(sale_id: int, payload: dict, db: AsyncSession = Depends(
     db.add(ret)
     await db.flush()
 
+    product_ids = sorted({line.product_id for line in lines_map.values() if line.product_id is not None})
+    locked_products = (
+        await db.execute(
+            select(Product).where(Product.id.in_(product_ids)).order_by(Product.id).with_for_update()
+        )
+    ).scalars().all() if product_ids else []
+    products = {product.id: product for product in locked_products}
+
     total_amount = Decimal("0")
     stock_deltas: list[dict] = []
     for it in items:
@@ -1879,7 +1933,7 @@ async def create_return(sale_id: int, payload: dict, db: AsyncSession = Depends(
         )
         db.add(rl)
         # Incrementar stock
-        prod = await db.scalar(select(Product).where(Product.id == line.product_id).with_for_update())
+        prod = products.get(line.product_id)
         if prod:
             before = Decimal(str(prod.stock or 0))
             prod.stock = before + qty_req
@@ -2388,141 +2442,6 @@ async def upload_sale_attachment(sale_id: int, file: UploadFile = File(...), db:
     await db.commit()
     await db.refresh(att)
     return {"attachment_id": att.id, "path": att.path}
-
-
-# --- Devoluciones (Returns) ---
-
-@router.post("/{sale_id}/returns", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
-async def create_return(sale_id: int, payload: dict, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session), request: Request = None):
-    """Registra una devolución parcial o total de una venta CONFIRMADA/ENTREGADA.
-
-    payload:
-      - reason (opcional)
-      - items: lista de { sale_line_id: int, qty: number }
-    Validaciones:
-      - Venta debe estar CONFIRMADA o ENTREGADA
-      - qty > 0 y no excede saldo (vendido - devuelto previo) de la línea
-    Efectos:
-      - Incrementa stock de productos devueltos
-      - Guarda Return + ReturnLines + AuditLog return_create
-    """
-    t0 = time.perf_counter()
-    sale = await db.get(Sale, sale_id)
-    if not sale:
-        raise HTTPException(status_code=404, detail="Venta no encontrada")
-    if sale.status not in ("CONFIRMADA", "ENTREGADA"):
-        raise HTTPException(status_code=400, detail="Sólo se permiten devoluciones de ventas CONFIRMADA/ENTREGADA")
-    if sale.status == "ANULADA":  # por si cambia flujo futuro
-        raise HTTPException(status_code=400, detail="Venta anulada")
-    items = payload.get("items") or []
-    if not items:
-        raise HTTPException(status_code=400, detail="items requerido")
-    reason = (payload.get("reason") or None)
-
-    # Pre-cargar líneas de venta involucradas
-    line_ids = [int(it.get("sale_line_id")) for it in items if it.get("sale_line_id") is not None]
-    if not line_ids:
-        raise HTTPException(status_code=400, detail="Cada item debe incluir sale_line_id")
-    q_lines = (await db.execute(select(SaleLine).where(SaleLine.id.in_(line_ids)))).scalars().all()
-    lines_map = {l.id: l for l in q_lines if l.sale_id == sale.id}
-    if len(lines_map) != len(line_ids):
-        raise HTTPException(status_code=400, detail="Alguna sale_line no pertenece a la venta")
-
-    # Calcular ya devuelto por línea
-    # SELECT sale_line_id, COALESCE(SUM(qty),0) FROM return_lines rl JOIN returns r ON rl.return_id=r.id WHERE r.sale_id=:sale_id GROUP BY sale_line_id
-    returned_map: dict[int, Decimal] = {}
-    from sqlalchemy import join
-    rl_alias = ReturnLine
-    r_alias = Return
-    rows = (await db.execute(
-        select(rl_alias.sale_line_id, func.coalesce(func.sum(rl_alias.qty), 0)).select_from(
-            join(rl_alias, r_alias, rl_alias.return_id == r_alias.id)
-        ).where(r_alias.sale_id == sale_id).group_by(rl_alias.sale_line_id)
-    )).all()
-    for sl_id, qty_sum in rows:
-        if sl_id is not None:
-            returned_map[int(sl_id)] = Decimal(str(qty_sum))
-
-    ret = Return(sale_id=sale.id, status="REGISTRADA", reason=reason, created_by=getattr(sess, "user_id", None), correlation_id=getattr(sess, "session_id", None))
-    db.add(ret)
-    await db.flush()
-
-    total_amount = Decimal("0")
-    stock_deltas: list[dict] = []
-    for it in items:
-        sl_id = int(it.get("sale_line_id"))
-        line = lines_map[sl_id]
-        qty_req = Decimal(str(it.get("qty")))
-        if qty_req <= 0:
-            raise HTTPException(status_code=400, detail=f"qty inválida en línea {sl_id}")
-        prev_ret = returned_map.get(sl_id, Decimal("0"))
-        saldo = Decimal(str(line.qty)) - prev_ret
-        if qty_req > saldo:
-            raise HTTPException(status_code=400, detail=f"qty excede saldo disponible (vendido {line.qty} ya devuelto {prev_ret}) en línea {sl_id}")
-        line_total_unit = Decimal(str(line.unit_price)) * qty_req * (Decimal("1") - Decimal(str(line.line_discount or 0))/Decimal("100"))
-        total_amount += line_total_unit
-        rl = ReturnLine(
-            return_id=ret.id,
-            sale_line_id=sl_id,
-            product_id=line.product_id,
-            qty=qty_req,
-            unit_price=line.unit_price,
-            subtotal=line_total_unit,
-        )
-        db.add(rl)
-        # Incrementar stock
-        prod = await db.get(Product, line.product_id)
-        if prod:
-            before = int(prod.stock or 0)
-            prod.stock = before + int(qty_req)
-            stock_deltas.append({"product_id": prod.id, "delta": int(qty_req), "new": int(prod.stock)})
-            # Ledger delta positivo via ORM
-            try:
-                db.add(StockLedger(
-                    product_id=prod.id,
-                    source_type='return',
-                    source_id=ret.id,
-                    delta=int(qty_req),
-                    balance_after=int(prod.stock),
-                    meta={'sale_line_id': sl_id}
-                ))
-            except Exception:
-                pass
-
-    ret.total_amount = total_amount
-    _audit(db, "return_create", "returns", ret.id, {
-        "sale_id": sale.id,
-        "lines": len(items),
-        "total": float(total_amount),
-        "stock_deltas": stock_deltas,
-        "elapsed_ms": round((time.perf_counter()-t0)*1000,2),
-    }, sess, request)
-    # Invalidate report cache (devoluciones afectan reportes)
-    _report_cache_invalidate()
-    await db.commit()
-    return {"return_id": ret.id, "total": float(total_amount), "lines": len(items)}
-
-
-@router.get("/{sale_id}/returns", dependencies=[Depends(require_roles("colaborador", "admin"))])
-async def list_returns(sale_id: int, db: AsyncSession = Depends(get_session)):
-    sale = await db.get(Sale, sale_id)
-    if not sale:
-        raise HTTPException(status_code=404, detail="Venta no encontrada")
-    rets = (await db.execute(select(Return).where(Return.sale_id == sale_id).order_by(Return.id.asc()))).scalars().all()
-    result = []
-    for r in rets:
-        lines = (await db.execute(select(ReturnLine).where(ReturnLine.return_id == r.id))).scalars().all()
-        result.append({
-            "id": r.id,
-            "status": r.status,
-            "reason": r.reason,
-            "total": float(r.total_amount or 0),
-            "created_at": r.created_at.isoformat(),
-            "lines": [
-                {"id": l.id, "sale_line_id": l.sale_line_id, "product_id": l.product_id, "qty": float(l.qty), "unit_price": float(l.unit_price), "subtotal": float(l.subtotal or 0)} for l in lines
-            ]
-        })
-    return {"items": result, "total": len(result)}
 
 
 # --- Export CSV ventas ---
