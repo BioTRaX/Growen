@@ -7,8 +7,9 @@ import { describe, expect, it } from 'vitest'
 import { frontendManifest, moduleForPath, validateManifest, type FrontendManifest } from './manifest'
 
 describe('manifiesto frontend', () => {
-  it('cubre rutas y aliases relevantes y activa Vue sÃ³lo con estado active', () => {
-    expect(moduleForPath('/productos/42')?.id).toBe('products')
+  it('cubre rutas y aliases relevantes y activa Vue sólo con estado active', () => {
+    expect(moduleForPath('/productos')?.id).toBe('products')
+    expect(moduleForPath('/productos/42')?.id).toBe('product-detail-legacy')
     expect(frontendManifest.modules.find((module) => module.id === 'images')?.aliases).toEqual([
       '/admin/imagenes',
       '/admin/imagenes-productos',
@@ -16,6 +17,20 @@ describe('manifiesto frontend', () => {
     expect(frontendManifest.modules
       .filter((module) => module.runtime === 'vue')
       .every((module) => module.state === 'active')).toBe(true)
+  })
+
+  it('activa el catálogo Vue sin capturar el detalle legacy', () => {
+    const products = frontendManifest.modules.find((module) => module.id === 'products')
+    const detail = frontendManifest.modules.find((module) => module.id === 'product-detail-legacy')
+    expect(products).toMatchObject({ state: 'active', runtime: 'vue' })
+    expect(products?.routes.map((route) => route.path)).toEqual(['/productos'])
+    expect(detail).toMatchObject({ state: 'partial', runtime: 'legacy' })
+  })
+
+  it('activa Stock y Faltantes conjuntamente en Vue', () => {
+    const stock = frontendManifest.modules.find((module) => module.id === 'stock')
+    expect(stock).toMatchObject({ state: 'active', runtime: 'vue' })
+    expect(stock?.routes.map((route) => route.path)).toEqual(['/stock', '/stock/shortages'])
   })
 
   it('rechaza runtime Vue si el módulo no está active', () => {

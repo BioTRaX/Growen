@@ -14,6 +14,7 @@ const loaders: Record<string, RouteComponent> = {
   'product-detail': () => import('../../modules/products/views/ProductPurchaseHistoryView.vue'),
   stock: () => import('../../modules/stock/views/StockView.vue'),
   'stock-shortages': () => import('../../modules/stock/views/StockShortagesView.vue'),
+  market: () => import('../../modules/market/views/MarketView.vue'),
   purchases: () => import('../../modules/purchases/views/PurchasesView.vue'),
   'purchase-new': () => import('../../modules/purchases/views/PurchaseNewView.vue'),
   'purchase-detail': () => import('../../modules/purchases/views/PurchaseDetailView.vue'),

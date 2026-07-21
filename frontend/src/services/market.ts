@@ -20,6 +20,13 @@ export interface MarketProductItem {
   last_market_update: string | null
   has_active_alerts: boolean
   active_alerts_count: number
+  price_delta_pct?: number | null
+  price_position?: string
+  comparison_label?: string
+  effective_sources_count?: number
+  stale_sources_count?: number
+  warning_sources_count?: number
+  last_job_status?: string | null
   category_id: number | null
   category_name: string | null
   supplier_id: number | null
@@ -325,9 +332,11 @@ export async function updateProductSalePrice(
  */
 export interface BatchRefreshMarketItem {
   product_id: number
-  status: 'enqueued' | 'not_found' | 'error'
+  status: 'enqueued' | 'deduplicated' | 'not_found' | 'error'
   message: string
   job_id?: string | null
+  item_id?: number | null
+  deduplicated?: boolean
 }
 
 /**

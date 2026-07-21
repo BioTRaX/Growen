@@ -275,17 +275,17 @@ export default function Market() {
     return date.toLocaleDateString()
   }
 
-  function getPriceComparisonClass(salePrice: number | null, marketMin: number | null, marketMax: number | null): string {
-    if (!salePrice || !marketMin || !marketMax) return ''
-
-    // Si nuestro precio está por debajo del mínimo del mercado
-    if (salePrice < marketMin) return 'price-below-market'
-
-    // Si nuestro precio está por encima del máximo del mercado
-    if (salePrice > marketMax) return 'price-above-market'
-
-    // Si está dentro del rango
-    return 'price-in-market'
+  function getPriceComparisonClass(salePrice: number | null, marketReference: number | null): string {
+    if (!salePrice || !marketReference) return ''
+    const delta = ((salePrice - marketReference) / marketReference) * 100
+    if (delta <= -20) return 'price-much-cheaper'
+    if (delta <= -15) return 'price-very-cheaper'
+    if (delta <= -10) return 'price-moderately-cheaper'
+    if (delta < -5) return 'price-slightly-cheaper'
+    if (delta <= 5) return 'price-aligned'
+    if (delta < 10) return 'price-slightly-expensive'
+    if (delta < 15) return 'price-moderately-expensive'
+    return 'price-very-expensive'
   }
 
   /**
@@ -304,8 +304,8 @@ export default function Market() {
       .split(/\s+|_+/)
       .map(word => {
         if (word.length === 0) return word
-        // Si la palabra es solo números, mantenerla tal cual
-        if (/^\d+$/.test(word)) return word
+        // Preservar unidades y códigos alfanuméricos (5L, 20kg, HPS400).
+        if (/\d/.test(word)) return word
         // Convertir a Title Case: primera letra mayúscula, resto minúsculas
         return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
       })
@@ -501,8 +501,7 @@ export default function Market() {
               items.map((product) => {
                 const comparisonClass = getPriceComparisonClass(
                   product.sale_price,
-                  product.market_price_min,
-                  product.market_price_max
+                  product.market_price_reference
                 )
 
                 return (
@@ -650,18 +649,14 @@ export default function Market() {
 
       {/* Estilos adicionales para comparación de precios */}
       <style>{`
-        .price-below-market {
-          color: #22c55e;
-          font-weight: 600;
-        }
-        .price-above-market {
-          color: #ef4444;
-          font-weight: 600;
-        }
-        .price-in-market {
-          color: var(--primary);
-          font-weight: 500;
-        }
+        .price-much-cheaper { color: #ef4444; font-weight: 700; }
+        .price-very-cheaper { color: #c2410c; font-weight: 700; }
+        .price-moderately-cheaper { color: #fb923c; font-weight: 700; }
+        .price-slightly-cheaper { color: #eab308; font-weight: 700; }
+        .price-aligned { color: #06b6d4; font-weight: 700; }
+        .price-slightly-expensive { color: #2563eb; font-weight: 700; }
+        .price-moderately-expensive { color: #d946ef; font-weight: 700; }
+        .price-very-expensive { color: #a21caf; font-weight: 700; }
         .product-title {
           color: var(--primary);
           text-decoration: none;

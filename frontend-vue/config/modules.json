@@ -23,10 +23,23 @@
       "group": "Productos",
       "roles": ["cliente", "proveedor", "colaborador", "admin"],
       "capabilities": [],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [
+        { "path": "/productos", "name": "products", "title": "Productos", "component": "products", "roles": ["cliente", "proveedor", "colaborador", "admin"] }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "product-detail-legacy",
+      "title": "Detalle de producto",
+      "icon": "mdi-package-variant-closed",
+      "group": "Productos",
+      "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"],
+      "capabilities": [],
       "state": "partial",
       "runtime": "legacy",
       "routes": [
-        { "path": "/productos", "name": "products", "title": "Productos", "component": "products", "roles": ["cliente", "proveedor", "colaborador", "admin"] },
         { "path": "/productos/:id", "name": "product-detail", "title": "Detalle de producto", "component": "product-detail", "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"], "navigation": false },
         { "path": "/productos/:id/imagen", "name": "product-image", "title": "Imagen de producto", "component": "pending", "roles": ["colaborador", "admin"], "navigation": false }
       ],
@@ -39,8 +52,8 @@
       "group": "Productos",
       "roles": ["cliente", "proveedor", "colaborador", "admin"],
       "capabilities": [],
-      "state": "pending",
-      "runtime": "legacy",
+      "state": "active",
+      "runtime": "vue",
       "routes": [
         { "path": "/stock", "name": "stock", "title": "Stock", "component": "stock", "roles": ["cliente", "proveedor", "colaborador", "admin"] },
         { "path": "/stock/shortages", "name": "stock-shortages", "title": "Faltantes", "component": "stock-shortages", "roles": ["colaborador", "admin"], "navigation": false }
@@ -54,9 +67,9 @@
       "group": "Operaciones",
       "roles": ["colaborador", "admin"],
       "capabilities": [],
-      "state": "pending",
-      "runtime": "legacy",
-      "routes": [{ "path": "/mercado", "name": "market", "title": "Mercado", "component": "pending", "roles": ["colaborador", "admin"] }],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/mercado", "name": "market", "title": "Mercado", "component": "market", "roles": ["colaborador", "admin"] }],
       "aliases": []
     },
     {

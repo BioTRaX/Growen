@@ -563,7 +563,7 @@ describe('Market Page', () => {
     it('aplica clase CSS correcta cuando precio está por debajo del mercado', async () => {
       const lowPriceProduct = {
         ...mockProducts[0],
-        sale_price: 1200, // Menor que market_price_min (1400)
+        sale_price: 1200, // -25% contra referencia 1600
       }
 
       vi.mocked(marketServices.listMarketProducts).mockResolvedValue({
@@ -583,13 +583,13 @@ describe('Market Page', () => {
 
       // Buscar la celda con el precio (formato argentino: 1.200,00)
       const priceCell = screen.getByText('$ 1.200,00').closest('td')
-      expect(priceCell).toHaveClass('price-below-market')
+      expect(priceCell).toHaveClass('price-much-cheaper')
     })
 
     it('aplica clase CSS correcta cuando precio está por encima del mercado', async () => {
       const highPriceProduct = {
         ...mockProducts[0],
-        sale_price: 2000, // Mayor que market_price_max (1800)
+        sale_price: 2000, // +25% contra referencia 1600
       }
 
       vi.mocked(marketServices.listMarketProducts).mockResolvedValue({
@@ -609,12 +609,12 @@ describe('Market Page', () => {
 
       // Formato argentino: 2.000,00
       const priceCell = screen.getByText('$ 2.000,00').closest('td')
-      expect(priceCell).toHaveClass('price-above-market')
+      expect(priceCell).toHaveClass('price-very-expensive')
     })
 
     it('aplica clase CSS correcta cuando precio está dentro del rango', async () => {
       vi.mocked(marketServices.listMarketProducts).mockResolvedValue({
-        items: [mockProducts[0]], // sale_price 1500, rango 1400-1800
+        items: [mockProducts[0]], // sale_price 1500: -6,25% contra referencia 1600
         total: 1,
         page: 1,
         page_size: 50,
@@ -630,7 +630,7 @@ describe('Market Page', () => {
 
       // Formato argentino: 1.500,00
       const priceCell = screen.getByText('$ 1.500,00').closest('td')
-      expect(priceCell).toHaveClass('price-in-market')
+      expect(priceCell).toHaveClass('price-slightly-cheaper')
     })
   })
 
