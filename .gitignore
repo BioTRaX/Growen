@@ -69,7 +69,12 @@ yarn-error.log*
 .pnpm-debug.log*
 frontend/dist/
 frontend/.vite/
+frontend-vue/dist/
+frontend-vue/.vite/
+frontend-vue/test-results/
+frontend-vue/playwright-report/
 frontend/tsconfig.tsbuildinfo
+*.tsbuildinfo
 
 # Docker
 docker-compose.override.yml
@@ -86,6 +91,10 @@ data/*
 !frontend/package-lock.json
 !frontend/tsconfig.json
 !frontend/.env.development
+!frontend-vue/package.json
+!frontend-vue/package-lock.json
+!frontend-vue/tsconfig.json
+!frontend-vue/config/modules.json
 
 # Backups
 backup/

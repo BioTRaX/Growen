@@ -111,7 +111,7 @@ class AIRouter:
                 task=Task.REASONING.value,
                 prompt="¿Cuánto cuesta el producto SKU123?",
                 user_context={"role": "admin"},
-                tools_schema=provider._build_tools_schema("admin")
+                tools_schema=await provider.build_tools_schema("admin")
             )
         """
         provider = self.get_provider(task)

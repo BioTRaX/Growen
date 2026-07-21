@@ -1,25 +1,35 @@
 # NG-HEADER: Nombre de archivo: Dockerfile
 # NG-HEADER: Ubicación: mcp_servers/web_search_server/Dockerfile
-# NG-HEADER: Descripción: Imagen Docker optimizada para MCP Web Search (solo dependencias mínimas).
+# NG-HEADER: Descripción: Imagen multi-stage Python 3.14.6 para MCP Web Search.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 
-FROM python:3.13-slim-bookworm as runtime
+FROM python:3.14.6-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
-
 WORKDIR /app
 
-# Copiar SOLO requirements del servidor MCP (no el de la raíz del proyecto)
-COPY mcp_servers/web_search_server/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY mcp_servers/web_search_server/requirements-lock.txt /app/requirements-lock.txt
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --upgrade --no-cache-dir pip setuptools wheel \
+    && /opt/venv/bin/pip install --no-cache-dir --require-hashes -r /app/requirements-lock.txt
 
-# Copiar solo el código del servidor MCP (no todo el proyecto)
-COPY mcp_servers/web_search_server/ /app/mcp_servers/web_search_server/
-COPY mcp_servers/__init__.py /app/mcp_servers/__init__.py
+FROM python:3.14.6-slim-bookworm AS runtime
 
-# Puerto sugerido 8002
-ENV PORT=8002
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    PORT=8002
+
+RUN useradd --create-home --shell /usr/sbin/nologin app
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --chown=app:app mcp_servers/web_search_server/ /app/mcp_servers/web_search_server/
+COPY --chown=app:app mcp_servers/__init__.py mcp_servers/security.py /app/mcp_servers/
+COPY --chown=app:app agent_core/__init__.py agent_core/tool_security.py /app/agent_core/
+
+USER app
 EXPOSE 8002
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \

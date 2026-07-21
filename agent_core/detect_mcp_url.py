@@ -53,8 +53,8 @@ def get_mcp_web_search_url() -> str:
     
     Returns:
         URL del servicio MCP Web Search:
-        - Si está en Docker: http://mcp_web_search:8002/invoke_tool (red interna)
-        - Si está en host: http://localhost:8102/invoke_tool (puerto mapeado)
+        - Si está en Docker: http://mcp_web_search:8002/mcp (red interna)
+        - Si está en host: http://localhost:8102/mcp (puerto mapeado)
     """
     # Primero verificar si hay una URL explícita en variables de entorno
     env_url = os.getenv("MCP_WEB_SEARCH_URL")
@@ -64,10 +64,10 @@ def get_mcp_web_search_url() -> str:
     # Si no, detectar automáticamente
     if is_running_in_docker():
         # Dentro de Docker: usar nombre del servicio y puerto interno
-        return "http://mcp_web_search:8002/invoke_tool"
+        return "http://mcp_web_search:8002/mcp"
     else:
         # En el host: usar localhost y puerto mapeado
-        return "http://localhost:8102/invoke_tool"
+        return "http://localhost:8102/mcp"
 
 
 def get_mcp_products_url() -> str:
@@ -76,8 +76,8 @@ def get_mcp_products_url() -> str:
     
     Returns:
         URL del servicio MCP Products:
-        - Si está en Docker: http://mcp_products:8100/invoke_tool (red interna)
-        - Si está en host: http://localhost:8100/invoke_tool (puerto mapeado)
+        - Si está en Docker: http://mcp_products:8100/mcp (red interna)
+        - Si está en host: http://localhost:8100/mcp (puerto mapeado)
     """
     # Primero verificar si hay una URL explícita en variables de entorno
     env_url = os.getenv("MCP_PRODUCTS_URL")
@@ -87,10 +87,10 @@ def get_mcp_products_url() -> str:
     # Si no, detectar automáticamente
     if is_running_in_docker():
         # Dentro de Docker: usar nombre del servicio y puerto interno
-        return "http://mcp_products:8100/invoke_tool"
+        return "http://mcp_products:8100/mcp"
     else:
         # En el host: usar localhost y puerto mapeado
-        return "http://localhost:8100/invoke_tool"
+        return "http://localhost:8100/mcp"
 
 
 # Para uso como script standalone

@@ -34,10 +34,16 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
+from pathlib import Path
 from typing import List
 
+from dotenv import load_dotenv
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import make_url
+
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
 @dataclass
@@ -59,6 +65,14 @@ class AuditReport:
         return [c.name for c in self.checks if c.status == 'missing']
 
 
+def _safe_db_url(db_url: str) -> str:
+    """Devuelve la URL anonimizada para logs y salida de consola."""
+    try:
+        return make_url(db_url).render_as_string(hide_password=True)
+    except Exception:
+        return "<URL inválida>"
+
+
 def _has_column(inspector, table: str, column: str) -> bool:
     try:
         cols = [c['name'] for c in inspector.get_columns(table)]
@@ -70,6 +84,13 @@ def _has_column(inspector, table: str, column: str) -> bool:
 def _has_table(inspector, table: str) -> bool:
     try:
         return table in inspector.get_table_names()
+    except Exception:
+        return False
+
+
+def _column_is_nullable(inspector, table: str, column: str) -> bool:
+    try:
+        return next(item for item in inspector.get_columns(table) if item['name'] == column)['nullable']
     except Exception:
         return False
 
@@ -122,6 +143,15 @@ def run_audit(db_url: str) -> AuditReport:
     # sku_sequences table
     _ts = _has_table(insp, 'sku_sequences')
     checks.append(CheckResult("table.sku_sequences", _ts, status=("ok" if _ts else "missing")))
+    for table in ("canonical_batch_jobs", "canonical_batch_job_items"):
+        present = _has_table(insp, table)
+        checks.append(CheckResult(f"table.{table}", present, status=("ok" if present else "missing")))
+    _sph_file_nullable = _column_is_nullable(insp, 'supplier_price_history', 'file_fk')
+    checks.append(CheckResult(
+        "supplier_price_history.file_fk_nullable",
+        _sph_file_nullable,
+        status=("ok" if _sph_file_nullable else "missing"),
+    ))
 
     # constraints
     with engine.connect() as conn:
@@ -145,6 +175,9 @@ def run_audit(db_url: str) -> AuditReport:
         ("sale_lines", "ix_sale_lines_product_id"),
         ("sales", "ix_sales_customer_id"),
         ("sales", "ix_sales_sale_date"),
+        ("canonical_batch_jobs", "ix_canonical_batch_jobs_status"),
+        ("canonical_batch_jobs", "ix_canonical_batch_jobs_created_by"),
+        ("canonical_batch_job_items", "ix_canonical_batch_job_items_status"),
     ]:
         exists_tbl = _has_table(insp, tbl)
         exists_idx = _has_index(insp, tbl, idx) if exists_tbl else False
@@ -171,7 +204,7 @@ def main():
             sys.exit(2)
         return
     print("Auditoría de schema")
-    print("DB:", args.url)
+    print("DB:", _safe_db_url(args.url))
     for chk in rep.checks:
         if chk.status == 'ok':
             status = 'OK'

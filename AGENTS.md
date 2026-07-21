@@ -1,4 +1,4 @@
--- NG-HEADER: Nombre de archivo: AGENTS.md -->
+<!-- NG-HEADER: Nombre de archivo: AGENTS.md -->
 <!-- NG-HEADER: Ubicación: AGENTS.md -->
 <!-- NG-HEADER: Descripción: Lineamientos para agentes de desarrollo -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
@@ -35,6 +35,8 @@ Este documento orienta a herramientas de asistencia de código (Copilot, Codex, 
 
 ## Encabezado obligatorio (NG-HEADER)
 Agregar al inicio de cada archivo de código y documentación `.md` (excepto `README.md`). Excepciones: `*.json`, `destinatarios.json`, binarios, imágenes, PDFs y otros archivos de datos.
+
+`SKILL.md` también está exceptuado: el frontmatter YAML con `name` y `description` debe comenzar en la primera línea para que la skill sea descubrible.
 
 Formato por lenguaje:
 
@@ -105,10 +107,12 @@ Formato por lenguaje:
 - Dejar notas de migración cuando corresponda.
 - Adjuntar ejemplos mínimos de uso y pruebas cuando sea razonable.
 - Mantener consistencia de idioma en commits, PRs y documentación: español.
+- Las skills canónicas residen en `.agents/skills/`; `.agent/skills/` contiene adaptadores temporales.
+- La skill de Git solo puede activarse cuando el usuario solicite explícitamente stage, commit o push.
 
 ## Entorno de Ejecución Obligatorio (CRÍTICO)
 
-> **⚠️ REGLA OBLIGATORIA**: TODO comando Python debe ejecutarse en el **venv del proyecto** o en **Docker**. NUNCA usar el Python del sistema.
+> **⚠️ REGLA OBLIGATORIA**: TODO comando Python debe ejecutarse en el **venv Python 3.14.6+ del proyecto** o en **Docker**. NUNCA usar el Python del sistema.
 
 ### Por qué es obligatorio
 
@@ -148,7 +152,7 @@ Los workers tienen scripts de inicio que ya activan el venv. Usar siempre estos 
 
 ### Checklist antes de ejecutar Python
 
-1. ¿Estoy usando `.venv/Scripts/python.exe` o Docker?
+1. ¿Estoy usando `.venv/Scripts/python.exe` con Python 3.14.6+ o Docker?
 2. ¿Consulté `.agent/workflows/python-commands.md`?
 3. ¿El comando requiere un script de inicio específico?
 
@@ -167,16 +171,18 @@ Actualizado Entorno de Ejecución: 2026-01-24.
 2. **Testing integración**: Docker Compose completo (antes de merge)
 3. **Producción**: Docker (idéntico a testing)
 
+El inicio diario canónico es `scripts/start-dev.ps1`: levanta PostgreSQL, API, MCP Products y Vue; usar `-McpMode All` para incluir Web Search y `-WithCatalogWorker` cuando se probarán altas canónicas masivas (inicia/verifica Redis y Dramatiq).
+
 **Comandos esenciales desarrollo**:
 ```powershell
 # Infra en Docker (una vez al día)
 docker compose up -d db
 
 # API local con hot reload
-python -m uvicorn services.api:app --reload --port 8000
+.\.venv\Scripts\python.exe -m uvicorn services.api:app --reload --port 8000
 
-# Frontend local
-cd frontend && npm run dev
+# Frontend Vue local
+cd frontend-vue && npm run dev
 ```
 
 **Cuándo SÍ recompilar Docker**:
@@ -200,10 +206,10 @@ Antes de realizar cualquier cambio, el agente DEBE consultar la documentación r
 
 | Tarea/Sistema | Documentos a consultar (orden de prioridad) |
 |---------------|---------------------------------------------|
-| **Base de datos / Modelos** | `docs/MIGRATIONS_NOTES.md`, `db/models.py`, `alembic/versions/` |
+| **Base de datos / Modelos** | `docs/MIGRATIONS_NOTES.md`, `db/models.py`, `db/migrations/versions/` |
 | **API / Endpoints** | `services/api.py`, `services/routers/*.py`, documentos específicos en `docs/API_*.md` |
 | **Workers / Jobs asíncronos** | `docs/IMAGES.md`, `docs/API_MARKET.md`, `workers/*.py`, `services/jobs/*.py` |
-| **Frontend / UI** | `frontend/src/**`, `docs/FRONTEND_DEBUG.md`, `docs/PRODUCTS_UI.md` |
+| **Frontend / UI** | `frontend-vue/src/**`, `frontend/src/**` (fallback React), `docs/FRONTEND_DEBUG.md`, `docs/PRODUCTS_UI.md` |
 | **Autenticación / Seguridad** | `docs/SECURITY.md`, `docs/CHATBOT_ROLES.md`, `services/auth.py` |
 | **Docker / Infraestructura** | `docker-compose.yml`, `infra/Dockerfile.*`, sección "Convenciones Docker" en este archivo |
 | **Tests** | `pytest.ini`, `tests/**`, sección correspondiente en `docs/` |
@@ -223,7 +229,8 @@ Antes de realizar cualquier cambio, el agente DEBE consultar la documentación r
 | **Migración de BD** | Leer `docs/MIGRATIONS_NOTES.md` ANTES de crear/modificar migraciones. Revisar `scripts/debug_migrations.py` |
 | **Nuevo endpoint admin** | `docs/roles-endpoints.md`, `services/routers/services_admin.py` o similar como referencia |
 | **Nuevo worker Dramatiq** | `docs/IMAGES.md` (referencia workers), `workers/market_scraping.py` (plantilla), verificar config Redis |
-| **Cambio en modelos** | `db/models.py`, luego `alembic revision --autogenerate -m "descripción"`, actualizar `docs/MIGRATIONS_NOTES.md` |
+| **Cambio en modelos** | `db/models.py`, luego `.\.venv\Scripts\python.exe -m alembic revision --autogenerate -m "descripción"`; las revisiones viven en `db/migrations/versions/` |
+| **Cambio en sesión, cookies o CSRF** | Agregar al menos una prueba con `@pytest.mark.no_auth_override` que cubra login, `GET /auth/me` y una mutación real con `X-CSRF-Token`; los tests con overrides globales no validan el ciclo de sesión. |
 | **Nuevo servicio Docker** | Revisar sección "Convenciones Docker" en este archivo, usar multi-stage builds |
 | **Problema de conexión DB** | Verificar patrón: `DB_URL = os.getenv("DB_URL") or settings.db_url` (ver corrección 2025-11-15) |
 
@@ -376,21 +383,22 @@ pytest -q
 ---
 Actualizado Testing: 2025-11-24.
 
-## MCP Servers (Nueva capa de herramientas para IA)
+## MCP Servers (herramientas interoperables para IA)
 
-Esta sección documenta lineamientos para crear y mantener microservicios bajo `mcp_servers/` orientados a exponer "tools" consumibles por agentes LLM mediante un contrato uniforme.
+Los servicios bajo `mcp_servers/` implementan Model Context Protocol real mediante el SDK oficial de Python y Streamable HTTP.
 
 ### Objetivos
-- Separar preocupaciones: cada MCP Server actúa como fachada de dominio (productos, compras, ventas, etc.).
+- Exponer `initialize`, `tools/list` y `tools/call` en el endpoint `/mcp`.
+- Separar preocupaciones: cada servidor actúa como fachada de dominio.
 - Evitar acceso directo a la base: siempre consumir la API principal (`api`) vía HTTP.
-- Control de acceso basado en roles (parámetro `user_role` en MVP; evolucionará a autenticación/verificación tokenizada).
+- Autenticar con `Authorization: Bearer <JWT>` y aplicar roles nuevamente en cada tool.
 
 ### Estructura mínima de un MCP Server
 ```
 mcp_servers/
 	<domain>_server/
 		__init__.py
-		main.py          # FastAPI/Flask app con endpoint POST /invoke_tool
+		main.py          # FastMCP/ASGI con endpoint /mcp y /health
 		tools.py         # Implementación de funciones async registradas
 		requirements.txt # Dependencias aisladas (no mezclar con raíz salvo necesidad)
 		Dockerfile       # Imagen autocontenida (usa red compartida con api)
@@ -399,30 +407,25 @@ mcp_servers/
 ```
 
 ### Convenciones de Tools
-- Firma recomendada: `async def <name>(... , user_role: str) -> dict`.
-- Validar inputs y roles temprano; lanzar `PermissionError` (subclase de `ValueError`) para mapear a 403.
+- Definir inputs y outputs tipados; no exponer `user_role` como argumento al modelo.
+- Validar token, issuer, audience, expiración, rate limit y rol antes de ejecutar.
 - Retornar dict plano serializable (sin objetos ORM ni tipos complejos).
 - Mantener TOOLS_REGISTRY en `tools.py` para despacho dinámico.
 
 ### Endpoint estándar
-- `POST /invoke_tool` recibe `{ "tool_name": str, "parameters": { ... } }`.
-- Respuesta `{ "tool_name": str, "result": { ... } }` o error HTTP:
-	- 400 validación parámetros
-	- 403 permiso insuficiente
-	- 404 tool desconocida
-	- 502 error upstream (API principal) / red
+- `/mcp`: Streamable HTTP y mensajes JSON-RPC administrados por el SDK.
+- `/health`: healthcheck operativo fuera del protocolo.
+- `/invoke_tool`: adaptador temporal deprecado; no usar en consumidores nuevos.
 
 ### Roles y Seguridad
-- MVP: confianza en parámetro `user_role` (solo para prototipo interno).
-- Próximos pasos obligatorios antes de exponer externamente:
-	- Token firmado (HMAC o JWT) con claims de rol y expiración.
-	- Lista blanca de tools por rol y rate limiting por IP/rol.
-	- Auditoría de cada invocación (`tool_name`, latencia, rol, éxito/error).
+- JWT HS256 de corta duración con `iss`, `aud`, `sub`, `role`, `iat`, `exp` y `jti`.
+- Filtrar el catálogo entregado al modelo y volver a autorizar en el servidor.
+- No registrar tokens, prompts completos ni parámetros sensibles.
 
 ### Tests
-- Unit: validación de roles y shape de respuesta (mock de red cuando sea necesario).
+- Unit: validación de roles, schemas y shape de respuesta.
 - Integración: uso de `respx` para mockear endpoints de la API principal y simular latencias y códigos de error.
-- Futuros: contract tests para garantizar estabilidad de payload al añadir campos nuevos (estrategia additive-only v1).
+- Contract tests: un cliente MCP debe inicializar, descubrir e invocar tools sobre `/mcp`.
 
 ### Documentación
 - Actualizar `Roadmap.md` al introducir nuevo MCP Server.
@@ -438,14 +441,14 @@ mcp_servers/
 - `mcp_servers/products_server`: tools `get_product_info` y `get_product_full_info` (roles admin|colaborador para la segunda) exponiendo datos de primer nivel de productos.
 
 ---
-Actualizado MCP Servers: 2025-10-06.
+Actualizado MCP Servers: 2026-07-14.
 
 ## Convenciones Docker (Imágenes de Servicios)
 
 Esta sección establece pautas para la construcción de imágenes Docker en el repositorio:
 
 1. Multi-stage obligatorio para servicios Python y frontend: separar `builder` (toolchain, wheel builds) de `runtime` (mínimo). Evita arrastrar compiladores a producción.
-2. Base Python: usar `python:3.13-slim-bookworm` salvo requerimiento puntual distinto. Justificar cambios de versión / distro en la PR.
+2. Base Python: usar `python:3.14.6-slim-bookworm` y actualizarla ante revisiones de seguridad 3.14 posteriores. Justificar cambios de versión / distro en la PR.
 3. Usuario no root: crear usuario del sistema (`app`) y ejecutar procesos con privilegios mínimos.
 4. Virtualenv aislado en `/opt/venv` y añadir a `PATH`. No instalar dependencias globales en system site-packages.
 5. Limpieza de capas: remover listas de APT (`rm -rf /var/lib/apt/lists/*`) y usar `--no-install-recommends`.

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Iterable
+from typing import Any, Iterable
 
 
 class ILLMProvider(ABC):
@@ -28,6 +28,7 @@ class ILLMProvider(ABC):
         prompt: str,
         tools_schema: list | None = None,
         user_context: dict | None = None,
+        images: list[dict[str, Any]] | list[str] | None = None,
     ) -> str:
         """Genera respuesta asíncrona con soporte opcional de herramientas.
         

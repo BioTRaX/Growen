@@ -20,6 +20,11 @@ services:
       - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
+      # Docker Engine no publica puertos de contenedores conectados solo a una
+      # red internal. Esta red conserva el acceso local 127.0.0.1:5433.
+      - host_access
   api:
     build:
       context: .
@@ -37,13 +42,18 @@ services:
       PGCONNECT_TIMEOUT: ${PGCONNECT_TIMEOUT:-5}
       # Enriquecimiento IA con búsqueda web (MCP)
       AI_USE_WEB_SEARCH: "1"
-      MCP_WEB_SEARCH_URL: "http://mcp_web_search:8002/invoke_tool"
+      MCP_PRODUCTS_URL: "http://mcp_products:8100/mcp"
+      MCP_WEB_SEARCH_URL: "http://mcp_web_search:8002/mcp"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       - db
     command: ["/app/infra/wait-for.sh", "db:5432", "uvicorn", "services.api:app", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     volumes:
       # Consolidar logs del backend en la carpeta del host
       - ./logs:/app/logs
@@ -56,15 +66,22 @@ services:
         max-size: "10m"
         max-file: "3"
         tag: "{{.Name}}"
+    networks:
+      - backend
+      - egress
   frontend:
     build:
-      context: frontend
-      dockerfile: ../infra/Dockerfile.frontend
+      context: .
+      dockerfile: infra/Dockerfile.frontend
+    environment:
+      NGINX_CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-25m}
     ports:
-      - "5173:80"
+      - "127.0.0.1:5173:80"
     depends_on:
       - api
     restart: unless-stopped
+    networks:
+      - backend
   pdf_import:
     image: alpine:3.19
     command: ["sh","-c","sleep infinity"]
@@ -86,6 +103,10 @@ services:
       - redis_data:/data
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
+    networks:
+      - backend
+      # Requerida por la API y los workers ejecutados localmente.
+      - host_access
   dramatiq:
     build:
       context: .
@@ -129,6 +150,9 @@ services:
         max-size: "10m"
         max-file: "3"
         tag: "{{.Name}}"
+    networks:
+      - backend
+      - egress
   scheduler:
     image: alpine:3.19
     command: ["sh","-c","sleep infinity"]
@@ -148,18 +172,42 @@ services:
     container_name: growen-mcp-products
     depends_on:
       - api
+      - redis
     environment:
-      # Cuando la API corre LOCAL (fuera de Docker), el MCP debe usar host.docker.internal
-      # para acceder al puerto 8000 del host. Si la API corre en Docker, usar http://api:8000
-      API_BASE_URL: ${API_BASE_URL:-http://host.docker.internal:8000}
+      # En Compose, Products consume siempre la API por el nombre de servicio.
+      # start-dev.ps1 configura 127.0.0.1 cuando ambos procesos corren locales.
+      API_BASE_URL: http://api:8000
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      INTERNAL_SERVICE_NAME: mcp-products
       # Seguridad JWT (debe coincidir con el backend que genera los tokens)
-      MCP_SECRET_KEY: ${MCP_SECRET_KEY}
+      MCP_SECRET_KEY: ${MCP_PRODUCTS_SECRET_KEY}
+      MCP_SECRET_KEY_PREVIOUS: ${MCP_PRODUCTS_SECRET_KEY_PREVIOUS:-}
+      MCP_JWT_KEY_ID: ${MCP_PRODUCTS_KEY_ID:-products-v1}
+      MCP_JWT_PREVIOUS_KEY_ID: ${MCP_PRODUCTS_PREVIOUS_KEY_ID:-}
+      MCP_JWT_AUDIENCE: ${MCP_PRODUCTS_JWT_AUDIENCE:-growen-mcp-products}
       MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-60}
+      MCP_RATE_LIMIT_BACKEND: redis
+      MCP_TOKEN_REVOCATION_BACKEND: redis
+      MCP_RATE_LIMIT_REDIS_URL: redis://redis:6379/0
+      MCP_JWT_MAX_TTL_SECONDS: ${MCP_JWT_MAX_TTL_SECONDS:-600}
+      MCP_JWT_ISSUER: ${MCP_JWT_ISSUER:-growen-api}
+      MCP_PROTOCOL_VERSION: ${MCP_PROTOCOL_VERSION:-2025-11-25}
+      MCP_LEGACY_RPC_ENABLED: ${MCP_LEGACY_RPC_ENABLED:-0}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
       LOG_LEVEL: info
     ports:
-      - "8100:8100"
+      - "127.0.0.1:8100:8100"
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
   mcp_web_search:
     build:
       context: .
@@ -167,11 +215,46 @@ services:
     container_name: growen-mcp-web-search
     depends_on:
       - api
+      - redis
     environment:
       LOG_LEVEL: info
+      MCP_SECRET_KEY: ${MCP_WEB_SEARCH_SECRET_KEY}
+      MCP_SECRET_KEY_PREVIOUS: ${MCP_WEB_SEARCH_SECRET_KEY_PREVIOUS:-}
+      MCP_JWT_KEY_ID: ${MCP_WEB_SEARCH_KEY_ID:-web-search-v1}
+      MCP_JWT_PREVIOUS_KEY_ID: ${MCP_WEB_SEARCH_PREVIOUS_KEY_ID:-}
+      MCP_JWT_AUDIENCE: ${MCP_WEB_SEARCH_JWT_AUDIENCE:-growen-mcp-web-search}
+      MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-60}
+      MCP_RATE_LIMIT_BACKEND: redis
+      MCP_TOKEN_REVOCATION_BACKEND: redis
+      MCP_RATE_LIMIT_REDIS_URL: redis://redis:6379/0
+      MCP_JWT_MAX_TTL_SECONDS: ${MCP_JWT_MAX_TTL_SECONDS:-600}
+      MCP_JWT_ISSUER: ${MCP_JWT_ISSUER:-growen-api}
+      MCP_PROTOCOL_VERSION: ${MCP_PROTOCOL_VERSION:-2025-11-25}
+      MCP_LEGACY_RPC_ENABLED: ${MCP_LEGACY_RPC_ENABLED:-0}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
     ports:
-      - "8102:8002"
+      - "127.0.0.1:8102:8002"
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+      - egress
 volumes:
   pgdata:
   redis_data:
+networks:
+  backend:
+    internal: true
+  # Puente exclusivo para bindings loopback de infraestructura local.
+  # Los puertos de cada servicio continúan limitados a 127.0.0.1.
+  host_access:
+    driver: bridge
+  egress:
+    driver: bridge

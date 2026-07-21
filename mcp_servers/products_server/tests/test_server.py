@@ -8,10 +8,8 @@ import sys
 from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
-import os
 import respx
 import httpx
-import time
 import jwt
 from datetime import datetime, timedelta, timezone
 
@@ -25,7 +23,6 @@ from mcp_servers.products_server.security import (  # noqa: E402
     verify_mcp_token,
     MCPTokenExpired,
     MCPTokenInvalid,
-    MCPUnauthorized,
     reset_rate_limit,
 )
 
@@ -33,7 +30,7 @@ client = TestClient(app)
 
 # --- Test Fixtures ---
 
-TEST_SECRET = "test-mcp-secret-key-for-testing-only"
+TEST_SECRET = "test-mcp-secret-key-for-testing-only-32-bytes"
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +39,9 @@ def _set_env(monkeypatch):
     monkeypatch.setenv("MCP_CACHE_TTL_SECONDS", "2")
     monkeypatch.setenv("MCP_SECRET_KEY", TEST_SECRET)
     monkeypatch.setenv("MCP_RATE_LIMIT_PER_MINUTE", "60")
+    monkeypatch.setenv("MCP_JWT_ISSUER", "growen-api")
+    monkeypatch.setenv("MCP_JWT_AUDIENCE", "growen-mcp")
+    monkeypatch.setenv("MCP_LEGACY_RPC_ENABLED", "1")
     # Reset rate limits between tests
     reset_rate_limit()
     # Clear cache between tests to prevent interference
@@ -59,13 +59,15 @@ def create_test_token(
 ) -> str:
     """Create a test JWT token."""
     now = datetime.now(timezone.utc)
-    expires = now + (expires_delta or timedelta(minutes=15))
+    expires = now + (expires_delta or timedelta(minutes=5))
     payload = {
         "sub": sub,
         "role": role,
         "iat": now,
         "exp": expires,
         "jti": "test-jti",
+        "iss": "growen-api",
+        "aud": "growen-mcp",
     }
     return jwt.encode(payload, secret, algorithm="HS256")
 
@@ -89,7 +91,7 @@ def test_verify_token_expired():
 
 def test_verify_token_invalid_signature():
     """Debe rechazar token con firma inválida."""
-    token = create_test_token(secret="wrong-secret")
+    token = create_test_token(secret="wrong-secret-that-is-at-least-32-bytes")
     with pytest.raises(MCPTokenInvalid):
         verify_mcp_token(token)
 
@@ -140,7 +142,7 @@ def test_invoke_with_expired_token_returns_401():
         headers={"X-MCP-Token": token},
     )
     assert response.status_code == 401
-    assert "expired" in response.json()["detail"].lower()
+    assert "expir" in response.json()["detail"].lower()
 
 
 def test_invoke_tool_basic_flow():
@@ -206,6 +208,7 @@ def test_get_product_full_info_requires_admin_role():
                 "name": "Producto Enriquecido",
                 "sale_price": 100.0,
                 "stock": 10,
+                "tags": ["#Interior", "#Orgánico"],
             })
         )
         payload = {
@@ -237,7 +240,7 @@ def test_get_product_full_info_guest_denied():
         "/invoke_tool", json=payload, headers={"X-MCP-Token": token}
     )
     assert response.status_code == 403
-    assert "not authorized" in response.json()["detail"].lower()
+    assert "autorizado" in response.json()["detail"].lower()
 
 
 def test_rate_limit_blocks_after_threshold(monkeypatch):
@@ -269,7 +272,8 @@ def test_rate_limit_blocks_after_threshold(monkeypatch):
             "/invoke_tool", json=payload, headers={"X-MCP-Token": token}
         )
         assert response.status_code == 429
-        assert "rate limit" in response.json()["detail"].lower()
+    assert response.json()["detail"]["code"] == "rate_limited"
+    assert response.headers["Retry-After"] == "60"
 
 
 def test_get_product_full_info_includes_enrichment_fields():
@@ -282,6 +286,7 @@ def test_get_product_full_info_includes_enrichment_fields():
                 "name": "Producto Enriquecido",
                 "sale_price": 100.0,
                 "stock": 10,
+                "tags": ["#Interior", "#Orgánico"],
                 "technical_specs": {
                     "dimensions": {"height": "50 cm", "width": "30 cm"},
                     "power": "1000W",
@@ -310,6 +315,7 @@ def test_get_product_full_info_includes_enrichment_fields():
         assert result["technical_specs"]["power"] == "1000W"
         assert "usage_instructions" in result
         assert len(result["usage_instructions"]["steps"]) == 2
+        assert result["tags"] == ["#Interior", "#Orgánico"]
         assert route.called
 
 
@@ -319,7 +325,7 @@ def test_find_products_by_name_works_with_token():
     with respx.mock(base_url="http://api:8000") as router:
         router.get("/catalog/search").mock(
             return_value=httpx.Response(200, json=[
-                {"id": 1, "name": "Producto A", "sku": "SKU_A", "stock": 5, "price": 10.0},
+                {"id": 1, "name": "Producto A", "sku": "SKU_A", "stock": 5, "price": 10.0, "tags": ["#Interior"]},
                 {"id": 2, "name": "Producto B", "sku": "SKU_B", "stock": 3, "price": 20.0},
             ])
         )
@@ -334,6 +340,8 @@ def test_find_products_by_name_works_with_token():
         result = response.json()["result"]
         assert result["count"] == 2
         assert len(result["items"]) == 2
+        assert result["items"][0]["tags"] == ["#Interior"]
+        assert result["items"][1]["tags"] == []
 
 
 def test_health_endpoint():
@@ -341,3 +349,57 @@ def test_health_endpoint():
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_streamable_http_requires_bearer_token():
+    response = client.post(
+        "/mcp/",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        headers={"Accept": "application/json, text/event-stream"},
+    )
+    assert response.status_code == 401
+
+
+def test_streamable_http_initializes_and_lists_tools():
+    """Valida el contrato MCP real sin pasar por el adaptador `/invoke_tool`."""
+    headers = {
+        "Authorization": f"Bearer {create_test_token(role='admin')}",
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "growen-contract-test", "version": "1.0"},
+        },
+    }
+    with TestClient(app, base_url="http://localhost") as mcp_client:
+        initialized = mcp_client.post("/mcp/", json=initialize, headers=headers)
+        assert initialized.status_code == 200
+        assert initialized.json()["result"]["serverInfo"]["name"] == "Growen Products"
+
+        listed = mcp_client.post(
+            "/mcp/",
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+            headers=headers,
+        )
+        assert listed.status_code == 200
+        names = {tool["name"] for tool in listed.json()["result"]["tools"]}
+        assert {"find_products_by_name", "get_product_info", "get_product_full_info"} <= names
+
+        guest_headers = {
+            **headers,
+            "Authorization": f"Bearer {create_test_token(role='guest')}",
+        }
+        guest_listed = mcp_client.post(
+            "/mcp/",
+            json={"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}},
+            headers=guest_headers,
+        )
+        assert guest_listed.status_code == 200
+        guest_names = {tool["name"] for tool in guest_listed.json()["result"]["tools"]}
+        assert guest_names == {"find_products_by_name", "get_product_info"}

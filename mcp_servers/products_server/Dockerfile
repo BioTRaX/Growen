@@ -6,7 +6,7 @@
 ############################
 # Etapa 1: builder
 ############################
-FROM python:3.13-slim-bookworm AS builder
+FROM python:3.14.6-slim-bookworm AS builder
 
 # NG-COMMENT: Endurecemos entorno base y deshabilitamos bytecode para builds reproducibles.
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -24,21 +24,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # NG-COMMENT: Copiamos sólo requirements para maximizar cache de capas.
-COPY mcp_servers/products_server/requirements.txt ./requirements.txt
+COPY mcp_servers/products_server/requirements-lock.txt ./requirements-lock.txt
 
 # NG-COMMENT: Creamos venv aislado e instalamos dependencias sin caches.
 RUN python -m venv /opt/venv \
  && . /opt/venv/bin/activate \
  && pip install --upgrade --no-cache-dir pip setuptools wheel \
- && pip install --no-cache-dir -r requirements.txt
+ && pip install --no-cache-dir --require-hashes -r requirements-lock.txt
 
 # NG-COMMENT: Copiamos el código fuente (invalida cache solo cuando cambia el código).
 COPY mcp_servers/products_server /app/mcp_servers/products_server
+COPY mcp_servers/__init__.py mcp_servers/security.py /app/mcp_servers/
 
 ############################
 # Etapa 2: runtime delgado
 ############################
-FROM python:3.13-slim-bookworm AS runtime
+FROM python:3.14.6-slim-bookworm AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
         PYTHONDONTWRITEBYTECODE=1 \
@@ -60,6 +61,7 @@ WORKDIR /app
 # NG-COMMENT: Copiamos entorno virtual construido y código.
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=appuser:appuser mcp_servers/products_server /app/mcp_servers/products_server
+COPY --chown=appuser:appuser mcp_servers/__init__.py mcp_servers/security.py /app/mcp_servers/
 
 # NG-COMMENT: Ajuste de permisos conservador (lectura para archivos, ejecución para dirs).
 RUN find /app -type f -exec chmod 0644 {} \; && \
@@ -69,9 +71,9 @@ USER appuser
 
 EXPOSE 8100
 
-# NG-COMMENT: Healthcheck simple contra raíz; sustituir por /health si se implementa.
+# NG-COMMENT: Healthcheck auxiliar; el transporte MCP canónico permanece en /mcp.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8100/ || exit 1
+    CMD curl -fsS http://127.0.0.1:8100/health || exit 1
 
 ENV UVICORN_HOST=0.0.0.0 \
         UVICORN_PORT=8100 \

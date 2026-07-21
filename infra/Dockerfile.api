@@ -1,12 +1,12 @@
 ﻿# NG-HEADER: Nombre de archivo: Dockerfile.api
 # NG-HEADER: Ubicación: infra/Dockerfile.api
-# NG-HEADER: Descripción: Imagen multi-stage para API FastAPI / Uvicorn con Python 3.13-slim, usuario no root y healthcheck.
+# NG-HEADER: Descripción: Imagen multi-stage para API FastAPI / Uvicorn con Python 3.14.6-slim, usuario no root y healthcheck.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 
 ###############################################
 # Etapa 1: Builder (compila dependencias)
 ###############################################
-FROM python:3.13-slim-bookworm AS builder
+FROM python:3.14.6-slim-bookworm AS builder
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -30,10 +30,10 @@ RUN python -m venv "$VENV_PATH" && \
     "$VENV_PATH/bin/pip" install --upgrade pip setuptools wheel
 
 WORKDIR /app
-COPY requirements-base.txt requirements-ml.txt requirements-pdf.txt ./
+COPY requirements-api-lock.txt ./
 
 # Instalamos dependencias de producción (sin dev/test)
-RUN "$VENV_PATH/bin/pip" install -r requirements-base.txt -r requirements-ml.txt -r requirements-pdf.txt
+RUN "$VENV_PATH/bin/pip" install --require-hashes -r requirements-api-lock.txt
 
 # Copiamos código fuente (para posibles compilaciones post-install si hiciera falta)
 COPY . .
@@ -41,7 +41,7 @@ COPY . .
 ###############################################
 # Etapa 2: Runtime (mínima superficie)
 ###############################################
-FROM python:3.13-slim-bookworm AS runtime
+FROM python:3.14.6-slim-bookworm AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     VENV_PATH=/opt/venv \

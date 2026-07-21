@@ -1,0 +1,40 @@
+# NG-HEADER: Nombre de archivo: quality-manual.yml
+# NG-HEADER: Ubicación: .github/workflows/quality-manual.yml
+# NG-HEADER: Descripción: Ejecuta manualmente el quality gate sin consumir créditos en cada push.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+name: Quality gate manual
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14.6"
+          cache: pip
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend-vue/package-lock.json
+      - name: Crear venv e instalar dependencias
+        shell: pwsh
+        run: |
+          py -3.14 -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements-lock.txt
+          npm ci --prefix frontend
+          npm ci --prefix frontend-vue
+          npm exec --prefix frontend-vue -- playwright install chromium
+      - name: Ejecutar quality gate
+        shell: pwsh
+        run: .\scripts\check-quality.ps1

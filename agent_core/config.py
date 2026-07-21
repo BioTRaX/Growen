@@ -61,10 +61,23 @@ class Settings:
     dev_assume_admin: bool = os.getenv("DEV_ASSUME_ADMIN", "false").lower() == "true"
     # Token secreto para autenticación entre servicios internos (MCP servers, workers)
     internal_service_token: str = os.getenv("INTERNAL_SERVICE_TOKEN", "")
+    internal_service_name: str = os.getenv("INTERNAL_SERVICE_NAME", "mcp-products")
+    internal_service_role: str = os.getenv("INTERNAL_SERVICE_ROLE", "colaborador")
     # Clave secreta para firmar JWT tokens MCP (debe ser diferente de SECRET_KEY)
     mcp_secret_key: str = os.getenv("MCP_SECRET_KEY", "")
+    mcp_products_secret_key: str = os.getenv("MCP_PRODUCTS_SECRET_KEY", "")
+    mcp_web_search_secret_key: str = os.getenv("MCP_WEB_SEARCH_SECRET_KEY", "")
+    mcp_products_key_id: str = os.getenv("MCP_PRODUCTS_KEY_ID", "products-v1")
+    mcp_web_search_key_id: str = os.getenv("MCP_WEB_SEARCH_KEY_ID", "web-search-v1")
     # Rate limit para MCP: peticiones por minuto por usuario
     mcp_rate_limit_per_minute: int = int(os.getenv("MCP_RATE_LIMIT_PER_MINUTE", "60"))
+    mcp_jwt_issuer: str = os.getenv("MCP_JWT_ISSUER", "growen-api")
+    mcp_jwt_audience: str = os.getenv("MCP_JWT_AUDIENCE", "growen-mcp")
+    mcp_products_audience: str = os.getenv("MCP_PRODUCTS_JWT_AUDIENCE", "growen-mcp-products")
+    mcp_web_search_audience: str = os.getenv("MCP_WEB_SEARCH_JWT_AUDIENCE", "growen-mcp-web-search")
+    mcp_protocol_version: str = os.getenv("MCP_PROTOCOL_VERSION", "2025-11-25")
+    mcp_tool_catalog_ttl_seconds: int = int(os.getenv("MCP_TOOL_CATALOG_TTL_SECONDS", "60"))
+    mcp_legacy_rpc_enabled: bool = os.getenv("MCP_LEGACY_RPC_ENABLED", "1").lower() in {"1", "true", "yes"}
 
 
     # Configuracion de importacion de PDFs
@@ -143,6 +156,10 @@ class Settings:
                 self.env
             )
             self.dev_assume_admin = False
+
+        if self.env not in {"dev", "test", "testing"}:
+            if not self.mcp_products_secret_key or not self.mcp_web_search_secret_key:
+                raise RuntimeError("Las claves MCP específicas deben definirse fuera de desarrollo y tests")
 
 
 settings = Settings()

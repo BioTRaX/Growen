@@ -12,7 +12,8 @@ Futuras expansiones:
 - info de segundo nivel (relaciones, categoría, supplier offers)
 - info extendida (historial de stock, pricing, auditoría)
 
-Todas las funciones reciben `user_role` para aplicar control de acceso.
+Las funciones reciben un JWT fuera del esquema visible al modelo; el rol se
+obtiene de claims verificados y la autorización se aplica en el servidor.
 """
 from __future__ import annotations
 
@@ -33,15 +34,8 @@ logger = logging.getLogger("mcp_products.tools")
 # Roles permitidos para la herramienta "full" (por ahora hace lo mismo que la básica)
 _FULL_INFO_ROLES = {"admin", "colaborador"}
 
-# Importar módulo de seguridad
-from .security import (
-    require_mcp_auth,
-    MCPAuthError,
-    MCPTokenExpired,
-    MCPTokenInvalid,
-    MCPUnauthorized,
-    MCPRateLimited,
-)
+# Importar seguridad compartida
+from mcp_servers.security import require_mcp_auth  # noqa: E402
 
 
 def _get_cache_ttl() -> float:
@@ -70,7 +64,10 @@ def _get_internal_auth_headers() -> Dict[str, str]:
     if not token:
         logger.warning("INTERNAL_SERVICE_TOKEN no configurado. Las peticiones pueden fallar con 403.")
         return {}
-    return {"X-Internal-Service-Token": token}
+    return {
+        "X-Internal-Service-Token": token,
+        "X-Internal-Service-Name": os.getenv("INTERNAL_SERVICE_NAME", "mcp-products"),
+    }
 
 
 def _cache_get(key: str) -> Dict[str, Any] | None:
@@ -134,7 +131,7 @@ async def get_product_info(sku: str = None, product_id: int = None) -> Dict[str,
     
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
-            logger.debug("get_product_info: Consultando URL=%s", url)
+            logger.debug("get_product_info: consultando API de variantes")
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
@@ -156,12 +153,11 @@ async def get_product_info(sku: str = None, product_id: int = None) -> Dict[str,
                 "sale_price": data.get("sale_price"),
                 "stock": data.get("stock"),
             }
-            
+
             # Incluir tags si están disponibles
             tags = data.get("tags")
-            if tags and isinstance(tags, list):
-                result["tags"] = tags
-                logger.debug("get_product_info: Incluyendo tags: %s", tags)
+            result["tags"] = tags if isinstance(tags, list) else []
+            logger.debug("get_product_info: Incluyendo tags: %s", result["tags"])
 
             # Incluir imágenes si están disponibles
             images = data.get("images")
@@ -173,11 +169,7 @@ async def get_product_info(sku: str = None, product_id: int = None) -> Dict[str,
             description = data.get("description")
             if description:
                 result["description"] = description
-                logger.debug(
-                    "get_product_info: Incluyendo descripción (%d chars): %s...",
-                    len(description),
-                    description[:200] if len(description) > 200 else description,
-                )
+                logger.debug("get_product_info: descripción disponible (%d chars)", len(description))
             else:
                 logger.warning(
                     "get_product_info: SIN DESCRIPCION para product_id=%s sku=%s",
@@ -209,7 +201,7 @@ async def get_product_info(sku: str = None, product_id: int = None) -> Dict[str,
             return result
             
         except httpx.TimeoutException as exc:
-            logger.warning("Timeout URL=%s: %s", url, exc)
+            logger.warning("Timeout consultando API de variantes: %s", type(exc).__name__)
             raise
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
@@ -217,7 +209,7 @@ async def get_product_info(sku: str = None, product_id: int = None) -> Dict[str,
                 raise KeyError("Producto no encontrado")
             raise
         except httpx.RequestError as exc:
-            logger.warning("RequestError URL=%s: %s", url, exc)
+            logger.warning("Error de red consultando API de variantes: %s", type(exc).__name__)
             raise
 
 
@@ -263,7 +255,7 @@ async def get_product_full_info(sku: str = None, product_id: int = None) -> Dict
     
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
-            logger.debug("Consultando URL=%s (full info)", url)
+            logger.debug("Consultando API de variantes (full info)")
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
@@ -276,6 +268,10 @@ async def get_product_full_info(sku: str = None, product_id: int = None) -> Dict
                 "sale_price": data.get("sale_price"),
                 "stock": data.get("stock"),
             }
+
+            tags = data.get("tags")
+            result["tags"] = tags if isinstance(tags, list) else []
+            logger.debug("get_product_full_info: Incluyendo tags: %s", result["tags"])
             
             # Incluir imágenes si están disponibles
             images = data.get("images")
@@ -302,7 +298,7 @@ async def get_product_full_info(sku: str = None, product_id: int = None) -> Dict
             return result
             
         except httpx.TimeoutException as exc:
-            logger.warning("Timeout URL=%s: %s", url, exc)
+            logger.warning("Timeout consultando API de variantes: %s", type(exc).__name__)
             raise
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
@@ -310,7 +306,7 @@ async def get_product_full_info(sku: str = None, product_id: int = None) -> Dict
                 raise KeyError("Producto no encontrado")
             raise
         except httpx.RequestError as exc:
-            logger.warning("RequestError URL=%s: %s", url, exc)
+            logger.warning("Error de red consultando API de variantes: %s", type(exc).__name__)
             raise
 
 
@@ -374,10 +370,8 @@ async def find_products_by_name(query: str) -> Dict[str, Any]:
                 "sku": sku,
                 "stock": stock,
                 "price": price,
+                "tags": tags if isinstance(tags, list) else [],
             }
-            # Incluir tags si están disponibles
-            if tags:
-                item["tags"] = tags
             
             # Incluir imagen principal si está disponible (para preview rápida)
             if image_path:
@@ -411,9 +405,7 @@ async def invoke_tool(tool_name: str, parameters: Dict[str, Any], token: str) ->
         ValueError: Validaciones internas de parámetros.
         MCPAuthError: Si la autenticación o autorización falla.
     """
-    # DEBUG: Log de entrada (sin mostrar token completo por seguridad)
-    logger.info("invoke_tool: Tool Call Inputs: %s -> %s (token=%s...)", 
-                tool_name, parameters, token[:20] if token else "None")
+    logger.info("invoke_tool legacy: tool=%s", tool_name)
     
     if tool_name not in TOOLS_REGISTRY:
         raise KeyError(f"Tool desconocida: {tool_name}")
@@ -427,7 +419,7 @@ async def invoke_tool(tool_name: str, parameters: Dict[str, Any], token: str) ->
         query = parameters.get("query")
         if not query or not isinstance(query, str):
             raise ValueError("Parámetro 'query' requerido (string).")
-        logger.info("invoke_tool: Ejecutando %s con query='%s'", tool_name, query)
+        logger.info("invoke_tool: ejecutando %s", tool_name)
         # El decorador @require_mcp_auth recibe token como primer parámetro
         result = await func(token, query=query)  # type: ignore[arg-type]
     else:
@@ -442,37 +434,9 @@ async def invoke_tool(tool_name: str, parameters: Dict[str, Any], token: str) ->
         if not sku and not product_id:
             raise ValueError("Se requiere 'sku' o 'product_id'.")
         
-        logger.info("invoke_tool: Ejecutando %s con sku='%s' product_id=%s", tool_name, sku, product_id)
+        logger.info("invoke_tool: ejecutando %s", tool_name)
         # El decorador @require_mcp_auth recibe token como primer parámetro
         result = await func(token, sku=sku, product_id=product_id)  # type: ignore[arg-type]
     
-    # DEBUG: Log de salida (truncado si es muy largo)
-    result_summary = _summarize_tool_output(result)
-    logger.info("invoke_tool: Tool Call Output (%s): %s", tool_name, result_summary)
-    
+    logger.info("invoke_tool: tool=%s status=success", tool_name)
     return result
-
-
-
-def _summarize_tool_output(result: Dict[str, Any], max_length: int = 500) -> str:
-    """Resume el output de una tool para logging.
-    
-    Trunca campos largos como 'description' para mantener los logs legibles.
-    """
-    if not isinstance(result, dict):
-        return str(result)[:max_length]
-    
-    summary = {}
-    for key, value in result.items():
-        if key == "description" and isinstance(value, str):
-            summary[key] = f"({len(value)} chars) {value[:100]}..." if len(value) > 100 else value
-        elif key == "items" and isinstance(value, list):
-            summary[key] = f"[{len(value)} items]"
-        elif key == "images" and isinstance(value, list):
-            summary[key] = f"[{len(value)} images]"
-        elif isinstance(value, str) and len(value) > 200:
-            summary[key] = f"{value[:200]}..."
-        else:
-            summary[key] = value
-    
-    return str(summary)[:max_length]
