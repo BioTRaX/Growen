@@ -22,6 +22,7 @@ export interface SchedulerRun { id: string; trigger: string; status: string; pro
 export interface KnowledgeFile { filename: string; path: string; size_bytes: number; extension: string; indexed: boolean; source_id?: number | null; needs_reindex?: boolean; chunks_count?: number }
 export interface KnowledgeTask { id: string; type: string; target: string; status: string; progress: number; error?: string | null; started_at?: string | null; completed_at?: string | null }
 export interface KnowledgeStatus { total_sources: number; total_chunks: number; total_tokens_estimated: number; files_in_folder: number; files_pending: number; files_need_reindex: number; tasks_running: number }
+export interface KnowledgeSource { id: number; filename: string; chunks_count: number; role_scope: string[]; channel_scope: string[]; visibility: 'public'|'supplier'|'internal'; status: 'active'|'stale'|'disabled'; content_version: number; expires_at?: string|null }
 export interface RagResult { content: string; source: string; similarity: number; chunk_index: number; source_id: number }
 export interface CatalogSummary { run_id: string; generated_at: string; file: string; size: number; count: number; duration_ms: number; status?: string; error?: string | null }
 export interface CatalogLog { ts?: string; step?: string; [key: string]: unknown }
@@ -32,8 +33,10 @@ export interface ChatSession {
   classification_model?: string | null; problem_signals?: string[] | null
 }
 export interface ChatMessage { id: number; role: string; content: string; created_at: string; meta?: Record<string, unknown> | null }
-export interface ChatDetail { session: ChatSession; messages: ChatMessage[] }
+export interface ChatTrace { correlation_id: string; account_role: string; effective_role: string; channel: string; latency_ms?: number | null; citation_count: number; tools: Array<{ name: string; status: string; duration_ms?: number | null }> }
+export interface ChatDetail { session: ChatSession; messages: ChatMessage[]; trace?: ChatTrace | null }
 export interface ChatStats { total_sessions: number; total_messages: number; sessions_last_7_days: number; sessions_last_30_days: number; avg_messages_per_session: number; sessions_by_status: Record<string, number> }
+export interface ChatMetrics { runs: number; succeeded: number; failed: number; latency_ms: { p50?: number | null; p95?: number | null; p99?: number | null }; tokens: { input: number; output: number }; estimated_cost: number; rag: { used: number; with_citations: number; cache_hits: number }; tools: Record<string, number>; telegram_updates: Record<string, number>; feedback: Record<string, number> }
 export interface HealthSummary { status: string; details: Record<string, unknown> }
 export interface ImageReview { image_id: number; product_id: number; title?: string; url?: string; status: string }
 export interface ProductImage { id: number; display_url?: string | null; url?: string | null; is_primary: boolean; locked: boolean; has_webp: boolean; size_human?: string }
@@ -59,6 +62,8 @@ export const saveScheduler = async (payload: { start_hour: string; interval_hour
 
 export const getKnowledgeFiles = async () => (await http.get<{ files: KnowledgeFile[] }>('/admin/knowledge/files')).data.files
 export const getKnowledgeStatus = async () => (await http.get<KnowledgeStatus>('/admin/knowledge/status')).data
+export const getKnowledgeSources = async () => (await http.get<{ sources: KnowledgeSource[] }>('/admin/knowledge/sources')).data.sources
+export const updateKnowledgeSourcePolicy = async (id: number, payload: Pick<KnowledgeSource, 'role_scope'|'channel_scope'|'visibility'|'status'|'expires_at'>) => (await http.patch(`/admin/knowledge/sources/${id}/policy`, payload)).data
 export const listKnowledgeTasks = async () => (await http.get<{ tasks: KnowledgeTask[] }>('/admin/knowledge/tasks')).data.tasks
 export const uploadKnowledge = async (file: File) => { const body = new FormData(); body.append('file', file); return (await http.post('/admin/knowledge/upload', body)).data }
 export const indexKnowledge = async (target: string, force_reindex = false) => (await http.post('/admin/knowledge/index', { target, force_reindex })).data
@@ -94,6 +99,7 @@ export const downloadCatalogLog = async (id: string, format: 'ndjson' | 'csv') =
 
 export const getTechnicalHealth = async () => (await http.get<HealthSummary>('/health/summary')).data
 export const getChatStats = async () => (await http.get<ChatStats>('/admin/chats/stats')).data
+export const getChatMetrics = async () => (await http.get<ChatMetrics>('/admin/chats/metrics')).data
 export const listChats = async (params: Record<string, string | number | undefined>) => (await http.get<Page<ChatSession>>('/admin/chats', { params })).data
 export const getChat = async (id: string) => (await http.get<ChatDetail>(`/admin/chats/${encodeURIComponent(id)}`)).data
 export const updateChat = async (id: string, payload: Record<string, unknown>) => (await http.patch(`/admin/chats/${encodeURIComponent(id)}`, payload)).data

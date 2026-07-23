@@ -19,7 +19,9 @@ describe('registro de navegación', () => {
     expect(navigationItemsFor('proveedor').map((item) => item.to)).not.toContain('/imagenes-productos')
   })
 
-  it('no expone navegación protegida a invitados', () => {
-    expect(navigationFor('guest')).toEqual([])
+  it('expone sólo el Chat público a invitados', () => {
+    const navigation = navigationFor('guest')
+    expect(navigation).toHaveLength(1)
+    expect(navigation[0]).toMatchObject({ kind: 'item', to: '/chat' })
   })
 })

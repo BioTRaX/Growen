@@ -10,6 +10,7 @@ import { resolveRouteAccess } from './access'
 
 const loaders: Record<string, RouteComponent> = {
   dashboard: () => import('../../modules/dashboard/views/DashboardView.vue'),
+  chat: () => import('../../modules/chat/views/ChatView.vue'),
   products: () => import('../../modules/products/views/ProductsImpactView.vue'),
   'product-detail': () => import('../../modules/products/views/ProductPurchaseHistoryView.vue'),
   stock: () => import('../../modules/stock/views/StockView.vue'),

@@ -17,6 +17,18 @@
       "aliases": []
     },
     {
+      "id": "chat",
+      "title": "Chat 😎",
+      "icon": "mdi-chat-processing-outline",
+      "group": "Inicio",
+      "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"],
+      "capabilities": [],
+      "state": "ready",
+      "runtime": "legacy",
+      "routes": [{ "path": "/chat", "name": "chat", "title": "Chat 😎", "component": "chat", "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"] }],
+      "aliases": []
+    },
+    {
       "id": "products",
       "title": "Catálogo",
       "icon": "mdi-format-list-bulleted",

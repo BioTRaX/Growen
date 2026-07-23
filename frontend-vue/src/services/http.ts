@@ -86,7 +86,7 @@ export function requestDiagnostics(): readonly RequestDiagnostic[] {
   return diagnostics
 }
 
-export type HttpErrorKind = 'cancelled' | 'unauthorized' | 'forbidden' | 'conflict' | 'validation' | 'network' | 'unknown'
+export type HttpErrorKind = 'cancelled' | 'unauthorized' | 'forbidden' | 'conflict' | 'rate_limited' | 'validation' | 'server' | 'network' | 'unknown'
 
 export function classifyHttpError(error: unknown): HttpErrorKind {
   if (axios.isCancel(error) || (error as AxiosError).code === 'ERR_CANCELED') return 'cancelled'
@@ -94,7 +94,9 @@ export function classifyHttpError(error: unknown): HttpErrorKind {
   if (status === 401) return 'unauthorized'
   if (status === 403) return 'forbidden'
   if (status === 409) return 'conflict'
+  if (status === 429) return 'rate_limited'
   if (status === 422) return 'validation'
+  if (status && status >= 500) return 'server'
   if (!(error as AxiosError).response) return 'network'
   return 'unknown'
 }
