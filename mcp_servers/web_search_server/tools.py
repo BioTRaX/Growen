@@ -11,10 +11,10 @@ import urllib.parse as _url
 import httpx
 from bs4 import BeautifulSoup  # type: ignore
 from mcp_servers.security import require_mcp_auth
+from agent_core.chat_policy import allowed_roles_for
 from agent_core.tool_security import contains_sensitive_material, sanitize_text
 
 # Roles permitidos (puedes afinar en futuro)
-_ALLOWED_ROLES = {"admin", "colaborador"}
 _DEFAULT_HOSTS = {"duckduckgo.com", "html.duckduckgo.com", "lite.duckduckgo.com"}
 
 
@@ -46,7 +46,7 @@ def _ddg_unwrap(href: str) -> str:
     return href
 
 
-@require_mcp_auth(allowed_roles=_ALLOWED_ROLES)
+@require_mcp_auth(allowed_roles=allowed_roles_for("search_web"))
 async def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
     """Busca resultados web (DuckDuckGo HTML) y devuelve títulos/URLs/snippets.
 

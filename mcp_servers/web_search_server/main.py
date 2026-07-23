@@ -33,6 +33,7 @@ from mcp_servers.security import (  # noqa: E402
     mcp_transport_security,
 )
 from .tools import invoke_tool, search_web as execute_search_web  # noqa: E402
+from agent_core.chat_policy import tool_allowed  # noqa: E402
 
 logger = logging.getLogger("mcp_web_search.main")
 _legacy_invocations_total = 0
@@ -42,9 +43,8 @@ class RoleAwareFastMCP(FastMCP):
     async def list_tools(self):
         """Expone búsqueda web únicamente a roles internos autorizados."""
         tools = await super().list_tools()
-        if get_current_claims().role not in {"admin", "colaborador"}:
-            return []
-        return tools
+        claims = get_current_claims()
+        return [tool for tool in tools if tool_allowed(tool.name, claims.role, claims.channel)]
 
 
 mcp = RoleAwareFastMCP(

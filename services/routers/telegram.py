@@ -47,6 +47,8 @@ async def telegram_webhook(token: str, request: Request, db: AsyncSession = Depe
     message = payload.get("message") or payload.get("edited_message") or {}
     chat = (message.get("chat") or {})
     chat_id = chat.get("id")
+    chat_type = str(chat.get("type") or "private")
+    telegram_user_id = (message.get("from") or {}).get("id")
     text = message.get("text") or ""
     
     # Extraer file_id de foto (si existe)
@@ -59,7 +61,7 @@ async def telegram_webhook(token: str, request: Request, db: AsyncSession = Depe
         if not text:
             text = "¿Qué le pasa a mi planta?"
     
-    if not chat_id or (not text and not image_file_id):
+    if not chat_id or not telegram_user_id or (not text and not image_file_id):
         return {"ok": True}  # silencioso para otras actualizaciones
 
     # Procesar mensaje usando el handler compartido
@@ -69,6 +71,8 @@ async def telegram_webhook(token: str, request: Request, db: AsyncSession = Depe
             text=text, 
             chat_id=str(chat_id), 
             db=db,
+            telegram_user_id=telegram_user_id,
+            chat_type=chat_type,
             image_file_id=image_file_id,  # Pasar file_id si existe
         )
         await tg_send(answer, chat_id=str(chat_id))

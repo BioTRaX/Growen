@@ -28,13 +28,14 @@ import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ValidationError, constr
+from pydantic import BaseModel, Field, ValidationError, constr
 
 from agent_core.config import settings as core_settings
 from ai.router import AIRouter
 from ai.types import Task
 from db.session import get_session
-from services.auth import SessionData, current_session
+from services.auth import SessionData, current_session, require_csrf
+from db.models import ChatFeedbackEvent
 from services.chat.memory import (
     MemoryState,
     build_memory_key,
@@ -198,10 +199,32 @@ class ChatOut(BaseModel):
     data: Optional[ProductLookupOut] = None
     intent: Optional[str] = None
     took_ms: Optional[int] = None
+    correlation_id: Optional[str] = None
+    citations: List[Dict[str, Any]] = Field(default_factory=list)
 
 
-@router.post("/chat", response_model=ChatOut)
-async def chat_endpoint(
+class ChatFeedbackIn(BaseModel):
+    correlation_id: constr(min_length=4, max_length=100)
+    rating: constr(pattern="^(positive|negative)$")
+
+
+@router.post("/chat/feedback", dependencies=[Depends(require_csrf)])
+async def save_chat_feedback(
+    payload: ChatFeedbackIn,
+    session_data: SessionData = Depends(current_session),
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    db.add(ChatFeedbackEvent(
+        correlation_id=payload.correlation_id,
+        rating=payload.rating,
+        channel="web",
+        account_role=session_data.role,
+    ))
+    await db.commit()
+    return {"status": "recorded"}
+
+
+async def _chat_endpoint_impl(
     payload: ChatIn,
     request: Request,
     session_data: SessionData = Depends(current_session),
@@ -230,13 +253,8 @@ async def chat_endpoint(
     # Agregar prefijo "web:" para identificar sesiones web
     chat_session_id = f"web:{base_session_id}"
     
-    # Extraer user_identifier para guardar en sesión
-    user_identifier = None
-    if hasattr(session_data, 'user') and session_data.user:
-        user_identifier = getattr(session_data.user, 'identifier', None) or getattr(session_data.user, 'email', None)
-    if not user_identifier:
-        # Fallback: extraer del session_id (después del prefijo "web:")
-        user_identifier = base_session_id
+    # Identificador opaco: nunca persistir email o nombre de cuenta en ChatSession.
+    user_identifier = f"web:{base_session_id[:24]}"
     
     # 0.1 Recuperar historial reciente para memoria conversacional
     history_context = await get_recent_history(db, chat_session_id, limit=6)
@@ -395,7 +413,7 @@ async def chat_endpoint(
             return ChatOut(text=answer, type="diagnosis", intent=UserIntent.DIAGNOSTICO.value)
             
         except Exception as e:
-            logger.error(f"Error en diagnóstico de plantas: {e}", exc_info=True)
+            logger.error("Error en diagnóstico de plantas: %s", type(e).__name__)
             # Fallback a chat general si falla el diagnóstico
             pass  # Continuar al flujo siguiente
 
@@ -414,12 +432,14 @@ async def chat_endpoint(
                     query=user_text,
                     session=db,
                     top_k=3,
-                    min_similarity=0.5
+                    min_similarity=0.5,
+                    role=user_role,
+                    channel="web",
                 )
                 if rag_context:
-                    logger.info(f"RAG: Encontrado contexto para '{user_text[:50]}...'")
+                    logger.info("RAG: contexto autorizado encontrado para consulta de producto")
             except Exception as e:
-                logger.debug(f"RAG search falló (continuando sin contexto): {e}")
+                logger.debug("RAG search falló error=%s", type(e).__name__)
             
             # Construir prompt con historial conversacional + contexto RAG
             prompt_parts = []
@@ -445,7 +465,8 @@ async def chat_endpoint(
                 task=Task.SHORT_ANSWER.value,
                 prompt=prompt_with_history,
                 user_context={
-                    "role": user_role, 
+                        "role": user_role,
+                        "channel": "web",
                     "intent": "product_lookup",
                     "conversation_state": conversation_state
                 },
@@ -499,7 +520,7 @@ async def chat_endpoint(
                 await db.commit()
                 logger.info(f"✓ Mensajes guardados exitosamente para session {chat_session_id[:8]}")
             except Exception as e:
-                logger.error(f"Error guardando mensajes: {type(e).__name__}: {e}")
+                logger.error("Error guardando mensajes: %s", type(e).__name__)
                 # No fallar el request, continuar con la respuesta
             
             # Retornar respuesta del LLM
@@ -566,12 +587,14 @@ async def chat_endpoint(
                 query=user_text,
                 session=db,
                 top_k=3,
-                min_similarity=0.5
+                min_similarity=0.5,
+                role=user_role,
+                channel="web",
             )
             if rag_context:
-                logger.info(f"RAG: Encontrado contexto para chat general '{user_text[:50]}...'")
+                logger.info("RAG: contexto autorizado encontrado para chat general")
         except Exception as e:
-            logger.debug(f"RAG search falló (continuando sin contexto): {e}")
+            logger.debug("RAG search falló error=%s", type(e).__name__)
         
         # Construir prompt con historial conversacional + contexto RAG
         prompt_parts = []
@@ -590,7 +613,8 @@ async def chat_endpoint(
             task=Task.SHORT_ANSWER.value,
             prompt=prompt_with_history,
             user_context={
-                "role": user_role, 
+                "role": user_role,
+                "channel": "web",
                 "intent": "chat_general",
                 "conversation_state": conversation_state
             },
@@ -613,3 +637,38 @@ async def chat_endpoint(
         await db.commit()
         
         return ChatOut(text=reply, intent=UserIntent.CHAT_GENERAL.value)
+
+
+@router.post("/chat", response_model=ChatOut, dependencies=[Depends(require_csrf)])
+async def chat_endpoint(
+    payload: ChatIn,
+    request: Request,
+    session_data: SessionData = Depends(current_session),
+    db: AsyncSession = Depends(get_session),
+) -> ChatOut:
+    """Adapta HTTP al contexto y trazabilidad multicanal común."""
+    import hashlib
+    from services.chat.orchestrator import ChatRequestContext, chat_orchestrator
+
+    session = getattr(session_data, "session", None)
+    base_session_id = getattr(session, "id", None)
+    if not base_session_id:
+        host = request.client.host if request.client else "unknown"
+        user_agent = request.headers.get("user-agent", "unknown")
+        base_session_id = hashlib.md5(f"{host}_{user_agent}".encode()).hexdigest()[:16]
+    conversation_id = f"web:{base_session_id}"
+    correlation_id = getattr(request.state, "correlation_id", None) or request.headers.get("x-correlation-id") or request.headers.get("x-request-id")
+    context = ChatRequestContext.build(
+        channel="web",
+        conversation_id=conversation_id,
+        account_role=session_data.role,
+        user_id=getattr(getattr(session_data, "user", None), "id", None),
+        correlation_id=correlation_id,
+    )
+
+    async def operation() -> ChatOut:
+        return await _chat_endpoint_impl(payload, request, session_data, db)
+
+    response = await chat_orchestrator.execute(db, context, operation)
+    response.correlation_id = context.correlation_id
+    return response

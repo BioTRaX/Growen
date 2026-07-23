@@ -31,17 +31,18 @@ class AIRouter:
             out.append("ollama")
         if self.settings.ai_allow_external and "openai" in self._providers:
             out.append("openai")
-        elif "openai" in self._providers and not out:
-            # si ollama deshabilitado, igual exponer openai aunque ai_allow_external sea False
-            out.append("openai")
         return out
 
     def get_provider(self, task: str):
         """Devuelve el provider seleccionado (aplica mismas reglas que run)."""
         name = choose(task, self.settings)
-        if name == "openai" and not self.settings.ai_allow_external and "ollama" in self._providers:
+        if name == "openai" and not self.settings.ai_allow_external:
+            if "ollama" not in self._providers:
+                raise RuntimeError("ai_external_disabled")
             name = "ollama"
         if name == "ollama" and "ollama" not in self._providers:
+            if not self.settings.ai_allow_external:
+                raise RuntimeError("ai_external_disabled")
             name = "openai"  # deshabilitado
         provider = self._providers[name]
         try:

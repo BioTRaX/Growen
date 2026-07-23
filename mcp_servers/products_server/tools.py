@@ -32,10 +32,16 @@ logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 logger = logging.getLogger("mcp_products.tools")
 
 # Roles permitidos para la herramienta "full" (por ahora hace lo mismo que la básica)
-_FULL_INFO_ROLES = {"admin", "colaborador"}
+from agent_core.chat_policy import allowed_roles_for, public_product_result  # noqa: E402
+from mcp_servers.security import MCPTokenInvalid, get_current_claims, require_mcp_auth  # noqa: E402
 
-# Importar seguridad compartida
-from mcp_servers.security import require_mcp_auth  # noqa: E402
+
+def _request_role_for_output() -> str:
+    """Usa claims reales; el fallback sólo soporta pruebas directas de la función envuelta."""
+    try:
+        return get_current_claims().role
+    except MCPTokenInvalid:
+        return "admin"
 
 
 def _get_cache_ttl() -> float:
@@ -91,7 +97,7 @@ def _cache_put(key: str, value: Dict[str, Any]) -> None:
     _cache[key] = (time.time(), value)
 
 
-@require_mcp_auth()  # Todos los usuarios autenticados pueden acceder
+@require_mcp_auth(allowed_roles=allowed_roles_for("get_product_info"))
 async def get_product_info(sku: str = None, product_id: int = None) -> Dict[str, Any]:
     """Obtiene información de un producto por SKU canónico o ID, incluyendo descripción.
 
@@ -188,17 +194,8 @@ async def get_product_info(sku: str = None, product_id: int = None) -> Dict[str,
                 logger.debug("get_product_info: Incluyendo usage_instructions: %s", list(usage_instructions.keys()))
             
             # DEBUG: Log final del resultado que se devuelve al LLM
-            logger.info(
-                "get_product_info: Tool Output - product_id=%s, sku=%s, name=%s, stock=%s, has_description=%s",
-                result.get("product_id"),
-                result.get("sku"),
-                result.get("name"),
-                result.get("stock"),
-                "description" in result,
-            )
-            
             _cache_put(cache_key, result)
-            return result
+            return public_product_result(result, _request_role_for_output())
             
         except httpx.TimeoutException as exc:
             logger.warning("Timeout consultando API de variantes: %s", type(exc).__name__)
@@ -213,7 +210,7 @@ async def get_product_info(sku: str = None, product_id: int = None) -> Dict[str,
             raise
 
 
-@require_mcp_auth(allowed_roles=["admin", "colaborador"])
+@require_mcp_auth(allowed_roles=allowed_roles_for("get_product_full_info"))
 async def get_product_full_info(sku: str = None, product_id: int = None) -> Dict[str, Any]:
     """Obtiene información completa del producto incluyendo datos de enriquecimiento.
 
@@ -310,7 +307,7 @@ async def get_product_full_info(sku: str = None, product_id: int = None) -> Dict
             raise
 
 
-@require_mcp_auth()  # Todos los usuarios autenticados
+@require_mcp_auth(allowed_roles=allowed_roles_for("find_products_by_name"))
 async def find_products_by_name(query: str) -> Dict[str, Any]:
     """Busca productos por nombre (búsqueda parcial) y retorna coincidencias con stock.
 
@@ -379,7 +376,10 @@ async def find_products_by_name(query: str) -> Dict[str, Any]:
             
             items.append(item)
         
-        return {"items": items, "count": len(items), "query": query}
+        return public_product_result(
+            {"items": items, "count": len(items), "query": query},
+            _request_role_for_output(),
+        )
 
 
 TOOLS_REGISTRY = {

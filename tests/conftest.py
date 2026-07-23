@@ -5,6 +5,7 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import AsyncGenerator
 import pytest
@@ -25,7 +26,11 @@ os.environ.setdefault("MCP_SECRET_KEY", "test-mcp-secret-key-not-for-production"
 os.environ.setdefault("MCP_PRODUCTS_SECRET_KEY", "test-products-key-not-for-production")
 os.environ.setdefault("MCP_WEB_SEARCH_SECRET_KEY", "test-web-key-not-for-production")
 os.environ["OPENAI_API_KEY"] = ""
-os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
+# Una base temporal por proceso evita que TestClient/WebSocket pierda el esquema
+# al cruzar hilos o abrir una conexión SQLite diferente. Cada test conserva el
+# aislamiento mediante create_all/drop_all en el fixture autouse.
+_test_db_path = Path(tempfile.gettempdir()) / f"growen-pytest-{os.getpid()}.db"
+os.environ["DB_URL"] = f"sqlite+aiosqlite:///{_test_db_path.as_posix()}"
 # En el entorno de tests usamos modo NO estricto por defecto para no exigir category_name
 # en creaciones simples y mantener compatibilidad con payloads legacy.
 os.environ.setdefault("CANONICAL_SKU_STRICT", "0")

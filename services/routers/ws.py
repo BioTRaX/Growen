@@ -175,7 +175,7 @@ async def ws_chat(socket: WebSocket) -> None:
     user_agent = socket.headers.get("user-agent", "unknown")
     if sid:
         # Agregar prefijo "web:" para identificar sesiones web
-        chat_session_id = f"web:{sid}"
+        chat_session_id = f"web:{hash_session_id(sid)}"
     else:
         # Fallback: generar ID basado en IP + user agent
         raw = f"{host}_{user_agent}"
@@ -183,9 +183,7 @@ async def ws_chat(socket: WebSocket) -> None:
         chat_session_id = f"web:{hash_id}"
     
     # Extraer user_identifier para guardar en sesión
-    user_identifier = None
-    if sess and hasattr(sess, 'user') and sess.user:
-        user_identifier = getattr(sess.user, 'identifier', None) or getattr(sess.user, 'email', None)
+    user_identifier = f"web:{chat_session_id.split(':', 1)[-1][:24]}"
     if not user_identifier:
         # Fallback: extraer del session_id (después del prefijo "web:")
         user_identifier = chat_session_id[4:] if chat_session_id.startswith("web:") else chat_session_id
@@ -194,7 +192,7 @@ async def ws_chat(socket: WebSocket) -> None:
     correlation_header = socket.headers.get("x-correlation-id") or socket.headers.get("x-request-id")
     base_correlation_id = correlation_header or f"ws-{uuid.uuid4().hex[:10]}"
     message_index = 0
-    role = getattr(sess, "role", "anon") or "anon"
+    role = getattr(getattr(sess, "user", None), "role", None) or getattr(sess, "role", "guest") or "guest"
     memory_key = build_memory_key(session_id=sid, role=role, host=host, user_agent=user_agent)
     ping_task = asyncio.create_task(_ping(socket))
     try:
@@ -237,7 +235,7 @@ async def ws_chat(socket: WebSocket) -> None:
                     # Obtener el schema de herramientas para consulta de productos
                     tools_schema = None
                     if hasattr(provider, 'build_tools_schema'):
-                        tools_schema = await provider.build_tools_schema(role)
+                        tools_schema = await provider.build_tools_schema(role, "websocket")
                     
                     if tools_schema:
                         try:
@@ -245,7 +243,7 @@ async def ws_chat(socket: WebSocket) -> None:
                             answer_raw = await ai_router.run_async(
                                 task=Task.SHORT_ANSWER.value,
                                 prompt=prompt_with_history,
-                                user_context={"role": role, "intent": "product_lookup"},
+                                user_context={"role": role, "channel": "websocket", "intent": "product_lookup"},
                                 tools_schema=tools_schema,
                             )
                             answer = _strip_provider_prefix(answer_raw)
@@ -331,7 +329,7 @@ async def ws_chat(socket: WebSocket) -> None:
                         mark_prompted(memory_key)
                         terms = memory_terms_text(memory_state.query)
                         try:
-                            logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
+                            logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id})
                         except Exception:
                             pass
                         await socket.send_json({
@@ -356,7 +354,7 @@ async def ws_chat(socket: WebSocket) -> None:
                         mark_prompted(memory_key)
                         terms = memory_terms_text(memory_state.query)
                         try:
-                            logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id, "terms": terms})
+                            logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id})
                         except Exception:
                             pass
                         await socket.send_json({
@@ -449,12 +447,12 @@ async def ws_chat(socket: WebSocket) -> None:
                             user_identifier=user_identifier,
                         )
                     except Exception as exc:  # pragma: no cover
-                        logger.error("Error streaming ws_chat: %s", exc)
+                        logger.error("Error streaming ws_chat: %s", type(exc).__name__)
                         await socket.send_json({
                             "role": "system",
                             "stream": "error",
                             "id": msg_id,
-                            "error": str(exc),
+                            "error": "stream_failed",
                         })
                 else:
                     try:
@@ -467,8 +465,8 @@ async def ws_chat(socket: WebSocket) -> None:
                         )
                         raw_reply = await ai_reply(prompt_with_history)
                     except Exception as exc:  # pragma: no cover
-                        logger.error("Error inesperado en ws_chat: %s", exc)
-                        await socket.send_json({"role": "system", "text": f"error: {exc}"})
+                        logger.error("Error inesperado en ws_chat: %s", type(exc).__name__)
+                        await socket.send_json({"role": "system", "text": "No pude procesar el mensaje."})
                         continue
                     reply = _strip_provider_prefix(raw_reply.strip())
                     await socket.send_json({"role": "assistant", "text": reply})
@@ -494,12 +492,12 @@ async def ws_chat(socket: WebSocket) -> None:
     except WebSocketDisconnect:
         logger.warning("Cliente desconectado")
     except Exception as exc:
-        logger.error("Error inesperado en ws_chat: %s", exc)
+        logger.error("Error inesperado en ws_chat: %s", type(exc).__name__)
         if socket.client_state == WebSocketState.CONNECTED:
             try:
-                await socket.send_json({"role": "system", "text": f"error: {exc}"})
+                await socket.send_json({"role": "system", "text": "La conexión de chat encontró un error."})
             except Exception as send_exc:
-                logger.error("No se pudo notificar al cliente del error: %s", send_exc)
+                logger.error("No se pudo notificar al cliente del error: %s", type(send_exc).__name__)
     finally:
         ping_task.cancel()
         if socket.client_state == WebSocketState.CONNECTED:

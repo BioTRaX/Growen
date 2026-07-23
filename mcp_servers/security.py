@@ -60,6 +60,7 @@ class TokenClaims:
     aud: str
     jti: str
     iat: float
+    channel: str = "web"
 
 
 _current_token: ContextVar[str | None] = ContextVar("mcp_token", default=None)
@@ -174,6 +175,7 @@ def verify_mcp_token(token: str) -> TokenClaims:
         aud=str(payload["aud"]),
         jti=str(payload["jti"]),
         iat=issued_at,
+        channel=str(payload.get("channel") or "web"),
     )
 
 
@@ -294,12 +296,17 @@ def require_mcp_auth(allowed_roles: Iterable[str] | None = None):
             if roles and claims.role not in roles:
                 log_audit(claims.sub, func.__name__, "unauthorized")
                 raise MCPUnauthorized("Rol no autorizado para esta herramienta")
+            token_ctx = _current_token.set(token)
+            claims_ctx = _current_claims.set(claims)
             try:
                 result = await func(**kwargs)
             except Exception as exc:
                 elapsed = (time.perf_counter() - started) * 1000
                 log_audit(claims.sub, func.__name__, "error", elapsed, type(exc).__name__)
                 raise
+            finally:
+                _current_claims.reset(claims_ctx)
+                _current_token.reset(token_ctx)
             elapsed = (time.perf_counter() - started) * 1000
             log_audit(claims.sub, func.__name__, "success", elapsed)
             return result

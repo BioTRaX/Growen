@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 url = os.getenv('DB_URL')
 assert url, 'DB_URL not set'
-print('DB_URL:', url)
+print('Configuración de base disponible:', True)
 engine = create_engine(url, future=True)
 with engine.begin() as conn:
     print('Adding column import_jobs.summary_json if missing...')

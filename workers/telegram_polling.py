@@ -1,451 +1,311 @@
 #!/usr/bin/env python
 # NG-HEADER: Nombre de archivo: telegram_polling.py
 # NG-HEADER: Ubicación: workers/telegram_polling.py
-# NG-HEADER: Descripción: Worker de Long Polling para Telegram Bot
+# NG-HEADER: Descripción: Worker Telegram polling acotado, idempotente y privado.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-"""Worker de Long Polling para Telegram Bot.
-
-Este worker permite usar el bot de Telegram sin necesidad de webhooks o URLs públicas.
-Ideal para desarrollo local sin necesidad de ngrok o servidores expuestos.
-
-Uso:
-    python workers/telegram_polling.py
-
-Variables de entorno requeridas:
-    TELEGRAM_BOT_TOKEN: Token del bot de Telegram
-    TELEGRAM_ENABLED: 1 para habilitar (opcional, default: 0)
-    DB_URL: URL de conexión a la base de datos (opcional, usa settings por defecto)
-"""
+"""Long polling Telegram con deduplicación persistente y backpressure."""
 
 from __future__ import annotations
 
-import os
-import sys
-import logging
 import asyncio
-import re
-from typing import Any, Dict, Optional
+import json
+import logging
+import os
+import random
+import signal
+import sys
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
-# FIX: Windows ProactorEventLoop no soporta psycopg async
-# Debe ejecutarse ANTES de cualquier import que use asyncio
-if sys.platform == 'win32':
+if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-try:
-    import httpx
-except ImportError:
-    print("ERROR: httpx no está instalado. Instalar con: pip install httpx")
-    sys.exit(1)
+import httpx
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
-from pathlib import Path
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from agent_core.config import settings
+from db.models import TelegramUpdate
+from db.session import SessionLocal
+from services.chat.external_identity import subject_hmac
 from services.chat.telegram_handler import handle_telegram_message
-from services.notifications.telegram import send_message as tg_send
+from services.notifications.telegram import send_message as telegram_send
 
-# Resolver ROOT antes de configurar logging
 ROOT = Path(__file__).resolve().parent.parent
 LOGS_DIR = ROOT / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
-
-
-class TokenMaskingFilter(logging.Filter):
-    """Filtro que enmascara tokens de Telegram en los logs."""
-    
-    # Patrón para detectar tokens de Telegram en URLs: bot<ID>:<TOKEN>
-    # Ejemplo: bot[REDACTED_TELEGRAM_TOKEN]
-    TELEGRAM_TOKEN_PATTERN = re.compile(
-        r'(bot\d+):([A-Za-z0-9_-]+)',
-        re.IGNORECASE
-    )
-    
-    def filter(self, record: logging.LogRecord) -> bool:
-        """Filtra y enmascara tokens en el mensaje de log."""
-        if hasattr(record, 'msg') and record.msg:
-            # Convertir mensaje a string si no lo es
-            msg = str(record.msg)
-            # Reemplazar tokens: bot<ID>:<TOKEN> -> bot<ID>:***MASKED***
-            msg = self.TELEGRAM_TOKEN_PATTERN.sub(r'\1:***MASKED***', msg)
-            record.msg = msg
-            
-            # También enmascarar en args si existen
-            if hasattr(record, 'args') and record.args:
-                args = list(record.args)
-                for i, arg in enumerate(args):
-                    if isinstance(arg, str):
-                        args[i] = self.TELEGRAM_TOKEN_PATTERN.sub(r'\1:***MASKED***', arg)
-                record.args = tuple(args)
-        
-        return True
-
-
-# Configuración de logging
-# Usar nivel INFO por defecto, pero permitir override con LOG_LEVEL
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-log_handlers = [logging.StreamHandler()]  # Siempre consola
-
-# Intentar agregar handler de archivo, pero no fallar si hay error de permisos
-try:
-    log_file_path = LOGS_DIR / "worker_telegram_polling.log"
-    # Usar modo 'a' (append) para evitar problemas si el archivo está abierto
-    file_handler = logging.FileHandler(log_file_path, mode='a', encoding="utf-8")
-    log_handlers.append(file_handler)
-except (PermissionError, OSError) as e:
-    # Si no se puede escribir al archivo (está abierto o sin permisos), solo usar consola
-    print(f"Warning: No se pudo abrir archivo de log {log_file_path}: {e}")
-    print("Continuando solo con logging a consola...")
-
-# Crear filtro de enmascaramiento de tokens
-token_filter = TokenMaskingFilter()
-
-# Aplicar filtro a todos los handlers
-for handler in log_handlers:
-    handler.addFilter(token_filter)
+HEALTH_FILE = LOGS_DIR / "telegram_health.json"
+OFFSET_FILE = LOGS_DIR / "telegram_offset.txt"
 
 logging.basicConfig(
-    level=getattr(logging, log_level, logging.INFO),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=log_handlers
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    handlers=[logging.StreamHandler(), logging.FileHandler(LOGS_DIR / "worker_telegram_polling.log", encoding="utf-8")],
 )
-logger = logging.getLogger(__name__)
-
-# Reducir verbosidad de httpx/httpcore (solo WARNING y superior)
-# Esto evita que se logueen automáticamente las URLs con tokens
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+logger = logging.getLogger("growen.telegram.polling")
 
-# Aplicar filtro también al root logger para capturar cualquier log que escape
-root_logger = logging.getLogger()
-for handler in root_logger.handlers:
-    if not any(isinstance(f, TokenMaskingFilter) for f in handler.filters):
-        handler.addFilter(token_filter)
-
-# Configuración de base de datos - usar settings como en db/session.py
-DB_URL = os.getenv("DB_URL") or settings.db_url
-engine = create_async_engine(DB_URL, future=True, pool_pre_ping=True)
-SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-
-# Configuración de Telegram
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_API_BASE = "https://api.telegram.org"
-TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "0").lower() in ("1", "true", "yes")
-
-# Configuración de polling
-POLLING_TIMEOUT = int(os.getenv("TELEGRAM_POLLING_TIMEOUT", "30"))  # segundos
-POLLING_RETRY_DELAY = int(os.getenv("TELEGRAM_POLLING_RETRY_DELAY", "5"))  # segundos entre reintentos
+API_BASE = "https://api.telegram.org"
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+QUEUE_SIZE = max(1, int(os.getenv("TELEGRAM_POLLING_QUEUE_SIZE", "100")))
+CONCURRENCY = max(1, int(os.getenv("TELEGRAM_POLLING_CONCURRENCY", "8")))
+POLL_TIMEOUT = max(1, int(os.getenv("TELEGRAM_POLLING_TIMEOUT", "30")))
+RETRY_DELAY = max(1, int(os.getenv("TELEGRAM_POLLING_RETRY_DELAY", "5")))
 
 
-async def delete_webhook(token: str) -> bool:
-    """
-    Elimina el webhook configurado en Telegram (obligatorio antes de usar polling).
-    
-    Args:
-        token: Token del bot de Telegram
-        
-    Returns:
-        True si se eliminó exitosamente, False en caso contrario
-    """
-    url = f"{TELEGRAM_API_BASE}/bot{token}/deleteWebhook"
+@dataclass
+class WorkerHealth:
+    status: str = "starting"
+    last_poll_at: str | None = None
+    last_success_at: str | None = None
+    backlog: int = 0
+    consecutive_errors: int = 0
+    duplicates: int = 0
+    processed: int = 0
+
+
+health = WorkerHealth()
+
+
+def _write_health() -> None:
+    temp = HEALTH_FILE.with_suffix(".tmp")
+    temp.write_text(json.dumps(asdict(health), ensure_ascii=False), encoding="utf-8")
+    temp.replace(HEALTH_FILE)
+
+
+def _read_offset() -> int | None:
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, json={"drop_pending_updates": True})
-            resp.raise_for_status()
-            result = resp.json()
-            if result.get("ok"):
-                logger.info("✓ Webhook eliminado exitosamente")
-                return True
-            else:
-                logger.warning(f"⚠ Error eliminando webhook: {result.get('description', 'Unknown')}")
-                return False
-    except Exception as e:
-        logger.error(f"✗ Error al eliminar webhook: {e}")
-        return False
-
-
-async def get_updates(
-    token: str,
-    offset: Optional[int] = None,
-    timeout: int = POLLING_TIMEOUT,
-) -> Optional[Dict[str, Any]]:
-    """
-    Obtiene actualizaciones de Telegram usando Long Polling.
-    
-    Args:
-        token: Token del bot de Telegram
-        offset: ID del último update procesado + 1 (None para obtener todos)
-        timeout: Timeout en segundos para long polling (default: 30)
-        
-    Returns:
-        Dict con la respuesta de getUpdates o None si hay error
-    """
-    url = f"{TELEGRAM_API_BASE}/bot{token}/getUpdates"
-    params: Dict[str, Any] = {
-        "timeout": timeout,
-        "allowed_updates": ["message"],  # Solo mensajes, ignorar otros tipos de updates
-    }
-    if offset is not None:
-        params["offset"] = offset
-    
-    try:
-        async with httpx.AsyncClient(timeout=timeout + 10) as client:  # Timeout mayor que polling
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            result = resp.json()
-            # Log detallado si hay error en la respuesta de Telegram
-            if not result.get("ok"):
-                error_code = result.get("error_code")
-                description = result.get("description", "Unknown error")
-                logger.error(f"✗ Telegram API error: code={error_code}, description={description}")
-            return result
-    except httpx.TimeoutException:
-        # Timeout es normal en long polling, no es un error
-        logger.debug("Timeout en getUpdates (normal en long polling)")
-        return None
-    except httpx.HTTPStatusError as e:
-        logger.error(f"✗ HTTP error obteniendo updates: {e.response.status_code} - {e.response.text}")
-        return None
-    except Exception as e:
-        logger.error(f"✗ Error obteniendo updates: {type(e).__name__}: {e}", exc_info=True)
+        value = OFFSET_FILE.read_text(encoding="utf-8").strip()
+        return int(value) if value.isdigit() else None
+    except OSError:
         return None
 
 
-async def process_message(text: str, chat_id: int, image_file_id: Optional[str] = None) -> None:
-    """
-    Procesa un mensaje de Telegram usando el handler compartido.
-    
-    Args:
-        text: Texto del mensaje (puede estar vacío si solo hay imagen)
-        chat_id: ID del chat de Telegram
-        image_file_id: File ID de imagen de Telegram (opcional)
-    """
-    logger.info(f"🔄 Procesando mensaje de chat_id={chat_id}, text='{text[:50] if text else '(solo imagen)'}', has_image={bool(image_file_id)}")
+def _write_offset(update_id: int) -> None:
+    temp = OFFSET_FILE.with_suffix(".tmp")
+    temp.write_text(str(update_id), encoding="utf-8")
+    temp.replace(OFFSET_FILE)
+
+
+async def _telegram_call(method: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    url = f"{API_BASE}/bot{TOKEN}/{method}"
+    delay = RETRY_DELAY
+    for attempt in range(5):
+        try:
+            async with httpx.AsyncClient(timeout=POLL_TIMEOUT + 10, trust_env=False) as client:
+                response = await client.get(url, params=params)
+            if response.status_code == 429 or response.status_code >= 500:
+                retry_after = int(response.headers.get("Retry-After", delay))
+                await asyncio.sleep(retry_after + random.random())
+                delay = min(delay * 2, 60)
+                continue
+            response.raise_for_status()
+            payload = response.json()
+            if not payload.get("ok"):
+                raise RuntimeError("telegram_api_rejected")
+            return payload
+        except (httpx.TimeoutException, httpx.NetworkError):
+            if attempt == 4:
+                raise
+            await asyncio.sleep(delay + random.random())
+            delay = min(delay * 2, 60)
+    raise RuntimeError("telegram_retry_exhausted")
+
+
+async def _verify_polling_mode() -> str:
+    me = (await _telegram_call("getMe")).get("result") or {}
+    bot_id = me.get("id")
+    if bot_id is None:
+        raise RuntimeError("telegram_bot_identity_missing")
+    webhook = (await _telegram_call("getWebhookInfo")).get("result") or {}
+    if webhook.get("url"):
+        raise RuntimeError("telegram_webhook_active")
+    return subject_hmac("telegram_bot", bot_id)
+
+
+async def _claim_update(bot_hash: str, update_id: int) -> bool:
+    async with SessionLocal() as db:
+        existing = await db.scalar(
+            select(TelegramUpdate).where(
+                TelegramUpdate.bot_id_hash == bot_hash,
+                TelegramUpdate.update_id == update_id,
+            )
+        )
+        if existing and existing.status in {"succeeded", "failed", "skipped"}:
+            health.duplicates += 1
+            return False
+        if existing:
+            existing.status = "processing"
+            existing.attempts += 1
+            existing.processing_at = datetime.utcnow()
+            existing.error_code = None
+        else:
+            db.add(
+                TelegramUpdate(
+                    bot_id_hash=bot_hash,
+                    update_id=update_id,
+                    status="processing",
+                    attempts=1,
+                    processing_at=datetime.utcnow(),
+                )
+            )
+        try:
+            await db.commit()
+            return True
+        except IntegrityError:
+            await db.rollback()
+            health.duplicates += 1
+            return False
+
+
+async def _finish_update(bot_hash: str, update_id: int, status: str, error_code: str | None = None) -> None:
+    async with SessionLocal() as db:
+        record = await db.scalar(
+            select(TelegramUpdate).where(
+                TelegramUpdate.bot_id_hash == bot_hash,
+                TelegramUpdate.update_id == update_id,
+            )
+        )
+        if record:
+            record.status = status
+            record.error_code = error_code
+            record.completed_at = datetime.utcnow()
+            await db.commit()
+
+
+async def _process_update(update: dict[str, Any], bot_hash: str) -> None:
+    update_id = update.get("update_id")
+    if not isinstance(update_id, int) or not await _claim_update(bot_hash, update_id):
+        return
+    message = update.get("message") or update.get("edited_message") or {}
+    chat = message.get("chat") or {}
+    sender = message.get("from") or {}
+    chat_id = chat.get("id")
+    sender_id = sender.get("id")
+    text = str(message.get("text") or "").strip()
+    photo = message.get("photo") or []
+    image_file_id = photo[-1].get("file_id") if isinstance(photo, list) and photo else None
+    if not chat_id or not sender_id or (not text and not image_file_id):
+        await _finish_update(bot_hash, update_id, "skipped", "unsupported_payload")
+        return
     try:
-        # Crear sesión de DB para este mensaje
         async with SessionLocal() as db:
-            logger.debug(f"✓ Sesión de DB creada para chat_id={chat_id}")
-            # Procesar mensaje usando el handler compartido
             answer = await handle_telegram_message(
                 text=text,
                 chat_id=str(chat_id),
+                telegram_user_id=sender_id,
+                chat_type=str(chat.get("type") or "private"),
                 db=db,
-                image_file_id=image_file_id,  # Pasar file_id si existe
+                image_file_id=image_file_id,
             )
-            logger.info(f"✓ Respuesta generada para chat_id={chat_id}: {answer[:100] if answer else '(vacía)'}...")
-            
-            # Enviar respuesta
-            sent = await tg_send(answer, chat_id=str(chat_id))
-            if sent:
-                logger.info(f"✓ Mensaje enviado exitosamente a chat_id={chat_id}")
-            else:
-                logger.warning(f"⚠ No se pudo enviar mensaje a chat_id={chat_id} (tg_send retornó False)")
-            
-    except Exception as e:
-        logger.error(f"✗ Error procesando mensaje de chat_id={chat_id}: {e}", exc_info=True)
-        # Intentar enviar mensaje de error al usuario
+        if not await telegram_send(answer, chat_id=str(chat_id)):
+            raise RuntimeError("telegram_send_failed")
+        await _finish_update(bot_hash, update_id, "succeeded")
+        health.processed += 1
+        health.last_success_at = datetime.utcnow().isoformat()
+    except (PermissionError, ValueError):
+        await _finish_update(bot_hash, update_id, "failed", "request_rejected")
+    except Exception as exc:
+        logger.warning("Update no completado error=%s", type(exc).__name__)
+        await _finish_update(bot_hash, update_id, "failed", "processing_failure")
+
+
+async def _queue_worker(
+    queue: asyncio.Queue[dict[str, Any] | None],
+    bot_hash: str,
+    subject_locks: dict[str, asyncio.Lock],
+) -> None:
+    while True:
+        update = await queue.get()
         try:
-            await tg_send(
-                "Disculpá, hubo un error procesando tu mensaje. Probá más tarde.",
-                chat_id=str(chat_id)
-            )
-        except Exception as send_err:
-            logger.error(f"✗ Error al enviar mensaje de error: {send_err}", exc_info=True)
+            if update is None:
+                return
+            message = update.get("message") or update.get("edited_message") or {}
+            sender_id = (message.get("from") or {}).get("id")
+            lock_key = subject_hmac("telegram", sender_id) if sender_id is not None else "invalid"
+            lock = subject_locks.setdefault(lock_key, asyncio.Lock())
+            async with lock:
+                await _process_update(update, bot_hash)
+        finally:
+            queue.task_done()
 
 
 async def run_polling() -> None:
-    """
-    Ejecuta el bucle principal de Long Polling.
-    
-    Obtiene actualizaciones de Telegram, procesa mensajes y mantiene el offset
-    para evitar procesar mensajes duplicados.
-    """
-    if not TELEGRAM_ENABLED:
-        logger.warning("TELEGRAM_ENABLED no está habilitado. Saliendo.")
+    if not settings.telegram_enabled or not settings.telegram_public_bot_enabled:
+        logger.warning("Worker Telegram deshabilitado por feature flag")
         return
-    
-    if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN no está configurado. Saliendo.")
-        return
-    
-    logger.info("=" * 60)
-    logger.info("Iniciando Telegram Polling Worker...")
-    logger.info(f"Token: {TELEGRAM_BOT_TOKEN[:10]}...")
-    logger.info(f"Timeout de polling: {POLLING_TIMEOUT}s")
-    logger.info(f"Retry delay: {POLLING_RETRY_DELAY}s")
-    logger.info(f"DB_URL: {DB_URL[:50]}..." if len(DB_URL) > 50 else f"DB_URL: {DB_URL}")
-    logger.info("=" * 60)
-    
-    # 0. Test de conexión con Telegram (verificar que el token es válido)
-    logger.info("Verificando conexión con Telegram API...")
-    try:
-        test_url = f"{TELEGRAM_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/getMe"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            test_resp = await client.get(test_url)
-            test_resp.raise_for_status()
-            test_result = test_resp.json()
-            if test_result.get("ok"):
-                bot_info = test_result.get("result", {})
-                bot_username = bot_info.get("username", "N/A")
-                bot_id = bot_info.get("id", "N/A")
-                logger.info(f"✓ Conexión exitosa con Telegram. Bot: @{bot_username} (ID: {bot_id})")
-            else:
-                logger.error(f"✗ Error verificando bot: {test_result.get('description', 'Unknown error')}")
-                return
-    except Exception as e:
-        logger.error(f"✗ Error de conexión con Telegram API: {e}")
-        logger.error("Verificar que TELEGRAM_BOT_TOKEN sea correcto y que haya conexión a internet")
-        return
-    
-    # 1. Eliminar webhook (obligatorio antes de polling)
-    logger.info("Eliminando webhook existente...")
-    webhook_deleted = await delete_webhook(TELEGRAM_BOT_TOKEN)
-    if webhook_deleted:
-        # No duplicar el mensaje (ya se loguea en delete_webhook)
-        pass
-    else:
-        logger.warning("⚠ No se pudo eliminar el webhook. Continuando de todas formas...")
-    
-    # 2. Inicializar offset (recuperar de archivo si existe)
-    offset_file = LOGS_DIR / "telegram_offset.txt"
-    last_update_id = 0
-    try:
-        if offset_file.exists():
-            offset_str = offset_file.read_text().strip()
-            if offset_str.isdigit():
-                last_update_id = int(offset_str)
-                logger.info(f"✓ Offset recuperado de archivo: {last_update_id}")
-    except Exception as e:
-        logger.warning(f"⚠ Error leyendo offset de archivo: {e}")
-    
-    logger.info(f"Offset inicial: {last_update_id}")
-    
-    # Función para persistir el offset
-    def save_offset(offset: int) -> None:
+    if settings.telegram_transport != "polling" or not TOKEN:
+        raise RuntimeError("telegram_polling_configuration_invalid")
+
+    bot_hash = await _verify_polling_mode()
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(maxsize=QUEUE_SIZE)
+    subject_locks: dict[str, asyncio.Lock] = {}
+    workers = [asyncio.create_task(_queue_worker(queue, bot_hash, subject_locks)) for _ in range(CONCURRENCY)]
+    offset = _read_offset()
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            offset_file.write_text(str(offset))
-        except Exception as e:
-            logger.debug(f"Error guardando offset: {e}")
-    
-    # 3. Bucle principal
-    logger.info("✓ Iniciando bucle de polling...")
-    consecutive_errors = 0
-    max_consecutive_errors = 5
-    updates_processed = 0
-    messages_processed = 0
-    
-    while True:
-        try:
-            # Obtener updates
-            result = await get_updates(
-                token=TELEGRAM_BOT_TOKEN,
-                offset=last_update_id + 1 if last_update_id > 0 else None,
-                timeout=POLLING_TIMEOUT,
-            )
-            
-            if result is None:
-                # Timeout normal o error de red, continuar
-                consecutive_errors = 0
-                logger.debug("Timeout en getUpdates (normal en long polling), continuando...")
-                continue
-            
-            if not result.get("ok"):
-                error_description = result.get("description", "Unknown error")
-                logger.error(f"Error en getUpdates: {error_description}")
-                consecutive_errors += 1
-                
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.error(f"Demasiados errores consecutivos ({consecutive_errors}). Reintentando en {POLLING_RETRY_DELAY}s...")
-                    await asyncio.sleep(POLLING_RETRY_DELAY)
-                    consecutive_errors = 0
-                continue
-            
-            # Procesar updates
-            updates = result.get("result", [])
-            if not updates:
-                consecutive_errors = 0
-                logger.debug("No hay updates nuevos, continuando polling...")
-                continue  # No hay updates, continuar polling
-            
-            updates_processed += len(updates)
-            
-            logger.info(f"📥 Recibidos {len(updates)} updates de Telegram")
-            
-            for update in updates:
-                update_id = update.get("update_id")
-                if update_id:
-                    last_update_id = max(last_update_id, update_id)
-                
-                # Extraer mensaje
-                message = update.get("message") or update.get("edited_message")
-                if not message:
-                    logger.debug(f"Update {update_id} no contiene mensaje, saltando...")
-                    continue
-                
-                chat = message.get("chat", {})
-                chat_id = chat.get("id")
-                text = message.get("text", "").strip()
-                
-                # Extraer file_id de foto (si existe)
-                image_file_id = None
-                photo = message.get("photo")
-                if photo and isinstance(photo, list) and len(photo) > 0:
-                    # Usar la foto más grande (última en la lista)
-                    image_file_id = photo[-1].get("file_id")
-                    logger.info(f"📷 Foto detectada en update {update_id}, file_id={image_file_id}")
-                    # Si no hay texto pero hay foto, usar texto por defecto para diagnóstico
-                    if not text:
-                        text = "¿Qué le pasa a mi planta?"
-                
-                if not chat_id:
-                    logger.warning(f"⚠ Update {update_id} no tiene chat_id, saltando...")
-                    continue
-                
-                if not text and not image_file_id:
-                    logger.debug(f"Update {update_id} no tiene texto ni imagen, saltando...")
-                    continue  # Ignorar mensajes sin texto ni imagen
-                
-                logger.info(f"📨 Mensaje recibido de chat_id={chat_id}: {text[:50] if text else '(solo imagen)'}...")
-                
-                # Procesar mensaje de forma asíncrona (sin bloquear el loop)
-                try:
-                    asyncio.create_task(process_message(text, chat_id, image_file_id))
-                    messages_processed += 1
-                    logger.debug(f"✓ Tarea de procesamiento creada para chat_id={chat_id} (total procesados: {messages_processed})")
-                except Exception as task_err:
-                    logger.error(f"✗ Error creando tarea de procesamiento: {task_err}", exc_info=True)
-            
-            consecutive_errors = 0
-            # Persistir offset para evitar pérdida de mensajes en reinicios
-            if last_update_id > 0:
-                save_offset(last_update_id)
-            if updates_processed > 0 and updates_processed % 10 == 0:
-                logger.info(f"📊 Estadísticas: {updates_processed} updates procesados, {messages_processed} mensajes procesados")
-            
-        except KeyboardInterrupt:
-            logger.info("Interrupción recibida. Cerrando worker...")
-            break
-        except Exception as e:
-            consecutive_errors += 1
-            logger.error(f"Error en bucle de polling: {e}", exc_info=True)
-            
-            if consecutive_errors >= max_consecutive_errors:
-                logger.error(f"Demasiados errores consecutivos ({consecutive_errors}). Esperando {POLLING_RETRY_DELAY}s antes de reintentar...")
-                await asyncio.sleep(POLLING_RETRY_DELAY)
-                consecutive_errors = 0
-    
-    logger.info("Worker de Telegram detenido.")
+            loop.add_signal_handler(sig, stop.set)
+        except (NotImplementedError, RuntimeError):
+            pass
+
+    health.status = "running"
+    _write_health()
+    logger.info("Worker Telegram polling iniciado queue=%s concurrency=%s", QUEUE_SIZE, CONCURRENCY)
+    try:
+        while not stop.is_set():
+            try:
+                result = await _telegram_call(
+                    "getUpdates",
+                    params={
+                        "timeout": POLL_TIMEOUT,
+                        "offset": offset + 1 if offset is not None else None,
+                        "allowed_updates": json.dumps(["message", "edited_message"]),
+                    },
+                )
+                health.last_poll_at = datetime.utcnow().isoformat()
+                updates = result.get("result") or []
+                for update in updates:
+                    await queue.put(update)
+                    health.backlog = queue.qsize()
+                if updates:
+                    await queue.join()
+                    terminal_ids = [item.get("update_id") for item in updates if isinstance(item.get("update_id"), int)]
+                    if terminal_ids:
+                        offset = max(terminal_ids)
+                        _write_offset(offset)
+                health.consecutive_errors = 0
+                health.backlog = queue.qsize()
+                _write_health()
+            except Exception as exc:
+                health.consecutive_errors += 1
+                health.status = "degraded"
+                _write_health()
+                logger.warning("Fallo de polling error=%s", type(exc).__name__)
+                await asyncio.sleep(min(RETRY_DELAY * (2 ** min(health.consecutive_errors, 4)) + random.random(), 60))
+                health.status = "running"
+    finally:
+        await queue.join()
+        for _ in workers:
+            await queue.put(None)
+        await asyncio.gather(*workers, return_exceptions=True)
+        health.status = "stopped"
+        _write_health()
 
 
 def main() -> None:
-    """Función principal para ejecutar el worker."""
     try:
         asyncio.run(run_polling())
     except KeyboardInterrupt:
-        logger.info("Worker interrumpido por el usuario.")
-    except Exception as e:
-        logger.error(f"Error fatal en worker: {e}", exc_info=True)
-        sys.exit(1)
+        pass
+    except Exception as exc:
+        logger.error("Worker Telegram detenido error=%s", type(exc).__name__)
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":
     main()
-

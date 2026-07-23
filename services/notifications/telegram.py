@@ -48,7 +48,7 @@ async def send_message(
         logger.warning("TELEGRAM_BOT_TOKEN no está configurado, no se puede enviar mensaje")
         return False
     if not chat:
-        logger.warning(f"chat_id no proporcionado y TELEGRAM_DEFAULT_CHAT_ID no configurado, no se puede enviar mensaje")
+        logger.warning("Destino Telegram no configurado; notificación omitida")
         return False
     if httpx is None:
         logger.warning("httpx no está disponible, no se puede enviar mensaje")
@@ -64,7 +64,7 @@ async def send_message(
                 json=payload,
             )
             if resp.status_code == 200:
-                logger.debug(f"✓ Mensaje enviado exitosamente a chat_id={chat}")
+                logger.debug("Mensaje Telegram enviado exitosamente")
                 return True
             else:
                 # Log del error de Telegram API
@@ -72,15 +72,15 @@ async def send_message(
                     error_data = resp.json()
                     error_code = error_data.get("error_code")
                     description = error_data.get("description", "Unknown error")
-                    logger.error(f"✗ Error enviando mensaje a chat_id={chat}: code={error_code}, description={description}")
+                    logger.error("✗ Error enviando mensaje Telegram: code=%s", error_code)
                 except Exception:
-                    logger.error(f"✗ Error enviando mensaje a chat_id={chat}: HTTP {resp.status_code} - {resp.text[:200]}")
+                    logger.error("✗ Error enviando mensaje Telegram: HTTP %s", resp.status_code)
                 return False
     except httpx.TimeoutException:
-        logger.error(f"✗ Timeout enviando mensaje a chat_id={chat}")
+        logger.error("✗ Timeout enviando mensaje Telegram")
         return False
     except Exception as e:
-        logger.error(f"✗ Excepción enviando mensaje a chat_id={chat}: {type(e).__name__}: {e}", exc_info=True)
+        logger.error("✗ Excepción enviando mensaje Telegram: %s", type(e).__name__)
         return False
 
 
@@ -226,13 +226,13 @@ async def send_photo(
                     file_content.close() # type: ignore
 
             if resp.status_code == 200:
-                logger.debug(f"✓ Foto enviada exitosamente a chat_id={chat}")
+                logger.debug("✓ Foto Telegram enviada exitosamente")
                 return True
             else:
-                logger.error(f"✗ Error enviando foto a chat_id={chat}: {resp.status_code} - {resp.text[:200]}")
+                logger.error("✗ Error enviando foto Telegram: HTTP %s", resp.status_code)
                 return False
                 
     except Exception as e:
-        logger.error(f"✗ Excepción enviando foto a chat_id={chat}: {e}")
+        logger.error("✗ Excepción enviando foto Telegram: %s", type(e).__name__)
         return False
 

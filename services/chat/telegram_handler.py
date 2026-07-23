@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,15 +15,20 @@ from agent_core.config import settings as core_settings
 from ai.router import AIRouter
 from ai.types import Task
 from services.chat.price_lookup import extract_product_query
-from services.chat.history import save_message, get_recent_history
+from services.chat.history import get_or_create_session, save_message, get_recent_history
+from services.chat.external_identity import consume_link_code, opaque_conversation_key, resolve_identity, revoke_identity
+from db.models import ExternalIdentity
+from services.chat.rate_limit import allow_subject
 
 logger = logging.getLogger(__name__)
 
 
-async def handle_telegram_message(
+async def _handle_telegram_message(
     text: str,
     chat_id: str,
     db: AsyncSession,
+    telegram_user_id: int | str | None = None,
+    chat_type: str = "private",
     image_file_id: str | None = None,  # NUEVO: File ID de imagen de Telegram
 ) -> str:
     """
@@ -52,18 +58,69 @@ async def handle_telegram_message(
     else:
         user_text = text.strip()
     
-    user_role = "anon"  # Usuarios de Telegram no tienen autenticación
-    
-    # Construir session_id estable para Telegram
-    telegram_session_id = f"telegram:{chat_id}"
+    if telegram_user_id is None:
+        raise ValueError("telegram_sender_missing")
+    is_private = chat_type == "private"
+    identity = await resolve_identity(
+        db,
+        provider="telegram",
+        external_id=telegram_user_id,
+        channel="telegram" if is_private else "telegram_group",
+    )
+    if not is_private:
+        identity = identity.__class__(None, None, "guest", "guest", identity.subject_hmac)
+    user_role = identity.effective_role
+    rate_limit = int(
+        os.getenv(
+            "TELEGRAM_RATE_LIMIT_GUEST_PER_MINUTE" if identity.account_role == "guest" else "TELEGRAM_RATE_LIMIT_AUTHENTICATED_PER_MINUTE",
+            "10" if identity.account_role == "guest" else "30",
+        )
+    )
+    if not await allow_subject(identity.subject_hmac, rate_limit):
+        return "Alcanzaste el límite temporal de consultas. Probá nuevamente en un minuto."
+
+    command, _, argument = user_text.partition(" ")
+    command = command.lower().split("@", 1)[0]
+    if command == "/vincular":
+        if not is_private:
+            return "Por seguridad, la vinculación sólo está disponible en un chat privado con el bot."
+        if not argument.strip():
+            return "Usá /vincular CODIGO con el código generado desde tu cuenta web."
+        try:
+            linked, account_role = await consume_link_code(db, code=argument.strip(), telegram_user_id=telegram_user_id)
+        except (ValueError, PermissionError):
+            return "El código no es válido, venció o la vinculación no está habilitada."
+        if linked.status == "pending_approval":
+            return "Identidad verificada. Falta la aprobación de un segundo administrador."
+        return f"Vinculación activa. Tu rol de cuenta actual es {account_role}."
+    if command == "/desvincular":
+        if not identity.identity_id or not identity.user_id:
+            return "No hay una identidad activa para desvincular."
+        linked = await db.get(ExternalIdentity, identity.identity_id)
+        if linked:
+            await revoke_identity(db, linked, identity.user_id)
+        return "La identidad de Telegram quedó revocada."
+    if command == "/quien_soy":
+        return f"Rol de cuenta: {identity.account_role}. Rol efectivo en este canal: {identity.effective_role}."
+    if command == "/privacidad":
+        return "Tu ID se cifra y se indexa con HMAC; no se muestra en logs. Podés revocar el vínculo con /desvincular."
+
+    conversation_key = opaque_conversation_key("telegram", telegram_user_id, chat_id)
+    telegram_session_id = f"telegram:{conversation_key[:48]}"
+    opaque_user_identifier = f"tg:{identity.subject_hmac[:24]}"
+    chat_session = await get_or_create_session(db, telegram_session_id, opaque_user_identifier)
+    chat_session.channel = "telegram"
+    chat_session.external_identity_id = identity.identity_id
+    chat_session.subject_hmac = identity.subject_hmac
+    chat_session.conversation_key = conversation_key
+    await db.flush()
     
     # Recuperar historial reciente para contexto
     try:
-        logger.debug(f"Recuperando historial para session_id={telegram_session_id}")
         history_context = await get_recent_history(db, telegram_session_id, limit=6)
         logger.debug(f"Historial recuperado: {len(history_context) if history_context else 0} caracteres")
     except Exception as e:
-        logger.debug(f"Error recuperando historial para Telegram: {e}")
+        logger.debug("Error recuperando historial para Telegram: %s", type(e).__name__)
         history_context = ""
     
     # Detectar si hay un diagnóstico en curso basándose en el historial
@@ -125,7 +182,8 @@ async def handle_telegram_message(
             try:
                 await save_message(
                     db, telegram_session_id, "user", user_text,
-                    metadata={"intent": "diagnostico", "image_file_id": image_file_id}
+                    metadata={"intent": "diagnostico", "image_file_id": image_file_id},
+                    user_identifier=opaque_user_identifier,
                 )
                 await save_message(
                     db, telegram_session_id, "assistant", diagnosis_result["diagnosis"],
@@ -133,7 +191,7 @@ async def handle_telegram_message(
                 )
                 await db.commit()
             except Exception as e:
-                logger.error(f"Error guardando mensajes de Telegram: {e}", exc_info=True)
+                logger.error("Error guardando mensajes de Telegram: %s", type(e).__name__)
                 await db.rollback()
             
             # Construir respuesta
@@ -162,7 +220,7 @@ async def handle_telegram_message(
             return "\n".join(response_parts)
             
         except Exception as e:
-            logger.error(f"Error en diagnóstico de plantas desde Telegram: {e}", exc_info=True)
+            logger.error("Error en diagnóstico de plantas desde Telegram: %s", type(e).__name__)
             # Fallback a chat general si falla el diagnóstico
             pass  # Continuar al flujo normal
     
@@ -183,12 +241,14 @@ async def handle_telegram_message(
                     query=user_text,
                     session=db,
                     top_k=3,
-                    min_similarity=0.5
+                    min_similarity=0.5,
+                    role=user_role,
+                    channel="telegram",
                 )
                 if rag_context:
-                    logger.info(f"RAG: Encontrado contexto para Telegram '{user_text[:50]}...'")
+                    logger.info("RAG: contexto autorizado encontrado para Telegram")
             except Exception as e:
-                logger.debug(f"RAG search falló (continuando sin contexto): {e}")
+                logger.debug("RAG search falló error=%s", type(e).__name__)
             
             # Construir prompt con historial conversacional + contexto RAG si está disponible
             prompt_parts = []
@@ -207,7 +267,7 @@ async def handle_telegram_message(
             provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
             tools_schema = None
             if hasattr(provider, 'build_tools_schema'):
-                tools_schema = await provider.build_tools_schema(user_role)
+                tools_schema = await provider.build_tools_schema(user_role, "telegram")
             
             logger.debug(f"Preparando llamada a AIRouter con task={Task.SHORT_ANSWER.value}, intent=product_lookup")
             
@@ -217,12 +277,12 @@ async def handle_telegram_message(
                 answer = await ai_router.run_async(
                     task=Task.SHORT_ANSWER.value,
                     prompt=prompt_with_context,
-                    user_context={"role": user_role, "intent": "product_lookup"},
+                    user_context={"role": user_role, "channel": "telegram", "intent": "product_lookup"},
                     tools_schema=tools_schema,
                 )
                 logger.debug(f"Respuesta de ai_router.run_async recibida.")
             except Exception as e:
-                logger.error(f"Error durante la llamada a ai_router.run_async para producto: {e}", exc_info=True)
+                logger.error("Error durante la llamada IA para producto: %s", type(e).__name__)
                 raise # Re-lanzar para que el except externo lo capture
             
             # Limpiar prefijo técnico si existe (openai:, ollama:)
@@ -319,7 +379,7 @@ async def handle_telegram_message(
                     else:
                         logger.debug(f"Path no existe o no contiene 'raw': exists={p.exists()}, parts={p.parts}")
                 except Exception as e:
-                    logger.error(f"Error intentando optimizar imagen a WebP: {e}", exc_info=True)
+                    logger.error("Error intentando optimizar imagen a WebP: %s", type(e).__name__)
 
                 logger.debug(f"Intentando enviar imagen: {clean_path}")
                 try:
@@ -328,7 +388,7 @@ async def handle_telegram_message(
                     await send_photo(photo=clean_path, chat_id=chat_id)
                     logger.info(f"✓ Imagen enviada a Telegram: {clean_path} (raw: {raw_path})")
                 except Exception as e:
-                    logger.error(f"✗ Error enviando imagen {clean_path}: {e}", exc_info=True)
+                    logger.error("✗ Error enviando imagen Telegram: %s", type(e).__name__)
             
             answer = answer.strip()
 
@@ -336,7 +396,8 @@ async def handle_telegram_message(
             try:
                 await save_message(
                     db, telegram_session_id, "user", user_text,
-                    metadata={"intent": "product_lookup"}
+                    metadata={"intent": "product_lookup"},
+                    user_identifier=opaque_user_identifier,
                 )
                 await save_message(
                     db, telegram_session_id, "assistant", answer,
@@ -344,13 +405,13 @@ async def handle_telegram_message(
                 )
                 await db.commit()
             except Exception as e:
-                logger.error(f"Error guardando mensajes de Telegram: {e}", exc_info=True)
+                logger.error("Error guardando mensajes de Telegram: %s", type(e).__name__)
                 await db.rollback()
             
             return answer
             
         except Exception as e:
-            logger.error(f"Error procesando consulta de producto en Telegram: {e}", exc_info=True)
+            logger.error("Error procesando consulta de producto en Telegram: %s", type(e).__name__)
             return "Error consultando el producto. Probá más tarde o reformulá tu pregunta."
     
     # 2. Fallback: Chat general sin tools
@@ -364,12 +425,14 @@ async def handle_telegram_message(
                 query=user_text,
                 session=db,
                 top_k=3,
-                min_similarity=0.5
+                min_similarity=0.5,
+                role=user_role,
+                channel="telegram",
             )
             if rag_context:
-                logger.info(f"RAG: Encontrado contexto para chat general Telegram '{user_text[:50]}...'")
+                logger.info("RAG: contexto autorizado encontrado para chat general Telegram")
         except Exception as e:
-            logger.debug(f"RAG search falló (continuando sin contexto): {e}")
+            logger.debug("RAG search falló error=%s", type(e).__name__)
         
         # Construir prompt con historial conversacional + contexto RAG si está disponible
         prompt_parts = []
@@ -391,7 +454,8 @@ async def handle_telegram_message(
             task=Task.SHORT_ANSWER.value,
             prompt=prompt_with_context,
             user_context={
-                "role": user_role, 
+                "role": user_role,
+                "channel": "telegram",
                 "intent": active_intent,
                 "conversation_state": conversation_state,  # Mantener modo CULTIVATOR si aplica
             },
@@ -411,7 +475,8 @@ async def handle_telegram_message(
         try:
             await save_message(
                 db, telegram_session_id, "user", user_text,
-                metadata={"intent": "chat_general"}
+                metadata={"intent": "chat_general"},
+                user_identifier=opaque_user_identifier,
             )
             await save_message(
                 db, telegram_session_id, "assistant", reply,
@@ -419,12 +484,55 @@ async def handle_telegram_message(
             )
             await db.commit()
         except Exception as e:
-            logger.error(f"Error guardando mensajes de Telegram: {e}", exc_info=True)
+            logger.error("Error guardando mensajes de Telegram: %s", type(e).__name__)
             await db.rollback()
         
         return reply
         
     except Exception as e:
-        logger.error(f"Error procesando mensaje general en Telegram: {e}", exc_info=True)
+        logger.error("Error procesando mensaje general en Telegram: %s", type(e).__name__)
         return "Disculpá, hubo un error procesando tu mensaje. Probá más tarde."
+
+
+async def handle_telegram_message(
+    text: str,
+    chat_id: str,
+    db: AsyncSession,
+    telegram_user_id: int | str | None = None,
+    chat_type: str = "private",
+    image_file_id: str | None = None,
+) -> str:
+    """Adapta Telegram al contexto y trazabilidad común del orquestador."""
+    if telegram_user_id is None:
+        raise ValueError("telegram_sender_missing")
+    from services.chat.external_identity import resolve_identity
+    from services.chat.orchestrator import ChatRequestContext, chat_orchestrator
+
+    resolved = await resolve_identity(
+        db,
+        provider="telegram",
+        external_id=telegram_user_id,
+        channel="telegram",
+    )
+    account_role = resolved.account_role if chat_type == "private" else "guest"
+    conversation_key = opaque_conversation_key("telegram", telegram_user_id, chat_id)
+    context = ChatRequestContext.build(
+        channel="telegram",
+        conversation_id=f"telegram:{conversation_key[:48]}",
+        account_role=account_role,
+        external_identity_id=resolved.identity_id,
+        user_id=resolved.user_id,
+    )
+    return await chat_orchestrator.execute(
+        db,
+        context,
+        lambda: _handle_telegram_message(
+            text=text,
+            chat_id=chat_id,
+            db=db,
+            telegram_user_id=telegram_user_id,
+            chat_type=chat_type,
+            image_file_id=image_file_id,
+        ),
+    )
 

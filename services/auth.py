@@ -181,7 +181,8 @@ async def current_session(
     user: User | None = None
     if sess.user_id:
         user = await db.get(User, sess.user_id)
-    return SessionData(sess, user, sess.role)
+    # User.role es la autoridad actual; un cambio o revocación aplica de inmediato.
+    return SessionData(sess, user, user.role if user else sess.role)
 
 
 async def current_websocket_session(websocket: WebSocket, db: AsyncSession) -> SessionData:

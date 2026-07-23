@@ -95,6 +95,21 @@ class Settings:
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY") or None
     import_ai_classic_min_confidence: float = float(os.getenv("IMPORT_AI_CLASSIC_MIN_CONFIDENCE", "0.55"))
 
+    # Chat multicanal y Telegram. Los flags permanecen apagados por defecto.
+    telegram_enabled: bool = os.getenv("TELEGRAM_ENABLED", "0").lower() in {"1", "true", "yes"}
+    telegram_transport: str = os.getenv("TELEGRAM_TRANSPORT", "polling")
+    telegram_public_bot_enabled: bool = os.getenv("TELEGRAM_PUBLIC_BOT_ENABLED", "0").lower() in {"1", "true", "yes"}
+    telegram_role_linking_enabled: bool = os.getenv("TELEGRAM_ROLE_LINKING_ENABLED", "0").lower() in {"1", "true", "yes"}
+    telegram_channel_role_ceiling: str = os.getenv("TELEGRAM_CHANNEL_ROLE_CEILING", "colaborador")
+    telegram_admin_second_approval: bool = os.getenv("TELEGRAM_ADMIN_SECOND_APPROVAL", "1").lower() in {"1", "true", "yes"}
+    telegram_link_code_ttl_seconds: int = int(os.getenv("TELEGRAM_LINK_CODE_TTL_SECONDS", "300"))
+    chat_archive_after_days: int = int(os.getenv("CHAT_ARCHIVE_AFTER_DAYS", "90"))
+    chat_auto_delete_enabled: bool = os.getenv("CHAT_AUTO_DELETE_ENABLED", "0").lower() in {"1", "true", "yes"}
+    rag_search_mode: str = os.getenv("RAG_SEARCH_MODE", "hybrid")
+    rag_cache_ttl_seconds: int = int(os.getenv("RAG_CACHE_TTL_SECONDS", "300"))
+    rag_context_max_tokens: int = int(os.getenv("RAG_CONTEXT_MAX_TOKENS", "3000"))
+    rag_exclude_stale: bool = os.getenv("RAG_EXCLUDE_STALE", "1").lower() in {"1", "true", "yes"}
+
     def __post_init__(self) -> None:
         if not self.db_url:
             # Intentar construir desde variables sueltas
@@ -160,6 +175,27 @@ class Settings:
         if self.env not in {"dev", "test", "testing"}:
             if not self.mcp_products_secret_key or not self.mcp_web_search_secret_key:
                 raise RuntimeError("Las claves MCP específicas deben definirse fuera de desarrollo y tests")
+        if self.telegram_transport not in {"polling", "webhook"}:
+            raise RuntimeError("TELEGRAM_TRANSPORT debe ser polling o webhook")
+        if self.telegram_link_code_ttl_seconds < 60 or self.telegram_link_code_ttl_seconds > 900:
+            raise RuntimeError("TELEGRAM_LINK_CODE_TTL_SECONDS debe estar entre 60 y 900")
+        if self.telegram_channel_role_ceiling not in {"guest", "cliente", "proveedor", "colaborador"}:
+            raise RuntimeError("telegram_channel_role_ceiling_too_permissive")
+        if (self.telegram_public_bot_enabled or self.telegram_role_linking_enabled) and not self.telegram_enabled:
+            raise RuntimeError("telegram_feature_requires_worker")
+        if self.telegram_role_linking_enabled and not self.telegram_admin_second_approval:
+            raise RuntimeError("telegram_admin_second_approval_required")
+        if self.telegram_enabled:
+            if not os.getenv("TELEGRAM_BOT_TOKEN", "").strip():
+                raise RuntimeError("telegram_bot_token_missing")
+            if self.telegram_transport == "polling" and os.getenv("TELEGRAM_DROP_PENDING_UPDATES", "0").lower() in {"1", "true", "yes"}:
+                raise RuntimeError("telegram_drop_pending_updates_forbidden")
+            if self.telegram_public_bot_enabled and not os.getenv("TELEGRAM_IDENTITY_HMAC_KEY", "").strip():
+                raise RuntimeError("telegram_identity_hmac_key_missing")
+            if self.telegram_role_linking_enabled and not os.getenv("TELEGRAM_IDENTITY_ENCRYPTION_KEY", "").strip():
+                raise RuntimeError("telegram_identity_encryption_key_missing")
+        if self.chat_auto_delete_enabled:
+            raise RuntimeError("CHAT_AUTO_DELETE_ENABLED no está habilitado por la política de retención vigente")
 
 
 settings = Settings()

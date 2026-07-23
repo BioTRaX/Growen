@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import KnowledgeIndexTask
+from db.models import KnowledgeIndexTask, KnowledgeSource
 from db.session import get_session
 from db.session import SessionLocal
 from services.auth import SessionData, require_csrf, require_roles
@@ -42,6 +42,14 @@ class IndexResponse(BaseModel):
     task_id: str
     status: str
     message: str
+
+
+class KnowledgeSourcePolicyUpdate(BaseModel):
+    role_scope: list[str]
+    channel_scope: list[str]
+    visibility: str
+    status: str
+    expires_at: datetime | None = None
 
 
 MAX_UPLOAD_BYTES = int(os.getenv("KNOWLEDGE_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
@@ -337,6 +345,40 @@ async def list_sources(
         "sources": sources,
         "total": len(sources),
     }
+
+
+@router.patch(
+    "/sources/{source_id}/policy",
+    dependencies=[Depends(require_roles("admin")), Depends(require_csrf)],
+)
+async def update_source_policy(
+    source_id: int,
+    payload: KnowledgeSourcePolicyUpdate,
+    db: AsyncSession = Depends(get_session),
+):
+    allowed_roles = {"guest", "cliente", "proveedor", "colaborador", "admin"}
+    allowed_channels = {"web", "websocket", "telegram"}
+    if not payload.role_scope or not set(payload.role_scope) <= allowed_roles:
+        raise HTTPException(status_code=422, detail="invalid_role_scope")
+    if not payload.channel_scope or not set(payload.channel_scope) <= allowed_channels:
+        raise HTTPException(status_code=422, detail="invalid_channel_scope")
+    if payload.status not in {"active", "stale", "disabled"}:
+        raise HTTPException(status_code=422, detail="invalid_source_status")
+    if payload.visibility not in {"public", "supplier", "internal"}:
+        raise HTTPException(status_code=422, detail="invalid_visibility")
+    source = await db.get(KnowledgeSource, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="source_not_found")
+    source.role_scope = sorted(set(payload.role_scope))
+    source.channel_scope = sorted(set(payload.channel_scope))
+    source.visibility = payload.visibility
+    source.status = payload.status
+    source.expires_at = payload.expires_at
+    source.content_version += 1
+    await db.commit()
+    from services.rag.search import get_rag_search_service
+    get_rag_search_service()._cache.clear()
+    return {"id": source.id, "content_version": source.content_version, "status": source.status}
 
 
 @router.delete(

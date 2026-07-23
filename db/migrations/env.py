@@ -15,7 +15,6 @@ from alembic.runtime.migration import MigrationContext
 from sqlalchemy import engine_from_config, text, String
 from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
-from urllib.parse import urlsplit
 
 # Logger estandar para todas las operaciones del módulo
 logger = logging.getLogger("alembic.env")
@@ -72,18 +71,7 @@ db_url = os.getenv("DB_URL")
 if not db_url:
     raise RuntimeError("DB_URL no definida en entorno/.env")
 else:
-    # Log seguro del DB_URL sin credenciales
-    try:
-        parts = urlsplit(db_url)
-        netloc = parts.netloc
-        if "@" in netloc and ":" in netloc.split("@")[0]:
-            user = netloc.split("@")[0].split(":")[0]
-            host = netloc.split("@")[1]
-            netloc = f"{user}:***@{host}"
-        safe = parts._replace(netloc=netloc).geturl()
-        logger.info("DB_URL: %s", safe)
-    except Exception:
-        logger.info("DB_URL: (formato no imprimible)")
+    logger.info("Configuración de base disponible")
 
 # === Importar metadatos del proyecto ===
 try:

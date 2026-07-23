@@ -37,6 +37,7 @@ from mcp_servers.security import (  # noqa: E402
     mcp_transport_security,
 )
 import httpx  # noqa: E402
+from agent_core.chat_policy import tool_allowed  # noqa: E402
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
@@ -48,13 +49,8 @@ class RoleAwareFastMCP(FastMCP):
     async def list_tools(self):
         """Evita revelar al cliente tools que su rol no puede ejecutar."""
         tools = await super().list_tools()
-        role = get_current_claims().role
-        allowed = {
-            "find_products_by_name": {"guest", "colaborador", "admin"},
-            "get_product_info": {"guest", "colaborador", "admin"},
-            "get_product_full_info": {"colaborador", "admin"},
-        }
-        return [tool for tool in tools if role in allowed.get(tool.name, set())]
+        claims = get_current_claims()
+        return [tool for tool in tools if tool_allowed(tool.name, claims.role, claims.channel)]
 
 
 mcp = RoleAwareFastMCP(

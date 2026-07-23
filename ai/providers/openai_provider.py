@@ -147,6 +147,7 @@ class OpenAIProvider(ILLMProvider):
 
         system_prompt, user_prompt = self._split_prompt(prompt)
         user_role = user_context.get("role", "guest") if user_context else "guest"
+        user_channel = user_context.get("channel", "web") if user_context else "web"
 
         # Construir mensajes iniciales
         # Si hay imágenes, usar formato content array para visión
@@ -311,6 +312,7 @@ class OpenAIProvider(ILLMProvider):
                         tool_name=fn_name,
                         parameters={"query": query},
                         user_role=user_role,
+                        channel=user_channel,
                     )
                     # Auto-extracción de product_id y sku si búsqueda retorna 1 resultado único
                     if isinstance(tool_result, dict) and not tool_result.get("error"):
@@ -340,6 +342,7 @@ class OpenAIProvider(ILLMProvider):
                         arguments={"query": query, "max_results": max_results},
                         role=user_role,
                         server_name="web_search",
+                        channel=user_channel,
                     )
             else:
                 # Tools basadas en producto: get_product_info, get_product_full_info
@@ -387,6 +390,7 @@ class OpenAIProvider(ILLMProvider):
                             tool_name=fn_name,
                             parameters=params,
                             user_role=user_role,
+                            channel=user_channel,
                         )
 
             # Guardar tool call para logging
@@ -396,8 +400,6 @@ class OpenAIProvider(ILLMProvider):
                 "success": not isinstance(tool_result, dict) or not tool_result.get("error"),
                 "result_summary": {
                     "items_count": len(tool_result.get("items", [])) if isinstance(tool_result, dict) else 0,
-                    "product_id": tool_result.get("product_id") if isinstance(tool_result, dict) else None,
-                    "sku": tool_result.get("sku") if isinstance(tool_result, dict) else None,
                 } if isinstance(tool_result, dict) else {},
             })
             
@@ -443,6 +445,7 @@ class OpenAIProvider(ILLMProvider):
                     tool_name="get_product_info",
                     parameters=synthetic_params,
                     user_role=user_role,
+                    channel=user_channel,
                 )
                 
                 # IMPORTANTE: Agregar la llamada sintética al assistant message
@@ -500,17 +503,29 @@ class OpenAIProvider(ILLMProvider):
     # ------------------------------------------------------------------
     # Tool Calling (MCP Products) --------------------------------------
     # ------------------------------------------------------------------
-    async def build_tools_schema(self, user_role: str) -> List[Dict[str, Any]]:
+    async def build_tools_schema(
+        self, user_role: str, channel: str = "web"
+    ) -> List[Dict[str, Any]]:
         """Descubre tools MCP y las convierte al formato de function calling."""
-        return await mcp_client_manager.openai_tools(user_role)
+        if channel == "web":
+            return await mcp_client_manager.openai_tools(user_role)
+        return await mcp_client_manager.openai_tools(user_role, channel)
 
-    async def call_mcp_tool(self, *, tool_name: str, parameters: Dict[str, Any], user_role: str = "guest") -> Dict[str, Any] | str:
+    async def call_mcp_tool(
+        self,
+        *,
+        tool_name: str,
+        parameters: Dict[str, Any],
+        user_role: str = "guest",
+        channel: str = "web",
+    ) -> Dict[str, Any] | str:
         """Compatibilidad interna: invoca Products mediante el cliente MCP real."""
         return await mcp_client_manager.call_tool(
             tool_name=tool_name,
             arguments=parameters,
             role=user_role,
             server_name="products",
+            channel=channel,
         )
 
     async def call_mcp_web_tool(
@@ -519,6 +534,7 @@ class OpenAIProvider(ILLMProvider):
         tool_name: str,
         parameters: Dict[str, Any],
         user_role: str | None = None,
+        channel: str = "web",
     ) -> Dict[str, Any] | str:
         """Compatibilidad interna: invoca Web Search mediante MCP real."""
         role = user_role or "guest"
@@ -527,6 +543,7 @@ class OpenAIProvider(ILLMProvider):
             arguments=parameters,
             role=role,
             server_name="web_search",
+            channel=channel,
         )
 
     async def chat_with_tools(self, *, prompt: str, user_role: str) -> str:

@@ -61,6 +61,7 @@ from .routers import (
     market,
     alerts,
     drive_sync,
+    external_identities,
 )
 from services.auth import require_csrf  # para override condicional en dev
 from services.routers import bug_report  # router para reportes de bugs
@@ -73,6 +74,7 @@ level_name = raw_level.strip().upper()
 if level_name not in logging._nameToLevel:
     level_name = "INFO"
 logger = logging.getLogger("growen")
+_CHAT_ARCHIVE_TASK = None
 logger.setLevel(level_name)
 LOG_DIR = Path(os.getenv("LOG_DIR", str(Path(__file__).resolve().parents[1] / "logs")))
 try:
@@ -151,6 +153,7 @@ async def log_requests(request: Request, call_next):
         request.state.correlation_id = corr
     except Exception:
         pass
+
     try:
         resp = await call_next(request)
     except (FastHTTPException, StarletteHTTPException):
@@ -355,6 +358,7 @@ if os.getenv("RUN_DOCTOR_ON_BOOT", "1") == "1":
 app.include_router(chat.router)
 app.include_router(telegram.router)
 app.include_router(auth.router)
+app.include_router(external_identities.router)
 app.include_router(actions.router)
 app.include_router(ws.router)
 from services.routers import catalogs as catalogs_router  # import after logger setup
@@ -674,6 +678,21 @@ async def _init_inmemory_db():
     except Exception:
         pass
 
+    # Archivado automático diario; la política vigente no elimina conversaciones.
+    try:
+        global _CHAT_ARCHIVE_TASK
+        from services.chat.orchestrator import archive_expired_sessions
+
+        async def _chat_archive_loop():
+            while True:
+                async with SessionLocal() as _archive_db:
+                    await archive_expired_sessions(_archive_db, settings.chat_archive_after_days)
+                await asyncio.sleep(24 * 60 * 60)
+
+        _CHAT_ARCHIVE_TASK = asyncio.create_task(_chat_archive_loop())
+    except Exception:
+        logger.exception("No se pudo iniciar el archivado automático de chat")
+
     # Programar autobackup diferido y no bloqueante
     try:
         _t = _schedule_auto_backup()  # may be coroutine
@@ -685,6 +704,18 @@ async def _init_inmemory_db():
 
 
 # Unificado en services.routers.health
+
+
+@app.on_event("shutdown")
+async def _stop_chat_archive_task():
+    global _CHAT_ARCHIVE_TASK
+    if _CHAT_ARCHIVE_TASK:
+        _CHAT_ARCHIVE_TASK.cancel()
+        try:
+            await _CHAT_ARCHIVE_TASK
+        except asyncio.CancelledError:
+            pass
+        _CHAT_ARCHIVE_TASK = None
 
 # --- Static frontend (built) + SPA fallback ---
 try:

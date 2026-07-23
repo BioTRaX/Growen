@@ -179,6 +179,12 @@ def test_alembic_upgrade_head_from_empty_postgres() -> None:
             "market_update_jobs",
             "market_update_items",
             "market_update_source_results",
+            "external_identities",
+            "external_identity_link_requests",
+            "telegram_updates",
+            "chat_runs",
+            "chat_tool_events",
+            "chat_feedback_events",
         } <= tables
 
         market_source_columns = {column["name"] for column in schema.get_columns("market_sources")}
@@ -195,6 +201,23 @@ def test_alembic_upgrade_head_from_empty_postgres() -> None:
 
         chat_session_columns = {column["name"] for column in schema.get_columns("chat_sessions")}
         assert {"channel", "assigned_user_id", "detected_intent", "sentiment", "classification_model", "problem_signals"} <= chat_session_columns
+        assert {"external_identity_id", "subject_hmac", "conversation_key"} <= chat_session_columns
+
+        knowledge_source_columns = {
+            column["name"] for column in schema.get_columns("knowledge_sources")
+        }
+        assert {
+            "role_scope",
+            "channel_scope",
+            "visibility",
+            "content_version",
+            "status",
+            "indexed_at",
+            "expires_at",
+        } <= knowledge_source_columns
+        assert "ix_knowledge_sources_status_expiry" in {
+            item["name"] for item in schema.get_indexes("knowledge_sources")
+        }
 
         product_columns = {column["name"]: column for column in schema.get_columns("products")}
         assert product_columns["stock"]["type"].precision == 14
@@ -237,7 +260,7 @@ def test_alembic_upgrade_head_from_empty_postgres() -> None:
 
         with target_engine.connect() as connection:
             versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            assert versions == ["20260721_market_observability_v1"]
+            assert versions == ["20260722_chat_observability_v3"]
     finally:
         if target_engine is not None:
             target_engine.dispose()

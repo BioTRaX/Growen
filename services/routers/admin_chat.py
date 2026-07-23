@@ -21,7 +21,7 @@ from sqlalchemy import String, and_, cast, desc, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from db.session import get_session
-from db.models import ChatMessage, ChatSession, User
+from db.models import ChatFeedbackEvent, ChatMessage, ChatRun, ChatSession, ChatToolEvent, TelegramUpdate, User
 from services.auth import require_csrf, require_roles, SessionData
 
 router = APIRouter(prefix="/admin/chats", tags=["Admin - Chat"])
@@ -68,6 +68,13 @@ class ChatSessionDetailOut(BaseModel):
     """Schema de salida para detalle completo de sesión."""
     session: ChatSessionOut
     messages: list[ChatMessageOut]
+    trace: Optional[dict] = None
+
+
+def _masked_identifier(value: str) -> str:
+    prefix, _, tail = value.partition(":")
+    visible = (tail or prefix)[-6:]
+    return f"{prefix}:••••{visible}" if tail else f"••••{visible}"
 
 
 class ChatSessionUpdate(BaseModel):
@@ -194,7 +201,7 @@ async def list_chat_sessions(
     for session in sessions:
         session_dict = {
             "session_id": session.session_id,
-            "user_identifier": session.user_identifier,
+            "user_identifier": _masked_identifier(session.user_identifier),
             "status": session.status,
             "tags": session.tags,
             "admin_notes": session.admin_notes,
@@ -230,6 +237,60 @@ async def get_chat_stats_static(
     return await get_chat_stats(session_data, db)
 
 
+@router.get("/metrics")
+async def get_chat_metrics(
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    channel: Optional[str] = None,
+    role: Optional[str] = None,
+    model: Optional[str] = None,
+    _session: SessionData = Depends(require_roles("admin", "colaborador")),
+    db: AsyncSession = Depends(get_session),
+):
+    filters = []
+    if date_from:
+        filters.append(ChatRun.created_at >= date_from)
+    if date_to:
+        filters.append(ChatRun.created_at <= date_to)
+    if channel:
+        filters.append(ChatRun.channel == channel)
+    if role:
+        filters.append(ChatRun.effective_role == role)
+    if model:
+        filters.append(ChatRun.model == model)
+    stmt = select(ChatRun)
+    if filters:
+        stmt = stmt.where(and_(*filters))
+    runs = (await db.scalars(stmt.order_by(ChatRun.created_at.desc()).limit(10000))).all()
+    latencies = sorted(item.latency_ms for item in runs if item.latency_ms is not None)
+
+    def percentile(value: float) -> int | None:
+        if not latencies:
+            return None
+        return latencies[min(len(latencies) - 1, int((len(latencies) - 1) * value))]
+
+    tool_rows = (await db.execute(select(ChatToolEvent.status, func.count()).group_by(ChatToolEvent.status))).all()
+    update_rows = (await db.execute(select(TelegramUpdate.status, func.count()).group_by(TelegramUpdate.status))).all()
+    feedback_stmt = select(ChatFeedbackEvent.rating, func.count()).group_by(ChatFeedbackEvent.rating)
+    if date_from:
+        feedback_stmt = feedback_stmt.where(ChatFeedbackEvent.created_at >= date_from)
+    if date_to:
+        feedback_stmt = feedback_stmt.where(ChatFeedbackEvent.created_at <= date_to)
+    feedback_rows = (await db.execute(feedback_stmt)).all()
+    return {
+        "runs": len(runs),
+        "succeeded": sum(item.status == "succeeded" for item in runs),
+        "failed": sum(item.status == "failed" for item in runs),
+        "latency_ms": {"p50": percentile(0.50), "p95": percentile(0.95), "p99": percentile(0.99)},
+        "tokens": {"input": sum(item.input_tokens or 0 for item in runs), "output": sum(item.output_tokens or 0 for item in runs)},
+        "estimated_cost": float(sum(item.estimated_cost or 0 for item in runs)),
+        "rag": {"used": sum(item.rag_used for item in runs), "with_citations": sum(item.citation_count > 0 for item in runs), "cache_hits": sum(item.cache_hit for item in runs)},
+        "tools": {status: count for status, count in tool_rows},
+        "telegram_updates": {status: count for status, count in update_rows},
+        "feedback": {rating: count for rating, count in feedback_rows},
+    }
+
+
 @router.get("/{session_id}", response_model=ChatSessionDetailOut)
 async def get_chat_session(
     session_id: str,
@@ -259,7 +320,7 @@ async def get_chat_session(
     return ChatSessionDetailOut(
         session=ChatSessionOut(
             session_id=session.session_id,
-            user_identifier=session.user_identifier,
+            user_identifier=_masked_identifier(session.user_identifier),
             status=session.status,
             tags=session.tags,
             admin_notes=session.admin_notes,
@@ -284,7 +345,24 @@ async def get_chat_session(
             )
             for msg in messages
         ],
+        trace=await _latest_trace(db, session.session_id),
     )
+
+
+async def _latest_trace(db: AsyncSession, session_id: str) -> dict | None:
+    run = await db.scalar(select(ChatRun).where(ChatRun.session_id == session_id).order_by(ChatRun.created_at.desc()))
+    if not run:
+        return None
+    tools = (await db.scalars(select(ChatToolEvent).where(ChatToolEvent.run_id == run.id))).all()
+    return {
+        "correlation_id": run.correlation_id,
+        "account_role": run.account_role,
+        "effective_role": run.effective_role,
+        "channel": run.channel,
+        "latency_ms": run.latency_ms,
+        "citation_count": run.citation_count,
+        "tools": [{"name": item.tool_name, "status": item.status, "duration_ms": item.duration_ms} for item in tools],
+    }
 
 
 class ChatStatsResponse(BaseModel):

@@ -321,7 +321,7 @@ def test_get_product_full_info_includes_enrichment_fields():
 
 def test_find_products_by_name_works_with_token():
     """find_products_by_name debe funcionar con token válido."""
-    token = create_test_token(role="viewer")  # Cualquier rol autenticado
+    token = create_test_token(role="guest")  # Rol público canónico
     with respx.mock(base_url="http://api:8000") as router:
         router.get("/catalog/search").mock(
             return_value=httpx.Response(200, json=[

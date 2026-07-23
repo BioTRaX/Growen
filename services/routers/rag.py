@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.session import get_session
 from services.rag.search import get_rag_search_service
+from ai.embeddings import get_embedding_service
 from services.auth import require_csrf, require_roles
 
 logger = logging.getLogger(__name__)
@@ -132,7 +133,6 @@ async def rag_health() -> dict[str, Any]:
     Verifica que el servicio de embeddings esté configurado correctamente.
     """
     try:
-        from ai.embeddings import get_embedding_service
         service = get_embedding_service()
         return {
             "status": "ok",

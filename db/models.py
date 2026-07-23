@@ -16,6 +16,7 @@ from sqlalchemy import (
     Time,
     ForeignKey,
     Integer,
+    BigInteger,
     Numeric,
     Float,
     String,
@@ -1423,6 +1424,8 @@ class KnowledgeSource(Base):
     __table_args__ = (
         Index("ix_knowledge_sources_hash", "hash"),
         Index("ix_knowledge_sources_created", "created_at"),
+        Index("ix_knowledge_sources_status_expiry", "status", "expires_at"),
+        CheckConstraint("status IN ('active','stale','disabled')", name="ck_knowledge_sources_status"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1430,6 +1433,13 @@ class KnowledgeSource(Base):
     hash: Mapped[str] = mapped_column(String(64), nullable=False)  # SHA256 para detectar duplicados
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
     meta_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
+    role_scope: Mapped[list] = mapped_column(JSONBCompat, default=list, server_default='["admin"]', nullable=False)
+    channel_scope: Mapped[list] = mapped_column(JSONBCompat, default=list, server_default='["web"]', nullable=False)
+    visibility: Mapped[str] = mapped_column(String(24), default="internal", server_default="internal", nullable=False)
+    content_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="disabled", server_default="disabled", nullable=False)
+    indexed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Relación con fragmentos vectorizados
     chunks: Mapped[list["KnowledgeChunk"]] = relationship(
@@ -1457,6 +1467,87 @@ class KnowledgeChunk(Base):
     source: Mapped["KnowledgeSource"] = relationship(back_populates="chunks")
 
 
+class ExternalIdentity(Base):
+    """Vínculo cifrado y revocable entre una identidad externa y un usuario."""
+
+    __tablename__ = "external_identities"
+    __table_args__ = (
+        UniqueConstraint("provider", "external_id_hmac", name="uq_external_identity_provider_hmac"),
+        Index("ix_external_identities_user_status", "user_id", "status"),
+        Index(
+            "uq_external_identity_active_user_provider",
+            "user_id",
+            "provider",
+            unique=True,
+            postgresql_where=text("user_id IS NOT NULL AND status IN ('active','pending_approval')"),
+            sqlite_where=text("user_id IS NOT NULL AND status IN ('active','pending_approval')"),
+        ),
+        CheckConstraint(
+            "status IN ('pending_approval','active','revoked')",
+            name="ck_external_identities_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_id_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    external_id_hmac: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending_approval", nullable=False)
+    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    approved_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    revoked_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class ExternalIdentityLinkRequest(Base):
+    """Código de vinculación de un uso; sólo se persiste su hash."""
+
+    __tablename__ = "external_identity_link_requests"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_external_identity_link_token_hash"),
+        Index("ix_external_identity_link_user_status", "user_id", "status"),
+        CheckConstraint("status IN ('pending','consumed','expired')", name="ck_external_identity_link_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    external_identity_id: Mapped[Optional[int]] = mapped_column(ForeignKey("external_identities.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TelegramUpdate(Base):
+    """Deduplicación persistente y estado seguro de updates de Telegram."""
+
+    __tablename__ = "telegram_updates"
+    __table_args__ = (
+        UniqueConstraint("bot_id_hash", "update_id", name="uq_telegram_update_bot_update"),
+        Index("ix_telegram_updates_status_received", "status", "received_at"),
+        CheckConstraint(
+            "status IN ('queued','processing','succeeded','failed','skipped')",
+            name="ck_telegram_updates_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    update_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    processing_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 class ChatSession(Base):
     """Sesión de chat persistente para mantener contexto conversacional."""
     __tablename__ = "chat_sessions"
@@ -1465,6 +1556,7 @@ class ChatSession(Base):
         Index("ix_chat_sessions_status", "status"),
         Index("ix_chat_sessions_last_message", "last_message_at"),
         Index("ix_chat_sessions_created", "created_at"),
+        Index("ix_chat_sessions_channel_subject", "channel", "subject_hmac"),
         CheckConstraint(
             "status IN ('new','reviewed','archived')",
             name="ck_chat_sessions_status"
@@ -1477,6 +1569,9 @@ class ChatSession(Base):
     tags: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
     admin_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     channel: Mapped[str] = mapped_column(String(24), default="web", server_default="web", nullable=False)
+    external_identity_id: Mapped[Optional[int]] = mapped_column(ForeignKey("external_identities.id", ondelete="SET NULL"), nullable=True)
+    subject_hmac: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    conversation_key: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True)
     assigned_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -1517,6 +1612,71 @@ class ChatMessage(Base):
     meta: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')  # Ej: {"tool_name": "...", "tokens": 123}
 
     session: Mapped["ChatSession"] = relationship(back_populates="messages")
+
+
+class ChatRun(Base):
+    """Trazabilidad agregada de una respuesta sin contenido conversacional."""
+
+    __tablename__ = "chat_runs"
+    __table_args__ = (
+        Index("ix_chat_runs_created_channel_status", "created_at", "channel", "status"),
+        Index("ix_chat_runs_role_model", "effective_role", "model"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[Optional[str]] = mapped_column(ForeignKey("chat_sessions.session_id", ondelete="SET NULL"), nullable=True)
+    correlation_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    channel: Mapped[str] = mapped_column(String(24), nullable=False)
+    account_role: Mapped[str] = mapped_column(String(20), nullable=False)
+    effective_role: Mapped[str] = mapped_column(String(20), nullable=False)
+    model: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    provider: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    input_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    estimated_cost: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 6), nullable=True)
+    rag_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    citation_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tool_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cache_hit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class ChatToolEvent(Base):
+    """Evento de tool sin argumentos ni resultados completos."""
+
+    __tablename__ = "chat_tool_events"
+    __table_args__ = (Index("ix_chat_tool_events_tool_created", "tool_name", "created_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("chat_runs.id", ondelete="CASCADE"), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    authorized: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    cache_hit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ChatFeedbackEvent(Base):
+    """Feedback agregado vinculado por correlation ID, sin contenido de chat."""
+
+    __tablename__ = "chat_feedback_events"
+    __table_args__ = (
+        CheckConstraint("rating IN ('positive','negative')", name="ck_chat_feedback_events_rating"),
+        Index("ix_chat_feedback_events_rating_created", "rating", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    correlation_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    rating: Mapped[str] = mapped_column(String(16), nullable=False)
+    channel: Mapped[str] = mapped_column(String(24), default="web", nullable=False)
+    account_role: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 # --- Operaciones administrativas persistentes ---

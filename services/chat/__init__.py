@@ -1,6 +1,6 @@
-﻿# NG-HEADER: Nombre de archivo: __init__.py
+#!/usr/bin/env python
+# NG-HEADER: Nombre de archivo: __init__.py
 # NG-HEADER: Ubicación: services/chat/__init__.py
-# NG-HEADER: Descripción: Inicializa el paquete de utilidades de chat
+# NG-HEADER: Descripción: Servicios compartidos del orquestador de chat.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-
-"""Utilidades del módulo de chat."""
+"""Servicios compartidos del chat multicanal."""
