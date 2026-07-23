@@ -4,6 +4,20 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Notas de migraciones
 
+## 2026-07-22 — cadena de Chat segura
+
+La cadena lineal parte de `20260721_market_observability_v1` y termina en un head único:
+
+1. `20260722_chat_identity_security_v1`: identidades externas cifradas/HMAC, solicitudes de vínculo, deduplicación Telegram y sesiones opacas.
+2. `20260722_chat_rag_policy_v2`: scopes y vigencia en `knowledge_sources`, versión de contenido e índice full-text PostgreSQL. Las fuentes preexistentes quedan `disabled` y restringidas a `admin/web` hasta clasificación explícita.
+3. `20260722_chat_observability_v3`: `chat_runs`, `chat_tool_events` y `chat_feedback_events` sin contenido conversacional.
+
+El downgrade se bloquea si existen identidades, updates, políticas RAG o trazabilidad porque implicaría pérdida de evidencia o reglas de acceso. Validación requerida: `alembic heads`, upgrade incremental sobre PostgreSQL con pgvector, constraints/índices y `alembic check`; cualquier drift histórico ajeno debe documentarse, no incorporarse silenciosamente.
+
+La primera revisión amplía `alembic_version.version_num` de 32 a 64 caracteres antes de registrar su ID. La ampliación no se revierte: conservarla evita que un downgrade intente truncar el revision ID activo.
+
+Las sesiones legacy se inspeccionan con `.\.venv\Scripts\python.exe scripts\migrate_legacy_telegram_sessions.py` y sólo se convierten con `--apply`. El script es transaccional y nunca muestra IDs.
+
 ## 2026-07-21 — `20260721_market_observability_v1`
 
 Revisión focal posterior a `20260718_product_taxonomy_tags_v1`. Crea `market_alerts`, `market_update_jobs`, `market_update_items` y `market_update_source_results`; amplía fuentes e historial con validación, auditoría y referencias al trabajo originador. `source_type` pasa del enum PostgreSQL cerrado a `VARCHAR(16)` con check `static|dynamic|manual`, lo que permite el backfill manual dentro de una única revisión transaccional.

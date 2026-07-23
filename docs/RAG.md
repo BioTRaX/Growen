@@ -5,6 +5,14 @@
 
 # RAG - Retrieval-Augmented Generation
 
+## Política RAG v2 (2026-07-22)
+
+La recuperación filtra **antes de rankear** por `role_scope`, `channel_scope`, `status` y vigencia. `KnowledgeSource` es la autoridad única; los chunks heredan por join. Fuentes `stale`, `disabled` o vencidas no ingresan al contexto.
+
+PostgreSQL combina pgvector y full-text mediante fusión de rankings; SQLite mantiene un fallback determinista para tests. El cache se separa por hash de consulta, rol efectivo, canal y versión global del corpus, y se invalida al cambiar `content_version`. El contexto se limita por `RAG_CONTEXT_MAX_TOKENS`.
+
+Cada resultado incluye cita tipada con `source_id`, título, chunk, página, score y versión. Las fuentes existentes migran cerradas (`admin`, `web`, `disabled`) y deben clasificarse explícitamente desde Administración antes de habilitar el bot público.
+
 Sistema de recuperación de información con búsqueda vectorial para el chatbot de Growen.
 
 **Estado**: ✅ **Infraestructura + Admin UI Completos** (Etapa 2.5) - 2025-11-30

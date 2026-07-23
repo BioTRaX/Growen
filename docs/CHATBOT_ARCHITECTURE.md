@@ -5,6 +5,14 @@
 
 # Arquitectura del Chatbot Administrativo
 
+## Autorización por capacidades y canal (2026-07-22)
+
+Cada solicitud distingue `account_role` (valor vigente de `User.role`) de `effective_role` (rol tras el techo del canal). Telegram reduce admin a colaborador y rechaza toda mutación. Los roles canónicos son `guest`, `cliente`, `proveedor`, `colaborador` y `admin`; `anon` sólo se acepta como alias legacy de `guest`.
+
+`agent_core/chat_policy.py` es el registro único de tools, roles, capacidades, canales, lectura/escritura, perfil de datos y sanitizador. El cliente MCP, `tools/list`, decoradores y servidor vuelven a consultar el registro; una tool desconocida se deniega. Las respuestas públicas eliminan recursivamente SKU y stock exacto.
+
+El flujo es: validación/rate limit → identidad → persona → historial por tokens → RAG autorizado → tools autorizadas → modelo → sanitización → persistencia → métricas. HTTP y Telegram usan el orquestador observable; WebSocket conserva un adaptador legacy sobre las mismas políticas hasta completar la convergencia del transporte. React permanece como fallback hasta probar paridad Vue.
+
 ## Enriquecimiento por tags de producto (2026-07-18)
 
 Products MCP expone tags como `list[str]` en búsqueda y detalle. La búsqueda interpreta cada término con lógica AND y permite coincidencia por tag, además de nombre, descripción o SKU. Los tags enriquecen recuperación y conversación, pero no reemplazan categoría/subcategoría ni forman parte del identificador permanente del producto.

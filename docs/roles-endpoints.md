@@ -4,6 +4,22 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Roles por endpoint
 
+## Chat e identidades externas (2026-07-22)
+
+| Método/ruta | Roles | Requisitos |
+|---|---|---|
+| `POST /auth/external-identities/telegram/link-request` | usuario autenticado | CSRF, contraseña vigente, código privado de un uso |
+| `GET /auth/me/external-identities` | usuario autenticado | identificadores enmascarados |
+| `DELETE /auth/me/external-identities/{id}` | propietario | CSRF; revocación inmediata |
+| `GET /admin/external-identities` | admin | identificadores enmascarados |
+| `POST /admin/external-identities/{id}/approve` | segundo admin | CSRF; no permite autoaprobación |
+| `POST /admin/external-identities/{id}/revoke` | admin | CSRF y auditoría |
+| `POST /chat` / `WS /ws` | `guest`, cliente, proveedor, colaborador, admin | rol vigente por sesión; política por capacidades |
+| Telegram polling | público | `guest` por defecto, techo colaborador, sólo lectura |
+| `GET /admin/chats/metrics` | colaborador, admin | agregados sin contenido ni IDs en claro |
+
+El registro central es la autoridad de tools. Invitados/clientes reciben perfil público; proveedor conserva alcance propio; colaborador recibe datos operativos; admin sólo conserva capacidades administrativas completas en web.
+
 ## Productos, taxonomía y tags (2026-07-18)
 
 | Método/ruta | Lectura | Mutación |

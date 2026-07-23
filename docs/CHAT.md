@@ -5,6 +5,18 @@
 
 # Chatbot Growen
 
+## Pipeline multicanal seguro (2026-07-22)
+
+HTTP, WebSocket y Telegram convergen en un contexto común de canal, conversación opaca, identidad, rol real/efectivo, correlation ID, límites y capacidades. `ChatOrchestrator` registra ejecución, estado y latencia sin conservar contenido operativo en logs. HTTP y Telegram ya ingresan al orquestador; WebSocket conserva su contrato de transporte legacy, pero comparte rol vigente, política MCP, sanitización y RAG autorizado durante la transición.
+
+HTTP devuelve `correlation_id` y citas tipadas. Las invocaciones MCP registran nombre, autorización, estado y duración, nunca argumentos ni resultados. Chat Inbox presenta la última traza a personal autorizado.
+
+Telegram admite `/vincular`, `/desvincular`, `/quien_soy` y `/privacidad`. Los vínculos elevados sólo funcionan en chat privado; grupos permanecen `guest`. El catálogo público expone precio de venta y disponibilidad aproximada, nunca SKU ni stock exacto.
+
+El worker de polling no elimina webhook ni updates pendientes, registra `update_id` antes de procesar, usa cola acotada, concurrencia configurable y orden por persona. Iniciar exclusivamente con `scripts/start_worker_telegram_polling.cmd` después de configurar claves y flags.
+
+El módulo Vue `/chat` incluye HTTP/WS, reconexión con backoff, fallback HTTP, cancelación, cards filtradas, citas, feedback y errores tipados. Permanece `ready/legacy` hasta completar el smoke por rol y la ventana de estabilidad.
+
 ## Chat Inbox y calidad supervisada (2026-07-18)
 
 `/admin/chats` permite a staff buscar, filtrar, asignar, etiquetar y revisar conversaciones. Feedback, intención, sentimiento, confianza, modelo y señales problemáticas se conservan en PostgreSQL.

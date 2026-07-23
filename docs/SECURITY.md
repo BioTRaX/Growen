@@ -5,6 +5,19 @@
 
 # Seguridad
 
+## Identidad y autorización de Chat/Telegram (2026-07-22)
+
+- `message.from.id` es la identidad personal; `chat.id` sólo representa destino y conversación.
+- Los IDs externos se cifran con AES-GCM y se buscan con HMAC-SHA256 usando claves separadas. UI y APIs administrativas sólo muestran valores enmascarados.
+- Los desconocidos son `guest`. El rol de cuenta se consulta desde `User.role` en cada mensaje y Telegram aplica techo `colaborador`; en grupos no se aplican roles vinculados.
+- Admin exige reautenticación web, código privado de cinco minutos y aprobación de otro admin. La autoaprobación está prohibida.
+- Telegram es sólo lectura. Tools desconocidas, canales no declarados y capacidades ausentes se deniegan por defecto.
+- `AI_ALLOW_EXTERNAL=false` impide seleccionar OpenAI como fallback.
+- Logs y trazas no deben contener IDs, tokens, códigos, URLs de DB, prompts, respuestas ni argumentos/results de tools.
+- Las sesiones se archivan a los 90 días; no existe borrado automático. La eliminación o anonimización es manual y auditable.
+
+La rotación de cifrado admite temporalmente `TELEGRAM_IDENTITY_ENCRYPTION_KEY_PREVIOUS`; la clave HMAC no debe rotarse sin una migración de reindexación. Todas las banderas Telegram quedan apagadas hasta aplicar migraciones y completar smoke.
+
 ## Manejo de secretos
 - Nunca versionar archivos `.env` ni credenciales.
 - Utilizar gestores de secretos cuando sea posible.

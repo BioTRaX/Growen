@@ -4,6 +4,18 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-07-22 — Chat multicanal, Telegram, RAG y observabilidad
+
+- Se incorporaron identidades externas cifradas, vínculos de un uso, doble aprobación admin y revocación inmediata basada en `User.role`.
+- Telegram ahora usa `from.id`, sesiones opacas, rate limit, deduplicación persistente, cola acotada, orden por remitente, retries seguros y health sin datos personales.
+- Se centralizaron políticas MCP/tools con denegación por defecto y sanitización de catálogo público.
+- RAG suma scopes de rol/canal, estado y vigencia, búsqueda híbrida, cache versionado, presupuesto de tokens y citas tipadas.
+- Se agregaron trazas y métricas sin prompts, argumentos ni resultados completos, junto al archivado automático a 90 días.
+- Se implementó `Chat 😎` en Vue como módulo independiente en estado `ready/legacy`.
+- Se corrigió la pérdida de tablas SQLite en pruebas WebSocket usando una base temporal aislada por proceso.
+- Alembic y los scripts de diagnóstico dejaron de imprimir DB URLs, incluso enmascaradas.
+- `cryptography` quedó declarada como dependencia directa para AES-GCM; ya formaba parte de los locks existentes como dependencia transitiva. No se agregaron paquetes npm.
+
 ## 2026-07-21 — Retrospectiva técnica de Mercado
 
 - Se documentaron las tareas completadas, los incidentes post-implementación, sus causas y la deuda residual de Mercado.

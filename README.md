@@ -1,5 +1,15 @@
 # Growen
 
+## Chat 😎 y Telegram seguro
+
+La base multicanal comparte autorización entre HTTP, WebSocket y Telegram. Telegram opera por polling, identifica personas mediante `from.id`, asigna `guest` por defecto y limita cualquier admin al rol efectivo `colaborador`. Los vínculos usan AES-GCM + HMAC, los permisos se vuelven a consultar desde `User.role` en cada mensaje y todas las mutaciones quedan denegadas en Telegram.
+
+El despliegue es seguro por defecto: `TELEGRAM_ENABLED`, `TELEGRAM_PUBLIC_BOT_ENABLED` y `TELEGRAM_ROLE_LINKING_ENABLED` permanecen en `0`. Antes de habilitarlos, aplicar las tres revisiones `20260722_chat_*`, generar las claves locales con `.\.venv\Scripts\python.exe scripts\generate_chat_keys.py --write`, clasificar las fuentes RAG y ejecutar el smoke por rol. Nunca imprimir ni versionar las claves generadas.
+
+La identidad cifrada requiere `cryptography>=49,<50`, declarada en `requirements-base.txt` y ya fijada en los locks del proyecto.
+
+El módulo Vue está disponible en `/chat` como `ready/legacy`; React sigue siendo el runtime productivo hasta cerrar la validación de paridad. La operación detallada está en `docs/CHAT.md`, `docs/SECURITY.md` y `docs/FRONTEND_MIGRATION_VUE.md`.
+
 ## Compras Vue e ingesta de remitos
 
 El primer dominio operativo de la migración Vue permite importar remitos de Santa Planta en PDF, JPG o PNG, revisar las líneas y confirmar el impacto. Los productos desconocidos se crean dentro de la confirmación con stock inicial cero y sin producto canónico; la misma transacción registra costo, historial y movimiento de stock.

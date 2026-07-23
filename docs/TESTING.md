@@ -5,6 +5,18 @@
 
 # Testing en Growen
 
+## Suite focalizada de Chat seguro, RAG y MCP
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_chat_security_policy.py tests\test_chat_api.py tests\test_chat_quality_pipeline.py tests\test_chat_ws_price.py tests\test_ws_chat.py tests\test_rag_search.py tests\test_mcp_client.py tests\test_mcp_find_products.py tests\routers\test_chat_http.py tests\routers\test_chat_http_product_tool.py tests\routers\test_chat_tool_call.py mcp_servers\products_server\tests mcp_servers\web_search_server\tests tests\test_migrations_fresh_postgres.py -q -p no:randomly
+cd frontend-vue
+npm.cmd run typecheck
+npm.cmd test
+npm.cmd run build
+```
+
+La integración PostgreSQL limpia requiere `MIGRATION_TEST_POSTGRES_URL` y debe alcanzar `20260722_chat_observability_v3`, verificando identidades externas, deduplicación Telegram, políticas RAG y tablas de observabilidad. Los flags públicos de Telegram permanecen deshabilitados durante las pruebas salvo que el caso configure explícitamente claves efímeras.
+
 ## Suite focalizada de Mercado observable y Vue
 
 ```powershell

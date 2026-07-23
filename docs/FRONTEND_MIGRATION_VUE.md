@@ -5,6 +5,12 @@
 
 # Migración del frontend a Vue 3 y Vuetify 3
 
+## Chat 😎 — módulo independiente (2026-07-22)
+
+`frontend-vue/src/modules/chat/` implementa `/chat` para todos los roles con HTTP/WebSocket compartido, reconexión, fallback HTTP, streaming compatible, cancelación, cards por perfil, citas, feedback, estado de conexión y errores tipados. El borrador permanece sólo en memoria.
+
+El manifiesto queda deliberadamente en `state: ready`, `runtime: legacy`: Vue debe pasar typecheck/build, smoke autenticado por rol y paridad funcional antes de activarse. React se conserva durante dos releases estables y siete días sin incidentes críticos. Rollback: restaurar `legacy` sin revertir datos ni migraciones.
+
 ## Mercado — corte Vue implementado (2026-07-21)
 
 `/mercado` está activo en Vue para `colaborador|admin`. El módulo vive en `frontend-vue/src/modules/market/` y conserva backend autoritativo, CSRF, filtros, batch, fuentes, observaciones manuales, histórico SVG y seguimiento de jobs hasta estado terminal. React queda como fallback durante un ciclo de versión; no debe retirarse hasta completar el smoke visual autenticado y observar estabilidad operativa.

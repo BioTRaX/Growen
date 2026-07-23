@@ -5,6 +5,18 @@
 
 # Roadmap del Proyecto
 
+## Actualización 2026-07-22 — Chat multicanal seguro
+
+- [x] Base de identidad Telegram cifrada (AES-GCM), búsqueda HMAC, vínculos revocables y aprobación doble para admin.
+- [x] Registro central deny-by-default para roles, canales, capacidades, tools y sanitización pública.
+- [x] Polling acotado, idempotente, ordenado por remitente, con backoff, recuperación y health seguro.
+- [x] RAG híbrido con scopes previos al ranking, vigencia, versión, cache y citas tipadas.
+- [x] Trazabilidad sin contenido en `chat_runs`/`chat_tool_events`, métricas agregadas y archivado a 90 días.
+- [x] Módulo Vue `/chat` implementado como `Chat 😎`, conservando React como fallback.
+- [ ] Ejecutar migraciones y smoke sobre PostgreSQL con las banderas apagadas.
+- [ ] Clasificar explícitamente todas las fuentes RAG antes de publicar conocimiento.
+- [ ] Activar Telegram por etapas y promover Chat Vue sólo tras paridad, dos releases y siete días sin incidente crítico.
+
 ## Actualización 2026-07-21 — Mercado observable y migrado a Vue
 
 - [x] Migración focal `20260721_market_observability_v1`: alertas, jobs, items, resultados por fuente, validación, observaciones auditables e histórico de tres años.
