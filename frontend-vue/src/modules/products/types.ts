@@ -76,24 +76,104 @@ export interface ProductDetail {
   title: string
   preferred_title: string | null
   stock: number
+  stock_total: number
   sku_root: string | null
   category_path: string | null
   category_id: number | null
   subcategory_id: number | null
   description_html: string | null
+  last_enriched_at: string | null
+  enriched_by: number | null
+  weight_kg: number | null
+  height_cm: number | null
+  width_cm: number | null
+  depth_cm: number | null
+  technical_specs: Record<string, unknown>
+  usage_instructions: Record<string, unknown>
   canonical_product_id: number | null
   canonical_sku: string | null
   canonical_name: string | null
   canonical_sale_price: number | null
   supplier_sale_price: number | null
   sale_price: number | null
-  images: Array<{ id: number; url: string; alt_text: string | null; is_primary: boolean }>
+  canonical_status: 'ready' | 'canonical_required'
+  content_revision: number | null
+  enrichment: Pick<EnrichmentJob, 'job_id' | 'status' | 'stage' | 'applied_fields'> & { error: string | null } | null
+  images: Array<{ id: number; product_id: number; url: string; alt_text: string | null; is_primary: boolean }>
   tags: ProductTag[]
+  linked_inventory: LinkedInventoryItem[]
+}
+
+export interface LinkedInventorySupplier {
+  supplier_id: number
+  supplier_name: string
+  supplier_product_id: string
+  purchase_price: number | null
+  sale_price: number | null
+}
+
+export interface LinkedInventoryItem {
+  product_id: number
+  original_name: string
+  sku_root: string | null
+  stock: number
+  suppliers: LinkedInventorySupplier[]
+  product_url: string
+  stock_url: string
+}
+
+export type EnrichmentScope = 'full' | 'description' | 'technical'
+export type EnrichmentStatus =
+  | 'queued'
+  | 'running'
+  | 'review_required'
+  | 'partially_applied'
+  | 'applied'
+  | 'failed'
+  | 'cancelled'
+  | 'discarded'
+export type EnrichmentStage = 'research' | 'fetch' | 'compose' | 'validate' | 'apply' | null
+
+export interface EnrichmentSource {
+  url: string
+  title: string | null
+  source_type: string | null
+  mime_type: string | null
+  content_hash: string | null
+  evidence: { snippet?: string; excerpt?: string } | null
+}
+
+export interface EnrichmentJob {
+  job_id: string
+  canonical_product_id: number
+  requested_product_id: number | null
+  status: EnrichmentStatus
+  stage: EnrichmentStage
+  scope: EnrichmentScope
+  provider: string | null
+  model: string | null
+  proposal: Record<string, unknown> | null
+  confidence: Record<string, number> | null
+  evidence_by_field: Record<string, string[]> | null
+  sources: EnrichmentSource[]
+  applied_fields: string[]
+  error: { code: string | null; message: string | null } | null
+  attempts: number
+  created_at: string | null
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface EnrichmentJobCreated {
+  job_id: string
+  status: EnrichmentStatus
+  status_url: string
 }
 
 export interface ProductPurchaseHistoryItem {
   purchase_id: number
   purchase_line_id: number
+  product_id: number
   date: string
   supplier: { id: number; name: string }
   remito_number: string
@@ -108,6 +188,7 @@ export interface ProductPurchaseHistoryItem {
 
 export interface ProductStockMovement {
   type: string
+  product_id: number
   source_id: number | null
   delta: number
   balance_after: number

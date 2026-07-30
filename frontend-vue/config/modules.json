@@ -43,16 +43,29 @@
       "aliases": []
     },
     {
-      "id": "product-detail-legacy",
+      "id": "product-detail",
       "title": "Detalle de producto",
       "icon": "mdi-package-variant-closed",
       "group": "Productos",
       "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"],
       "capabilities": [],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [
+        { "path": "/productos/:id", "name": "product-detail", "title": "Detalle de producto", "component": "product-detail", "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"], "navigation": false }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "product-image-legacy",
+      "title": "Imagen avanzada de producto",
+      "icon": "mdi-image-edit",
+      "group": "Productos",
+      "roles": ["colaborador", "admin"],
+      "capabilities": [],
       "state": "partial",
       "runtime": "legacy",
       "routes": [
-        { "path": "/productos/:id", "name": "product-detail", "title": "Detalle de producto", "component": "product-detail", "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"], "navigation": false },
         { "path": "/productos/:id/imagen", "name": "product-image", "title": "Imagen de producto", "component": "pending", "roles": ["colaborador", "admin"], "navigation": false }
       ],
       "aliases": []

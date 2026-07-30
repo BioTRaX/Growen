@@ -20,6 +20,9 @@ import type {
   CanonicalSkuPreviewResponse,
   MassCanonicalDraftRow,
   ProductTag,
+  EnrichmentJob,
+  EnrichmentJobCreated,
+  EnrichmentScope,
 } from '../types'
 
 export function toProductApiParams(filters: ProductListFilters): Record<string, string | number> {
@@ -79,8 +82,49 @@ export async function getProduct(id: number): Promise<ProductDetail> {
   return (await http.get<ProductDetail>(`/products/${id}`)).data
 }
 
+export async function updateCanonicalSku(
+  canonicalId: number,
+  sku: string,
+): Promise<{ id: number; sku_custom: string }> {
+  return (await http.patch<{ id: number; sku_custom: string }>(`/canonical-products/${canonicalId}`, {
+    sku_custom: sku.trim(),
+  })).data
+}
+
 export async function getProductHistory(id: number): Promise<ProductPurchaseHistory> {
   return (await http.get<ProductPurchaseHistory>(`/products/${id}/purchase-history`)).data
+}
+
+export async function createEnrichmentJob(
+  canonicalId: number,
+  productId: number,
+  scope: EnrichmentScope,
+): Promise<EnrichmentJobCreated> {
+  return (await http.post<EnrichmentJobCreated>(`/canonical-products/${canonicalId}/enrichment-jobs`, {
+    client_request_id: crypto.randomUUID(),
+    requested_product_id: productId,
+    scope,
+  })).data
+}
+
+export async function getEnrichmentJob(canonicalId: number, jobId: string): Promise<EnrichmentJob> {
+  return (await http.get<EnrichmentJob>(`/canonical-products/${canonicalId}/enrichment-jobs/${jobId}`)).data
+}
+
+export async function applyEnrichmentJob(
+  canonicalId: number,
+  jobId: string,
+  fields: string[],
+  expectedContentRevision: number,
+): Promise<{ status: string; applied_fields: string[]; content_revision: number }> {
+  return (await http.post(`/canonical-products/${canonicalId}/enrichment-jobs/${jobId}/apply`, {
+    fields,
+    expected_content_revision: expectedContentRevision,
+  })).data
+}
+
+export async function discardEnrichmentJob(canonicalId: number, jobId: string): Promise<void> {
+  await http.post(`/canonical-products/${canonicalId}/enrichment-jobs/${jobId}/discard`)
 }
 
 export async function createProduct(payload: ProductCreatePayload): Promise<CreatedProduct> {

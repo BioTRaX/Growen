@@ -5,6 +5,22 @@
 
 # UI de Productos y Canónicos
 
+## Centro Conocimiento (2026-07-26)
+
+La ficha canónica muestra **Conocimiento** para staff. El centro compartido con Mercado reúne fuentes, documentos, imágenes, videos, hechos, historial e IA; permite alta, edición, procesamiento, revalidación, archivado/restauración y upload. Sus etiquetas/capacidades nunca se agregan a `Product.tags`. Mercado lo abre filtrado por `market`.
+
+Al editar una fuente Mercado, staff configura tipo de lectura, obligatoriedad, estado y confirma explícitamente ARS con entrega en Argentina. Sin esa confirmación el activo se conserva y puede ser evidencia, pero no participa del scraping ni del promedio.
+
+## Detalle canónico Vue y Enrich v2 (2026-07-25)
+
+`/productos/:id` está activo en Vue. El ID sigue identificando el registro interno, pero nombre preferido, descripción, medidas, especificaciones, instrucciones y revisión provienen del canónico vinculado. Todos los internos equivalentes comparten contenido; stock, tags e imágenes se agregan y el inventario inferior lista cada `Product.id` una sola vez con sus ofertas.
+
+El SKU canónico muestra un lápiz para `colaborador|admin`. La edición requiere confirmar con el botón de check o Enter; Escape/cancelar descarta el borrador y perder foco nunca guarda. El backend normaliza a mayúsculas, exige `XXX_0000_YYY` y valida unicidad antes del commit. Un SKU existente devuelve `409 duplicate_sku`, mantiene abierto el editor y no aplica ningún cambio.
+
+Sin canónico se muestra una ficha básica y la acción para asignarlo; Enrich queda bloqueado. El stock es sólo lectura y enlaza a `/stock`. Staff ve actividad, fuentes, selección de campos y una card que consume exclusivamente `/market`. La ruta `/productos/:id/imagen` y equivalencias avanzadas continúan en React.
+
+Los jobs pueden quedar `review_required` o `partially_applied`; la aplicación exige `expected_content_revision` y devuelve `409` ante cambios concurrentes. El backend entrega HTML escapado/permitido: el modelo sólo devuelve texto y datos estructurados.
+
 ## Taxonomía plana y tags (2026-07-18)
 
 Categoría y subcategoría son dos listas independientes identificadas por `kind=category|subcategory`. Sus autocompletes usan un valor numérico estable y `v-model:search`: aceptan escritura real y muestran **Agregar “…”** cuando no existe una coincidencia normalizada dentro del mismo tipo. El mismo nombre puede existir una vez en cada tipo; `parent_id` ya no filtra la selección.
@@ -41,12 +57,12 @@ Para `colaborador` y `admin` se recuperaron las operaciones principales:
 La barra lateral agrupa bajo **Productos**:
 
 - Catálogo: operativo en Vue.
-- Stock: vistas `/stock` y `/stock/shortages` implementadas para validación en Vue; el manifiesto conserva `legacy/pending` hasta activar Productos/Catálogos y completar el smoke por rol.
-- Imágenes: ruta `/imagenes-productos` visible sólo para `colaborador` y `admin`, pendiente de migración.
+- Stock: rutas `/stock` y `/stock/shortages` activas en Vue; contrato operativo en `docs/STOCK.md`.
+- Imágenes: ruta `/imagenes-productos` activa en Vue y visible sólo para `colaborador` y `admin`.
 
 El listado admite `cliente`, `proveedor`, `colaborador` y `admin`. El detalle `/productos/:id` admite también `guest`; el historial confirmado de compras, remitos y movimientos de stock se muestra únicamente a staff.
 
-Esta vista no sustituye todavía la administración avanzada React de imágenes, detalle enriquecido, mercado, equivalencias y preferencias de columnas. Enriquecimiento masivo, completar precios y catálogos ya están disponibles en Vue.
+Las capacidades pendientes deben consultarse en el manifiesto y en `docs/FRONTEND_MIGRATION_VUE.md`. Este documento no mantiene un segundo estado de migración. Enriquecimiento masivo, completar precios y catálogos están disponibles en Vue.
 
 ## Listado de Productos
 
@@ -90,49 +106,34 @@ Esta vista no sustituye todavía la administración avanzada React de imágenes,
 - **Aplica en**: Vista de Stock, exports XLS, export TiendaNegocio, detalle de producto.
 - **Implementación**: `db/text_utils.stylize_product_name()` (ver tests en `tests/test_text_utils.py`).
 
-  ### Nota sobre “Stock” y enlace de Precio de Venta
+### Relación con Stock
 
-  - En la vista Stock (`/stock`) la columna “Precio venta” muestra el precio efectivo con la misma regla que el listado de Productos:
-    - Si el producto está vinculado a un Canónico y éste tiene `sale_price`, se muestra ese valor.
-    - Si no hay canónico o el canónico no tiene precio, se muestra el `current_sale_price` del `SupplierProduct` (proveedor) asociado.
-  - La edición del precio desde Stock sigue esta lógica:
-    - Con canónico: el lápiz edita `CanonicalProduct.sale_price` vía `PATCH /products-ex/products/{canonical_product_id}/sale-price`.
-    - Sin canónico: el lápiz edita `SupplierProduct.current_sale_price` vía `PATCH /products-ex/supplier-items/{supplier_item_id}/sale-price`.
-  - Exportar Stock (XLS/CSV/PDF) utiliza el mismo precio efectivo (canónico → proveedor) para la columna “PRECIO DE VENTA”.
-- Exportar stock:
-  - Botones en UI: “Descargar XLS”, “Descargar CSV” y “Exportar PDF”.
-  - Endpoints: `GET /stock/export.xlsx`, `GET /stock/export.csv`, `GET /stock/export.pdf`.
-  - Nuevo: “Exportar a TiendaNegocio” (XLSX) exporta con la misma vista/filtros activos en el formato requerido por TiendaNegocio.
-    - Endpoint: `GET /stock/export-tiendanegocio.xlsx` (roles: colaborador/admin).
-    - Columnas: SKU, Nombre, Precio (precio efectivo canónico→proveedor), Oferta (vacío), Stock, Visibilidad (Visible), Descripción, Peso/Alto/Ancho/Profundidad (si están cargados), Variantes (vacías), Categoría jerárquica.
-  - Respetan los mismos filtros activos (texto, proveedor, categoría, stock) y el orden por defecto (`sort_by=updated_at&order=desc`).
-  - El PDF se abre desde un blob en una nueva pestaña y revoca su URL temporal; el backend usa ReportLab incluido en el proyecto, sin dependencia nueva.
-  - XLSX: Encabezado con fondo oscuro y texto en blanco/negrita; la primera columna (“NOMBRE DE PRODUCTO”) se exporta en negrita por fila y se ajusta un ancho adecuado de forma automática.
+Stock reutiliza el precio efectivo canónico → proveedor y los contratos de producto, pero mantiene su documentación funcional y de exportaciones en `docs/STOCK.md`. Esta separación evita duplicar reglas entre Productos y Stock.
 
 ## Detalle de Producto
-- Visualización del SKU: si el producto está vinculado a un canónico y éste posee `sku_custom` (o `ng_sku`), se muestra ese SKU preferentemente; si no, se muestra `sku_root` del producto interno.
- - Acción “Enriquecer con IA”: botón visible sólo si el usuario tiene permisos de edición (admin/colaborador) y el producto tiene título. Al hacer clic ejecuta `POST /products/{id}/enrich`, muestra un toast de éxito/error y refresca los datos de la ficha. Estilo dark con borde fucsia (accentPink) y texto `#f5d0fe`.
- - Menú de acciones IA: junto al botón principal, la UI muestra un menú con:
-   - “Reenriquecer (forzar)”: `POST /products/{id}/enrich?force=true` (reemplaza fuentes y reescribe descripción/campos técnicos si vienen en la respuesta).
-   - “Borrar enriquecimiento”: `DELETE /products/{id}/enrichment` (limpia descripción, campos técnicos y fuentes asociadas).
- - Descripción enriquecida: se muestra en una card dedicada y puede editarse por Admin/Colab (persistencia vía `PATCH /products/{id}` con `description_html`).
- - Descripción enriquecida: se muestra en una card dedicada y puede editarse por Admin/Colab (persistencia vía `PATCH /products/{id}` con `description_html`). Toda la UI (incluyendo admins) ve una vista previa HTML sanitizada: se eliminan `script`, `iframe`, `object`, `embed` y atributos `on*` antes de inyectar el contenido, y si el resultado queda vacío se muestra el fallback "Sin descripción".
-- Visibilidad invitados: el detalle `/productos/:id` admite accesos con rol `guest` en modo sólo lectura. Los invitados pueden ver nombre/canónico, precio efectivo y la vista previa de descripción enriquecida, pero no se muestran controles de edición ni acciones IA.
- - Datos técnicos (Admin/Colab): `weight_kg`, `height_cm`, `width_cm`, `depth_cm`, `market_price_reference` con edición inline. La persistencia se realiza vía `PATCH /products/{id}` y se validan valores numéricos no negativos.
- - Fuentes consultadas: si `enrichment_sources_url` está presente en el producto, aparece el botón “Fuentes consultadas” que abre un modal con el contenido del `.txt` y enlace de descarga.
- - Metadatos de enriquecimiento: el backend expone `last_enriched_at` (ISO UTC) y `enriched_by` (id de usuario) para trazabilidad; la UI puede mostrarlos en una sección de “Actividad reciente” (opcional).
+- La ruta activa `/productos/:id` usa Vue y conserva el `Product.id` únicamente como entrada compatible. Si existe vínculo, identidad, descripción y datos técnicos se resuelven desde `CanonicalProduct`.
+- Productos internos equivalentes muestran el mismo contenido canónico. La ficha agrega stock, tags, imágenes, historial y ofertas sin duplicar registros, y lista al final el inventario interno vinculado.
+- El stock agregado es de sólo lectura; los ajustes operativos continúan en `/stock`.
+- Un producto sin canónico muestra el estado `canonical_required`, conserva sus datos internos básicos y no permite iniciar enriquecimiento hasta crear o asignar el canónico.
+- “Generar contenido” crea un job mediante `POST /canonical-products/{id}/enrichment-jobs`. La vista hace polling cancelable, presenta fuentes, propuesta, confianza y campos autoaplicados o pendientes.
+- La aplicación manual usa `expected_content_revision`; un cambio concurrente responde `409` y nunca sobrescribe silenciosamente contenido más reciente.
+- El backend renderiza y sanitiza el HTML permitido. El proveedor IA sólo devuelve texto y datos estructurados.
+- Enrich v2 investiga descripción y especificaciones. No calcula, muestra ni edita valores monetarios: la card Mercado consume exclusivamente `/market`.
+- La trazabilidad y el historial se consultan en los endpoints de jobs y versiones canónicas. Ya no se usa un archivo `.txt` asociado al producto como fuente primaria.
+- Invitados y clientes acceden a la ficha en modo lectura; colaborador y admin pueden operar el enriquecimiento según sus permisos.
+- Imágenes avanzadas permanecen temporalmente en `/productos/:id/imagen` React y las equivalencias avanzadas siguen en la administración legacy para conservar rollback granular.
 
 ## Acciones masivas
-- En Productos Vue (`/productos`), al seleccionar múltiples productos aparece el botón “Enriquecer”. Stock Vue no incorpora selección ni operaciones avanzadas.
-  - Llama `POST /products/enrich-multiple` con `{ ids: [...], force?: boolean }` (límite de 20 IDs por solicitud).
-  - La UI limpia la selección y refresca el listado al finalizar.
+- El batch de Enrich v2 crea un grupo idempotente de jobs para canónicos únicos, omite productos internos sin canónico y reporta resultados parciales.
+- Los endpoints `/products/enrich-multiple` y `/products/{id}/enrich` se conservan sólo como adaptadores de compatibilidad para el fallback React; no calculan precios de mercado.
 - Productos Vue también permite completar precios faltantes por proveedor, generar un catálogo desde la selección y consultar, ver, descargar o eliminar (admin) el histórico.
 
 ## Flags y comportamiento IA
-- El enriquecimiento IA puede adjuntar resultados de búsqueda web (MCP) al prompt cuando:
-  - `AI_USE_WEB_SEARCH=1` y `ai_allow_external=true` (ver configuración), y
-  - Existe rol con permisos (admin/colaborador).
-- Auditoría: se registran `web_search_query` y `web_search_hits` cuando la búsqueda web está activa.
+- `ENRICH_V2_ENABLED` habilita los contratos y el worker de Enrich v2.
+- `ENRICH_WEB_REQUIRED=1` exige investigación mediante MCP Web Search. MCP Products no participa del pipeline.
+- `ENRICH_AI_MODE=auto` intenta OpenAI y sólo usa Ollama si está configurado y su salida valida el mismo esquema. Los modos explícitos no cambian de proveedor silenciosamente.
+- No existe fallback de eco. Sin proveedor válido el job termina `failed` con un error explícito y no aplica campos.
+- La configuración completa, el despliegue y el smoke vigente están documentados en `docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
 
 ## Alta/Edición de Producto Canónico
 

@@ -17,7 +17,8 @@ export interface MarketProduct {
 export interface MarketProductPage { items: MarketProduct[]; total: number; page: number; page_size: number; pages: number }
 export interface MarketFilters { q: string; category_id: number | null; supplier_id: number | null; page: number; page_size: number }
 export interface MarketSource {
-  id: number; source_name: string; url: string | null; currency: 'ARS'; source_type: 'static' | 'dynamic' | 'manual'
+  id: number; knowledge_asset_id: number; labels: string[]; capabilities: string[]; trust_score: number; exclude_from_enrichment: boolean
+  source_name: string; url: string | null; currency: 'ARS'; source_type: 'static' | 'dynamic' | 'manual'
   last_price: number | null; last_checked_at: string | null; is_mandatory: boolean; is_active: boolean
   validation_status: 'verified' | 'warning' | 'rejected'; ars_confirmed: boolean | null; argentina_delivery_confirmed: boolean | null
   last_error_code: string | null; last_error_message: string | null; created_at: string; updated_at: string

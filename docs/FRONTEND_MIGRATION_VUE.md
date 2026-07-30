@@ -11,19 +11,21 @@
 
 El manifiesto queda deliberadamente en `state: ready`, `runtime: legacy`: Vue debe pasar typecheck/build, smoke autenticado por rol y paridad funcional antes de activarse. React se conserva durante dos releases estables y siete días sin incidentes críticos. Rollback: restaurar `legacy` sin revertir datos ni migraciones.
 
-## Mercado — corte Vue implementado (2026-07-21)
+## Mercado — runtime Vue activo (verificado 2026-07-25)
 
-`/mercado` está activo en Vue para `colaborador|admin`. El módulo vive en `frontend-vue/src/modules/market/` y conserva backend autoritativo, CSRF, filtros, batch, fuentes, observaciones manuales, histórico SVG y seguimiento de jobs hasta estado terminal. React queda como fallback durante un ciclo de versión; no debe retirarse hasta completar el smoke visual autenticado y observar estabilidad operativa.
+`/mercado` está en `state: active` y `runtime: vue` para `colaborador|admin`. Nginx sirve la SPA Vue. El módulo conserva backend autoritativo, CSRF, filtros URL, actualización individual y batch, fuentes, descubrimiento, observaciones manuales, revalidación, histórico SVG y polling cancelable hasta estado terminal.
 
-## Stock y Faltantes — 2026-07-20
+React conserva compatibilidad temporal para rollback. Su retiro sigue pendiente de smoke visual autenticado y una ventana estable. El contrato vigente está en `docs/API_MARKET.md`; `docs/MERCADO_INTEGRACION_FRONTEND.md` describe únicamente la integración React histórica.
 
-Las vistas Vue `/stock` y `/stock/shortages` están implementadas y compiladas. Stock ofrece pestañas con/sin stock, filtros persistidos en URL, búsqueda con debounce/cancelación, edición decimal, exportaciones XLSX/CSV/PDF y TiendaNegocio sólo para staff. Faltantes incorpora métricas, filtro por motivo, búsqueda remota limitada a 50 productos, alta decimal y confirmación de saldo negativo.
+## Stock y Faltantes — runtime Vue activo (verificado 2026-07-25)
+
+Las rutas `/stock` y `/stock/shortages` están en `state: active` y `runtime: vue`. Stock ofrece pestañas con/sin stock, filtros persistidos en URL, búsqueda con debounce/cancelación, edición decimal de stock y precios, exportaciones XLSX/CSV/PDF y TiendaNegocio sólo para staff. Faltantes incorpora métricas, filtro por motivo, búsqueda remota limitada a 50 productos, alta decimal y confirmación de saldo negativo.
 
 El backend usa `Decimal(14,2)`, bloqueo de fila, ledger y auditoría transaccional; `expected_stock` devuelve 409 ante una lectura desactualizada. XLSX, CSV y PDF comparten la misma consulta. Las acciones de enriquecimiento, completar precios y catálogos se reubicaron en Productos Vue.
 
-Estado de despliegue: el router Vue conoce ambos componentes, pero el manifiesto permanece `runtime: legacy`, `state: pending`. El gate de activación exige que Productos/Catálogos esté disponible desde una ruta Vue productiva y que pase el smoke visual por rol. Rollback posterior: volver a `legacy/pending`, regenerar Nginx y desplegar sin revertir datos ni ledger.
+Estado de despliegue: el manifiesto y las reglas Nginx generadas dirigen ambas rutas a Vue. El rollback consiste en volver el módulo a `legacy`, regenerar Nginx y desplegar sin revertir datos ni ledger.
 
-Validación local: 65 pruebas Vue, 12 pruebas backend funcionales más el contrato CSRF aislado, `vue-tsc`, build Vue, build React y generación Nginx aprobados. Quedan pendientes smoke visual autenticado y prueba de concurrencia real sobre PostgreSQL. La colisión heredada `table already exists`/`no such table` quedó resuelta al conservar SQLite `:memory:` con `StaticPool`; el quality gate consolidado posterior aprobó 39/39 pruebas Python. SQLite sigue sin ser evidencia válida del bloqueo pesimista PostgreSQL.
+Validación documental del corte actual: el 2026-07-25 aprobaron 82 pruebas Vue, `vue-tsc` y build Vue. Se conserva como evidencia histórica la validación backend focal del corte original. Quedan pendientes smoke visual autenticado y prueba de concurrencia real sobre PostgreSQL; SQLite no demuestra el bloqueo pesimista. El contrato vigente está en `docs/STOCK.md`.
 
 ## Productos: taxonomía plana y tags — 2026-07-18
 
@@ -39,7 +41,7 @@ React sólo podrá retirarse luego de dos releases estables y siete días sin in
 
 La segunda capacidad operativa de Productos migra a Vue la creación de canónicos desde filas de proveedor. Incluye wizard de cuatro pasos, borradores recuperables por usuario, SKU provisional, envío idempotente, polling y resultados parciales. Categorías y subcategorías pueden crearse en línea al escribir un nombre inexistente; el mismo selector se reutiliza en el alta individual del catálogo. El backend conserva `POST /canonical-products/batch-job` para React, pero Vue no envía el SKU provisional: la secuencia definitiva se asigna dentro del worker.
 
-Próximas fases, en orden: equivalencias/detalle integral, imágenes, activación productiva de Productos/Catálogos y smoke/activación de Stock.
+Próximas fases, en orden: equivalencias, imágenes avanzadas, smoke de los módulos activos y retiro selectivo de sus fallbacks React.
 
 ## Corte funcional Compras/Productos — 2026-07-16
 
@@ -50,15 +52,15 @@ Próximas fases, en orden: equivalencias/detalle integral, imágenes, activació
 - `/proveedores` queda activo con listado, búsqueda y creación básica.
 - `/productos` ofrece un catálogo operativo con filtros, búsqueda diferida, paginación y estado persistido en la URL.
 - Productos recupera alta con proveedor y categoría creable desde el buscador, edición de stock, edición de precio efectivo y borrado protegido individual o masivo para staff.
-- El menú lateral agrupa Catálogo, Stock e Imágenes bajo Productos; Stock está implementado pero permanece señalado como pendiente hasta cerrar sus gates, mientras Imágenes tiene runtime Vue propio.
+- El menú lateral agrupa Catálogo, Stock e Imágenes bajo Productos; los tres módulos tienen runtime Vue propio.
 - El listado admite usuarios autenticados. `/productos/:id` ofrece detalle básico a invitados y suma historial de compras para `colaborador` y `admin`.
 - Equivalencias, detalle enriquecido y preferencias de tabla continúan temporalmente en React; las operaciones masivas de enriquecimiento, precios y catálogos ya están en Productos Vue.
 
-Última actualización: 2026-07-17.
+Última actualización: 2026-07-25.
 
 ## 1. Contexto
 
-Growen mantiene su SPA productiva en `frontend/` con React 19, TypeScript y Vite. La migración se desarrolla de manera paralela en `frontend-vue/` para conservar la disponibilidad funcional durante el reemplazo por dominios.
+Growen mantiene una imagen frontend dual: React 19 continúa como fallback general y Vue 3 recibe las rutas activadas por dominio desde `frontend-vue/config/modules.json`.
 
 La arquitectura objetivo sigue las decisiones de `frontend/brainstorming_Growen.md`: Composition API con `script setup`, Vuetify, SASS, shell con navegación lateral y módulos cargados de forma diferida.
 
@@ -82,7 +84,7 @@ La primera base Vue incluye:
 
 ## 3. Errores y/u outputs
 
-- Vue `npm test`: 65 pruebas aprobadas en 22 archivos para manifiesto, autorización, navegación, capacidades, HTTP, transportes, validaciones y vistas migradas.
+- Vue `npm test`: 82 pruebas aprobadas en 23 archivos el 2026-07-25.
 - Vue `npm run test:e2e`: 5 smokes Playwright aprobados para sesión, guardas, Servicios/Workers, MCP, Usuarios y Backups.
 - `pytest` focalizado: 4 pruebas aprobadas para reglas y autorización real del borrado de productos.
 - La validación de Compras prioriza errores bloqueantes sobre advertencias, resalta bonificaciones inválidas y ofrece feedback al intentar confirmar un borrador.
@@ -102,8 +104,8 @@ Reemplazar React por Vue sin interrumpir operación, conservando rutas, roles, c
 2. **Componentes compartidos (en progreso):** notificaciones y manejo global de errores completados; pendientes tablas, formularios, diálogos y carga de archivos reutilizables.
 3. **Primeros dominios funcionales (completado):** Dashboard, Compras, primer corte de Productos y Proveedores básico.
 4. **Productos (en progreso):** listado, alta, categorías, stock, precio efectivo, borrado protegido, enriquecimiento masivo, completar precios y catálogos completados; pendientes detalle enriquecido, equivalencias, imágenes, preferencias y activación productiva.
-5. **Stock (listo para smoke):** listado y Faltantes implementados; permanece en fallback hasta satisfacer los gates de Productos/Catálogos, PostgreSQL y smoke por rol.
-6. **Otros dominios operativos:** detalle avanzado de proveedores, clientes, ventas, mercado y administración.
+5. **Stock (activo en Vue):** listado y Faltantes reciben tráfico Vue; quedan pendientes smoke por rol, concurrencia PostgreSQL y retiro React.
+6. **Mercado (activo en Vue):** listado, jobs, fuentes e histórico reciben tráfico Vue; quedan pendientes smoke final, ventana estable y retiro React.
 7. **Cambio de tráfico (completado):** Docker/Nginx compilan ambas SPAs y seleccionan el runtime desde el manifiesto; FastAPI ya no necesita decidir el índice en el camino productivo.
 8. **Retiro de React:** eliminar dependencias y código legado en un cambio separado y reversible.
 
