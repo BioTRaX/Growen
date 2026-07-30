@@ -22,14 +22,27 @@ pip-wheel-metadata/
 .env
 .env.*
 !.env.example
+.envrc
+.direnv/
+*.local.env
+config.local.*
+credentials.local.*
+secrets.local.*
 
 # Credenciales y llaves
 *.pem
 *.key
 *.crt
 *.pfx
+*.p12
+*.jks
+*.keystore
+*.secret
+*.secrets
 # Carpeta de certificados y credenciales
 certs/
+credentials/
+secrets/
 
 # Logs y temporales
 *.log

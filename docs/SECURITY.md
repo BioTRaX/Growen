@@ -22,6 +22,28 @@ La rotación de cifrado admite temporalmente `TELEGRAM_IDENTITY_ENCRYPTION_KEY_P
 - Nunca versionar archivos `.env` ni credenciales.
 - Utilizar gestores de secretos cuando sea posible.
 
+## Incidente Telegram confirmado (2026-07-30)
+
+- GitHub Secret Scanning confirmó como `Public leak` el token operativo de
+  Telegram publicado en `workers/telegram_polling.py:56` por el commit
+  `b4bf96907f05cc772f265400f7d8d60ba3dcf3ac`.
+- El literal fue retirado en
+  `590ef3b8598b6434d7a8474d9a5b02f721cb1bdf`, pero permanece recuperable en el
+  historial y en la punta de `main`. El token fue revocado y no debe reutilizarse.
+- Un comentario, fixture o ejemplo jamás puede usar una credencial real ni una
+  cadena que cumpla el formato válido del proveedor.
+- No copiar tokens dentro de URLs de navegador, logs, tickets, capturas o
+  comandos persistidos en el historial de la terminal.
+- Todo secreto detectado en Git se considera comprometido: primero se revoca,
+  luego se preserva evidencia redactada y finalmente se sanea el historial en
+  una ventana coordinada.
+- Informe, alcance y plan de erradicación:
+  `docs/SECURITY_INCIDENT_TELEGRAM_20260730.md`.
+
+El `.env` local contiene además una clave OpenAI con formato real. Está ignorada
+y no se encontró en la historia, pero debe rotarse por formar parte del host
+investigado. No debe darse por eliminada hasta completar esa rotación.
+
 ## Publicación Git y auditoría previa
 
 - Antes de un push, revisar archivos sensibles y patrones de alta confianza en el contenido final y en las líneas agregadas.

@@ -1,5 +1,34 @@
 # Growen
 
+## Aviso de seguridad — Telegram
+
+La auditoría del 2026-07-30 confirmó que un token operativo de Telegram fue
+publicado históricamente en el repositorio y validado por GitHub como fuga
+pública. La credencial está revocada; la limpieza coordinada del historial y de
+las ramas remotas sigue pendiente. No reutilizar tokens históricos ni colocar
+secretos reales en ejemplos. Ver
+[informe forense y acciones de erradicación](./docs/SECURITY_INCIDENT_TELEGRAM_20260730.md).
+
+## Base de Conocimiento Canónica (2026-07-26)
+
+La revisión `20260726_canonical_knowledge_v1` reemplaza las fuentes propias de Enrich y la tabla `market_sources` por activos reutilizables del producto canónico. El Centro **Conocimiento** se abre desde el detalle de Producto y desde Mercado; gestiona fuentes, documentos, imágenes, videos, hechos, historial e IA sin contaminar `Product.tags` ni MCP Products. La ficha Vue permite además editar el SKU canónico con confirmación explícita, formato estricto y rechazo de duplicados sin sobrescritura.
+
+Enrich consulta primero conocimiento persistido y sólo usa MCP Web Search cuando falta cobertura. Mercado es la única autoridad de precios y consume activos confirmados con etiqueta `market`, capacidad `price` y perfil técnico válido.
+
+Arquitectura: [docs/CANONICAL_KNOWLEDGE.md](./docs/CANONICAL_KNOWLEDGE.md). Despliegue y smoke real: [docs/CANONICAL_KNOWLEDGE_DEPLOYMENT_SMOKE_20260726.md](./docs/CANONICAL_KNOWLEDGE_DEPLOYMENT_SMOKE_20260726.md).
+
+## Enrich v2 y detalle canónico
+
+`/productos/:id` conserva el `Product.id` de la URL, pero cuando existe una equivalencia muestra descripción y datos técnicos del `CanonicalProduct`. El stock agregado es informativo y los ajustes se realizan en `/stock`; la imagen avanzada continúa temporalmente en `/productos/:id/imagen` React.
+
+Enrich v2 investiga fuentes externas mediante MCP Web Search, genera texto/datos estructurados y registra jobs/versiones. No consulta MCP Products y nunca calcula precios. Mercado es la única autoridad de referencias monetarias.
+
+El despliegue local del 2026-07-25 aplicó `20260725_canonical_enrichment_v2`,
+levantó MCP Web Search, Redis, worker, API y Vue, y activó
+`ENRICH_V2_ENABLED=1`. El smoke obtuvo cinco fuentes y no aplicó campos porque el
+entorno no dispone aún de OpenAI ni Ollama. Ver
+`docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
+
 ## Chat 😎 y Telegram seguro
 
 La base multicanal comparte autorización entre HTTP, WebSocket y Telegram. Telegram opera por polling, identifica personas mediante `from.id`, asigna `guest` por defecto y limita cualquier admin al rol efectivo `colaborador`. Los vínculos usan AES-GCM + HMAC, los permisos se vuelven a consultar desde `User.role` en cada mensaje y todas las mutaciones quedan denegadas en Telegram.
@@ -34,15 +63,17 @@ El catálogo Vue permite además crear productos canónicos en lote desde oferta
 
 Los lotes son idempotentes. Un reintento de un lote que falló antes de procesar filas vuelve a encolar el mismo job cuando Redis se recupera, sin duplicar canónicos.
 
-## Stock Vue en validación
+## Stock y Mercado en Vue
 
-`frontend-vue` implementa `/stock` y `/stock/shortages` para validación local en el puerto 5176. Incluye filtros restaurables desde URL, edición decimal de stock y precios, conflicto optimista mediante `expected_stock`, exportaciones XLSX/CSV/PDF y alta decimal de faltantes con advertencia de saldo negativo. Enriquecimiento masivo, completar precios y operaciones de catálogos viven en Productos Vue, no en Stock.
+El manifiesto activo dirige `/stock`, `/stock/shortages` y `/mercado` a Vue. Stock conserva filtros en la URL, edición decimal de existencias y precios, control optimista mediante `expected_stock`, exportaciones y trazabilidad de faltantes. Mercado ofrece filtros, actualización individual o masiva, polling hasta estado terminal, fuentes auditables, observaciones manuales, descubrimiento e histórico ARS.
 
-El manifiesto conserva Stock en `legacy/pending`: producción continúa en React hasta que Productos/Catálogos sea una ruta Vue activa y se complete el smoke autenticado para cliente, proveedor, colaborador y admin. No se agregó una migración Alembic porque el esquema ya usa `Numeric(14,2)`.
+React conserva copias temporales para rollback, pero ya no es el runtime principal de estas rutas. Su eliminación requiere smoke autenticado y la ventana de estabilidad definida. Los contratos vigentes están en `docs/STOCK.md` y `docs/API_MARKET.md`; el estado de migración se mantiene en `docs/FRONTEND_MIGRATION_VUE.md`.
 
 ## Documentación
 
 - Hoja de ruta: [Roadmap.md](./Roadmap.md)
+- Stock y Faltantes: [docs/STOCK.md](./docs/STOCK.md)
+- Mercado: [docs/API_MARKET.md](./docs/API_MARKET.md)
 - Retrospectiva técnica de Productos Vue: [docs/RETROSPECTIVE_PRODUCTS_20260718.md](./docs/RETROSPECTIVE_PRODUCTS_20260718.md)
 - Retrospectiva de taxonomía plana, tags y QA: [docs/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md](./docs/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md)
 - Retrospectiva operativa de Redis, Dramatiq y batch canónico: [docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md](./docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md)
@@ -483,7 +514,7 @@ Variables de entorno (ver `.env`):
 - `PURCHASE_TELEGRAM_TOKEN` y `PURCHASE_TELEGRAM_CHAT_ID` (opcionales): overrides específicos para notificaciones de Compras; si están vacíos, se usan los valores globales.
 
 Cómo obtener el `chat_id`:
-- Escribí a tu bot y luego consultá `https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates` (en dev) para ver el `chat.id` numérico del último mensaje.
+- Escribí a tu bot y ejecutá `.\.venv\Scripts\python.exe scripts/check_telegram_updates.py` desde un entorno local protegido. No pegues el token en el navegador, logs o capturas.
 - En grupos, asegurate de que el bot esté agregado y que la privacidad permita leer los mensajes necesarios.
 
 Notas de seguridad:
@@ -504,7 +535,7 @@ Podés hablarle al bot de Telegram y que responda con el mismo pipeline del chat
 Pasos para configurar:
 1) Publicá temporalmente la API o usá un túnel (ngrok/localtunnel).
 2) Registrá el webhook en Telegram (opcionalmente con secret):
-   - URL base: `https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook`
+   - Usá un cliente o script que lea el token desde el entorno; no copies una URL con la credencial embebida al navegador, documentación o historial de terminal.
    - Query: `url=<PUBLIC_URL>/telegram/webhook/<TELEGRAM_WEBHOOK_TOKEN>` y `secret_token=<TELEGRAM_WEBHOOK_SECRET>` (si lo definiste).
 3) Escribí al bot: invocará el endpoint y responderá con el pipeline actual (intents de precio + fallback IA).
 
@@ -837,14 +868,13 @@ COOKIE_DOMAIN=
 
 ```env
 # Token del bot obtenido de @BotFather en Telegram
-TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+TELEGRAM_BOT_TOKEN=<valor_emitido_por_BotFather>
 
 # Habilitar integración de Telegram (1, true o yes)
 TELEGRAM_ENABLED=1
 
 # Chat ID numérico por defecto para notificaciones
-# Obtener escribiendo al bot y consultando:
-# https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates
+# Obtener escribiendo al bot y ejecutando el script local seguro documentado
 TELEGRAM_DEFAULT_CHAT_ID=123456789
 ```
 
@@ -872,7 +902,7 @@ TELEGRAM_POLLING_RETRY_DELAY=5
 - `TELEGRAM_BOT_TOKEN` es **obligatorio** para que funcione el chatbot y las notificaciones.
 - Si `TELEGRAM_ENABLED=0` (o no está definido), toda la funcionalidad de Telegram se desactiva.
 - Para obtener el `TELEGRAM_BOT_TOKEN`: crear un bot con [@BotFather](https://t.me/BotFather) en Telegram.
-- Para obtener el `TELEGRAM_DEFAULT_CHAT_ID`: escribir al bot y consultar `getUpdates` con el token.
+- Para obtener el `TELEGRAM_DEFAULT_CHAT_ID`: escribir al bot y ejecutar `.\.venv\Scripts\python.exe scripts/check_telegram_updates.py`; no insertar el token en una URL visible.
 
 `SECRET_KEY` y las credenciales iniciales (`ADMIN_USER` y `ADMIN_PASS`, definidas en `.env`) deben reemplazarse por valores robustos en producción.
 En entornos de desarrollo se usarán valores de prueba si se dejan en los placeholders, pero conviene ajustarlos igualmente.
@@ -1210,9 +1240,9 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 
 **⚠️ OBLIGATORIO para funcionalidad de Telegram (chatbot y notificaciones):**
 
-- `TELEGRAM_BOT_TOKEN`: Token del bot obtenido de [@BotFather](https://t.me/BotFather) en Telegram. Formato: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`. **Sin este token, el chatbot y las notificaciones no funcionarán.**
+- `TELEGRAM_BOT_TOKEN`: Token del bot obtenido de [@BotFather](https://t.me/BotFather) en Telegram. Configurarlo sólo en el gestor de secretos o `.env` ignorado; nunca documentar un valor con formato real. **Sin este token, el chatbot y las notificaciones no funcionarán.**
 - `TELEGRAM_ENABLED`: Habilitar integración de Telegram. Valores: `1`, `true` o `yes` para habilitar; `0`, `false` o `no` (o no definido) para deshabilitar.
-- `TELEGRAM_DEFAULT_CHAT_ID`: Chat ID numérico por defecto para notificaciones. Obtener escribiendo al bot y consultando `https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates`.
+- `TELEGRAM_DEFAULT_CHAT_ID`: Chat ID numérico por defecto para notificaciones. Obtener escribiendo al bot y ejecutando `.\.venv\Scripts\python.exe scripts/check_telegram_updates.py` en local.
 
 **Opcionales (para webhook en producción):**
 
@@ -1232,7 +1262,7 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 
 **Cómo obtener el Chat ID:**
 1. Escribir un mensaje a tu bot (puede ser cualquier mensaje).
-2. Consultar: `https://api.telegram.org/bot<TU_TOKEN>/getUpdates`.
+2. Ejecutar `.\.venv\Scripts\python.exe scripts/check_telegram_updates.py` desde la raíz, con el token cargado en el entorno o `.env` ignorado.
 3. Buscar en la respuesta el campo `chat.id` del mensaje que enviaste.
 
 ## Endpoints de diagnóstico

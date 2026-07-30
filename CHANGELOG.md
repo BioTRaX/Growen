@@ -4,6 +4,44 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-07-26 — Edición segura del SKU canónico
+
+- La ficha Vue suma lápiz, confirmación y cancelación explícitas para el SKU canónico.
+- `PATCH /canonical-products/{id}` normaliza el SKU, exige `XXX_0000_YYY`, detecta duplicados antes del commit y convierte carreras de unicidad en `409 duplicate_sku`.
+- Ante colisión, el editor permanece abierto, muestra el error y conserva el SKU anterior sin aplicar cambios.
+
+## 2026-07-26 — Base de Conocimiento del Producto Canónico
+
+- `20260726_canonical_knowledge_v1` creó activos, ubicaciones, etiquetas, capacidades, versiones, claims, hechos, eventos, jobs y perfiles técnicos Mercado; `market_sources` dejó de existir.
+- Mercado conserva IDs de perfil y contratos legacy, pero URLs/nombres/producto pertenecen al activo; `DELETE` archiva y conserva histórico.
+- Enrich knowledge-first reutiliza hechos y fuentes antes de buscar y persiste descubrimientos; las clasificaciones dudosas quedan excluidas.
+- Se agregó `knowledge_worker` con HTML/PDF seguro vía MCP, PDF/OCR, imagen, video, transcripción, heartbeat y health.
+- Vue suma el Centro **Conocimiento** compartido por Producto y Mercado.
+- Las fuentes Mercado automáticas sólo participan con activo confirmado, etiqueta `market`, capacidad `price`, ARS y entrega argentina confirmados; el Centro permite registrar esa confirmación con revisión y auditoría.
+- El despliegue real conservó 1 fuente, 6 observaciones, 3 resultados y 1 alerta, y completó un job autenticado con CSRF/polling.
+
+## 2026-07-25 — Detalle canónico Vue y Enrich v2
+
+- Se agregó la revisión irreversible `20260725_canonical_enrichment_v2`, con backfill conservador, jobs, evidencias acotadas y versiones restaurables.
+- Se retiró `products.market_price_reference`; `/market` y `CanonicalProduct.market_price_reference` continúan como autoridad exclusiva.
+- Los contratos canónicos soportan idempotencia, aplicación parcial, descarte, restore y conflicto `409` por revisión.
+- MCP Web Search suma `fetch_web_document` para HTML/PDF público con controles SSRF; `pypdf>=6.4,<7` quedó fijado en su lock.
+- Se creó `enrichment_worker` con cola y health dedicados y configuración híbrida OpenAI/Ollama sin fallback de eco.
+- El detalle `/productos/:id` pasó a Vue y agrega registros equivalentes; la edición avanzada de imágenes conserva React.
+- El despliegue real corrigió el marcador Linux de `pywin32`, el contenido de la
+  imagen MCP, la normalización `/mcp/`, el descubrimiento dirigido, redirects
+  DuckDuckGo, retries idempotentes, sanitización de errores, Redis de la API y el
+  binding loopback del frontend.
+- Se activó `ENRICH_V2_ENABLED=1`; el smoke autenticado persistió cinco fuentes y
+  confirmó un error explícito por falta de proveedor IA, sin aplicar contenido.
+
+## 2026-07-25 — Reconciliación documental de Stock y Mercado
+
+- Se contrastaron manifiesto, reglas Nginx, componentes Vue, clientes HTTP, roles y pruebas.
+- Stock y Mercado quedan documentados como `active/vue`; React se conserva únicamente como fallback temporal para rollback.
+- `docs/STOCK.md` pasa a ser el contrato operativo de Stock y Faltantes, y `docs/API_MARKET.md` la fuente canónica de Mercado.
+- Se retiraron referencias `legacy/pending` desactualizadas y se marcó la integración React de Mercado como histórica.
+
 ## 2026-07-22 — Chat multicanal, Telegram, RAG y observabilidad
 
 - Se incorporaron identidades externas cifradas, vínculos de un uso, doble aprobación admin y revocación inmediata basada en `User.role`.

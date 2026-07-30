@@ -5,6 +5,62 @@
 
 # Roadmap del Proyecto
 
+## Actualización 2026-07-30 — Incidente de credencial Telegram
+
+- [x] Confirmada por GitHub Secret Scanning la publicación del token operativo
+  en `workers/telegram_polling.py:56`, commit
+  `b4bf96907f05cc772f265400f7d8d60ba3dcf3ac`.
+- [x] Token revocado y literal retirado en `dev` por
+  `590ef3b8598b6434d7a8474d9a5b02f721cb1bdf`.
+- [x] Auditados 631 commits, 137 referencias, reflogs, cero stashes y 433 blobs
+  no alcanzables sin reproducir valores sensibles.
+- [x] Documentados el `.env` históricamente rastreado, la clave OpenAI local
+  pendiente de rotación y el estado de dependencias.
+- [ ] Integrar la remoción en `main`, sanear todas las referencias y eliminar o
+  regenerar las cuatro ramas Dependabot cuya punta todavía expone el token.
+- [ ] Coordinar reescritura del historial, force-push, invalidación de clones,
+  forks, caches y artefactos, y verificación posterior de objetos.
+- [ ] Rotar la clave OpenAI local y registrar la invalidación sin guardar el
+  reemplazo.
+- [ ] Habilitar GitHub Push Protection y un escáner de secretos obligatorio en
+  pre-commit/CI.
+- [ ] Actualizar `react-router`/`react-router-dom` y repetir `npm audit`; el
+  barrido del 2026-07-30 detectó una vulnerabilidad alta corregible.
+
+Evidencia y plan: `docs/SECURITY_INCIDENT_TELEGRAM_20260730.md`.
+
+## Actualización 2026-07-25 — Detalle canónico Vue y Enrich v2
+
+- [x] Contenido, dimensiones, especificaciones, instrucciones, revisión y trazabilidad viven en `CanonicalProduct`.
+- [x] Jobs, fuentes breves y versiones son persistentes, idempotentes y usan revisión optimista.
+- [x] `products.market_price_reference` fue retirado; Mercado conserva su modelo canónico, observaciones e histórico como única autoridad monetaria.
+- [x] MCP Web Search incorpora lectura HTTPS de HTML/PDF con defensa SSRF, redirects acotados, streaming, MIME y tamaño validados.
+- [x] `enrichment_worker` usa cola, heartbeat y health propios; OpenAI/Ollama deben validar el mismo esquema y el eco nunca es aceptable.
+- [x] Despliegue local, migración, health y smoke autenticado para `guest`,
+  `cliente`, `colaborador` y `admin`.
+- [x] `ENRICH_V2_ENABLED=1` efectivo; investigación real con cinco fuentes y
+  retries idempotentes.
+- [ ] Configurar OpenAI u Ollama y repetir el smoke hasta obtener una propuesta
+  válida y aplicar/revisar campos con `content_revision`. Documentar el resultado
+  y actualizar cualquier instrucción desactualizada.
+
+Evidencia operativa: `docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
+- [x] `/productos/:id` quedó activo en Vue con contenido canónico, inventario vinculado sin duplicados, stock agregado de sólo lectura, Mercado separado y polling cancelable.
+- [x] `/productos/:id/imagen` permanece como módulo React independiente para rollback granular.
+- [x] Upgrade desde PostgreSQL vacío validado hasta `20260725_canonical_enrichment_v2`; requiere `vector` antes de recorrer el historial RAG.
+- [ ] Activar `ENRICH_V2_ENABLED=1` sólo después del smoke autenticado con MCP, Redis, worker y proveedor saludables.
+- [ ] Retirar `Product.is_enriching` y los campos técnicos legacy después de un ciclo estable de fallback React.
+
+## Actualización 2026-07-25 — Reconciliación documental de Stock y Mercado
+
+- [x] Contrastados manifiesto, Nginx, vistas Vue, clientes HTTP, permisos y pruebas de Stock y Mercado.
+- [x] Confirmado `state: active` y `runtime: vue` para `/stock`, `/stock/shortages` y `/mercado`.
+- [x] Creado `docs/STOCK.md` como contrato operativo y definido `docs/API_MARKET.md` como fuente canónica de Mercado.
+- [x] Eliminadas afirmaciones `legacy/pending` desactualizadas y marcado el documento de integración React de Mercado como histórico.
+- [ ] Ejecutar smoke visual autenticado por rol para ambos módulos.
+- [ ] Validar concurrencia real de Stock/Faltantes sobre PostgreSQL.
+- [ ] Retirar código React sólo después de los gates y la ventana de estabilidad.
+
 ## Actualización 2026-07-22 — Chat multicanal seguro
 
 - [x] Base de identidad Telegram cifrada (AES-GCM), búsqueda HMAC, vínculos revocables y aprobación doble para admin.
@@ -44,14 +100,15 @@
 - [ ] Evaluar un `scripts/audit-secrets.ps1` reutilizable que implemente las mismas reglas y pruebas para evitar scanners ad hoc.
 - [ ] Migrar los tests heredados de `TestClient` antes de adoptar `httpx2`.
 
-## Actualización 2026-07-20 — Stock Vue listo para validación
+## Actualización 2026-07-20 — Stock Vue activo; retiro React pendiente
 
 - [x] Implementadas `/stock` y `/stock/shortages` en Vue 3 con filtros URL, debounce, cancelación, paginación reemplazable, permisos y estados de error.
 - [x] Stock y faltantes admiten `Decimal(14,2)`; el ajuste manual usa `expected_stock`, bloqueo de fila, ledger y auditoría en una transacción.
 - [x] XLSX, CSV y PDF comparten selección y filtros; PDF usa ReportLab y TiendaNegocio conserva su contrato.
 - [x] Enriquecimiento masivo, completar precios, generación e histórico de catálogos fueron retirados de la nueva vista Stock y ubicados en Productos Vue.
 - [x] Quality gates locales: Vue 65/65, backend Stock 12/12 y contrato CSRF aislado aprobado, typecheck y builds Vue/React aprobados.
-- [ ] Mantener `stock` en `legacy/pending` hasta que Productos/Catálogos esté activo en una ruta Vue productiva y se complete el smoke visual autenticado por rol.
+- [x] Activar `stock` como `active/vue` una vez disponible Productos/Catálogos en Vue.
+- [ ] Completar el smoke visual autenticado por rol antes de retirar React.
 - [ ] Validar concurrencia real de dos faltantes sobre PostgreSQL; SQLite no permite demostrar el bloqueo pesimista.
 - [ ] Tras dos releases estables y siete días sin incidentes críticos, evaluar el retiro de React en un corte separado.
 
@@ -183,9 +240,9 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 
 - Base de datos/Migraciones: Se reparó la instalación completa desde PostgreSQL vacío. La revisión RAG autogenerada `cf0f6e70fe89` quedó como no-op, se preservaron la implementación manual `b2d22a7ce889` y el merge `fa50a5cba1bb`, y se agregó `20260714_schema_integrity` para garantizar índices y constraints omitidos por ramas históricas. Se incorporó una prueba PostgreSQL temporal de `alembic upgrade head`; resultado local: 53 tablas, único head y auditoría sin faltantes. Ver `docs/MIGRATIONS_NOTES.md`.
 
-- Frontend/Migración Vue (fase 1): Se creó `frontend-vue/` como aplicación paralela con Vue 3, Vuetify 3, Pinia, Vue Router, SASS, shell colapsable, autenticación real, guardas por rol y contratos de rutas actuales. React continúa como frontend productivo mientras se migra por dominios. Estado y comandos en `docs/FRONTEND_MIGRATION_VUE.md`.
+- Frontend/Migración Vue: La imagen productiva compila React y Vue. `frontend-vue/config/modules.json` decide el runtime por dominio; React es el fallback general para rutas todavía no activadas o sujetas a rollback. Estado y comandos en `docs/FRONTEND_MIGRATION_VUE.md`.
 
-- Frontend/Productos Vue: El primer corte reemplaza la vista de impacto por un catálogo operativo. Incluye búsqueda diferida, filtros combinables, paginación y URL persistente; Stock e Imágenes quedan agrupados y marcados como pendientes sin cambiar sus rutas públicas.
+- Frontend/Productos Vue: Catálogo, detalle principal, Stock e Imágenes tienen rutas Vue activas. La imagen avanzada `/productos/:id/imagen` y otras capacidades declaradas como legacy permanecen en React hasta completar su corte.
 
 - Frontend/Proveedores Vue: `/proveedores` habilita búsqueda y alta básica para administradores. Compras reutiliza el selector con autocomplete y deja de exponer IDs internos en sus formularios.
 
@@ -488,11 +545,14 @@ Hito 5.1 - Funcionalidad "Mercado" (comparación de precios)
   - Navegación configurada: nueva ruta `/mercado` protegida (solo admin/colaborador), botón "Mercado" agregado en `AppToolbar` junto a "Productos".
   - Filtros implementados: búsqueda por nombre/SKU, filtro por proveedor (autocomplete) y categoría (dropdown).
   - Indicadores visuales de comparación: precio por debajo, dentro o por encima del rango de mercado con colores distintivos.
-- Implementado: `market_sources`, API de listado/fuentes/mutaciones/batch, scraping estático y dinámico, descubrimiento, scheduler persistente, alertas y modal React.
+- Implementado: Base de Conocimiento Canónica; `market_sources` fue reemplazada por activos etiquetados/capacitados y perfiles técnicos con IDs compatibles. Mercado conserva API, scraping, scheduler, alertas e histórico.
 - Estado operativo actualizado el 2026-07-21: worker `market_worker` Docker saludable, heartbeat vigente y cola `market` sin mensajes pendientes; las fuentes y observaciones quedan auditadas por producto y trabajo.
 - Implementado: consumidor dedicado, jobs persistentes e idempotentes, histórico de tres años, política ARS/promedio y observabilidad por cola, producto y fuente.
 - Migración Vue: módulo `market` activo en Vue sobre `/mercado`; React se conserva como fallback durante un ciclo estable.
 - Auditoría y plan: `docs/MARKET_CURRENT_STATE_20260721.md`.
+- Evolución 2026-07-26: Centro Vue **Conocimiento**, worker dedicado y Enrich knowledge-first desplegados; evidencia en `docs/CANONICAL_KNOWLEDGE_DEPLOYMENT_SMOKE_20260726.md`.
+- Seguridad Mercado 2026-07-26: scraping, promedio y agregados sólo aceptan conocimiento validado; el perfil migrado conserva ARS pero requiere confirmar entrega argentina desde **Conocimiento** antes de volver a participar.
+- Detalle Producto 2026-07-26: edición confirmada del SKU canónico activa en Vue para staff, con formato estricto, normalización, auditoría y rechazo transaccional de duplicados.
 - Criterios de aceptación
   - Admin/Colaborador pueden visualizar lista de productos con comparación de precios vs mercado.
   - Scraping funcional para al menos 3 fuentes obligatorias (MercadoLibre, tienda competidora, fabricante).
