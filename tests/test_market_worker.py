@@ -25,6 +25,8 @@ async def test_all_sources_failed_returns_failed_status(db_session, monkeypatch)
         url="https://example.com/failing-product",
         currency="ARS",
         source_type="static",
+        ars_confirmed=True,
+        argentina_delivery_confirmed=True,
     )
     db_session.add(source)
     await db_session.commit()
@@ -44,7 +46,7 @@ async def test_all_sources_failed_returns_failed_status(db_session, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_foreign_currency_is_not_averaged_as_ars(db_session, monkeypatch):
+async def test_foreign_currency_is_not_processed_as_ars(db_session, monkeypatch):
     product = CanonicalProduct(
         name="Producto importado",
         market_price_reference=Decimal("1000.00"),
@@ -69,11 +71,11 @@ async def test_foreign_currency_is_not_averaged_as_ars(db_session, monkeypatch):
     result = await market_scraping.update_market_prices_for_product(product.id, db_session)
 
     assert result["success"] is True
-    assert result["market_price_reference"] is None
+    assert result["sources_total"] == 0
     await db_session.refresh(product)
     await db_session.refresh(source)
     assert product.market_price_reference == Decimal("1000.00")
-    assert source.last_price == Decimal("50.00")
+    assert source.last_price is None
     assert source.currency == "USD"
 
 

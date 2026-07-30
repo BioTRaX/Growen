@@ -49,8 +49,8 @@ async def test_reference_averages_one_effective_ars_observation_per_source(db_se
     db_session.add(product)
     await db_session.flush()
     sources = [
-        MarketSource(product_id=product.id, source_name="Obligatoria", url="https://a.example/item", currency="ARS", source_type="static", is_mandatory=True, validation_status="verified"),
-        MarketSource(product_id=product.id, source_name="Adicional", url="https://b.example/item", currency="ARS", source_type="static", is_mandatory=False, validation_status="warning"),
+        MarketSource(product_id=product.id, source_name="Obligatoria", url="https://a.example/item", currency="ARS", source_type="static", is_mandatory=True, validation_status="verified", ars_confirmed=True, argentina_delivery_confirmed=True),
+        MarketSource(product_id=product.id, source_name="Adicional", url="https://b.example/item", currency="ARS", source_type="static", is_mandatory=False, validation_status="warning", ars_confirmed=True, argentina_delivery_confirmed=True),
         MarketSource(product_id=product.id, source_name="Rechazada", url="https://c.example/item", currency="ARS", source_type="static", validation_status="rejected"),
     ]
     db_session.add_all(sources)
@@ -75,7 +75,7 @@ async def test_stale_automatic_expires_but_manual_remains_effective(db_session):
     product = CanonicalProduct(name="Vigencias")
     db_session.add(product)
     await db_session.flush()
-    automatic = MarketSource(product_id=product.id, source_name="Automática", url="https://a.example/stale", currency="ARS", source_type="static")
+    automatic = MarketSource(product_id=product.id, source_name="Automática", url="https://a.example/stale", currency="ARS", source_type="static", ars_confirmed=True, argentina_delivery_confirmed=True)
     manual = MarketSource(product_id=product.id, source_name="Manual", url=None, currency="ARS", source_type="manual")
     db_session.add_all([automatic, manual])
     await db_session.flush()

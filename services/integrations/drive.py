@@ -12,10 +12,20 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaIoBaseDownload
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+    from googleapiclient.http import MediaIoBaseDownload
+    _GOOGLE_DRIVE_AVAILABLE = True
+except ImportError:
+    service_account = None  # type: ignore[assignment]
+    build = None  # type: ignore[assignment]
+    MediaIoBaseDownload = None  # type: ignore[assignment]
+    _GOOGLE_DRIVE_AVAILABLE = False
+
+    class HttpError(Exception):  # type: ignore[no-redef]
+        """Fallback tipado cuando la integración opcional no está instalada."""
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +57,11 @@ class GoogleDriveSync:
             source_folder_id: ID de la carpeta origen en Drive.
         """
         # Resolver ruta relativa desde el directorio raíz del proyecto
+        if not _GOOGLE_DRIVE_AVAILABLE:
+            raise GoogleDriveError(
+                "Google Drive no está disponible en este proceso; "
+                "instalar requirements-worker.txt y ejecutar la operación desde el worker."
+            )
         creds_path = Path(credentials_path)
         if not creds_path.is_absolute():
             # Buscar el directorio raíz (donde está el .env o services/)

@@ -12,10 +12,18 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import CanonicalProduct, MarketPriceHistory, MarketSource, MarketUpdateJob
+from db.models import (
+    CanonicalKnowledgeAsset,
+    CanonicalKnowledgeAssetCapability,
+    CanonicalKnowledgeLabel,
+    CanonicalProduct,
+    MarketPriceHistory,
+    MarketSource,
+    MarketUpdateJob,
+)
 
 
 AUTOMATIC_FRESHNESS_DAYS = int(os.getenv("MARKET_PRICE_FRESHNESS_DAYS", "7"))
@@ -35,6 +43,26 @@ class MarketCoverage:
     effective: int
     stale: int
     warning: int
+
+
+def eligible_market_profile_conditions(*, allow_manual: bool = True):
+    """Condiciones compartidas para que un perfil pueda aportar a Mercado."""
+    attestation = and_(
+        MarketSource.ars_confirmed.is_(True),
+        MarketSource.argentina_delivery_confirmed.is_(True),
+    )
+    if allow_manual:
+        attestation = or_(MarketSource.source_type == "manual", attestation)
+    return (
+        CanonicalKnowledgeAsset.status == "confirmed",
+        CanonicalKnowledgeLabel.label == "market",
+        CanonicalKnowledgeAssetCapability.capability_code == "price",
+        CanonicalKnowledgeAssetCapability.enabled.is_(True),
+        MarketSource.is_active.is_(True),
+        MarketSource.validation_status != "rejected",
+        MarketSource.currency == ARS,
+        attestation,
+    )
 
 
 def compare_sale_to_market(
@@ -81,7 +109,16 @@ async def effective_source_prices(
     current = now or datetime.utcnow()
     sources = list((await db.execute(
         select(MarketSource)
-        .where(MarketSource.product_id == product_id, MarketSource.is_active.is_(True))
+        .join(CanonicalKnowledgeAsset, CanonicalKnowledgeAsset.id == MarketSource.asset_id)
+        .join(CanonicalKnowledgeLabel, CanonicalKnowledgeLabel.asset_id == CanonicalKnowledgeAsset.id)
+        .join(
+            CanonicalKnowledgeAssetCapability,
+            CanonicalKnowledgeAssetCapability.asset_id == CanonicalKnowledgeAsset.id,
+        )
+        .where(
+            CanonicalKnowledgeAsset.canonical_product_id == product_id,
+            *eligible_market_profile_conditions(),
+        )
         .order_by(MarketSource.id)
     )).scalars())
     effective: list[tuple[MarketSource, MarketPriceHistory]] = []

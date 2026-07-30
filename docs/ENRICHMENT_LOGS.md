@@ -3,7 +3,35 @@
 <!-- NG-HEADER: Descripción: Documentación sobre logging y diagnóstico de enriquecimiento IA. -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
+## Enrich knowledge-first (2026-07-26)
+
+Enrich consulta primero `canonical_knowledge_assets`/hechos confirmados y sólo busca web si falta cobertura. Los descubrimientos se persisten; clasificaciones dudosas quedan `pending` y excluidas. `CanonicalEnrichmentSource` conserva evidencia inmutable con referencias al activo/versión. La capacidad `price` nunca entra en composición descriptiva.
+
 # Logging y Diagnóstico de Enriquecimiento IA
+
+## Enrich v2 (vigente desde 2026-07-25)
+
+El flujo operativo nuevo es asíncrono y canónico. Diagnosticar en este orden:
+
+1. `GET /health/enrichment-worker`: broker, heartbeat y profundidad de `enrichment`.
+2. `GET /canonical-products/{id}/enrichment-jobs/{job_id}`: estado, etapa, proveedor/modelo, campos aplicados y error acotado.
+3. Logs estructurados del proceso `enrichment_worker`, que incluyen IDs/estados pero nunca prompts, secretos ni documentos.
+
+Los retries reutilizan fuentes ya persistidas y mantienen un máximo de cinco URLs
+por job. Un `IntegrityError` se registra con mensaje genérico: nunca se guardan
+parámetros SQL, documentos completos, prompts ni secretos. Resultado del smoke
+real: `docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
+4. `canonical_enrichment_sources` y `canonical_content_versions`: URL, MIME, hash, evidencia breve y snapshots auditables.
+
+El pipeline exige MCP Web Search cuando `ENRICH_WEB_REQUIRED=1`; usa `search_web` y `fetch_web_document`. MCP Products y cualquier análisis de precios están excluidos. `ENRICH_AI_MODE=auto` intenta OpenAI y sólo usa Ollama si está configurado y valida el mismo JSON; un eco se considera error.
+
+Arranque local:
+
+```powershell
+scripts\start-dev.ps1 -McpMode All -WithEnrichmentWorker
+```
+
+La sección legacy siguiente se conserva únicamente para diagnosticar el fallback React mientras exista. Sus variables `AI_USE_WEB_SEARCH` y el endpoint `/debug/enrich/{product_id}` no describen el worker v2.
 
 ## Resumen
 

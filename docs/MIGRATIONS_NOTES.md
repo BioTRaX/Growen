@@ -2,7 +2,28 @@
 <!-- NG-HEADER: Ubicación: docs/MIGRATIONS_NOTES.md -->
 <!-- NG-HEADER: Descripción: Notas técnicas sobre fixes recientes en migraciones Alembic -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
+
 # Notas de migraciones
+
+## 2026-07-26 — Base de Conocimiento Canónica
+
+`20260726_canonical_knowledge_v1` desciende de `20260725_canonical_enrichment_v2`, crea el inventario completo de conocimiento y transforma `market_sources` en `canonical_knowledge_market_profiles`. Cada fuente genera activo, ubicación, etiqueta `market` y capacidades `price|availability|offers`; los IDs se preservan y las FKs históricas continúan válidas.
+
+El downgrade está bloqueado. PostgreSQL vacío alcanzó head con `vector`; el upgrade local conservó 1 perfil, 6 observaciones, 3 resultados y 1 alerta sin huérfanos. Backup: `backups/pg/pre_canonical_knowledge_20260726_1911.dump`.
+## 2026-07-25 — contenido canónico y Enrich v2
+
+`20260725_canonical_enrichment_v2` desciende linealmente de `20260722_chat_observability_v3`. Agrega contenido/revisión a `canonical_products`, crea jobs, fuentes y versiones, y aplica un backfill conservador: sólo valores legacy únicos pasan al canónico; cada alternativa se conserva como versión candidata.
+
+La revisión elimina `products.market_price_reference`. Su downgrade está bloqueado porque los valores nunca fueron confiables ni recuperables; Mercado conserva su campo canónico. Desde la revisión siguiente, su configuración técnica vive en perfiles de la Base de Conocimiento, no en fuentes propias. `Product.is_enriching` y los demás campos legacy continúan temporalmente sólo para rollback React.
+
+La validación sobre bases PostgreSQL desechables alcanzó el nuevo head y confirmó tablas/columna. Un upgrade incremental con dos descripciones contradictorias dejó `content_revision=0`, no aplicó descripción y creó dos versiones candidatas. El primer recorrido desde cero falló antes de esta revisión porque el historial RAG requiere `CREATE EXTENSION vector`; tras crearla, el upgrade completo fue exitoso. Este prerrequisito histórico se documenta y no se mezcla con la revisión Enrich v2.
+
+El despliegue local real confirmó que `vector` ya existía y avanzó la base desde
+`20260722_chat_observability_v3` hasta el head nuevo. `scripts/audit_schema.py`
+aprobó 16 verificaciones; una consulta focal confirmó la tabla de jobs,
+`canonical_products.content_revision` y la ausencia de
+`products.market_price_reference`. Ver
+`docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
 
 ## 2026-07-22 — cadena de Chat segura
 

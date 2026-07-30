@@ -2,7 +2,15 @@
 <!-- NG-HEADER: Ubicación: docs/roles-endpoints.md -->
 <!-- NG-HEADER: Descripción: Roles y endpoints expuestos por la API. -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
+
 # Roles por endpoint
+
+## Conocimiento canónico (2026-07-26)
+
+| Método/ruta | Roles | Requisitos |
+|---|---|---|
+| `/canonical-products/{id}/knowledge*` | colaborador, admin | lectura staff; mutaciones + CSRF |
+| `/knowledge-capabilities*` y override de confianza | admin | admin + CSRF |
 
 ## Chat e identidades externas (2026-07-22)
 
@@ -84,7 +92,7 @@ Las rutas sin un rol específico son accesibles para cualquier usuario, incluido
 | POST | /canonical-products | admin (requiere CSRF) |
 | GET | /canonical-products | Ninguno |
 | GET | /canonical-products/{canonical_id} | Ninguno |
-| PATCH | /canonical-products/{canonical_id} | admin (requiere CSRF) |
+| PATCH | /canonical-products/{canonical_id} | colaborador, admin (requiere CSRF; edición canónica y SKU único) |
 | GET | /canonical-products/{canonical_id}/offers | Ninguno |
 | GET | /equivalences | Ninguno |
 | POST | /equivalences | colaborador, admin (requiere CSRF) |

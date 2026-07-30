@@ -27,7 +27,7 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=app:app mcp_servers/web_search_server/ /app/mcp_servers/web_search_server/
 COPY --chown=app:app mcp_servers/__init__.py mcp_servers/security.py /app/mcp_servers/
-COPY --chown=app:app agent_core/__init__.py agent_core/tool_security.py /app/agent_core/
+COPY --chown=app:app agent_core/__init__.py agent_core/chat_policy.py agent_core/tool_security.py /app/agent_core/
 
 USER app
 EXPOSE 8002

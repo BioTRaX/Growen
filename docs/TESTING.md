@@ -3,7 +3,34 @@
 <!-- NG-HEADER: Descripción: Lineamientos completos de testing para el proyecto Growen -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
-# Testing en Growen
+# Testing
+
+## Suite focalizada de conocimiento canónico
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_canonical_knowledge.py tests\test_enrichment_v2_rules.py tests\test_enrichment_v2_api_contract.py tests\test_market_pricing.py tests\test_market_validation.py tests\test_market_worker.py -q -p no:randomly
+.\.venv\Scripts\python.exe -m pytest tests\test_migrations_fresh_postgres.py -q -p no:randomly
+cd frontend-vue
+npm.cmd run typecheck
+npm.cmd test -- src/modules/products src/modules/knowledge
+npm.cmd run build
+```
+
+PostgreSQL vacío debe crear `vector`, alcanzar `20260726_canonical_knowledge_v1` y confirmar ausencia de `market_sources`. `SMOKE_PROCESS_KNOWLEDGE=1` en `scripts/test_login_flow.py` exige login, CSRF, encolado, polling y `completed` sin imprimir secretos.
+
+## Lineamientos generales
+
+## Suite focalizada Enrich v2 y detalle canónico
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_enrichment_v2_rules.py tests\test_enrichment_v2_api_contract.py tests\test_product_canonical_detail.py mcp_servers\web_search_server\tests -q
+cd frontend-vue
+npm.cmd test -- src/modules/products src/app/modules/manifest.spec.ts
+npm.cmd run typecheck
+npm.cmd run build
+```
+
+El upgrade PostgreSQL vacío debe crear previamente `vector`, alcanzar `20260725_canonical_enrichment_v2`, crear `canonical_enrichment_jobs` y confirmar la ausencia de `products.market_price_reference`. `alembic check` puede seguir señalando drift histórico ajeno; se clasifica en `MIGRATIONS_NOTES.md` y no se incorpora a esta revisión.
 
 ## Suite focalizada de Chat seguro, RAG y MCP
 

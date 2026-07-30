@@ -121,7 +121,10 @@ class MCPClientManager:
             timeout=httpx.Timeout(8.0),
             follow_redirects=False,
         )
-        transport = streamable_http_client(config.url, http_client=client)
+        # FastMCP montado bajo ``/mcp`` canonicaliza el transporte en ``/mcp/``.
+        # Normalizar aquí evita un 307 que el cliente MCP deliberadamente no sigue.
+        transport_url = f"{config.url.rstrip('/')}/"
+        transport = streamable_http_client(transport_url, http_client=client)
         return client, transport
 
     async def _list_server_tools(
@@ -215,7 +218,15 @@ class MCPClientManager:
             return await finish({"error": "tool_not_allowed"}, authorized=False)
 
         if tool_name not in self._tool_servers:
-            await self.list_tools(role, channel)
+            if server_name:
+                requested_config = next(
+                    (item for item in self.server_configs() if item.name == server_name),
+                    None,
+                )
+                if requested_config and requested_config.enabled:
+                    await self._list_server_tools(requested_config, role, channel)
+            else:
+                await self.list_tools(role, channel)
         target = server_name or self._tool_servers.get(tool_name)
         config = next((item for item in self.server_configs() if item.name == target), None)
         if not config:

@@ -3,6 +3,10 @@
 <!-- NG-HEADER: Descripción: Crawler y gestión de imágenes -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
+## Activos de conocimiento
+
+Las imágenes del Centro Conocimiento se almacenan por hash, registran dimensiones/OCR/procedencia y no ingresan automáticamente a la galería comercial. Incorporarlas a la ficha requiere una acción explícita; etiquetas/capacidades no son tags.
+
 # Gestión de imágenes
 
 ## Separación de operación y revisión Vue (2026-07-18)

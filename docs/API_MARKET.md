@@ -3,11 +3,21 @@
 <!-- NG-HEADER: Descripción: Documentación de API del módulo Mercado -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
+> Vigencia 2026-07-26: `market_sources` ya no existe. Identidad, URL, etiquetas y capacidades viven en `canonical_knowledge_assets`; `canonical_knowledge_market_profiles` conserva configuración/estado de scraping y el ID aceptado por `/market/sources/{id}`. Los SQL y modelos posteriores basados en `market_sources` son historia del contrato 2025. Ver `CANONICAL_KNOWLEDGE.md`.
+
 # API del Módulo Mercado
 
-## Estado operativo auditado (2026-07-21)
+## Autoridad monetaria única (2026-07-25)
 
-Mercado está activo en Vue y usa un consumidor Docker dedicado `market_worker`, separado del contenedor liviano `dramatiq`. El worker consume exclusivamente `market`, publica heartbeat y su health distingue broker, consumidor y profundidad lista/diferida. El diagnóstico canónico es `scripts\diagnose_market.ps1` y el arranque diario es `scripts\start-dev.ps1 -WithMarketWorker`.
+Enrich v2 no genera, aplica ni elimina valores monetarios. `products.market_price_reference` fue retirado en `20260725_canonical_enrichment_v2`; las referencias, fuentes, observaciones ARS, vigencia, promedio e histórico permanecen bajo `/market` y `CanonicalProduct`. La card del detalle Vue consulta únicamente estos contratos.
+
+## Estado operativo vigente (verificado 2026-07-26)
+
+Mercado está en `state: active` y `runtime: vue` para `colaborador|admin`. Nginx dirige `/mercado` a Vue. El consumidor Docker dedicado `market_worker`, separado del contenedor liviano `dramatiq`, consume exclusivamente `market`, publica heartbeat y expone health de broker, consumidor y profundidad lista/diferida. El diagnóstico canónico es `scripts\diagnose_market.ps1` y el arranque diario es `scripts\start-dev.ps1 -WithMarketWorker`.
+
+Una fuente automática sólo aporta si su activo está confirmado, conserva etiqueta `market`, capacidad `price`, perfil activo, moneda ARS y entrega argentina confirmada. El Centro **Conocimiento** permite registrar esta confirmación; las fuentes migradas con entrega desconocida quedan protegidas hasta revisión humana. Las cargas manuales auditadas no ejecutan scraping.
+
+Este archivo es la fuente canónica para API, reglas operativas y ejecución de Mercado. `docs/MERCADO_INTEGRACION_FRONTEND.md` conserva únicamente el baseline React de 2025; los documentos `MARKET_CURRENT_STATE_*` y `RETROSPECTIVE_MARKET_*` son evidencia histórica, no fuentes del estado vigente.
 
 En los contratos de producto, `preferred_name`/`product_name` contienen siempre el nombre canónico y `product_sku` contiene `sku_custom`, `ng_sku` o el fallback por ID. Para extraer precios se prioriza JSON-LD Schema.org `Product → Offer → priceSpecification`, seguido por metadata/contenedores del producto; las clases genéricas y regex son únicamente fallback, porque pueden incluir carrito, cuotas y productos relacionados.
 
@@ -1901,7 +1911,7 @@ Campos relevantes:
 - `supplier_id`: FK a `suppliers`
 - `supplier_product_id`: FK a `supplier_products`
 
-### MarketSource *(futuro - Etapa 2)*
+### MarketSource
 
 Fuentes de precios de mercado.
 
@@ -2007,7 +2017,9 @@ Ejecutar tests:
 pytest tests/test_market_api.py -v
 ```
 
-## Cambios Futuros (Roadmap)
+## Registro histórico del plan inicial
+
+> La checklist siguiente explica la evolución del módulo, pero ya no representa su estado vigente. Los pendientes actuales viven únicamente en `Roadmap.md`.
 
 ### Etapa 2: Fuentes de Mercado
 
@@ -2023,7 +2035,7 @@ pytest tests/test_market_api.py -v
 - [ ] Agregar `last_market_update` desde fuentes
 - [ ] Actualizar `GET /market/products` para incluir joins con `market_sources`
 
-**Estado Etapa 2**: 8/11 items completados (73%)
+**Estado histórico de Etapa 2**: 8/11 ítems estaban completados al registrar esta sección; el cierre vigente se describe al inicio del documento.
 
 ### Etapa 3: Worker de Scraping
 
@@ -2375,6 +2387,6 @@ Los conteos no se fijan como contrato porque cambian con cada regresión. Como e
 
 ---
 
-**Última actualización**: 2026-07-21
+**Última actualización**: 2026-07-25
 **Estado**: módulo Vue activo, worker Mercado Docker dedicado y observable, jobs idempotentes con estados terminales, fuentes/promedios exclusivamente ARS e histórico auditable de tres años. React permanece como fallback temporal durante un ciclo estable.
 

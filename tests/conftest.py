@@ -48,6 +48,7 @@ from sqlalchemy import text as _text  # noqa: E402
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.ext.asyncio import create_async_engine as _create_engine
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+from db.models import KnowledgeCapability
 
 if str(_session.engine.url).startswith("postgres"):
     mem_url = "sqlite+aiosqlite:///file:memdb1?mode=memory&cache=shared"
@@ -58,6 +59,21 @@ else:
     engine = _session.engine
 
 Base = _base.Base
+
+_KNOWLEDGE_CAPABILITIES = (
+    "description",
+    "technical_specs",
+    "compatibility",
+    "images",
+    "manuals",
+    "price",
+    "availability",
+    "offers",
+    "seo",
+    "video",
+    "warranty",
+    "certifications",
+)
 
 
 @pytest_asyncio.fixture(scope="function", autouse=True)
@@ -78,6 +94,11 @@ async def db_session(request):
     
     # Crear y retornar sesión para que fixtures puedan usarla
     async with _session.SessionLocal() as session:
+        session.add_all(
+            KnowledgeCapability(code=code, name=code.replace("_", " ").title())
+            for code in _KNOWLEDGE_CAPABILITIES
+        )
+        await session.commit()
         yield session
     
     # Cleanup

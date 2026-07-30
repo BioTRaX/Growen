@@ -20,6 +20,9 @@ import logging
 import traceback
 
 from db.models import (
+    CanonicalKnowledgeAsset,
+    CanonicalKnowledgeAssetCapability,
+    CanonicalKnowledgeLabel,
     CanonicalProduct,
     Category,
     ProductEquivalence,
@@ -34,8 +37,15 @@ from db.models import (
 from db.session import get_session
 from services.auth import SessionData, current_session, require_roles, require_csrf
 from services.market.jobs import complete_item, create_update_job, job_payload
-from services.market.pricing import AUTOMATIC_FRESHNESS_DAYS, compare_sale_to_market, persist_source_observation, recompute_market_reference
+from services.market.pricing import (
+    AUTOMATIC_FRESHNESS_DAYS,
+    compare_sale_to_market,
+    eligible_market_profile_conditions,
+    persist_source_observation,
+    recompute_market_reference,
+)
 from services.market.source_validation import initial_validation, validate_public_url
+from services.knowledge.service import archive_asset
 
 # Logger para errores del módulo
 logger = logging.getLogger(__name__)
@@ -143,7 +153,7 @@ async def list_market_products(
     freshness_threshold = datetime.utcnow() - timedelta(days=AUTOMATIC_FRESHNESS_DAYS)
     source_aggregate = (
         select(
-            MarketSource.product_id.label("product_id"),
+            CanonicalKnowledgeAsset.canonical_product_id.label("product_id"),
             func.min(MarketSource.last_price).label("market_min"),
             func.max(MarketSource.last_price).label("market_max"),
             func.count().filter(
@@ -157,12 +167,14 @@ async def list_market_products(
             ).label("stale_count"),
             func.count().filter(MarketSource.validation_status == "warning").label("warning_count"),
         )
-        .where(
-            MarketSource.is_active.is_(True),
-            MarketSource.validation_status != "rejected",
-            MarketSource.currency == "ARS",
+        .join(CanonicalKnowledgeAsset, CanonicalKnowledgeAsset.id == MarketSource.asset_id)
+        .join(CanonicalKnowledgeLabel, CanonicalKnowledgeLabel.asset_id == CanonicalKnowledgeAsset.id)
+        .join(
+            CanonicalKnowledgeAssetCapability,
+            CanonicalKnowledgeAssetCapability.asset_id == CanonicalKnowledgeAsset.id,
         )
-        .group_by(MarketSource.product_id)
+        .where(*eligible_market_profile_conditions())
+        .group_by(CanonicalKnowledgeAsset.canonical_product_id)
         .subquery()
     )
     latest_job_status = (
@@ -343,6 +355,11 @@ async def list_market_products(
 class MarketSourceItem(BaseModel):
     """Fuente de precio de mercado individual"""
     id: int = Field(description="ID de la fuente")
+    knowledge_asset_id: int = Field(description="ID estable del activo de conocimiento")
+    labels: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
+    trust_score: float = 0
+    exclude_from_enrichment: bool = False
     source_name: str = Field(description="Nombre de la tienda o sitio")
     url: Optional[str] = Field(None, description="URL de la fuente")
     currency: Optional[str] = Field(None, description="Moneda del precio (ARS, USD, etc.)")
@@ -433,6 +450,11 @@ async def get_product_sources(
     for source in sources:
         item = MarketSourceItem(
             id=source.id,
+            knowledge_asset_id=source.asset_id,
+            labels=sorted(item.label for item in source.asset.labels),
+            capabilities=sorted(item.capability_code for item in source.asset.capabilities if item.enabled),
+            trust_score=source.asset.trust_score,
+            exclude_from_enrichment=source.asset.exclude_from_enrichment,
             source_name=source.source_name,
             url=source.url,
             last_price=float(source.last_price) if source.last_price else None,
@@ -1511,6 +1533,7 @@ async def add_market_source(
 async def delete_market_source(
     source_id: int,
     db: AsyncSession = Depends(get_session),
+    session_data: SessionData = Depends(current_session),
 ):
     """
     Elimina una fuente de precio de mercado.
@@ -1536,8 +1559,17 @@ async def delete_market_source(
             detail=f"Fuente con ID {source_id} no encontrada"
         )
     
-    # 2. Eliminar fuente
-    await db.delete(source)
+    # 2. Archivar el activo y conservar perfil, observaciones e histórico
+    await archive_asset(
+        db,
+        source.asset,
+        session_data.user.id if session_data.user else None,
+    )
+    await recompute_market_reference(
+        db,
+        product_id=source.product_id,
+        created_by_user_id=session_data.user.id if session_data.user else None,
+    )
     await db.commit()
     
     # 3. Retornar 204 No Content (FastAPI maneja automáticamente sin body)

@@ -26,9 +26,11 @@ from sqlalchemy import (
     Index,
     Enum,
     func,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 from .base import Base
@@ -75,7 +77,6 @@ class Product(Base):
     height_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
     width_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
     depth_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
-    market_price_reference: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
     # Etapa 1: Enriquecimiento de datos estructurados para IA
     technical_specs: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
     usage_instructions: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
@@ -412,6 +413,24 @@ class CanonicalProduct(Base):
     market_price_reference: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
     # Fecha de última actualización del precio de mercado de referencia
     market_price_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Contenido enriquecido canónico. Product conserva sus columnas legacy sólo
+    # durante la ventana de compatibilidad React.
+    description_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    weight_kg: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 3), nullable=True)
+    height_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
+    width_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
+    depth_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
+    technical_specs: Mapped[Optional[dict]] = mapped_column(
+        JSONBCompat, nullable=True, default=dict, server_default="{}"
+    )
+    usage_instructions: Mapped[Optional[dict]] = mapped_column(
+        JSONBCompat, nullable=True, default=dict, server_default="{}"
+    )
+    content_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_enriched_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    enriched_by: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     specs_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     # Taxonomía: categoría padre y subcategoría (opcional)
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True)
@@ -422,34 +441,266 @@ class CanonicalProduct(Base):
     equivalences: Mapped[list["ProductEquivalence"]] = relationship(
         back_populates="canonical_product"
     )
-    market_sources: Mapped[list["MarketSource"]] = relationship(
-        back_populates="product", cascade="all, delete-orphan"
+    knowledge_assets: Mapped[list["CanonicalKnowledgeAsset"]] = relationship(
+        back_populates="canonical_product", cascade="all, delete-orphan"
+    )
+    market_sources: Mapped[list["CanonicalKnowledgeMarketProfile"]] = relationship(
+        "CanonicalKnowledgeMarketProfile",
+        secondary="canonical_knowledge_assets",
+        primaryjoin="CanonicalProduct.id == CanonicalKnowledgeAsset.canonical_product_id",
+        secondaryjoin="CanonicalKnowledgeAsset.id == CanonicalKnowledgeMarketProfile.asset_id",
+        viewonly=True,
     )
     price_history: Mapped[list["MarketPriceHistory"]] = relationship(
         back_populates="product", cascade="all, delete-orphan", order_by="MarketPriceHistory.created_at.desc()"
     )
     category: Mapped[Optional["Category"]] = relationship(foreign_keys=[category_id])
     subcategory: Mapped[Optional["Category"]] = relationship(foreign_keys=[subcategory_id])
+    enrichment_jobs: Mapped[list["CanonicalEnrichmentJob"]] = relationship(
+        back_populates="canonical_product", cascade="all, delete-orphan"
+    )
+    content_versions: Mapped[list["CanonicalContentVersion"]] = relationship(
+        back_populates="canonical_product", cascade="all, delete-orphan"
+    )
 
 
-class MarketSource(Base):
-    """Fuente de precio de mercado para un producto canónico."""
-    __tablename__ = "market_sources"
+class CanonicalKnowledgeAsset(Base):
+    """Activo reusable de conocimiento asociado a un producto canónico."""
+
+    __tablename__ = "canonical_knowledge_assets"
     __table_args__ = (
-        Index("idx_market_sources_product_id", "product_id"),
-        UniqueConstraint("product_id", "url", name="uq_market_sources_product_url"),
+        Index("ix_canonical_knowledge_assets_product_status", "canonical_product_id", "status"),
+        CheckConstraint("asset_type IN ('web','document','image','video')", name="ck_canonical_knowledge_assets_type"),
+        CheckConstraint("status IN ('pending','confirmed','archived')", name="ck_canonical_knowledge_assets_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    asset_type: Mapped[str] = mapped_column(String(24), nullable=False, default="web", server_default="web")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", server_default="pending")
+    origin: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", server_default="manual")
+    exclude_from_enrichment: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    trust_score: Mapped[float] = mapped_column(Float, nullable=False, default=0, server_default="0")
+    trust_breakdown: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    ai_trust_adjustment: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ai_trust_reason: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now())
+
+    canonical_product: Mapped["CanonicalProduct"] = relationship(back_populates="knowledge_assets")
+    locations: Mapped[list["CanonicalKnowledgeLocation"]] = relationship(back_populates="asset", cascade="all, delete-orphan", lazy="selectin")
+    labels: Mapped[list["CanonicalKnowledgeLabel"]] = relationship(back_populates="asset", cascade="all, delete-orphan", lazy="selectin")
+    capabilities: Mapped[list["CanonicalKnowledgeAssetCapability"]] = relationship(back_populates="asset", cascade="all, delete-orphan", lazy="selectin")
+    versions: Mapped[list["CanonicalKnowledgeVersion"]] = relationship(back_populates="asset", cascade="all, delete-orphan")
+    market_profile: Mapped[Optional["CanonicalKnowledgeMarketProfile"]] = relationship(back_populates="asset", cascade="all, delete-orphan", uselist=False)
+
+
+class CanonicalKnowledgeLocation(Base):
+    """Ubicación o representación concreta de un activo."""
+
+    __tablename__ = "canonical_knowledge_locations"
+    __table_args__ = (
+        Index("ix_canonical_knowledge_locations_asset", "asset_id"),
+        Index("ix_canonical_knowledge_locations_hash", "content_hash"),
+        Index(
+            "uq_canonical_knowledge_location_url",
+            "asset_id",
+            "normalized_url",
+            unique=True,
+            postgresql_where=text("normalized_url IS NOT NULL"),
+            sqlite_where=text("normalized_url IS NOT NULL"),
+        ),
+        CheckConstraint("status IN ('pending','ready','failed','stale','archived')", name="ck_canonical_knowledge_locations_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), nullable=False)
+    url: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    normalized_url: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    storage_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    mime_type: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    content_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", server_default="pending")
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    last_fetched_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now())
+    asset: Mapped["CanonicalKnowledgeAsset"] = relationship(back_populates="locations")
+
+
+class CanonicalKnowledgeLabel(Base):
+    """Etiqueta controlada, independiente de los tags de producto."""
+
+    __tablename__ = "canonical_knowledge_labels"
+    __table_args__ = (
+        CheckConstraint(
+            "label IN ('manufacturer','supplier','market','manual','catalog','msds','official','other')",
+            name="ck_canonical_knowledge_labels_value",
+        ),
+    )
+
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), primary_key=True)
+    label: Mapped[str] = mapped_column(String(32), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    asset: Mapped["CanonicalKnowledgeAsset"] = relationship(back_populates="labels")
+
+
+class KnowledgeCapability(Base):
+    """Catálogo extensible de capacidades consumibles por módulos."""
+
+    __tablename__ = "knowledge_capabilities"
+
+    code: Mapped[str] = mapped_column(String(48), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+
+
+class CanonicalKnowledgeAssetCapability(Base):
+    """Capacidad habilitada para un activo."""
+
+    __tablename__ = "canonical_knowledge_asset_capabilities"
+
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), primary_key=True)
+    capability_code: Mapped[str] = mapped_column(ForeignKey("knowledge_capabilities.code", ondelete="RESTRICT"), primary_key=True)
+    origin: Mapped[str] = mapped_column(String(24), nullable=False, default="manual", server_default="manual")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0, server_default="0")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    asset: Mapped["CanonicalKnowledgeAsset"] = relationship(back_populates="capabilities")
+    capability: Mapped["KnowledgeCapability"] = relationship()
+
+
+class CanonicalKnowledgeVersion(Base):
+    """Snapshot inmutable del contenido procesado."""
+
+    __tablename__ = "canonical_knowledge_versions"
+    __table_args__ = (
+        UniqueConstraint("location_id", "version", name="uq_canonical_knowledge_location_version"),
+        Index("ix_canonical_knowledge_versions_asset_created", "asset_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), nullable=False)
+    location_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_locations.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    extracted_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    asset: Mapped["CanonicalKnowledgeAsset"] = relationship(back_populates="versions")
+    location: Mapped["CanonicalKnowledgeLocation"] = relationship()
+
+
+class CanonicalKnowledgeClaim(Base):
+    """Afirmación extraída de una versión con evidencia."""
+
+    __tablename__ = "canonical_knowledge_claims"
+    __table_args__ = (
+        Index("ix_canonical_knowledge_claims_product_key", "canonical_product_id", "fact_key"),
+        CheckConstraint("status IN ('proposed','confirmed','contradicted','rejected')", name="ck_canonical_knowledge_claims_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), nullable=False)
+    version_id: Mapped[Optional[int]] = mapped_column(ForeignKey("canonical_knowledge_versions.id", ondelete="SET NULL"), nullable=True)
+    capability_code: Mapped[str] = mapped_column(ForeignKey("knowledge_capabilities.code", ondelete="RESTRICT"), nullable=False)
+    fact_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    value_json: Mapped[dict] = mapped_column(JSONBCompat, nullable=False)
+    unit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="proposed", server_default="proposed")
+    evidence_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+
+
+class CanonicalKnowledgeFact(Base):
+    """Resolución vigente de claims coincidentes o contradictorios."""
+
+    __tablename__ = "canonical_knowledge_facts"
+    __table_args__ = (UniqueConstraint("canonical_product_id", "fact_key", name="uq_canonical_knowledge_fact_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False)
+    fact_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    capability_code: Mapped[str] = mapped_column(ForeignKey("knowledge_capabilities.code", ondelete="RESTRICT"), nullable=False)
+    value_json: Mapped[dict] = mapped_column(JSONBCompat, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="confirmed", server_default="confirmed")
+    supporting_claim_ids: Mapped[list] = mapped_column(JSONBCompat, nullable=False, default=list, server_default="[]")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now())
+
+
+class CanonicalKnowledgeEvent(Base):
+    """Evento append-only de auditoría."""
+
+    __tablename__ = "canonical_knowledge_events"
+    __table_args__ = (Index("ix_canonical_knowledge_events_asset_created", "asset_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False)
+    asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="SET NULL"), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    payload_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+
+
+class CanonicalKnowledgeJob(Base):
+    """Job persistente de ingestión o reprocesamiento."""
+
+    __tablename__ = "canonical_knowledge_jobs"
+    __table_args__ = (
+        Index("ix_canonical_knowledge_jobs_asset_created", "asset_id", "created_at"),
+        Index(
+            "uq_canonical_knowledge_jobs_active",
+            "asset_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued','running')"),
+            sqlite_where=text("status IN ('queued','running')"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", server_default="queued")
+    stage: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    result_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class CanonicalKnowledgeMarketProfile(Base):
+    """Estado técnico de Mercado; identidad y URL pertenecen al activo."""
+
+    __tablename__ = "canonical_knowledge_market_profiles"
+    __table_args__ = (
+        UniqueConstraint("asset_id", name="uq_canonical_knowledge_market_profile_asset"),
         CheckConstraint(
             "source_type IS NULL OR source_type IN ('static','dynamic','manual')",
-            name="ck_market_sources_source_type",
+            name="ck_canonical_knowledge_market_profiles_source_type",
         ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    product_id: Mapped[int] = mapped_column(
-        ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
-    )
-    source_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), nullable=False)
     last_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
     last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     is_mandatory: Mapped[bool] = mapped_column(
@@ -483,7 +734,102 @@ class MarketSource(Base):
         default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now()
     )
 
-    product: Mapped["CanonicalProduct"] = relationship(back_populates="market_sources")
+    asset: Mapped["CanonicalKnowledgeAsset"] = relationship(back_populates="market_profile", lazy="joined")
+
+    @hybrid_property
+    def product_id(self) -> Optional[int]:
+        return self.asset.canonical_product_id if self.asset else None
+
+    @product_id.inplace.expression
+    @classmethod
+    def _product_id_expression(cls):
+        return select(CanonicalKnowledgeAsset.canonical_product_id).where(
+            CanonicalKnowledgeAsset.id == cls.asset_id
+        ).scalar_subquery()
+
+    @product_id.inplace.setter
+    def _set_product_id(self, value: int) -> None:
+        self._ensure_asset().canonical_product_id = value
+
+    @hybrid_property
+    def source_name(self) -> str:
+        return self.asset.title if self.asset else "Fuente de Mercado"
+
+    @source_name.inplace.expression
+    @classmethod
+    def _source_name_expression(cls):
+        return select(CanonicalKnowledgeAsset.title).where(
+            CanonicalKnowledgeAsset.id == cls.asset_id
+        ).scalar_subquery()
+
+    @source_name.inplace.setter
+    def _set_source_name(self, value: str) -> None:
+        self._ensure_asset().title = value
+
+    @hybrid_property
+    def url(self) -> Optional[str]:
+        if not self.asset:
+            return None
+        # Evita iniciar IO implícito desde una hybrid property bajo AsyncSession.
+        # Los queries de Mercado cargan ubicaciones de forma explícita; un perfil
+        # manual recién creado legítimamente no posee ninguna.
+        locations = self.asset.__dict__.get("locations", ())
+        location = next((item for item in locations if item.is_primary), None)
+        return location.url if location else None
+
+    @url.inplace.expression
+    @classmethod
+    def _url_expression(cls):
+        return select(CanonicalKnowledgeLocation.url).where(
+            CanonicalKnowledgeLocation.asset_id == cls.asset_id,
+            CanonicalKnowledgeLocation.is_primary.is_(True),
+        ).order_by(CanonicalKnowledgeLocation.id).limit(1).scalar_subquery()
+
+    @url.inplace.setter
+    def _set_url(self, value: Optional[str]) -> None:
+        asset = self._ensure_asset()
+        locations = asset.__dict__.get("locations")
+        if locations is None:
+            if asset.id is None:
+                locations = asset.locations
+            else:
+                raise RuntimeError("Las ubicaciones deben cargarse antes de modificar la URL de Mercado")
+        location = next((item for item in locations if item.is_primary), None)
+        if location:
+            location.url = value
+            location.normalized_url = value
+        elif value:
+            asset.locations.append(
+                CanonicalKnowledgeLocation(url=value, normalized_url=value, is_primary=True)
+            )
+
+    @property
+    def product(self) -> Optional["CanonicalProduct"]:
+        return self.asset.canonical_product if self.asset else None
+
+    def _ensure_asset(self) -> "CanonicalKnowledgeAsset":
+        if not self.asset:
+            self.asset = CanonicalKnowledgeAsset(
+                canonical_product_id=0,
+                title="Fuente de Mercado",
+                asset_type="web",
+                status="confirmed",
+                origin="market_compat",
+            )
+            self.asset.labels.append(CanonicalKnowledgeLabel(label="market"))
+            self.asset.capabilities.extend(
+                CanonicalKnowledgeAssetCapability(
+                    capability_code=code,
+                    origin="market_compat",
+                    confidence=0.72,
+                )
+                for code in ("price", "availability", "offers")
+            )
+        return self.asset
+
+
+# Adaptador temporal para imports Python legacy. No existe una tabla market_sources.
+MarketSource = CanonicalKnowledgeMarketProfile
 
 
 class MarketPriceHistory(Base):
@@ -507,7 +853,7 @@ class MarketPriceHistory(Base):
         ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
     )
     source_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("market_sources.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("canonical_knowledge_market_profiles.id", ondelete="SET NULL"), nullable=True
     )
     price: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False)
     currency: Mapped[str] = mapped_column(
@@ -539,7 +885,7 @@ class MarketPriceHistory(Base):
 
     # Relaciones
     product: Mapped["CanonicalProduct"] = relationship(back_populates="price_history")
-    source: Mapped[Optional["MarketSource"]] = relationship()
+    source: Mapped[Optional["CanonicalKnowledgeMarketProfile"]] = relationship()
 
 
 class MarketUpdateJob(Base):
@@ -643,7 +989,7 @@ class MarketUpdateSourceResult(Base):
         ForeignKey("market_update_items.id", ondelete="CASCADE"), nullable=False
     )
     source_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("market_sources.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("canonical_knowledge_market_profiles.id", ondelete="SET NULL"), nullable=True
     )
     status: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
     attempt: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
@@ -758,6 +1104,122 @@ class CanonicalBatchJobItem(Base):
     error_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     job: Mapped["CanonicalBatchJob"] = relationship(back_populates="items")
+
+
+class CanonicalEnrichmentJob(Base):
+    """Trabajo persistente de investigación y contenido para un canónico."""
+
+    __tablename__ = "canonical_enrichment_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','review_required','partially_applied','applied','failed','cancelled','discarded')",
+            name="ck_canonical_enrichment_jobs_status",
+        ),
+        CheckConstraint(
+            "scope IN ('full','description','technical')",
+            name="ck_canonical_enrichment_jobs_scope",
+        ),
+        Index("ix_canonical_enrichment_jobs_canonical_created", "canonical_product_id", "created_at"),
+        Index(
+            "uq_canonical_enrichment_jobs_active",
+            "canonical_product_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued','running')"),
+            sqlite_where=text("status IN ('queued','running')"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
+    )
+    requested_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("products.id", ondelete="SET NULL"), nullable=True
+    )
+    client_request_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    batch_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    scope: Mapped[str] = mapped_column(String(20), nullable=False, default="full", server_default="full")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", server_default="queued")
+    stage: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    provider: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    config_snapshot: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    result_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    applied_fields: Mapped[Optional[list]] = mapped_column(JSONBCompat, nullable=True, default=list, server_default="[]")
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    canonical_product: Mapped["CanonicalProduct"] = relationship(back_populates="enrichment_jobs")
+    sources: Mapped[list["CanonicalEnrichmentSource"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan"
+    )
+
+
+class CanonicalEnrichmentSource(Base):
+    """Evidencia acotada consultada durante un job de enriquecimiento."""
+
+    __tablename__ = "canonical_enrichment_sources"
+    __table_args__ = (
+        Index("ix_canonical_enrichment_sources_job", "job_id"),
+        UniqueConstraint("job_id", "url", name="uq_canonical_enrichment_source_url"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("canonical_enrichment_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    knowledge_asset_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("canonical_knowledge_assets.id", ondelete="SET NULL"), nullable=True
+    )
+    knowledge_version_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("canonical_knowledge_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    source_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    mime_type: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    evidence_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    accessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    job: Mapped["CanonicalEnrichmentJob"] = relationship(back_populates="sources")
+
+
+class CanonicalContentVersion(Base):
+    """Snapshot revisable de contenido canónico aplicado o heredado."""
+
+    __tablename__ = "canonical_content_versions"
+    __table_args__ = (
+        Index("ix_canonical_content_versions_canonical_created", "canonical_product_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
+    )
+    origin: Mapped[str] = mapped_column(String(32), nullable=False)
+    origin_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("products.id", ondelete="SET NULL"), nullable=True
+    )
+    job_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("canonical_enrichment_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot_json: Mapped[dict] = mapped_column(JSONBCompat, nullable=False)
+    is_applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+
+    canonical_product: Mapped["CanonicalProduct"] = relationship(back_populates="content_versions")
 
 
 class ImportJob(Base):
@@ -1337,7 +1799,7 @@ class MarketAlert(Base):
         ForeignKey("market_update_items.id", ondelete="SET NULL"), nullable=True
     )
     source_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("market_sources.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("canonical_knowledge_market_profiles.id", ondelete="SET NULL"), nullable=True
     )
     observation_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("market_price_history.id", ondelete="SET NULL"), nullable=True

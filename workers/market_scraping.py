@@ -26,11 +26,18 @@ if sys.platform == 'win32':
 
 import dramatiq  # type: ignore
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy import select
+from sqlalchemy import and_, select
 
 # Inicializa el RedisBroker antes de registrar los actores de este módulo.
 from services import jobs as _jobs_bootstrap  # noqa: F401
-from db.models import CanonicalProduct, MarketSource, MarketUpdateSourceResult
+from db.models import (
+    CanonicalKnowledgeAsset,
+    CanonicalKnowledgeAssetCapability,
+    CanonicalKnowledgeLabel,
+    CanonicalProduct,
+    MarketSource,
+    MarketUpdateSourceResult,
+)
 from services.market.jobs import claim_item, complete_item
 from services.market.pricing import persist_source_observation, recompute_market_reference
 from workers.scraping import scrape_static_price
@@ -47,6 +54,41 @@ engine = create_async_engine(DB_URL, future=True)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 _CURRENT_ITEM_ID: int | None = None
+
+
+def _eligible_market_sources_query(product_id: int):
+    """Selecciona sólo conocimiento confirmado y habilitado para precios."""
+    return (
+        select(MarketSource)
+        .join(CanonicalKnowledgeAsset, CanonicalKnowledgeAsset.id == MarketSource.asset_id)
+        .join(
+            CanonicalKnowledgeLabel,
+            and_(
+                CanonicalKnowledgeLabel.asset_id == CanonicalKnowledgeAsset.id,
+                CanonicalKnowledgeLabel.label == "market",
+            ),
+        )
+        .join(
+            CanonicalKnowledgeAssetCapability,
+            and_(
+                CanonicalKnowledgeAssetCapability.asset_id == CanonicalKnowledgeAsset.id,
+                CanonicalKnowledgeAssetCapability.capability_code == "price",
+                CanonicalKnowledgeAssetCapability.enabled.is_(True),
+            ),
+        )
+        .where(
+            CanonicalKnowledgeAsset.canonical_product_id == product_id,
+            CanonicalKnowledgeAsset.status == "confirmed",
+            MarketSource.is_active.is_(True),
+            MarketSource.validation_status != "rejected",
+            MarketSource.currency == "ARS",
+            MarketSource.ars_confirmed.is_(True),
+            MarketSource.argentina_delivery_confirmed.is_(True),
+            MarketSource.source_type != "manual",
+            MarketSource.url.is_not(None),
+        )
+        .order_by(MarketSource.is_mandatory.desc(), MarketSource.id)
+    )
 
 
 def _redis_client():
@@ -399,8 +441,8 @@ async def update_market_prices_for_product(product_id: int, db: AsyncSession) ->
         product_name = product.name or f"ID:{product_id}"
         logger.info(f"[scraping] Producto encontrado: '{product_name}'")
         
-        # 2. Obtener todas las fuentes de mercado del producto
-        query_sources = select(MarketSource).where(MarketSource.product_id == product_id)
+        # 2. Obtener sólo activos canónicos habilitados explícitamente para Mercado.
+        query_sources = _eligible_market_sources_query(product_id)
         result_sources = await db.execute(query_sources)
         sources = result_sources.scalars().all()
         
@@ -684,16 +726,7 @@ async def process_market_item(item_id: int) -> dict[str, Any]:
             )
             _CURRENT_ITEM_ID = None
             return {"item_id": item_id, "status": "failed"}
-        sources = list((await db.execute(
-            select(MarketSource).where(
-                MarketSource.product_id == product.id,
-                MarketSource.is_active.is_(True),
-                MarketSource.validation_status != "rejected",
-                MarketSource.currency == "ARS",
-                MarketSource.source_type != "manual",
-                MarketSource.url.is_not(None),
-            ).order_by(MarketSource.is_mandatory.desc(), MarketSource.id)
-        )).scalars())
+        sources = list((await db.execute(_eligible_market_sources_query(product.id))).scalars())
         succeeded = 0
         failed = 0
         errors: list[str] = []

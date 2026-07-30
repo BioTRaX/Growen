@@ -2,6 +2,8 @@
 <!-- NG-HEADER: Ubicación: docs/MEDIA.md -->
 <!-- NG-HEADER: Descripción: Guía de manejo y almacenamiento de archivos multimedia. -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
+
+Los uploads canónicos usan `/canonical-products/{id}/knowledge/upload`, se deduplican por hash dentro del producto y quedan bajo `MEDIA_ROOT/canonical-knowledge`. Documentos, imágenes y videos son procesados por `knowledge_worker`; frames y transcripciones respetan límites `KNOWLEDGE_*`.
 Media y galería de productos
 ============================
 

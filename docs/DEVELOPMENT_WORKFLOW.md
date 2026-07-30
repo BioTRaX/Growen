@@ -5,6 +5,46 @@
 
 # Flujo de Trabajo: Desarrollo Local → Docker Producción
 
+## Base de Conocimiento local
+
+`scripts\start-dev.ps1 -McpMode All -WithKnowledgeWorker` inicia/verifica Redis, MCP y el consumidor `canonical_knowledge`. Confirmar `/health/knowledge-worker`.
+
+Un cambio de `.env` exige recrear el contenedor afectado con `docker compose up -d --force-recreate <servicio>`; `restart` conserva el entorno anterior. Sólo reconstruir imagen por código copiado, Dockerfile o dependencias. No levantar API Compose si `8000` ya pertenece al launcher local. En despliegue híbrido usar `KNOWLEDGE_MCP_WEB_SEARCH_URL` y `ENRICH_MCP_WEB_SEARCH_URL`.
+
+## Enrich v2 local
+
+```powershell
+scripts\start-dev.ps1 -McpMode All -WithEnrichmentWorker
+```
+
+El switch inicia/verifica Redis, MCP Web Search y un worker local con un proceso y dos threads. La API debe responder `ok=true` en `/health/enrichment-worker`. Mantener `ENRICH_V2_ENABLED=0` durante migración y diagnóstico; activarlo sólo cuando DB, MCP, Redis, heartbeat y proveedor IA estén saludables. Compose ofrece el servicio opcional `enrichment_worker` para integración y accede a Ollama del host mediante `host.docker.internal`.
+
+### Despliegue Compose verificado
+
+```powershell
+docker compose up -d db redis
+.\.venv\Scripts\python.exe -m alembic upgrade head
+docker compose build mcp_web_search enrichment_worker api frontend
+docker compose --profile optional up -d mcp_web_search enrichment_worker api frontend
+```
+
+Verificar `http://127.0.0.1:8102/health`,
+`http://127.0.0.1:8000/health/enrichment-worker` y
+`http://127.0.0.1:5173/health`. La API puede tardar cerca de 60 segundos mientras
+ejecuta el doctor de dependencias. `frontend` debe conservar las redes `backend` y
+`host_access`; sin la segunda Docker Desktop no publica el puerto 5173 aunque el
+contenedor figure saludable.
+
+Si la API se recrea después del frontend —por ejemplo, al activar
+`ENRICH_V2_ENABLED`— recrear luego `frontend`. Nginx resuelve el upstream al
+iniciar y puede conservar la IP anterior del contenedor, dejando `/health` y
+`/api/*` en 502 aunque el shell estático continúe respondiendo.
+
+El smoke del 2026-07-25 activó el flag con infraestructura saludable, pero el
+entorno no tenía OpenAI ni Ollama: la investigación obtuvo cinco fuentes y el job
+falló explícitamente sin aplicar campos. Ver
+`docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
+
 Guía para optimizar el ciclo de desarrollo usando servicios locales y reservar Docker para testing de integración y producción.
 
 ## Filosofía
@@ -126,7 +166,7 @@ Verificaciones y diagnóstico:
 - El worker `catalog_worker` iniciado desde Administración escribe stdout/stderr en `logs/worker_catalog.log`; no usa pipes sin lector. Si convive con Dramatiq Docker, cada mensaje lo consume sólo uno de ellos. `start-dev.ps1` advierte esta competencia y registra los PID locales en `catalog_worker_competing_local_pids`.
 - `start-dev.ps1` exporta `GROWEN_DEV_RUN_LOG_DIR` a los procesos hijos. Servicios → Mantenimiento de logs y `scripts/cleanup_logs.py` usan ese dato más los PID de `state.json` para proteger ejecuciones activas y eliminan las ejecuciones antiguas como carpetas completas. Ver `docs/LOG_CLEANUP.md`.
 - Si un servicio local ya responde correctamente, se reutiliza. Un puerto ocupado por un servicio no saludable detiene el arranque con código de error.
-- El servicio Compose `frontend` continúa correspondiendo a React; no es necesario levantarlo para trabajar en Vue.
+- El servicio Compose `frontend` entrega el build dual React/Vue según el manifiesto de rutas. No es necesario levantarlo cuando se trabaja con Vue mediante Vite local.
 - Una pantalla Vue oscura que permanece cargando suele indicar que `/auth/me` no pudo alcanzar la API.
 - Estado detallado y fases: `docs/FRONTEND_MIGRATION_VUE.md`.
 

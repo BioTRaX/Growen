@@ -10,6 +10,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from decimal import Decimal
@@ -433,7 +434,7 @@ async def get_canonical_product(
 
 @canonical_router.patch(
     "/{canonical_id}",
-    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
 )
 async def update_canonical_product(
     canonical_id: int,
@@ -447,14 +448,46 @@ async def update_canonical_product(
     if not cp:
         raise HTTPException(status_code=404, detail="Canonical product not found")
     data = req.model_dump(exclude_unset=True)
-    if "sku_custom" in data and data["sku_custom"]:
-        data["sku_custom"] = normalize_sku(data["sku_custom"])
-        exists = await session.scalar(select(CanonicalProduct).where(CanonicalProduct.sku_custom == data["sku_custom"], CanonicalProduct.id != cp.id))
+    if "sku_custom" in data:
+        normalized_sku = normalize_sku(data["sku_custom"] or "")
+        if not normalized_sku or not CANONICAL_SKU_REGEX.fullmatch(normalized_sku):
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid_sku", "message": "El SKU debe cumplir XXX_0000_YYY"},
+            )
+        exists = await session.scalar(
+            select(CanonicalProduct.id).where(
+                CanonicalProduct.id != cp.id,
+                (
+                    func.lower(CanonicalProduct.sku_custom) == normalized_sku.lower()
+                ) | (
+                    func.lower(CanonicalProduct.ng_sku) == normalized_sku.lower()
+                ),
+            )
+        )
         if exists:
-            raise HTTPException(status_code=409, detail="SKU canónico duplicado")
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "duplicate_sku", "message": "El SKU ya existe. Ingrese uno diferente."},
+            )
+        data["sku_custom"] = normalized_sku
     for k, v in data.items():
         setattr(cp, k, v)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        integrity_detail = str(exc.orig).lower()
+        if (
+            "sku_custom" in data
+            and "sku_custom" in integrity_detail
+            and ("unique" in integrity_detail or "duplicate" in integrity_detail)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "duplicate_sku", "message": "El SKU ya existe. Ingrese uno diferente."},
+            ) from exc
+        raise
     await session.refresh(cp)
     _cid = request.headers.get("x-correlation-id") or request.headers.get("x-request-id") if request else None
     await _audit(session, action="update", table="canonical_products", entity_id=cp.id, meta={"fields": list(data.keys()), **({"cid": _cid} if _cid else {})}, sess=sess, request=request)

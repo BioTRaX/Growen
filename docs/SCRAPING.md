@@ -5,6 +5,8 @@
 
 # Scraping de Precios de Mercado
 
+> Vigencia: Mercado ya no posee URLs. El worker selecciona perfiles técnicos de activos canónicos confirmados con etiqueta `market`, capacidad `price`, moneda ARS y entrega argentina confirmada. Ver `docs/CANONICAL_KNOWLEDGE.md`.
+
 Esta documentación describe la funcionalidad de scraping para obtener precios desde fuentes externas en el módulo "Mercado".
 
 ## Tabla de Contenidos

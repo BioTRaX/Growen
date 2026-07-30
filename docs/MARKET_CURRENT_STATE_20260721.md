@@ -3,7 +3,11 @@
 <!-- NG-HEADER: Descripción: Auditoría operativa, técnica y de migración Vue del dominio Mercado. -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
+> Documento histórico al 2026-07-21. Desde `20260726_canonical_knowledge_v1`, `market_sources` fue reemplazada por activos de conocimiento y perfiles técnicos. Los conteos reales del despliegue 2026-07-26 están en `CANONICAL_KNOWLEDGE_DEPLOYMENT_SMOKE_20260726.md`.
+
 # Estado actual y evolución del módulo Mercado — 2026-07-21
+
+> **Baseline histórico.** Este relevamiento conserva el estado previo y la secuencia de decisiones del 2026-07-21. No debe usarse como fuente del runtime vigente: `/mercado` está `active/vue`. Consultar `docs/API_MARKET.md` para el contrato actual y `docs/FRONTEND_MIGRATION_VUE.md` para el estado de migración.
 
 ## Resultado posterior a la implementación
 
@@ -24,7 +28,7 @@ La sección siguiente es una fotografía histórica previa a la implementación 
 
 ## 1. Contexto
 
-Mercado compara el precio de venta canónico con fuentes competidoras. FastAPI produce trabajos en Redis, Dramatiq consume la cola `market`, el worker extrae precios estáticos o dinámicos y PostgreSQL conserva fuentes, referencia y alertas. La pantalla `/mercado` continúa en React; Vue mantiene el módulo en `state: pending` y `runtime: legacy`.
+Mercado compara el precio de venta canónico con fuentes competidoras. FastAPI produce trabajos en Redis, Dramatiq consume la cola `market`, el worker extrae precios estáticos o dinámicos y PostgreSQL conserva fuentes, referencia y alertas. Al iniciar este baseline, `/mercado` todavía se servía en React y Vue figuraba `pending/legacy`; ese estado fue superado por la activación Vue documentada al comienzo del archivo.
 
 ## 2. Observaciones
 

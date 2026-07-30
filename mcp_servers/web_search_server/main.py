@@ -32,7 +32,11 @@ from mcp_servers.security import (  # noqa: E402
     get_current_token,
     mcp_transport_security,
 )
-from .tools import invoke_tool, search_web as execute_search_web  # noqa: E402
+from .tools import (  # noqa: E402
+    fetch_web_document as execute_fetch_web_document,
+    invoke_tool,
+    search_web as execute_search_web,
+)
 from agent_core.chat_policy import tool_allowed  # noqa: E402
 
 logger = logging.getLogger("mcp_web_search.main")
@@ -66,11 +70,28 @@ class WebSearchOutput(BaseModel):
     error: str | None = None
 
 
+class WebDocumentOutput(BaseModel):
+    url: str
+    mime_type: str
+    text: str
+    content_hash: str
+    bytes: int
+    redirects: list[str]
+
+
 @mcp.tool()
 async def search_web(query: str, max_results: int = 5) -> WebSearchOutput:
     """Busca fuentes web; requiere rol admin o colaborador y retorna hasta 10 resultados."""
     return WebSearchOutput.model_validate(
         await execute_search_web(get_current_token(), query=query, max_results=max_results)
+    )
+
+
+@mcp.tool()
+async def fetch_web_document(url: str) -> WebDocumentOutput:
+    """Lee una fuente HTTPS pública en HTML o PDF aplicando controles SSRF y de tamaño."""
+    return WebDocumentOutput.model_validate(
+        await execute_fetch_web_document(get_current_token(), url=url)
     )
 
 

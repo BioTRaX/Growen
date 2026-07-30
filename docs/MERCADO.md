@@ -3,6 +3,8 @@
 <!-- NG-HEADER: Descripción: Plan de implementación de la funcionalidad "Mercado" -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
+> Actualización 2026-07-26: la tabla `market_sources` descrita más abajo ya no existe. Mercado consume activos con etiqueta `market`, capacidad `price` y perfil `canonical_knowledge_market_profiles`. Ver `API_MARKET.md` y `CANONICAL_KNOWLEDGE.md`.
+
 # Funcionalidad "Mercado" - Plan de Implementación
 
 Este documento detalla el plan completo para implementar la sección "Mercado" en la aplicación Growen, que permitirá visualizar y comparar precios de productos con el mercado.

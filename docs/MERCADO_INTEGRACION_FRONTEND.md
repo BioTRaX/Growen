@@ -3,9 +3,11 @@
 <!-- NG-HEADER: Descripción: Guía de integración frontend-backend del módulo Mercado -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
-# Integración Frontend-Backend - Módulo Mercado
+# Integración Frontend-Backend React - Módulo Mercado (histórico)
 
-## Resumen
+> **Documento histórico.** Describe el baseline React de 2025 y no representa el runtime actual. `/mercado` está activo en Vue; consultar `docs/API_MARKET.md` para el contrato vigente y `docs/FRONTEND_MIGRATION_VUE.md` para el estado de migración. No agregar aquí cambios funcionales nuevos.
+
+## Resumen histórico
 
 Este documento describe la integración entre el frontend (React + TypeScript) y el backend (FastAPI) para el módulo Mercado, específicamente para la funcionalidad de listado de productos con precios.
 

@@ -3,7 +3,24 @@
 <!-- NG-HEADER: Descripción: Protocolo MCP real, servidores, seguridad y operación -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
+## Consumo desde conocimiento canónico
+
+`knowledge_worker` y Enrich usan `fetch_web_document` de MCP Web Search para contenido público HTML/PDF. MCP Products no recibe etiquetas, capacidades, claims ni inventario de conocimiento; continúa exponiendo sólo datos del producto permitidos por sus contratos.
+
 # MCP en Growen
+
+## Lectura segura de documentos para Enrich v2 (2026-07-25)
+
+Web Search expone `fetch_web_document(url)` además de `search_web`. Sólo acepta HTTPS público en puerto 443, valida DNS antes de cada conexión/redirect, compara el peer conectado, rechaza direcciones no globales y limita redirects a tres. Descarga por streaming, admite `text/html` y `application/pdf`, elimina contenido ejecutable del HTML y extrae PDF con `pypdf`.
+
+Los límites se configuran con `WEB_FETCH_*`. Enrich persiste sólo URL, MIME, hash y extractos breves; no almacena documentos completos ni prompts. MCP Products no participa del pipeline: sus datos son internos y no reemplazan la investigación de un producto sin información.
+
+El smoke real comprobó que FastMCP canonicaliza el transporte como `/mcp/`. Los
+consumidores siguen configurando `/mcp`; el cliente agrega la barra final sin
+seguir redirects. Al indicar `server_name="web_search"`, el descubrimiento se
+limita a ese servidor y no consulta MCP Products. El parser admite redirects
+DuckDuckGo `//duckduckgo.com/l/?uddg=...`. Evidencia en
+`docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
 
 ## Tags en Products MCP (2026-07-18)
 
@@ -44,6 +61,7 @@ Tools actuales:
 | Products | `get_product_info` | Todo usuario autenticado |
 | Products | `get_product_full_info` | admin, colaborador |
 | Web Search | `search_web` | admin, colaborador |
+| Web Search | `fetch_web_document` | admin, colaborador |
 
 ## Seguridad
 

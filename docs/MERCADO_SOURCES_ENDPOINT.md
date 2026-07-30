@@ -5,7 +5,9 @@
 
 # Endpoint: GET /market/products/{id}/sources
 
-**Estado**: ✅ Implementado (2025-11-11)
+**Estado**: adaptador compatible sobre Base de Conocimiento (actualizado 2026-07-26).
+
+La respuesta conserva IDs y campos legacy, e incorpora `knowledge_asset_id`, etiquetas, capacidades y confianza. No crear ni manipular una tabla `market_sources`: fue reemplazada por activos y perfiles técnicos canónicos.
 
 Este documento describe la implementación completa del endpoint que permite obtener las fuentes de precio de mercado configuradas para un producto.
 

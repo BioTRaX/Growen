@@ -50,6 +50,7 @@ KNOWN_SERVICES = [
     "drive_sync_worker",  # Worker de sincronización Drive
     "telegram_polling_worker",  # Worker de Long Polling para Telegram Bot
     "catalog_worker",  # Worker de creación batch de productos canónicos
+    "enrichment_worker",  # Worker dedicado de contenido canónico Enrich v2
 ]
 
 
@@ -703,7 +704,7 @@ async def deps_check(name: str) -> Dict[str, Any]:
             ok = False
             missing.append("httpx")
             hints.append("pip install httpx")
-    elif name == "catalog_worker":
+    elif name in {"catalog_worker", "enrichment_worker"}:
         # Verificar que Redis esté disponible para las colas
         try:
             import redis
@@ -721,6 +722,13 @@ async def deps_check(name: str) -> Dict[str, Any]:
             ok = False
             missing.append("dramatiq")
             hints.append("pip install dramatiq[redis]")
+        if name == "enrichment_worker":
+            if os.getenv("ENRICH_V2_ENABLED", "0") != "1":
+                hints.append("ENRICH_V2_ENABLED permanece apagado")
+            if not os.getenv("MCP_WEB_SEARCH_URL"):
+                ok = False
+                missing.append("MCP_WEB_SEARCH_URL")
+                hints.append("Configurar MCP_WEB_SEARCH_URL y verificar /health del servidor")
     else:
         return {"ok": False, "missing": [], "detail": ["servicio desconocido"]}
     return {"ok": ok, "missing": missing, "hints": hints}

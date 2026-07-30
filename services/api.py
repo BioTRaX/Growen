@@ -62,6 +62,8 @@ from .routers import (
     alerts,
     drive_sync,
     external_identities,
+    enrichment,
+    canonical_knowledge,
 )
 from services.auth import require_csrf  # para override condicional en dev
 from services.routers import bug_report  # router para reportes de bugs
@@ -372,6 +374,9 @@ app.include_router(catalog.router)
 app.include_router(imports.router)
 app.include_router(canonical_products.canonical_router)
 app.include_router(canonical_products.equivalences_router)
+app.include_router(enrichment.router)
+app.include_router(canonical_knowledge.router)
+app.include_router(canonical_knowledge.capabilities_router)
 app.include_router(products_ex.router)
 app.include_router(tags.router, prefix="/tags", tags=["tags"])
 # images.router debe estar ANTES que products_stock.router para evitar conflictos de rutas

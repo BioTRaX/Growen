@@ -185,16 +185,32 @@ def test_alembic_upgrade_head_from_empty_postgres() -> None:
             "chat_runs",
             "chat_tool_events",
             "chat_feedback_events",
+            "canonical_knowledge_assets",
+            "canonical_knowledge_locations",
+            "canonical_knowledge_labels",
+            "knowledge_capabilities",
+            "canonical_knowledge_asset_capabilities",
+            "canonical_knowledge_versions",
+            "canonical_knowledge_claims",
+            "canonical_knowledge_facts",
+            "canonical_knowledge_events",
+            "canonical_knowledge_jobs",
+            "canonical_knowledge_market_profiles",
         } <= tables
 
-        market_source_columns = {column["name"] for column in schema.get_columns("market_sources")}
+        assert "market_sources" not in tables
+        market_source_columns = {
+            column["name"] for column in schema.get_columns("canonical_knowledge_market_profiles")
+        }
         assert {
+            "asset_id",
             "is_active",
             "validation_status",
             "ars_confirmed",
             "argentina_delivery_confirmed",
             "created_by_user_id",
         } <= market_source_columns
+        assert {"product_id", "source_name", "url"}.isdisjoint(market_source_columns)
         assert {item["name"] for item in schema.get_indexes("market_update_items")} >= {
             "uq_market_update_items_active_product"
         }
@@ -260,7 +276,7 @@ def test_alembic_upgrade_head_from_empty_postgres() -> None:
 
         with target_engine.connect() as connection:
             versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            assert versions == ["20260722_chat_observability_v3"]
+            assert versions == ["20260726_canonical_knowledge_v1"]
     finally:
         if target_engine is not None:
             target_engine.dispose()

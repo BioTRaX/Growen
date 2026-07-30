@@ -39,6 +39,7 @@ services:
       DB_USER: ${POSTGRES_USER:-growen}
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
       PGCONNECT_TIMEOUT: ${PGCONNECT_TIMEOUT:-5}
       # Enriquecimiento IA con búsqueda web (MCP)
       AI_USE_WEB_SEARCH: "1"
@@ -82,6 +83,7 @@ services:
     restart: unless-stopped
     networks:
       - backend
+      - host_access
   pdf_import:
     image: alpine:3.19
     command: ["sh","-c","sleep infinity"]
@@ -187,6 +189,106 @@ services:
     networks:
       - backend
       - egress
+  enrichment_worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.dramatiq
+    container_name: growen-enrichment-worker
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      MCP_WEB_SEARCH_URL: ${ENRICH_MCP_WEB_SEARCH_URL:-http://mcp_web_search:8002/mcp}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      ENRICHMENT_HEARTBEAT_ENABLED: "1"
+      ENRICHMENT_HEARTBEAT_TTL_SECONDS: ${ENRICHMENT_HEARTBEAT_TTL_SECONDS:-60}
+    depends_on:
+      - db
+      - redis
+      - mcp_web_search
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "localhost:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    profiles: ["optional"]
+    command:
+      - python
+      - -m
+      - dramatiq
+      - services.jobs.enrichment_jobs
+      - --processes
+      - "1"
+      - --threads
+      - "${ENRICHMENT_CONCURRENCY:-2}"
+      - --queues
+      - enrichment
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{.Name}}"
+    networks:
+      - backend
+      - egress
+      - host_access
+  knowledge_worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.dramatiq
+    container_name: growen-knowledge-worker
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      MCP_WEB_SEARCH_URL: ${KNOWLEDGE_MCP_WEB_SEARCH_URL:-http://mcp_web_search:8002/mcp}
+      KNOWLEDGE_HEARTBEAT_ENABLED: "1"
+      KNOWLEDGE_HEARTBEAT_TTL_SECONDS: ${KNOWLEDGE_HEARTBEAT_TTL_SECONDS:-60}
+      MEDIA_ROOT: /app/media
+    depends_on:
+      - db
+      - redis
+      - mcp_web_search
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "localhost:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+      - ./Devs/Imagenes:/app/media
+    restart: unless-stopped
+    profiles: ["optional"]
+    command:
+      - python
+      - -m
+      - dramatiq
+      - services.jobs.knowledge_jobs
+      - --processes
+      - "1"
+      - --threads
+      - "${KNOWLEDGE_CONCURRENCY:-1}"
+      - --queues
+      - canonical_knowledge
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{.Name}}"
+    networks:
+      - backend
+      - egress
   scheduler:
     image: alpine:3.19
     command: ["sh","-c","sleep infinity"]
@@ -229,6 +331,14 @@ services:
       MCP_LEGACY_RPC_ENABLED: ${MCP_LEGACY_RPC_ENABLED:-0}
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
       MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
+      WEB_FETCH_ENABLED: ${WEB_FETCH_ENABLED:-1}
+      WEB_FETCH_MAX_HTML_BYTES: ${WEB_FETCH_MAX_HTML_BYTES:-2000000}
+      WEB_FETCH_MAX_PDF_BYTES: ${WEB_FETCH_MAX_PDF_BYTES:-10000000}
+      WEB_FETCH_MAX_TEXT_CHARS: ${WEB_FETCH_MAX_TEXT_CHARS:-50000}
+      WEB_FETCH_TIMEOUT_SECONDS: ${WEB_FETCH_TIMEOUT_SECONDS:-12}
+      WEB_FETCH_MAX_REDIRECTS: ${WEB_FETCH_MAX_REDIRECTS:-3}
+      WEB_FETCH_CACHE_TTL_SECONDS: ${WEB_FETCH_CACHE_TTL_SECONDS:-86400}
+      WEB_FETCH_ALLOWED_MIME: ${WEB_FETCH_ALLOWED_MIME:-text/html,application/pdf}
       LOG_LEVEL: info
     ports:
       - "127.0.0.1:8100:8100"

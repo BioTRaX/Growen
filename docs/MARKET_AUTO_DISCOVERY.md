@@ -5,6 +5,8 @@
 
 # Descubrimiento Automático de Fuentes de Precio
 
+> Vigencia: las fuentes descubiertas se persisten como activos de Conocimiento. Quedan pendientes y fuera del scraping hasta confirmar la etiqueta `market`, la capacidad `price`, ARS y entrega argentina. Las referencias a `MarketSource` son compatibilidad del endpoint legacy.
+
 Sistema para encontrar y validar automáticamente fuentes de precio de mercado usando MCP Web Search.
 
 ## Flujo Completo

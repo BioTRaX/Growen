@@ -21,7 +21,7 @@ from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import CanonicalProduct, Category, ProductEquivalence, Supplier, SupplierProduct, User, MarketSource
+from db.models import CanonicalKnowledgeAsset, CanonicalProduct, Category, ProductEquivalence, Supplier, SupplierProduct, User, MarketSource
 from services.api import app
 
 
@@ -1238,11 +1238,17 @@ async def test_delete_source_success(client_collab: AsyncClient, db: AsyncSessio
     assert resp.status_code == 204
     assert resp.content == b""  # No content
     
-    # Verificar que se eliminó de DB
-    query = select(MarketSource).where(MarketSource.id == source_id)
+    # La compatibilidad DELETE archiva el activo y conserva perfil/histórico.
+    query = (
+        select(MarketSource.is_active, CanonicalKnowledgeAsset.status)
+        .join(CanonicalKnowledgeAsset, CanonicalKnowledgeAsset.id == MarketSource.asset_id)
+        .where(MarketSource.id == source_id)
+    )
     result = await db.execute(query)
-    deleted_source = result.scalar_one_or_none()
-    assert deleted_source is None
+    deleted_source = result.one_or_none()
+    assert deleted_source is not None
+    assert deleted_source.is_active is False
+    assert deleted_source.status == "archived"
 
 
 @pytest.mark.asyncio
@@ -1288,8 +1294,11 @@ async def test_delete_source_updates_product_prices(client_collab: AsyncClient, 
     resp = await client_collab.delete(f"/market/sources/{source1.id}")
     assert resp.status_code == 204
     
-    # Verificar que la segunda fuente sigue existiendo
-    query = select(MarketSource).where(MarketSource.product_id == product.id)
+    # El perfil archivado se conserva; sólo la segunda fuente sigue operativa.
+    query = select(MarketSource).where(
+        MarketSource.product_id == product.id,
+        MarketSource.is_active.is_(True),
+    )
     result = await db.execute(query)
     remaining_sources = result.scalars().all()
     assert len(remaining_sources) == 1

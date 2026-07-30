@@ -12,6 +12,8 @@ param(
     [string]$McpMode = 'Core',
     [switch]$WithCatalogWorker,
     [switch]$WithMarketWorker,
+    [switch]$WithEnrichmentWorker,
+    [switch]$WithKnowledgeWorker,
     [switch]$CheckOnly
 )
 
@@ -47,6 +49,10 @@ $mcpProductsStdoutLog = Join-Path $runLogDir 'mcp-products.stdout.log'
 $mcpProductsStderrLog = Join-Path $runLogDir 'mcp-products.stderr.log'
 $mcpWebStdoutLog = Join-Path $runLogDir 'mcp-web-search.stdout.log'
 $mcpWebStderrLog = Join-Path $runLogDir 'mcp-web-search.stderr.log'
+$enrichmentWorkerStdoutLog = Join-Path $runLogDir 'enrichment-worker.stdout.log'
+$enrichmentWorkerStderrLog = Join-Path $runLogDir 'enrichment-worker.stderr.log'
+$knowledgeWorkerStdoutLog = Join-Path $runLogDir 'knowledge-worker.stdout.log'
+$knowledgeWorkerStderrLog = Join-Path $runLogDir 'knowledge-worker.stderr.log'
 $stateFile = Join-Path $runLogDir 'state.json'
 $startedProcesses = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
 $localCatalogWorkerPids = @()
@@ -452,6 +458,67 @@ function Ensure-MarketWorker {
     Write-DevLog 'Worker Docker Mercado disponible para la cola market.' 'OK'
 }
 
+function Ensure-EnrichmentInfrastructure {
+    if (-not $WithEnrichmentWorker -and -not $WithKnowledgeWorker) {
+        return
+    }
+    Invoke-LoggedNativeCommand -FilePath 'docker' `
+        -ArgumentList @('compose', 'up', '-d', 'redis') `
+        -LogPath $databaseLog `
+        -Description 'Iniciando Redis para Enrich v2'
+    if (-not (Wait-TcpPort -HostName '127.0.0.1' -Port 6379 -TimeoutSec 30)) {
+        throw "Redis no respondió para Enrich v2. Ver: $databaseLog"
+    }
+}
+
+function Start-KnowledgeWorker {
+    if (-not $WithKnowledgeWorker) {
+        return $null
+    }
+    Write-DevLog 'Iniciando knowledge_worker local (1 proceso, 1 thread).'
+    $process = Start-Process -FilePath $python `
+        -ArgumentList @(
+            '-m', 'dramatiq', 'services.jobs.knowledge_jobs',
+            '--processes', '1', '--threads', '1', '--queues', 'canonical_knowledge'
+        ) `
+        -WorkingDirectory $root `
+        -RedirectStandardOutput $knowledgeWorkerStdoutLog `
+        -RedirectStandardError $knowledgeWorkerStderrLog `
+        -WindowStyle Hidden `
+        -PassThru
+    $startedProcesses.Add($process)
+    $healthUri = 'http://127.0.0.1:8000/health/knowledge-worker'
+    if (-not (Wait-HttpEndpoint -Uri $healthUri -TimeoutSec $ApiTimeoutSec -Process $process -ErrorLog $knowledgeWorkerStderrLog)) {
+        throw "knowledge_worker no alcanzó un estado saludable. Ver: $knowledgeWorkerStderrLog"
+    }
+    Write-DevLog 'knowledge_worker saludable y consumiendo canonical_knowledge.' 'OK'
+    return $process
+}
+
+function Start-EnrichmentWorker {
+    if (-not $WithEnrichmentWorker) {
+        return $null
+    }
+    Write-DevLog 'Iniciando enrichment_worker local (1 proceso, 2 threads).'
+    $process = Start-Process -FilePath $python `
+        -ArgumentList @(
+            '-m', 'dramatiq', 'services.jobs.enrichment_jobs',
+            '--processes', '1', '--threads', '2', '--queues', 'enrichment'
+        ) `
+        -WorkingDirectory $root `
+        -RedirectStandardOutput $enrichmentWorkerStdoutLog `
+        -RedirectStandardError $enrichmentWorkerStderrLog `
+        -WindowStyle Hidden `
+        -PassThru
+    $startedProcesses.Add($process)
+    $healthUri = 'http://127.0.0.1:8000/health/enrichment-worker'
+    if (-not (Wait-HttpEndpoint -Uri $healthUri -TimeoutSec $ApiTimeoutSec -Process $process -ErrorLog $enrichmentWorkerStderrLog)) {
+        throw "enrichment_worker no alcanzó un estado saludable. Ver: $enrichmentWorkerStderrLog"
+    }
+    Write-DevLog 'enrichment_worker saludable y consumiendo la cola enrichment.' 'OK'
+    return $process
+}
+
 function Invoke-DatabaseMigrations {
     Invoke-LoggedNativeCommand -FilePath $python `
         -ArgumentList @('-m', 'alembic', 'upgrade', 'head') `
@@ -551,7 +618,7 @@ try {
     Write-DevLog "Inicio del entorno de desarrollo. Raíz: $root"
     Assert-DevelopmentPrerequisites
     if ($CheckOnly) {
-        Write-DevLog "Configuración válida. MCP mode: $McpMode. Catalog worker: $([bool]$WithCatalogWorker). Market worker: $([bool]$WithMarketWorker). No se iniciaron servicios ni migraciones." 'OK'
+        Write-DevLog "Configuración válida. MCP mode: $McpMode. Catalog worker: $([bool]$WithCatalogWorker). Market worker: $([bool]$WithMarketWorker). Enrichment worker: $([bool]$WithEnrichmentWorker). Knowledge worker: $([bool]$WithKnowledgeWorker). No se iniciaron servicios ni migraciones." 'OK'
         exit 0
     }
 
@@ -566,6 +633,7 @@ try {
     Ensure-DevelopmentDatabase
     Ensure-CatalogWorker
     Ensure-MarketWorker
+    Ensure-EnrichmentInfrastructure
     Invoke-DatabaseMigrations
 
     $apiProcess = Start-DevelopmentApi
@@ -579,7 +647,7 @@ try {
             -StdoutLog $mcpProductsStdoutLog `
             -StderrLog $mcpProductsStderrLog
     }
-    if ($McpMode -eq 'All') {
+    if ($McpMode -eq 'All' -or $WithEnrichmentWorker -or $WithKnowledgeWorker) {
         $mcpWebProcess = Start-DevelopmentMcp `
             -Name 'MCP Web Search' `
             -Module 'mcp_servers.web_search_server.main' `
@@ -587,6 +655,8 @@ try {
             -StdoutLog $mcpWebStdoutLog `
             -StderrLog $mcpWebStderrLog
     }
+    $enrichmentWorkerProcess = Start-EnrichmentWorker
+    $knowledgeWorkerProcess = Start-KnowledgeWorker
     $frontendProcess = Start-DevelopmentFrontend
 
     $state = [ordered]@{
@@ -599,14 +669,22 @@ try {
         api_health = 'healthy'
         api_log_source_hint = if ($apiProcess) { $apiStderrLog } else { Find-PreviousLogSourceHint -Component 'api' -FileName 'api.stderr.log' }
         catalog_worker_mode = if ($WithCatalogWorker) { 'docker-compose' } else { 'off' }
-        redis_url = if ($WithCatalogWorker) { 'redis://127.0.0.1:6379/0' } else { $null }
-        redis_health = if ($WithCatalogWorker) { 'healthy' } else { 'off' }
+        redis_url = if ($WithCatalogWorker -or $WithMarketWorker -or $WithEnrichmentWorker -or $WithKnowledgeWorker) { 'redis://127.0.0.1:6379/0' } else { $null }
+        redis_health = if ($WithCatalogWorker -or $WithMarketWorker -or $WithEnrichmentWorker -or $WithKnowledgeWorker) { 'healthy' } else { 'off' }
         catalog_worker_health = if ($WithCatalogWorker) { 'running' } else { 'off' }
         catalog_worker_log_command = if ($WithCatalogWorker) { 'docker compose --profile optional logs -f dramatiq redis' } else { $null }
         catalog_worker_competing_local_pids = if ($WithCatalogWorker) { @($localCatalogWorkerPids) } else { @() }
         market_worker_mode = if ($WithMarketWorker) { 'docker-compose' } else { 'off' }
         market_worker_health = if ($WithMarketWorker) { 'running' } else { 'off' }
         market_worker_log_command = if ($WithMarketWorker) { 'docker compose --profile optional logs -f market_worker redis' } else { $null }
+        enrichment_worker_mode = if ($WithEnrichmentWorker) { 'local' } else { 'off' }
+        enrichment_worker_pid = if ($enrichmentWorkerProcess) { $enrichmentWorkerProcess.Id } else { $null }
+        enrichment_worker_health = if ($WithEnrichmentWorker) { 'healthy' } else { 'off' }
+        enrichment_worker_log_source_hint = if ($WithEnrichmentWorker) { $enrichmentWorkerStderrLog } else { $null }
+        knowledge_worker_mode = if ($WithKnowledgeWorker) { 'local' } else { 'off' }
+        knowledge_worker_pid = if ($knowledgeWorkerProcess) { $knowledgeWorkerProcess.Id } else { $null }
+        knowledge_worker_health = if ($WithKnowledgeWorker) { 'healthy' } else { 'off' }
+        knowledge_worker_log_source_hint = if ($WithKnowledgeWorker) { $knowledgeWorkerStderrLog } else { $null }
         mcp_mode = $McpMode
         mcp_products_url = if ($McpMode -in @('Core', 'All')) { 'http://127.0.0.1:8100/mcp' } else { $null }
         mcp_products_pid = if ($mcpProductsProcess) { $mcpProductsProcess.Id } else { $null }
@@ -614,12 +692,12 @@ try {
         mcp_products_reused = ($McpMode -in @('Core', 'All')) -and ($null -eq $mcpProductsProcess)
         mcp_products_health = if ($McpMode -in @('Core', 'All')) { 'healthy' } else { 'off' }
         mcp_products_log_source_hint = if ($mcpProductsProcess) { $mcpProductsStderrLog } elseif ($McpMode -in @('Core', 'All')) { Find-PreviousLogSourceHint -Component 'mcp_products' -FileName 'mcp-products.stderr.log' } else { $null }
-        mcp_web_search_url = if ($McpMode -eq 'All') { 'http://127.0.0.1:8102/mcp' } else { $null }
+        mcp_web_search_url = if ($McpMode -eq 'All' -or $WithEnrichmentWorker -or $WithKnowledgeWorker) { 'http://127.0.0.1:8102/mcp' } else { $null }
         mcp_web_search_pid = if ($mcpWebProcess) { $mcpWebProcess.Id } else { $null }
         mcp_web_search_process_started_at = if ($mcpWebProcess) { $mcpWebProcess.StartTime.ToString('o') } else { $null }
-        mcp_web_search_reused = ($McpMode -eq 'All') -and ($null -eq $mcpWebProcess)
-        mcp_web_search_health = if ($McpMode -eq 'All') { 'healthy' } else { 'off' }
-        mcp_web_search_log_source_hint = if ($mcpWebProcess) { $mcpWebStderrLog } elseif ($McpMode -eq 'All') { Find-PreviousLogSourceHint -Component 'mcp_web_search' -FileName 'mcp-web-search.stderr.log' } else { $null }
+        mcp_web_search_reused = ($McpMode -eq 'All' -or $WithEnrichmentWorker -or $WithKnowledgeWorker) -and ($null -eq $mcpWebProcess)
+        mcp_web_search_health = if ($McpMode -eq 'All' -or $WithEnrichmentWorker -or $WithKnowledgeWorker) { 'healthy' } else { 'off' }
+        mcp_web_search_log_source_hint = if ($mcpWebProcess) { $mcpWebStderrLog } elseif ($McpMode -eq 'All' -or $WithEnrichmentWorker -or $WithKnowledgeWorker) { Find-PreviousLogSourceHint -Component 'mcp_web_search' -FileName 'mcp-web-search.stderr.log' } else { $null }
         frontend_url = 'http://127.0.0.1:5176'
         frontend_pid = if ($frontendProcess) { $frontendProcess.Id } else { $null }
         frontend_process_started_at = if ($frontendProcess) { $frontendProcess.StartTime.ToString('o') } else { $null }

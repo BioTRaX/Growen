@@ -72,6 +72,14 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         "web_search.read",
         output_profile="operational",
     ),
+    "fetch_web_document": ToolPolicy(
+        "fetch_web_document",
+        "web_search",
+        frozenset({"colaborador", "admin"}),
+        frozenset({"web", "websocket", "telegram"}),
+        "web_search.read",
+        output_profile="operational",
+    ),
 }
 
 
