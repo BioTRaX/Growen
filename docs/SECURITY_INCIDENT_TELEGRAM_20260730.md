@@ -7,7 +7,8 @@
 
 Fecha de auditoría: 2026-07-30
 
-Estado: causa de fuga confirmada; erradicación del historial pendiente
+Estado: causa de fuga confirmada; ramas administrables saneadas; purga de
+referencias internas de GitHub pendiente
 
 Clasificación: incidente de credencial, severidad crítica
 
@@ -33,9 +34,19 @@ El literal se eliminó del archivo en:
 - Fecha: `2026-07-23T20:45:25-03:00`
 - Asunto: `feat(chat): incorpora seguridad y operación multicanal`
 
-Eliminar el texto en un commit posterior no lo retira del historial. Al cierre
-de esta auditoría, la punta de `main` todavía contiene el literal y el objeto
-histórico sigue siendo recuperable. La revocación realizada en BotFather fue la
+Eliminar el texto en un commit posterior no lo retiró del historial. El
+2026-07-30 se reescribieron coordinadamente las referencias administrables con
+`git filter-repo`, se publicaron `main` y `dev` mediante
+`--force-with-lease` y se eliminaron las cuatro ramas Dependabot afectadas:
+
+- `main`: `1e117589d8547e07d12d30c94ddc0513a6452695`;
+- `dev`: `5eaf36a42771c0a3ed7104b60a08a9f488fd75af`.
+
+Una clonación independiente posterior confirmó cero coincidencias del patrón
+de Telegram en 130 referencias de ramas y tags. El objeto histórico todavía es
+alcanzable exclusivamente desde referencias internas `refs/pull/*` que GitHub
+administra y no permite actualizar o eliminar mediante Git. Su purga requiere
+una solicitud a GitHub Support. La revocación realizada en BotFather fue la
 contención correcta y debe considerarse definitiva para esa credencial.
 
 La combinación de evidencia es consistente con un abuso directo de la
@@ -73,7 +84,8 @@ confianza.
 
 Severidad: crítica
 
-Estado: revocado, todavía presente en Git
+Estado: revocado; referencias administrables saneadas; referencias internas de
+pull requests pendientes de purga por GitHub
 
 Confianza: confirmada por proveedor
 
@@ -81,18 +93,31 @@ La credencial se incorporó en un comentario marcado como “Ejemplo” dentro d
 un cambio destinado, paradójicamente, a ocultar tokens de los logs. Un ejemplo
 de documentación nunca debe tener forma ni valor de una credencial real.
 
-Las siguientes puntas todavía contienen el token en su snapshot actual:
+`main` y `dev` ya no contienen el secreto en sus snapshots ni en su historia
+publicada. También se eliminaron estas ramas Dependabot afectadas:
 
-- `refs/heads/main`
-- `refs/remotes/origin/main`
-- `refs/remotes/origin/HEAD`
-- `refs/remotes/origin/dependabot/npm_and_yarn/frontend/multi-ed462d840e`
-- `refs/remotes/origin/dependabot/npm_and_yarn/frontend/react-19.2.3`
-- `refs/remotes/origin/dependabot/npm_and_yarn/frontend/react-dom-19.2.3`
-- `refs/remotes/origin/dependabot/npm_and_yarn/frontend/react-router-dom-7.10.1`
+- `dependabot/npm_and_yarn/frontend/multi-ed462d840e`;
+- `dependabot/npm_and_yarn/frontend/react-19.2.3`;
+- `dependabot/npm_and_yarn/frontend/react-dom-19.2.3`;
+- `dependabot/npm_and_yarn/frontend/react-router-dom-7.10.1`.
 
-`dev` y `origin/dev` contienen el commit de remoción, pero también conservan el
-secreto en su historia ancestral.
+La verificación independiente detectó que el blob afectado continúa alcanzable
+desde referencias internas creadas por pull requests:
+
+- `refs/pull/133/head`;
+- `refs/pull/135/merge`;
+- `refs/pull/138/head`;
+- `refs/pull/139/merge`;
+- `refs/pull/140/merge`;
+- `refs/pull/147/head`;
+- `refs/pull/148/head`;
+- `refs/pull/149/merge`;
+- `refs/pull/150/merge`;
+- `refs/pull/151/merge`.
+
+Estas referencias pertenecen a GitHub, no aceptan force-push del propietario
+del repositorio y deben incluirse en una solicitud de eliminación de datos
+sensibles a GitHub Support.
 
 ### F-02 — Archivo `.env` versionado históricamente
 
@@ -186,19 +211,20 @@ con la infraestructura apagada.
 
 ### Erradicación Git
 
-1. Preservar primero evidencia mínima en almacenamiento cifrado y restringido:
-   hashes, fechas, alerta y logs; no crear otra copia abierta del secreto.
-2. Integrar la remoción en `main` de inmediato.
-3. Reescribir todas las referencias con `git filter-repo` o mecanismo
-   equivalente para reemplazar el literal en cada blob.
-4. Eliminar o regenerar las ramas Dependabot afectadas.
-5. Forzar la publicación de las referencias saneadas en una ventana coordinada.
-6. Invalidar clones, forks, caches de CI y artefactos; exigir reclonado limpio.
-7. Verificar nuevamente todas las puntas y objetos antes de cerrar el incidente.
+1. [x] Preservar evidencia mínima redactada: hashes, fechas y alerta.
+2. [x] Integrar la remoción en `main`.
+3. [x] Reescribir las referencias administrables con `git filter-repo`.
+4. [x] Eliminar las cuatro ramas Dependabot afectadas.
+5. [x] Publicar atómicamente `main` y `dev` con leases explícitos.
+6. [x] Verificar mediante una clonación independiente las ramas y tags.
+7. [ ] Solicitar a GitHub Support la purga del blob histórico y de las diez
+   referencias `refs/pull/*` enumeradas en F-01.
+8. [ ] Invalidar clones, forks, caches de CI y artefactos; exigir reclonado
+   limpio a cada colaborador.
 
-La reescritura es destructiva y no se ejecutó durante esta auditoría. Requiere
-autorización explícita, coordinación con colaboradores y una copia forense
-protegida.
+La reescritura preservó exactamente el árbol final de `dev`. En `main`, el único
+cambio de contenido fue reemplazar el literal por un marcador redactado. La
+publicación se protegió con `--force-with-lease` contra cambios concurrentes.
 
 ### Prevención
 
@@ -219,8 +245,11 @@ protegida.
 - [x] Árbol actual, historia, reflogs, ramas, blobs no alcanzables y stashes
   revisados.
 - [x] Política de secretos y documentación actualizadas.
-- [ ] Token eliminado de la punta de `main`.
-- [ ] Historia y ramas remotas saneadas.
+- [x] Token eliminado de la punta de `main`.
+- [x] Historia de `main`, `dev`, ramas y tags administrables saneada.
+- [x] Ramas Dependabot afectadas eliminadas.
+- [ ] Referencias internas `refs/pull/*` y objetos asociados purgados por
+  GitHub Support.
 - [ ] Clones, forks, caches y artefactos invalidados o revisados.
 - [ ] Clave OpenAI local rotada.
 - [ ] Push Protection y escaneo CI obligatorios habilitados.

@@ -4,6 +4,18 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-07-30 — Saneamiento histórico del token Telegram
+
+- Se reescribieron con `git filter-repo` y publicaron coordinadamente `main`
+  (`1e117589d8547e07d12d30c94ddc0513a6452695`) y `dev`
+  (`5eaf36a42771c0a3ed7104b60a08a9f488fd75af`) sin alterar el árbol final de
+  desarrollo.
+- Se eliminaron cuatro ramas Dependabot que heredaban el secreto y una
+  clonación independiente confirmó cero coincidencias en 130 referencias de
+  ramas y tags.
+- Diez referencias internas `refs/pull/*`, administradas por GitHub, todavía
+  alcanzan el objeto antiguo. Su purga queda pendiente de GitHub Support.
+
 ## 2026-07-26 — Edición segura del SKU canónico
 
 - La ficha Vue suma lápiz, confirmación y cancelación explícitas para el SKU canónico.

@@ -16,10 +16,15 @@
   no alcanzables sin reproducir valores sensibles.
 - [x] Documentados el `.env` históricamente rastreado, la clave OpenAI local
   pendiente de rotación y el estado de dependencias.
-- [ ] Integrar la remoción en `main`, sanear todas las referencias y eliminar o
-  regenerar las cuatro ramas Dependabot cuya punta todavía expone el token.
-- [ ] Coordinar reescritura del historial, force-push, invalidación de clones,
-  forks, caches y artefactos, y verificación posterior de objetos.
+- [x] Integrada la remoción en `main`; `main` y `dev` fueron reescritas con
+  `git filter-repo` y publicadas atómicamente con leases explícitos.
+- [x] Eliminadas las cuatro ramas Dependabot afectadas y verificadas 130
+  referencias de ramas y tags desde una clonación independiente.
+- [ ] Solicitar a GitHub Support la purga del objeto histórico todavía
+  alcanzable desde diez referencias internas `refs/pull/*`, que no aceptan
+  actualización mediante `git push`.
+- [ ] Invalidar clones, forks, caches y artefactos, y exigir reclonado limpio a
+  los colaboradores.
 - [ ] Rotar la clave OpenAI local y registrar la invalidación sin guardar el
   reemplazo.
 - [ ] Habilitar GitHub Push Protection y un escáner de secretos obligatorio en

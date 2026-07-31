@@ -4,9 +4,10 @@
 
 La auditoría del 2026-07-30 confirmó que un token operativo de Telegram fue
 publicado históricamente en el repositorio y validado por GitHub como fuga
-pública. La credencial está revocada; la limpieza coordinada del historial y de
-las ramas remotas sigue pendiente. No reutilizar tokens históricos ni colocar
-secretos reales en ejemplos. Ver
+pública. La credencial está revocada; `main`, `dev` y las ramas administrables
+fueron saneadas el 2026-07-30. La purga de referencias internas `refs/pull/*`
+que conservan objetos antiguos está pendiente de GitHub Support. No reutilizar
+tokens históricos ni colocar secretos reales en ejemplos. Ver
 [informe forense y acciones de erradicación](./docs/SECURITY_INCIDENT_TELEGRAM_20260730.md).
 
 ## Base de Conocimiento Canónica (2026-07-26)

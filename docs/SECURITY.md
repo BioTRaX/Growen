@@ -28,8 +28,13 @@ La rotación de cifrado admite temporalmente `TELEGRAM_IDENTITY_ENCRYPTION_KEY_P
   Telegram publicado en `workers/telegram_polling.py:56` por el commit
   `b4bf96907f05cc772f265400f7d8d60ba3dcf3ac`.
 - El literal fue retirado en
-  `590ef3b8598b6434d7a8474d9a5b02f721cb1bdf`, pero permanece recuperable en el
-  historial y en la punta de `main`. El token fue revocado y no debe reutilizarse.
+  `590ef3b8598b6434d7a8474d9a5b02f721cb1bdf`. El 2026-07-30 se reescribieron y
+  publicaron `main` (`1e117589d8547e07d12d30c94ddc0513a6452695`) y `dev`
+  (`5eaf36a42771c0a3ed7104b60a08a9f488fd75af`), y se eliminaron las cuatro
+  ramas Dependabot afectadas. El token fue revocado y no debe reutilizarse.
+- Diez referencias internas `refs/pull/*` de GitHub todavía alcanzan el objeto
+  histórico. No pueden modificarse mediante `git push`; su purga debe
+  solicitarse a GitHub Support antes de declarar completa la erradicación.
 - Un comentario, fixture o ejemplo jamás puede usar una credencial real ni una
   cadena que cumpla el formato válido del proveedor.
 - No copiar tokens dentro de URLs de navegador, logs, tickets, capturas o
