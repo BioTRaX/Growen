@@ -19,7 +19,7 @@ google-auth>=2.0.0
 
 # Scheduler
 apscheduler>=3.10.4
-psutil>=7.1.0
+psutil>=7.2.2
 
 # File monitoring for hot-reload (dev)
 watchdog[watchmedo]>=4.0.0
