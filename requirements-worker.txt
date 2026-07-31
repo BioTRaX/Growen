@@ -14,7 +14,7 @@ Pillow>=10.4.0
 pillow-heif>=0.13.0
 
 # Google APIs (Drive integration)
-google-api-python-client>=2.0.0
+google-api-python-client>=2.198.0
 google-auth>=2.0.0
 
 # Scheduler
