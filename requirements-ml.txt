@@ -7,7 +7,7 @@
 # Solo incluir si el servicio necesita procesamiento de imágenes con ML.
 
 # Background removal (requiere onnxruntime)
-rembg>=2.0.57
+rembg>=2.0.77
 
 # ML Runtime (requerido por rembg)
 onnxruntime>=1.22.1
