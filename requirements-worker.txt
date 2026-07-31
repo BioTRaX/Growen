@@ -22,4 +22,4 @@ apscheduler>=3.10.4
 psutil>=7.1.0
 
 # File monitoring for hot-reload (dev)
-watchdog[watchmedo]>=4.0.0
+watchdog[watchmedo]>=6.0.0
