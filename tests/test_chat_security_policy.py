@@ -53,7 +53,7 @@ def test_external_ai_fails_closed_without_local_provider(monkeypatch) -> None:
 
 def test_public_product_result_recursively_hides_exact_inventory() -> None:
     result = public_product_result(
-        {"items": [{"name": "A", "sku": "SECRET", "supplier_sku": "OTHER", "stock_qty": 3, "sale_price": 10, "nested": {"unique_sku": "NESTED"}}]},
+        {"items": [{"name": "A", "sku": "SECRET", "supplier_sku": "OTHER", "supplier_name": "Privado", "source_detail": "interno", "stock_qty": 3, "sale_price": 10, "nested": {"unique_sku": "NESTED"}}]},
         "cliente",
     )
     assert result["items"][0]["availability"] == "disponible"
@@ -61,12 +61,16 @@ def test_public_product_result_recursively_hides_exact_inventory() -> None:
     assert "stock" not in result["items"][0]
     assert "stock_qty" not in result["items"][0]
     assert "supplier_sku" not in result["items"][0]
+    assert "supplier_name" not in result["items"][0]
+    assert "source_detail" not in result["items"][0]
     assert "unique_sku" not in result["items"][0]["nested"]
 
 
 def test_external_id_uses_separate_encryption_and_hmac_keys(monkeypatch) -> None:
     encryption = base64.urlsafe_b64encode(b"e" * 32).decode("ascii")
     hmac_key = base64.urlsafe_b64encode(b"h" * 32).decode("ascii")
+    monkeypatch.delenv("TELEGRAM_IDENTITY_ENCRYPTION_KEY_FILE", raising=False)
+    monkeypatch.delenv("TELEGRAM_IDENTITY_HMAC_KEY_FILE", raising=False)
     monkeypatch.setenv("TELEGRAM_IDENTITY_ENCRYPTION_KEY", encryption)
     monkeypatch.setenv("TELEGRAM_IDENTITY_HMAC_KEY", hmac_key)
     ciphertext = encrypt_external_id("telegram", 123456)
@@ -77,6 +81,8 @@ def test_external_id_uses_separate_encryption_and_hmac_keys(monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_admin_link_is_pending_revocable_and_role_is_read_live(db_session, monkeypatch) -> None:
+    monkeypatch.delenv("TELEGRAM_IDENTITY_ENCRYPTION_KEY_FILE", raising=False)
+    monkeypatch.delenv("TELEGRAM_IDENTITY_HMAC_KEY_FILE", raising=False)
     monkeypatch.setenv("TELEGRAM_IDENTITY_ENCRYPTION_KEY", base64.urlsafe_b64encode(b"e" * 32).decode("ascii"))
     monkeypatch.setenv("TELEGRAM_IDENTITY_HMAC_KEY", base64.urlsafe_b64encode(b"h" * 32).decode("ascii"))
     monkeypatch.setattr(settings, "telegram_role_linking_enabled", True)

@@ -14,13 +14,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agent_core.config import settings as core_settings
 from ai.router import AIRouter
 from ai.types import Task
-from services.chat.price_lookup import extract_product_query
+from services.chat.price_lookup import extract_product_query, render_product_response_for_role, resolve_product_info
 from services.chat.history import get_or_create_session, save_message, get_recent_history
 from services.chat.external_identity import consume_link_code, opaque_conversation_key, resolve_identity, revoke_identity
 from db.models import ExternalIdentity
 from services.chat.rate_limit import allow_subject
+from services.chat.rollout import telegram_access_allowed
 
 logger = logging.getLogger(__name__)
+
+
+class TelegramProcessingError(RuntimeError):
+    """Fallo interno con código auditable y mensaje público sin detalles."""
+
+    def __init__(self, code: str, public_message: str) -> None:
+        super().__init__(code)
+        self.code = code
+        self.public_message = public_message
 
 
 async def _handle_telegram_message(
@@ -39,7 +49,7 @@ async def _handle_telegram_message(
     
     Args:
         text: Texto del mensaje del usuario (puede estar vacío si solo hay imagen)
-        chat_id: ID del chat de Telegram (para logging, no se usa en la respuesta)
+        chat_id: ID del chat de Telegram usado sólo como destino y contexto opaco.
         db: Sesión de base de datos asíncrona
         image_file_id: File ID de imagen de Telegram (opcional)
         
@@ -69,6 +79,13 @@ async def _handle_telegram_message(
     )
     if not is_private:
         identity = identity.__class__(None, None, "guest", "guest", identity.subject_hmac)
+    access_allowed, _access_code = await telegram_access_allowed(
+        db,
+        account_role=identity.account_role,
+        telegram_user_id=telegram_user_id,
+    )
+    if not access_allowed:
+        return "Chat está temporalmente en mantenimiento. Probá nuevamente más tarde."
     user_role = identity.effective_role
     rate_limit = int(
         os.getenv(
@@ -117,7 +134,7 @@ async def _handle_telegram_message(
     
     # Recuperar historial reciente para contexto
     try:
-        history_context = await get_recent_history(db, telegram_session_id, limit=6)
+        history_context = await get_recent_history(db, telegram_session_id, max_tokens=core_settings.chat_history_max_tokens)
         logger.debug(f"Historial recuperado: {len(history_context) if history_context else 0} caracteres")
     except Exception as e:
         logger.debug("Error recuperando historial para Telegram: %s", type(e).__name__)
@@ -126,7 +143,7 @@ async def _handle_telegram_message(
     # Detectar si hay un diagnóstico en curso basándose en el historial
     # Esto permite mantener el modo CULTIVATOR incluso si el mensaje actual no tiene imagen
     conversation_state = None
-    logger.debug(f"Analizando historial para detectar conversación en curso...")
+    logger.debug("Telegram: analizando estado conversacional")
     if history_context:
         history_lower = history_context.lower()
         diagnostic_indicators = [
@@ -139,31 +156,31 @@ async def _handle_telegram_message(
         is_diagnosis_in_progress = any(indicator in history_lower for indicator in diagnostic_indicators)
         if is_diagnosis_in_progress:
             conversation_state = {"current_mode": "CULTIVATOR"}
-            logger.debug(f"Conversación de diagnóstico detectada en historial")
+            logger.debug("Telegram: conversación diagnóstica detectada")
     
-    logger.debug(f"Estado de conversación: {conversation_state}")
+    logger.debug("Telegram: estado conversacional resuelto")
     
     # Determinar modo y tarea según el contexto
     mode = None
     task = Task.SHORT_ANSWER
     
-    logger.debug(f"Determinando modo... image_file_id={image_file_id}, conversation_state={conversation_state}")
+    logger.debug("Telegram: determinando modo")
     
     if image_file_id or (conversation_state and conversation_state.get("current_mode") == "CULTIVATOR"):
         mode = "CULTIVATOR"
         task = Task.LONG_ANSWER
-        logger.debug(f"Modo CULTIVATOR seleccionado (imagen o diagnóstico en curso)")
+        logger.debug("Telegram: modo cultivator")
     else:
-        logger.debug(f"Verificando si es consulta de producto...")
+        logger.debug("Telegram: verificando intención de producto")
         # Detectar si es una consulta de producto
         product_query_result = extract_product_query(user_text)
-        logger.debug(f"Resultado de extract_product_query: {product_query_result}")
+        logger.debug("Telegram: intención de producto resuelta")
         if product_query_result:
             mode = "PRODUCT_LOOKUP"
             task = Task.SHORT_ANSWER
-            logger.debug(f"Modo PRODUCT_LOOKUP seleccionado")
+            logger.debug("Telegram: modo product_lookup")
     
-    logger.debug(f"Modo final: {mode}, Tarea final: {task}")
+    logger.debug("Telegram: modo final=%s tarea=%s", mode, task)
 
     # Si hay imagen, usar flujo de diagnóstico
     if image_file_id:
@@ -232,6 +249,22 @@ async def _handle_telegram_message(
     if product_query:
         # Flujo con tool calling para consultas de productos
         try:
+            provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
+            if provider.name == "ollama":
+                result = await resolve_product_info(product_query, db, limit=5)
+                answer = render_product_response_for_role(result, user_role)
+                await save_message(
+                    db, telegram_session_id, "user", user_text,
+                    metadata={"intent": "product_lookup"},
+                    user_identifier=opaque_user_identifier,
+                )
+                await save_message(
+                    db, telegram_session_id, "assistant", answer,
+                    metadata={"type": "product_answer", "provider": "catalog_local"},
+                )
+                await db.commit()
+                return answer
+
             # Buscar contexto relevante en Knowledge Base (RAG) si está disponible
             rag_context = ""
             try:
@@ -264,7 +297,6 @@ async def _handle_telegram_message(
             prompt_with_context = "\n\n".join(prompt_parts) if prompt_parts else user_text
             
             # Obtener el schema de herramientas para consulta de productos
-            provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
             tools_schema = None
             if hasattr(provider, 'build_tools_schema'):
                 tools_schema = await provider.build_tools_schema(user_role, "telegram")
@@ -342,17 +374,17 @@ async def _handle_telegram_message(
                 # Optimización WebP: Buscar versión optimizada en 'derived'
                 # Estructura típica: .../Productos/12/raw/FILE -> .../Productos/12/derived/*-full.webp
                 try:
-                    logger.debug(f"Iniciando optimización WebP para: {clean_path}")
+                    logger.debug("Telegram: iniciando optimización WebP")
                     p = Path(clean_path)
-                    logger.debug(f"Path creado, verificando existencia...")
+                    logger.debug("Telegram: verificando recurso de imagen")
                     if p.exists() and "raw" in p.parts:
-                        logger.debug(f"Path existe y contiene 'raw', buscando derived...")
+                        logger.debug("Telegram: buscando derivado WebP")
                         # Identificar carpeta 'derived' paralela a 'raw'
                         parent = p.parent.parent # ej: .../Productos/12
                         derived_dir = parent / "derived"
-                        logger.debug(f"Buscando en derived_dir: {derived_dir}")
+                        logger.debug("Telegram: inspeccionando directorio derivado")
                         if derived_dir.exists():
-                            logger.debug(f"Derived dir existe, buscando archivos webp...")
+                            logger.debug("Telegram: buscando candidatos WebP")
                             # Buscar archivos webp, preferiblemente 'card' o 'full'
                             webp_candidates = list(derived_dir.glob("*.webp"))
                             logger.debug(f"Encontrados {len(webp_candidates)} archivos webp")
@@ -372,21 +404,21 @@ async def _handle_telegram_message(
                                     chosen = webp_candidates[0]
                                 
                                 if chosen:
-                                    logger.info(f"Optimización: Usando WebP {chosen} en lugar de RAW {p}")
+                                    logger.info("Telegram: usando imagen WebP derivada")
                                     clean_path = str(chosen)
                                 else:
                                     logger.debug(f"No se encontró archivo webp preferido, usando path original")
                     else:
-                        logger.debug(f"Path no existe o no contiene 'raw': exists={p.exists()}, parts={p.parts}")
+                        logger.debug("Telegram: recurso sin derivado WebP")
                 except Exception as e:
                     logger.error("Error intentando optimizar imagen a WebP: %s", type(e).__name__)
 
-                logger.debug(f"Intentando enviar imagen: {clean_path}")
+                logger.debug("Telegram: intentando enviar imagen")
                 try:
                     from services.notifications.telegram import send_photo
                     # Enviar la imagen
                     await send_photo(photo=clean_path, chat_id=chat_id)
-                    logger.info(f"✓ Imagen enviada a Telegram: {clean_path} (raw: {raw_path})")
+                    logger.info("Telegram: imagen enviada")
                 except Exception as e:
                     logger.error("✗ Error enviando imagen Telegram: %s", type(e).__name__)
             
@@ -412,7 +444,11 @@ async def _handle_telegram_message(
             
         except Exception as e:
             logger.error("Error procesando consulta de producto en Telegram: %s", type(e).__name__)
-            return "Error consultando el producto. Probá más tarde o reformulá tu pregunta."
+            await db.rollback()
+            raise TelegramProcessingError(
+                "telegram_product_processing_failed",
+                "Error consultando el producto. Probá más tarde o reformulá tu pregunta.",
+            ) from e
     
     # 2. Fallback: Chat general sin tools
     try:
@@ -491,7 +527,11 @@ async def _handle_telegram_message(
         
     except Exception as e:
         logger.error("Error procesando mensaje general en Telegram: %s", type(e).__name__)
-        return "Disculpá, hubo un error procesando tu mensaje. Probá más tarde."
+        await db.rollback()
+        raise TelegramProcessingError(
+            "telegram_general_processing_failed",
+            "Disculpá, hubo un error procesando tu mensaje. Probá más tarde.",
+        ) from e
 
 
 async def handle_telegram_message(
@@ -523,16 +563,21 @@ async def handle_telegram_message(
         external_identity_id=resolved.identity_id,
         user_id=resolved.user_id,
     )
-    return await chat_orchestrator.execute(
-        db,
-        context,
-        lambda: _handle_telegram_message(
-            text=text,
-            chat_id=chat_id,
-            db=db,
-            telegram_user_id=telegram_user_id,
-            chat_type=chat_type,
-            image_file_id=image_file_id,
-        ),
-    )
+    try:
+        return await chat_orchestrator.execute(
+            db,
+            context,
+            lambda: _handle_telegram_message(
+                text=text,
+                chat_id=chat_id,
+                db=db,
+                telegram_user_id=telegram_user_id,
+                chat_type=chat_type,
+                image_file_id=image_file_id,
+            ),
+            input_text=text,
+        )
+    except TelegramProcessingError as exc:
+        logger.warning("Telegram respondió con error seguro code=%s", exc.code)
+        return exc.public_message
 

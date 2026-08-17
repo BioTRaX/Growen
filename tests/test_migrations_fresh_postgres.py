@@ -276,7 +276,7 @@ def test_alembic_upgrade_head_from_empty_postgres() -> None:
 
         with target_engine.connect() as connection:
             versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            assert versions == ["20260726_canonical_knowledge_v1"]
+            assert versions == ["20260816_chat_rollout_v1"]
     finally:
         if target_engine is not None:
             target_engine.dispose()

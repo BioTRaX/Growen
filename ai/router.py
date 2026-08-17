@@ -66,13 +66,15 @@ class AIRouter:
         provider = self.get_provider(task)
         full_prompt = f"{SYSTEM_PROMPT}\n\n{prompt}"
         out = "".join(provider.generate(full_prompt))
+        if not out.strip():
+            raise RuntimeError("ai_empty_response")
         # Compatibilidad de tests: cuando se usa proveedor local sin daemon,
         # el fallback devuelve "ollama:<prompt>"; si no tiene prefijo y la tarea es CONTENT,
         # agregamos "ollama:" para satisfacer asserts del test.
         if task == Task.CONTENT.value and not (out.startswith("ollama:") or out.startswith("openai:")):
             # Prefijo depende del provider efectivo disponible (priorizar openai si ollama deshabilitado)
             prefix = "ollama" if "ollama" in self._providers else "openai"
-            return f"{prefix}:{out or prompt}"
+            return f"{prefix}:{out}"
         return out
 
     async def run_async(
@@ -157,7 +159,9 @@ class AIRouter:
             
             # Fallback: agregar prefijo según provider activo
             prefix = self._last_provider_name or "ollama"
-            return f"{prefix}:{result}" if result else f"{prefix}:{prompt}"
+            if not result:
+                raise RuntimeError("ai_empty_response")
+            return f"{prefix}:{result}"
 
         except NotImplementedError:
             # Fallback a método síncrono si el proveedor no implementa generate_async
@@ -167,11 +171,13 @@ class AIRouter:
             )
             # Usar generate síncrono como último recurso
             out = "".join(provider.generate(full_prompt))
+            if not out.strip():
+                raise RuntimeError("ai_empty_response")
             
             # Aplicar misma lógica de compatibilidad que run()
             if task == Task.CONTENT.value and not (out.startswith("ollama:") or out.startswith("openai:")):
                 prefix = "ollama" if "ollama" in self._providers else "openai"
-                return f"{prefix}:{out or prompt}"
+                return f"{prefix}:{out}"
             return out
 
     def run_stream(self, task: str, prompt: str):  # pragma: no cover - streaming depende de red

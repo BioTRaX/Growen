@@ -1,32 +1,24 @@
 # NG-HEADER: Nombre de archivo: test_chat_ws_price.py
 # NG-HEADER: Ubicación: tests/test_chat_ws_price.py
-# NG-HEADER: Descripción: Prueba del canal WS para intent de precio con type product_answer y copy consistente
+# NG-HEADER: Descripción: Pruebas asíncronas de precio WebSocket con servidor ASGI real.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-import os
+import json
 import uuid
-from fastapi.testclient import TestClient
 
-os.environ.setdefault("DB_URL", "sqlite+aiosqlite:///:memory:")
-
-from services.api import app  # noqa: E402
-from services.auth import SessionData, current_session, require_csrf  # noqa: E402
-
-client = TestClient(app)
-app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
-app.dependency_overrides[require_csrf] = lambda: None
+import pytest
+from websockets.asyncio.client import connect
 
 
-def _create_supplier(slug: str, name: str) -> int:
-    resp = client.post("/suppliers", json={"slug": slug, "name": name})
-    assert resp.status_code in (200, 201)
-    data = resp.json()
+async def _create_supplier(client, slug: str, name: str) -> int:
+    response = await client.post("/suppliers", json={"slug": slug, "name": name})
+    assert response.status_code in (200, 201)
+    data = response.json()
     if isinstance(data, dict) and "id" in data:
         return data["id"]
-    suppliers = client.get("/suppliers").json()
-    return suppliers[-1]["id"]
+    return (await client.get("/suppliers")).json()[-1]["id"]
 
 
-def _create_product(title: str, supplier_id: int, sku: str, sale_price: float, stock: int) -> dict:
+async def _create_product(client, title: str, supplier_id: int, sku: str, sale_price: float, stock: int) -> dict:
     unique_sku = f"{sku}-{uuid.uuid4().hex[:4]}"
     payload = {
         "title": title,
@@ -37,64 +29,61 @@ def _create_product(title: str, supplier_id: int, sku: str, sale_price: float, s
         "purchase_price": sale_price,
         "sale_price": sale_price,
     }
-    resp = client.post("/catalog/products", json=payload)
-    assert resp.status_code == 200, resp.text
-    data = resp.json()
-    data["unique_sku"] = payload["sku"]
+    response = await client.post("/catalog/products", json=payload)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    data["unique_sku"] = unique_sku
     return data
 
 
-def _receive_non_ping(ws):
-    msg = ws.receive_json()
-    while isinstance(msg, dict) and msg.get("role") == "ping":
-        msg = ws.receive_json()
-    return msg
+async def _receive_non_ping(ws) -> dict:
+    message = json.loads(await ws.recv())
+    while message.get("role") == "ping":
+        message = json.loads(await ws.recv())
+    return message
 
 
-def test_ws_returns_product_answer_and_copy():
-    sup_id = _create_supplier("sup-ws", "Proveedor WS")
-    product = _create_product("Medidor PH Digital", sup_id, "MPH-001", 999.99, stock=4)
+@pytest.mark.asyncio
+async def test_ws_returns_product_answer_and_copy(client, live_asgi_server):
+    supplier_id = await _create_supplier(client, "sup-ws", "Proveedor WS")
+    product = await _create_product(client, "Medidor PH Digital", supplier_id, "MPH-001", 999.99, 4)
 
-    with client.websocket_connect("/ws") as ws:
-        ws.send_text("Precio del Medidor PH Digital")
-        msg = _receive_non_ping(ws)
-        assert msg.get("role") == "assistant"
-        assert msg.get("type") == "product_answer"
-        # El intent puede ser "product_tool" (tool calling) o "price" (fallback legacy)
-        assert msg.get("intent") in ("product_tool", "price")
-        payload = msg.get("data", {})
-        results = payload.get("results", [])
-        assert results, payload
-        entry = results[0]
-        assert abs(entry.get("price") - 999.99) < 0.01
-        assert entry.get("stock_status") == "ok"
-        assert entry.get("stock_qty") == 4
-        assert product["unique_sku"] in {entry.get("sku"), entry.get("variant_skus", [None])[0]}
-        text = (msg.get("text") or "").lower()
-        assert "en stock" in text
+    async with connect(f"{live_asgi_server['ws']}/ws") as ws:
+        await ws.send("Precio del Medidor PH Digital")
+        message = await _receive_non_ping(ws)
+    assert message.get("role") == "assistant"
+    assert message.get("type") == "product_answer"
+    assert message.get("intent") in ("product_tool", "price")
+    results = message.get("data", {}).get("results", [])
+    assert results
+    entry = results[0]
+    assert abs(entry.get("price") - 999.99) < 0.01
+    assert entry.get("stock_status") == "ok"
+    assert "stock_qty" not in entry
+    assert "sku" not in entry
+    assert "variant_skus" not in entry
+    assert "supplier_name" not in entry
+    assert entry.get("stock_status") == "ok"
+    assert "disponibilidad" in (message.get("text") or "").lower()
 
-    prod2 = _create_product("Tijera Pro", sup_id, "TJ-001", 120.0, stock=1)
-    resp = client.post(f"/products-ex/diagnostics/supplier-item/{prod2['supplier_item_id']}/clear-sale")
-    assert resp.status_code == 200
-
-    with client.websocket_connect("/ws") as ws2:
-        ws2.send_text("Precio de la Tijera Pro")
-        msg2 = _receive_non_ping(ws2)
-        assert msg2.get("role") == "assistant"
-        assert msg2.get("type") == "product_answer"
-        text2 = (msg2.get("text") or "").lower()
-        assert "sin precio" in text2
-        payload2 = msg2.get("data", {})
-        assert payload2.get("results")
+    second = await _create_product(client, "Tijera Pro", supplier_id, "TJ-001", 120.0, 1)
+    response = await client.post(f"/products-ex/diagnostics/supplier-item/{second['supplier_item_id']}/clear-sale")
+    assert response.status_code == 200
+    async with connect(f"{live_asgi_server['ws']}/ws") as ws:
+        await ws.send("Precio de la Tijera Pro")
+        message = await _receive_non_ping(ws)
+    assert message.get("type") == "product_answer"
+    assert "no tiene precio" in (message.get("text") or "").lower()
+    assert message.get("data", {}).get("results")
 
 
-def test_ws_handles_unknown_product():
-    with client.websocket_connect("/ws") as ws:
-        ws.send_text("Precio de producto inexistente XYZ")
-        msg = _receive_non_ping(ws)
-        assert msg.get("role") == "assistant"
-        assert msg.get("type") == "product_answer"
-        payload = msg.get("data", {})
-        assert payload.get("status") == "no_match"
-        assert payload.get("results") == []
-        assert "no encontré" in (msg.get("text") or "").lower() or "no encontre" in (msg.get("text") or "").lower()
+@pytest.mark.asyncio
+async def test_ws_handles_unknown_product(live_asgi_server):
+    async with connect(f"{live_asgi_server['ws']}/ws") as ws:
+        await ws.send("Precio de producto inexistente XYZ")
+        message = await _receive_non_ping(ws)
+    assert message.get("role") == "assistant"
+    assert message.get("type") == "product_answer"
+    assert message.get("data", {}).get("status") == "no_match"
+    assert message.get("data", {}).get("results") == []
+    assert "no encontr" in (message.get("text") or "").lower()

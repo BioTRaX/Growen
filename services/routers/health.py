@@ -29,6 +29,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent_core.config import settings
+from ai.embeddings import EmbeddingService
+from ai.providers.ollama_provider import OllamaProvider
 from ai.router import AIRouter
 from db.session import get_db
 
@@ -108,7 +110,10 @@ def _market_worker_health(client: Any) -> Dict[str, Any]:
 
 
 def _enrichment_worker_health(client: Any) -> Dict[str, Any]:
-    raw = client.get("growen:enrichment_worker:heartbeat")
+    get_value = getattr(client, "get", None)
+    if get_value is None:
+        return {"ok": False, "detail": "cliente Redis sin lectura de heartbeat"}
+    raw = get_value("growen:enrichment_worker:heartbeat")
     if not raw:
         return {"ok": False, "detail": "heartbeat ausente"}
     try:
@@ -129,7 +134,10 @@ def _enrichment_worker_health(client: Any) -> Dict[str, Any]:
 
 
 def _knowledge_worker_health(client: Any) -> Dict[str, Any]:
-    raw = client.get("growen:knowledge_worker:heartbeat")
+    get_value = getattr(client, "get", None)
+    if get_value is None:
+        return {"ok": False, "detail": "cliente Redis sin lectura de heartbeat"}
+    raw = get_value("growen:knowledge_worker:heartbeat")
     if not raw:
         return {"ok": False, "detail": "heartbeat ausente"}
     try:
@@ -295,6 +303,30 @@ async def health_ai() -> Dict[str, List[str]]:
     """Lista proveedores de AI disponibles según configuración actual."""
     router = AIRouter(settings)
     return {"providers": router.available_providers()}
+
+
+@router.get("/ollama/generation")
+async def health_ollama_generation() -> Dict[str, Any]:
+    """Comprueba el modelo generativo sin enviar prompts ni contenido privado."""
+    started = time.monotonic()
+    result = await OllamaProvider().health()
+    return {
+        **result,
+        "ok": result.get("status") == "ok",
+        "latency_ms": round((time.monotonic() - started) * 1000, 2),
+    }
+
+
+@router.get("/ollama/embeddings")
+async def health_ollama_embeddings() -> Dict[str, Any]:
+    """Comprueba el modelo de embeddings y su dimensión configurada."""
+    started = time.monotonic()
+    result = await EmbeddingService().health()
+    return {
+        **result,
+        "ok": result.get("status") == "ok",
+        "latency_ms": round((time.monotonic() - started) * 1000, 2),
+    }
 
 
 @router.get("/db")

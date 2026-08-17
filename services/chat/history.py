@@ -32,8 +32,8 @@ async def get_or_create_session(
     
     Args:
         db: Sesión de base de datos async
-        session_id: Identificador de la sesión (ej: "telegram:12345")
-        user_identifier: Identificador del usuario (si no se proporciona, se extrae del session_id)
+        session_id: Identificador opaco de la sesión (ej: "telegram:<clave-opaca>")
+        user_identifier: Sujeto opaco (si falta, sólo se deriva para contratos legacy no sensibles)
         
     Returns:
         Instancia de ChatSession (existente o creada)
@@ -54,7 +54,7 @@ async def get_or_create_session(
         if not user_identifier:
             # Extraer user_identifier del session_id
             if session_id.startswith("telegram:"):
-                user_identifier = session_id[9:]  # "telegram:12345" -> "12345"
+                user_identifier = session_id[9:]  # Compatibilidad: sólo claves opacas nuevas
             elif session_id.startswith("web:"):
                 user_identifier = session_id[4:]  # "web:abc123" -> "abc123"
             else:
@@ -70,21 +70,21 @@ async def get_or_create_session(
         )
         db.add(new_session)
         await db.flush()
-        logger.debug(f"Creada nueva sesión: {session_id[:20]}...")
+        logger.debug("chat.session_created")
         return new_session
     except IntegrityError as e:
-        logger.error(f"Error de integridad al crear sesión {session_id[:20]}...: {e}")
+        logger.warning("chat.session_create_conflict")
         # Puede ser que la sesión se creó en paralelo, intentar obtenerla de nuevo
         stmt = select(ChatSession).where(ChatSession.session_id == session_id)
         result = await db.execute(stmt)
         existing_session = result.scalar_one_or_none()
         if existing_session:
-            logger.debug(f"Sesión encontrada tras error de integridad: {session_id[:20]}...")
+            logger.debug("chat.session_found_after_conflict")
             return existing_session
-        raise ValueError(f"No se pudo crear la sesión {session_id}: {e}") from e
+        raise ValueError("chat_session_create_failed") from e
     except Exception as e:
-        logger.error(f"Error inesperado al crear sesión {session_id[:20]}...: {type(e).__name__}: {e}")
-        raise ValueError(f"No se pudo crear la sesión {session_id}: {e}") from e
+        logger.error("chat.session_create_error error=%s", type(e).__name__)
+        raise ValueError("chat_session_create_failed") from e
 
 
 async def save_message(
@@ -102,7 +102,7 @@ async def save_message(
     
     Args:
         session: Sesión de base de datos async
-        session_id: Identificador de la sesión de chat (UUID o similar, ej: "telegram:12345")
+        session_id: Identificador opaco de la sesión de chat (UUID o similar)
         role: Rol del mensaje ("user", "assistant", "tool", "system")
         content: Contenido del mensaje
         metadata: Metadatos opcionales (ej: tool_name, tokens, intent)
@@ -117,7 +117,7 @@ async def save_message(
     Example:
         >>> await save_message(
         ...     session=session,
-        ...     session_id="telegram:12345",
+        ...     session_id="telegram:7f2c-clave-opaca",
         ...     role="user",
         ...     content="¿Cuál es el precio del sustrato Growmix?",
         ...     metadata={"intent": "product_query"}
@@ -129,7 +129,7 @@ async def save_message(
         
         # Validar role
         if role not in ("user", "assistant", "tool", "system"):
-            logger.warning(f"Role inválido '{role}' en session {session_id[:20]}..., usando 'user'")
+            logger.warning("chat.invalid_message_role")
             role = "user"
         
         # Crear el mensaje
@@ -153,11 +153,11 @@ async def save_message(
         chat_session.updated_at = datetime.utcnow()
         await session.flush()
         
-        logger.debug(f"Mensaje guardado: session={session_id[:20]}..., role={role}, content_length={len(content)}")
+        logger.debug("chat.message_saved role=%s content_length=%s", role, len(content))
         return message
         
     except IntegrityError as e:
-        logger.error(f"Error de integridad al guardar mensaje en {session_id[:20]}...: {e}")
+        logger.warning("chat.message_save_conflict")
         # Puede ser constraint violation (ej: FK inválido, duplicado)
         await session.rollback()
         # Intentar recuperar la sesión y volver a intentar
@@ -174,21 +174,22 @@ async def save_message(
             chat_session.last_message_at = datetime.utcnow()
             chat_session.updated_at = datetime.utcnow()
             await session.flush()
-            logger.info(f"Mensaje guardado exitosamente tras reintento: {session_id[:20]}...")
+            logger.info("chat.message_saved_after_retry")
             return message
         except Exception as retry_error:
-            logger.error(f"Error en reintento de guardado: {retry_error}")
-            raise ValueError(f"No se pudo guardar el mensaje en {session_id}: {e}") from e
+            logger.error("chat.message_retry_error error=%s", type(retry_error).__name__)
+            raise ValueError("chat_message_save_failed") from e
     except Exception as e:
-        logger.error(f"Error inesperado al guardar mensaje en {session_id[:20]}...: {type(e).__name__}: {e}")
+        logger.error("chat.message_save_error error=%s", type(e).__name__)
         await session.rollback()
-        raise ValueError(f"No se pudo guardar el mensaje en {session_id}: {e}") from e
+        raise ValueError("chat_message_save_failed") from e
 
 
 async def get_recent_history(
     session: AsyncSession,
     session_id: str,
-    limit: int = 6
+    limit: int = 50,
+    max_tokens: int | None = None,
 ) -> str:
     """
     Recupera el historial reciente de una sesión y lo formatea para inyectar en el prompt.
@@ -196,7 +197,8 @@ async def get_recent_history(
     Args:
         session: Sesión de base de datos async
         session_id: Identificador de la sesión de chat
-        limit: Número máximo de mensajes a recuperar (default: 6, últimos 3 intercambios)
+        limit: Tope defensivo de mensajes candidatos.
+        max_tokens: Presupuesto aproximado del contexto; conserva primero lo más reciente.
         
     Returns:
         String formateado con el historial en orden cronológico:
@@ -233,19 +235,23 @@ async def get_recent_history(
     if not messages:
         return ""
     
-    # Revertir orden para que sea cronológico (más antiguo primero)
-    messages = list(reversed(messages))
-    
-    # Formatear historial
-    lines = []
+    # Seleccionar desde lo más reciente respetando el presupuesto y luego ordenar.
+    selected: list[str] = []
+    used_tokens = 0
     for msg in messages:
-        # Mapear role a etiqueta legible
         label = "Usuario" if msg.role == "user" else "Asistente"
-        # Limpiar contenido (quitar prefijos tipo "openai:" si existen)
         clean_content = msg.content.replace("openai:", "").strip()
-        lines.append(f"H: {label}: {clean_content}")
-    
-    return "\n".join(lines)
+        line = f"H: {label}: {clean_content}"
+        estimated = max(1, (len(line) + 3) // 4)
+        if max_tokens is not None and selected and used_tokens + estimated > max_tokens:
+            break
+        if max_tokens is not None and not selected and estimated > max_tokens:
+            line = line[: max_tokens * 4]
+            estimated = max_tokens
+        selected.append(line)
+        used_tokens += estimated
+
+    return "\n".join(reversed(selected))
 
 
 async def get_full_history(

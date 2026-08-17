@@ -11,11 +11,11 @@ import hashlib
 import logging
 import math
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import Float, and_, cast, func, or_, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent_core.config import settings
@@ -35,18 +35,38 @@ class RAGSearchService:
 
     @staticmethod
     def _source_allowed(source: KnowledgeSource, role: str, channel: str) -> bool:
-        now = datetime.utcnow()
+        now = datetime.now(UTC).replace(tzinfo=None)
         if source.status != "active":
             return False
         if source.expires_at and source.expires_at <= now:
             return False
         return role in (source.role_scope or []) and channel in (source.channel_scope or [])
 
-    async def _corpus_version(self, session: AsyncSession) -> int:
-        return int(await session.scalar(select(func.max(KnowledgeSource.content_version))) or 0)
+    async def _corpus_version(self, session: AsyncSession) -> str:
+        """Devuelve una huella que cambia ante cualquier cambio de política o versión."""
+
+        rows = (
+            await session.execute(
+                select(
+                    KnowledgeSource.id,
+                    KnowledgeSource.content_version,
+                    KnowledgeSource.role_scope,
+                    KnowledgeSource.channel_scope,
+                    KnowledgeSource.status,
+                    KnowledgeSource.expires_at,
+                ).order_by(KnowledgeSource.id)
+            )
+        ).all()
+        if not rows:
+            return ""
+        payload = "\n".join(
+            repr((source_id, version, roles, channels, status, expires_at))
+            for source_id, version, roles, channels, status, expires_at in rows
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _cache_key(query: str, role: str, channel: str, version: int) -> str:
+    def _cache_key(query: str, role: str, channel: str, version: int | str) -> str:
         payload = f"{role}\0{channel}\0{version}\0{query.strip().lower()}".encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
@@ -117,16 +137,15 @@ class RAGSearchService:
     ) -> list[dict[str, Any]]:
         filters = [
             KnowledgeSource.status == "active",
-            KnowledgeSource.role_scope.contains([role]),
-            KnowledgeSource.channel_scope.contains([channel]),
+            cast(KnowledgeSource.role_scope, JSONB).contains([role]),
+            cast(KnowledgeSource.channel_scope, JSONB).contains([channel]),
             or_(KnowledgeSource.expires_at.is_(None), KnowledgeSource.expires_at > func.now()),
         ]
         candidates: dict[int, tuple[KnowledgeChunk, KnowledgeSource, float]] = {}
         rank_lists: list[list[int]] = []
 
         if query_embedding and settings.rag_search_mode in {"hybrid", "vector"}:
-            vector_expr = cast("[" + ",".join(str(value) for value in query_embedding) + "]", Vector(1536))
-            distance = KnowledgeChunk.embedding.op("<=>")(vector_expr)
+            distance = KnowledgeChunk.embedding.cosine_distance(query_embedding)
             rows = (
                 await session.execute(
                     select(KnowledgeChunk, KnowledgeSource, (1 - cast(distance, Float)).label("score"))
@@ -163,9 +182,8 @@ class RAGSearchService:
             for position, chunk_id in enumerate(ranking, 1):
                 fused[chunk_id] += 1.0 / (60 + position)
         ordered = sorted(candidates, key=lambda chunk_id: fused[chunk_id], reverse=True)
-        ceiling = max(1.0 / 61.0, len(rank_lists) / 61.0)
         return [
-            self._result(candidates[item][0], candidates[item][1], min(1.0, fused[item] / ceiling))
+            self._result(candidates[item][0], candidates[item][1], candidates[item][2])
             for item in ordered[:limit]
         ]
 
@@ -181,6 +199,9 @@ class RAGSearchService:
         if not query or not query.strip():
             return []
         version = await self._corpus_version(session)
+        if not version:
+            await self._mark_chat_run(session, [], cache_hit=False)
+            return []
         cache_key = self._cache_key(query, role, channel, version)
         cached = self._cache.get(cache_key)
         if cached and time.monotonic() - cached[0] < settings.rag_cache_ttl_seconds:

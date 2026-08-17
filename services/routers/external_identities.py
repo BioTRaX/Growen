@@ -16,6 +16,7 @@ from db.models import ExternalIdentity, User
 from db.session import get_session
 from services.auth import SessionData, current_session, require_csrf, require_roles, verify_pw
 from services.chat.external_identity import create_link_request, masked_identity, revoke_identity
+from agent_core.config import settings
 
 router = APIRouter(tags=["external-identities"])
 
@@ -30,6 +31,17 @@ def _require_user(session: SessionData) -> User:
     return session.user
 
 
+@router.get("/auth/external-identities/telegram/status")
+async def telegram_linking_status(session: SessionData = Depends(current_session)):
+    _require_user(session)
+    return {
+        "enabled": settings.telegram_enabled and settings.telegram_role_linking_enabled,
+        "public_bot_enabled": settings.telegram_enabled and settings.telegram_public_bot_enabled,
+        "transport": settings.telegram_transport,
+        "admin_second_approval": settings.telegram_admin_second_approval,
+    }
+
+
 @router.post("/auth/external-identities/telegram/link-request", dependencies=[Depends(require_csrf)])
 async def telegram_link_request(
     payload: LinkRequestInput,
@@ -37,6 +49,8 @@ async def telegram_link_request(
     db: AsyncSession = Depends(get_session),
 ):
     user = _require_user(session)
+    if not settings.telegram_enabled or not settings.telegram_role_linking_enabled:
+        raise HTTPException(status_code=409, detail="telegram_linking_disabled")
     if not verify_pw(payload.password, user.password_hash):
         raise HTTPException(status_code=403, detail="reauthentication_failed")
     code, request = await create_link_request(db, user)

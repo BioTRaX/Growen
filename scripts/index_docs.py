@@ -111,8 +111,8 @@ async def index_documents(
     logger.info("")
     
     if not settings.openai_api_key:
-        logger.error("❌ OPENAI_API_KEY no configurada en variables de entorno")
-        logger.error("   Configurar en .env: OPENAI_API_KEY=sk-...")
+        logger.error("❌ Secreto OpenAI no configurado")
+        logger.error("   Configurar OPENAI_API_KEY_FILE con una ruta absoluta fuera del repositorio")
         return
     
     # Escanear directorio

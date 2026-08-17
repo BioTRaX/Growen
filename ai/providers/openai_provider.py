@@ -4,9 +4,10 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 """Proveedor remoto OpenAI.
 
-Implementación real usando la librería oficial ``openai`` (>=1.x). Si falta
-``OPENAI_API_KEY`` o ocurre un error de red, se degrada a eco con prefijo
-``openai:`` para no romper los tests existentes.
+Implementación real usando la librería oficial ``openai`` (>=1.x). La clave se
+obtiene mediante el lector central de secretos, incluyendo ``OPENAI_API_KEY_FILE``.
+Los fallos de configuración o red se propagan con códigos seguros: nunca se
+devuelve el prompt como si fuera una respuesta del modelo.
 
 Formato de ``prompt`` recibido: el router actualmente concatena el
 ``SYSTEM_PROMPT`` + dos saltos de línea + el prompt del usuario.
@@ -23,6 +24,7 @@ import logging
 from ..provider_base import ILLMProvider
 from ..types import Task
 from agent_core.mcp_client import mcp_client_manager
+from agent_core.secrets import read_secret
 from agent_core.tool_security import TOOL_OUTPUT_POLICY
 
 try:  # Import perezoso para no forzar dependencia si no se usa
@@ -36,7 +38,7 @@ class OpenAIProvider(ILLMProvider):
     name = "openai"
 
     def __init__(self) -> None:
-        self.api_key = os.getenv("OPENAI_API_KEY") or ""
+        self.api_key = read_secret("OPENAI_API_KEY") or ""
         self.model = os.getenv("OPENAI_MODEL", os.getenv("IMPORT_AI_MODEL", "gpt-4.1-mini"))
         # Timeout (segundos) opcional (cae a 60s si no seteado)
         self.timeout = float(os.getenv("AI_TIMEOUT_OPENAI", os.getenv("AI_TIMEOUT_OPENAI_MS", "60000")))
@@ -76,10 +78,9 @@ class OpenAIProvider(ILLMProvider):
         Mantenido por compatibilidad legacy. Este método síncrono no soporta
         tool calling y será removido en futuras versiones.
         """
-        # Fallback inmediato si falta API key o lib
+        # Fallar cerrado: un eco puede confundirse con una respuesta real y filtrar prompts.
         if not self.api_key or OpenAI is None:
-            yield f"openai:{prompt}"
-            return
+            raise RuntimeError("openai_provider_unavailable")
         system_prompt, user_prompt = self._split_prompt(prompt)
         try:
             client = OpenAI(api_key=self.api_key)
@@ -101,9 +102,8 @@ class OpenAIProvider(ILLMProvider):
             )
             text = resp.choices[0].message.content if resp.choices else ""
             yield f"openai:{text.strip()}"
-        except Exception:  # pragma: no cover - red/timeout variable
-            # Degradar a eco para no romper funcionalidad general
-            yield f"openai:{user_prompt}"
+        except Exception as exc:  # pragma: no cover - red/timeout variable
+            raise RuntimeError("openai_request_failed") from exc
 
     async def generate_async(
         self,
@@ -136,18 +136,19 @@ class OpenAIProvider(ILLMProvider):
                 - Segunda llamada para obtener respuesta final.
 
         Manejo de errores:
-            - Si falta API key o librería: devuelve el prompt del usuario como eco.
-            - Si falla la red/MCP: devuelve estructura de error serializada para que
-              el modelo pueda responder amigablemente al usuario.
+            - Si falta API key/librería o falla la red: falla con un código seguro.
+            - Los errores MCP se serializan sin incluir argumentos ni resultados privados.
         """
         # Validaciones iniciales
         if not self.api_key or AsyncOpenAI is None:
-            # Degradar a eco sin prefijo para que el caller maneje
-            return prompt.split("\n\n", 1)[-1] if "\n\n" in prompt else prompt
+            raise RuntimeError("openai_provider_unavailable")
 
         system_prompt, user_prompt = self._split_prompt(prompt)
         user_role = user_context.get("role", "guest") if user_context else "guest"
         user_channel = user_context.get("channel", "web") if user_context else "web"
+
+        if images and os.getenv("OPENAI_VISION_ENABLED", "0").lower() not in {"1", "true", "yes"}:
+            raise RuntimeError("openai_vision_disabled")
 
         # Construir mensajes iniciales
         # Si hay imágenes, usar formato content array para visión
@@ -221,10 +222,8 @@ class OpenAIProvider(ILLMProvider):
                 text = resp.choices[0].message.content if resp.choices else ""
                 return text.strip()
             except Exception as e:
-                # Loguear el error para debugging
-                logging.warning("generate_async: Error en Vision API: %s", type(e).__name__)
-                # Fallback: devolver prompt del usuario
-                return user_prompt
+                logging.warning("generate_async: fallo del proveedor OpenAI: %s", type(e).__name__)
+                raise RuntimeError("openai_request_failed") from e
 
         # Caso 2: Con tools → tool calling
         try:
@@ -241,7 +240,7 @@ class OpenAIProvider(ILLMProvider):
             )
         except Exception as e:
             logging.warning("generate_async: Error en primera llamada OpenAI: %s", type(e).__name__)
-            return user_prompt
+            raise RuntimeError("openai_request_failed") from e
 
         choice = first.choices[0] if first.choices else None
         tool_calls = getattr(choice.message, "tool_calls", None) if choice else None
@@ -559,12 +558,10 @@ class OpenAIProvider(ILLMProvider):
     def generate_stream(self, prompt: str) -> Iterable[str]:  # pragma: no cover - dependiente de red
         """Versión streaming: emite deltas (solo texto nuevo).
 
-        Si falta API key o librería, se degrada al comportamiento no streaming
-        devolviendo un único chunk (eco prefijado).
+        Si falta API key o librería, falla cerrado sin devolver el prompt.
         """
         if not self.api_key or OpenAI is None:
-            yield f"openai:{prompt}"
-            return
+            raise RuntimeError("openai_provider_unavailable")
         system_prompt, user_prompt = self._split_prompt(prompt)
         try:
             client = OpenAI(api_key=self.api_key)
@@ -587,6 +584,5 @@ class OpenAIProvider(ILLMProvider):
                 if not delta:
                     continue
                 yield f"openai:{delta}"
-        except Exception:
-            # degradar: entregar el prompt del usuario como eco
-            yield f"openai:{user_prompt}"
+        except Exception as exc:
+            raise RuntimeError("openai_request_failed") from exc

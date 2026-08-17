@@ -1,0 +1,69 @@
+# NG-HEADER: Nombre de archivo: chat-production-rollout.yml
+# NG-HEADER: Ubicación: .github/workflows/chat-production-rollout.yml
+# NG-HEADER: Descripción: Activa Chat Vue sólo desde vue_eligible con rollback automático.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+name: Chat production rollout
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: growen-chat-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-chat-vue:
+    runs-on: [self-hosted, windows, growen-production]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+      - name: Verificar elegibilidad persistente
+        id: gate
+        shell: pwsh
+        run: |
+          & .\.venv\Scripts\python.exe scripts\chat_rollout_gate.py require-phase vue_eligible
+          if ($LASTEXITCODE -eq 0) { "eligible=true" >> $env:GITHUB_OUTPUT; exit 0 }
+          if ($LASTEXITCODE -eq 3) { "eligible=false" >> $env:GITHUB_OUTPUT; exit 0 }
+          exit $LASTEXITCODE
+      - name: Quality gate completo
+        if: steps.gate.outputs.eligible == 'true'
+        shell: pwsh
+        run: .\scripts\check-quality.ps1
+      - name: Etiquetar imagen actual para rollback
+        if: steps.gate.outputs.eligible == 'true'
+        shell: pwsh
+        run: |
+          $currentImage = docker inspect --format '{{.Image}}' growen-frontend
+          docker image tag $currentImage "growen/frontend:rollback-${{ github.sha }}"
+      - name: Construir y recrear sólo frontend
+        if: steps.gate.outputs.eligible == 'true'
+        shell: pwsh
+        env:
+          CHAT_MODULE_RUNTIME: vue
+        run: |
+          $buildDate = (Get-Date).ToUniversalTime().ToString('o')
+          docker compose build frontend --build-arg CHAT_MODULE_RUNTIME=vue --build-arg BUILD_SHA=${{ github.sha }} --build-arg BUILD_DATE=$buildDate
+          docker compose up -d --no-deps frontend
+      - name: Smoke autenticado de cinco roles
+        if: steps.gate.outputs.eligible == 'true'
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe scripts\smoke_chat_roles.py --base-url http://127.0.0.1:5173 --credentials-file $env:CHAT_SMOKE_CREDENTIALS_FILE
+      - name: Marcar Vue activo
+        if: steps.gate.outputs.eligible == 'true' && success()
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe scripts\chat_rollout_gate.py mark-vue-active --apply
+      - name: Restaurar imagen anterior
+        if: steps.gate.outputs.eligible == 'true' && failure()
+        shell: pwsh
+        run: |
+          docker image tag "growen/frontend:rollback-${{ github.sha }}" growen/frontend:current
+          docker compose up -d --no-deps --force-recreate frontend
+          .\.venv\Scripts\python.exe scripts\chat_rollout_gate.py record-check vue_deploy failed --code vue_smoke_failed
+          .\.venv\Scripts\python.exe scripts\chat_rollout_gate.py rollback-vue --apply

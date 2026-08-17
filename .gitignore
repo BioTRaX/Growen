@@ -108,6 +108,7 @@ data/*
 !frontend-vue/package-lock.json
 !frontend-vue/tsconfig.json
 !frontend-vue/config/modules.json
+!docs/rag/corpus-manifest.v1.json
 
 # Backups
 backup/

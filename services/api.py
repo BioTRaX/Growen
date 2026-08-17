@@ -39,7 +39,6 @@ from .routers import (
     actions,
     chat,
     ws,
-    telegram,
     catalog,
     imports,
     canonical_products,
@@ -64,6 +63,7 @@ from .routers import (
     external_identities,
     enrichment,
     canonical_knowledge,
+    chat_rollout,
 )
 from services.auth import require_csrf  # para override condicional en dev
 from services.routers import bug_report  # router para reportes de bugs
@@ -358,7 +358,6 @@ if os.getenv("RUN_DOCTOR_ON_BOOT", "1") == "1":
     except Exception:
         logger.exception("Doctor check failed")
 app.include_router(chat.router)
-app.include_router(telegram.router)
 app.include_router(auth.router)
 app.include_router(external_identities.router)
 app.include_router(actions.router)
@@ -401,6 +400,7 @@ from services.routers import mcp_admin  # MCP servers admin
 app.include_router(mcp_admin.router)
 app.include_router(backups_admin.router)
 app.include_router(admin_chat.router)  # Admin chat sessions
+app.include_router(chat_rollout.router)  # Control seguro de rollout Chat
 app.include_router(chat_quality.router)  # Feedback, clasificación y prompts supervisados
 app.include_router(admin_scheduler.router)  # Admin scheduler control
 from services.routers import knowledge as knowledge_admin  # Knowledge Base admin

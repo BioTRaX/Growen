@@ -46,6 +46,7 @@ class RAGSearchResult(BaseModel):
     similarity: float = Field(..., description="Score de similitud (0-1)")
     chunk_index: int = Field(..., description="Índice del fragmento en el documento")
     source_id: int = Field(..., description="ID de la fuente en la DB")
+    citation: dict[str, Any] = Field(..., description="Cita verificable y versionada")
 
 
 class RAGSearchResponse(BaseModel):
@@ -75,7 +76,7 @@ async def search_knowledge(
     """
     Búsqueda semántica en la base de conocimientos.
     
-    Utiliza embeddings de OpenAI y pgvector para encontrar fragmentos de texto
+    Utiliza embeddings locales Ollama y pgvector para encontrar fragmentos de texto
     relevantes basados en similitud coseno.
     
     **Parámetros:**
@@ -134,13 +135,16 @@ async def rag_health() -> dict[str, Any]:
     """
     try:
         service = get_embedding_service()
+        health = await service.health()
         return {
-            "status": "ok",
-            "embedding_model": service.DEFAULT_MODEL,
-            "embedding_dimensions": service.EMBEDDING_DIMENSIONS,
+            "status": health["status"],
+            "embedding_provider": health.get("provider", "ollama"),
+            "embedding_model": health.get("model", service.DEFAULT_MODEL),
+            "embedding_dimensions": health.get("dimensions", service.EMBEDDING_DIMENSIONS),
+            **({"code": health["code"]} if health.get("code") else {}),
         }
-    except Exception as e:
+    except Exception:
         return {
             "status": "error",
-            "detail": str(e),
+            "code": "rag_embedding_configuration_invalid",
         }

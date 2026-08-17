@@ -12,6 +12,8 @@ Endpoints:
 - PATCH /admin/chats/{session_id} - Actualizar estado/notas/tags
 """
 
+import json
+from pathlib import Path
 from typing import Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -23,8 +25,38 @@ from sqlalchemy.orm import selectinload
 from db.session import get_session
 from db.models import ChatFeedbackEvent, ChatMessage, ChatRun, ChatSession, ChatToolEvent, TelegramUpdate, User
 from services.auth import require_csrf, require_roles, SessionData
+from agent_core.config import settings
 
 router = APIRouter(prefix="/admin/chats", tags=["Admin - Chat"])
+TELEGRAM_HEALTH_FILE = Path(__file__).resolve().parents[2] / "logs" / "telegram_health.json"
+
+
+def _read_telegram_worker_health() -> dict:
+    """Lee únicamente métricas operativas permitidas del worker de polling."""
+
+    result = {
+        "enabled": settings.telegram_enabled,
+        "public_bot_enabled": settings.telegram_public_bot_enabled,
+        "role_linking_enabled": settings.telegram_role_linking_enabled,
+        "transport": settings.telegram_transport,
+        "status": "not_running",
+        "last_poll_at": None,
+        "last_success_at": None,
+        "backlog": 0,
+        "consecutive_errors": 0,
+        "duplicates": 0,
+        "processed": 0,
+    }
+    try:
+        payload = json.loads(TELEGRAM_HEALTH_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return result
+    if not isinstance(payload, dict):
+        return result
+    for key in ("status", "last_poll_at", "last_success_at", "backlog", "consecutive_errors", "duplicates", "processed"):
+        if key in payload and isinstance(payload[key], (str, int, type(None))):
+            result[key] = payload[key]
+    return result
 
 
 # ==================== SCHEMAS ====================
@@ -287,6 +319,7 @@ async def get_chat_metrics(
         "rag": {"used": sum(item.rag_used for item in runs), "with_citations": sum(item.citation_count > 0 for item in runs), "cache_hits": sum(item.cache_hit for item in runs)},
         "tools": {status: count for status, count in tool_rows},
         "telegram_updates": {status: count for status, count in update_rows},
+        "telegram_worker": _read_telegram_worker_health(),
         "feedback": {rating: count for rating, count in feedback_rows},
     }
 

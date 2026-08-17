@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent_core.chat_policy import effective_role, normalize_role
 from agent_core.config import settings
+from agent_core.secrets import SecretConfigurationError, read_secret
 from db.models import ExternalIdentity, ExternalIdentityLinkRequest, User
 
 
@@ -38,7 +39,10 @@ class ResolvedIdentity:
 
 
 def _decode_key(name: str, *, required: bool = True) -> bytes | None:
-    value = os.getenv(name, "").strip()
+    try:
+        value = read_secret(name, required=required)
+    except SecretConfigurationError as exc:
+        raise IdentityConfigurationError(str(exc)) from exc
     if not value:
         if required:
             raise IdentityConfigurationError(f"{name}_missing")

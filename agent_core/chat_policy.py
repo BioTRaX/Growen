@@ -124,6 +124,7 @@ def public_product_result(value: dict[str, Any], role: str) -> dict[str, Any]:
     blocked = {
         "sku", "unique_sku", "supplier_sku", "variant_skus", "stock", "stock_qty",
         "initial_stock", "exact_stock", "product_id", "supplier_item_id", "canonical_id",
+        "supplier_name", "source_detail", "match_reason",
     }
     stock_marker = next((value.get(key) for key in ("stock", "stock_qty", "initial_stock", "exact_stock") if key in value), None)
     clean: dict[str, Any] = {}

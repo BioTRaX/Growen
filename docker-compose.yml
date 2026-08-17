@@ -40,15 +40,27 @@ services:
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_NAME: ${POSTGRES_DB:-growen}
       REDIS_URL: redis://redis:6379/0
+      OLLAMA_HOST: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-4096}
+      AI_MODE: ${AI_MODE:-ollama}
+      AI_ALLOW_EXTERNAL: ${AI_ALLOW_EXTERNAL:-false}
+      OPENAI_API_KEY_FILE: ${OPENAI_API_KEY_FILE_DOCKER:-}
+      RAG_EMBEDDING_PROVIDER: ${RAG_EMBEDDING_PROVIDER:-ollama}
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-qwen3-embedding:4b}
+      RAG_EMBEDDING_DIMENSIONS: ${RAG_EMBEDDING_DIMENSIONS:-1536}
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/growen/telegram_bot_token
+      TELEGRAM_IDENTITY_ENCRYPTION_KEY_FILE: /run/secrets/growen/telegram_identity_encryption_key
+      TELEGRAM_IDENTITY_HMAC_KEY_FILE: /run/secrets/growen/telegram_identity_hmac_key
       PGCONNECT_TIMEOUT: ${PGCONNECT_TIMEOUT:-5}
       # Enriquecimiento IA con búsqueda web (MCP)
-      AI_USE_WEB_SEARCH: "1"
+      AI_USE_WEB_SEARCH: "0"
       MCP_PRODUCTS_URL: "http://mcp_products:8100/mcp"
       MCP_WEB_SEARCH_URL: "http://mcp_web_search:8002/mcp"
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
       - db
+      - redis
     command: ["/app/infra/wait-for.sh", "db:5432", "uvicorn", "services.api:app", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
     security_opt:
@@ -60,6 +72,10 @@ services:
       - ./logs:/app/logs
       # Carpeta de documentos de conocimiento para RAG
       - ./Conocimientos:/app/Conocimientos
+      - type: bind
+        source: ${GROWEN_SECRET_DIR:-../growen-secrets}
+        target: /run/secrets/growen
+        read_only: true
     # Configurar logging de Docker para escribir en logs/
     logging:
       driver: "json-file"
@@ -70,7 +86,12 @@ services:
     networks:
       - backend
       - egress
+      - host_access
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   frontend:
+    container_name: growen-frontend
+    image: growen/frontend:${FRONTEND_IMAGE_TAG:-current}
     build:
       context: .
       dockerfile: infra/Dockerfile.frontend
@@ -109,6 +130,89 @@ services:
       - backend
       # Requerida por la API y los workers ejecutados localmente.
       - host_access
+  telegram_worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.telegram-worker
+    container_name: growen-telegram-worker
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      CHAT_RATE_LIMIT_BACKEND: redis
+      TELEGRAM_RATE_LIMIT_REDIS_PREFIX: ${TELEGRAM_RATE_LIMIT_REDIS_PREFIX:-growen:telegram:rate}
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/growen/telegram_bot_token
+      TELEGRAM_IDENTITY_ENCRYPTION_KEY_FILE: /run/secrets/growen/telegram_identity_encryption_key
+      TELEGRAM_IDENTITY_HMAC_KEY_FILE: /run/secrets/growen/telegram_identity_hmac_key
+      TELEGRAM_CANARY_USER_ID_FILE: /run/secrets/growen/telegram_canary_user_id
+      OLLAMA_HOST: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-4096}
+      AI_MODE: ollama
+      AI_ALLOW_EXTERNAL: "false"
+      OPENAI_API_KEY_FILE: ${OPENAI_API_KEY_FILE_DOCKER:-}
+      RAG_EMBEDDING_PROVIDER: ollama
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-qwen3-embedding:4b}
+      RAG_EMBEDDING_DIMENSIONS: "1536"
+    depends_on:
+      - db
+      - redis
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+      - type: bind
+        source: ${GROWEN_SECRET_DIR:-../growen-secrets}
+        target: /run/secrets/growen
+        read_only: true
+    restart: unless-stopped
+    profiles: ["telegram"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+      - egress
+      - host_access
+  chat_rollout_controller:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.telegram-worker
+    container_name: growen-chat-rollout
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      CHAT_ROLLOUT_INTERVAL_SECONDS: ${CHAT_ROLLOUT_INTERVAL_SECONDS:-300}
+      TELEGRAM_POLLING_QUEUE_SIZE: ${TELEGRAM_POLLING_QUEUE_SIZE:-100}
+    depends_on:
+      - db
+    command: ["python", "workers/chat_rollout.py"]
+    restart: unless-stopped
+    profiles: ["telegram"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - ./logs:/app/logs:ro
+    networks:
+      - backend
   dramatiq:
     build:
       context: .
@@ -204,7 +308,8 @@ services:
       DB_NAME: ${POSTGRES_DB:-growen}
       REDIS_URL: redis://redis:6379/0
       MCP_WEB_SEARCH_URL: ${ENRICH_MCP_WEB_SEARCH_URL:-http://mcp_web_search:8002/mcp}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_HOST: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-4096}
       ENRICHMENT_HEARTBEAT_ENABLED: "1"
       ENRICHMENT_HEARTBEAT_TTL_SECONDS: ${ENRICHMENT_HEARTBEAT_TTL_SECONDS:-60}
     depends_on:

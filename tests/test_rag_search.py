@@ -6,7 +6,10 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
+
+from db.models import KnowledgeChunk, KnowledgeSource
+from services.rag.search import RAGSearchService
 
 # Skip si no está disponible pgvector (entorno SQLite)
 try:
@@ -86,6 +89,7 @@ class TestRAGSearchEndpoint:
                 "similarity": 0.85,
                 "chunk_index": 0,
                 "source_id": 1,
+                "citation": {"source_id": 1, "title": "documento.md", "chunk_index": 0, "page": None, "score": 0.85, "content_version": 1},
             },
             {
                 "content": "Otro fragmento relevante",
@@ -93,6 +97,7 @@ class TestRAGSearchEndpoint:
                 "similarity": 0.72,
                 "chunk_index": 2,
                 "source_id": 2,
+                "citation": {"source_id": 2, "title": "otro.md", "chunk_index": 2, "page": None, "score": 0.72, "content_version": 1},
             },
         ]
         
@@ -147,8 +152,14 @@ class TestRAGHealthEndpoint:
         """Health check retorna status ok cuando todo está configurado."""
         with patch("services.routers.rag.get_embedding_service") as mock_service:
             mock_instance = AsyncMock()
-            mock_instance.DEFAULT_MODEL = "text-embedding-3-small"
+            mock_instance.DEFAULT_MODEL = "qwen3-embedding:4b"
             mock_instance.EMBEDDING_DIMENSIONS = 1536
+            mock_instance.health.return_value = {
+                "status": "ok",
+                "provider": "ollama",
+                "model": "qwen3-embedding:4b",
+                "dimensions": 1536,
+            }
             mock_service.return_value = mock_instance
             
             resp = await client.get("/api/v1/rag/health")
@@ -156,17 +167,56 @@ class TestRAGHealthEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert data["embedding_model"] == "text-embedding-3-small"
+        assert data["embedding_model"] == "qwen3-embedding:4b"
         assert data["embedding_dimensions"] == 1536
 
     async def test_health_error(self, client):
         """Health check retorna status error cuando hay problemas."""
         with patch("services.routers.rag.get_embedding_service") as mock_service:
-            mock_service.side_effect = ValueError("OPENAI_API_KEY no configurada")
+            mock_service.side_effect = ValueError("invalid provider")
             
             resp = await client.get("/api/v1/rag/health")
             
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "error"
-        assert "OPENAI_API_KEY" in data["detail"]
+        assert data["code"] == "rag_embedding_configuration_invalid"
+
+
+class TestRAGCachePolicy:
+    """La huella del corpus invalida cache aunque cambie una fuente no máxima."""
+
+    async def test_content_version_change_invalidates_cached_result(self, db_session):
+        source = KnowledgeSource(
+            filename="cache-policy.md",
+            hash="cache-policy-v1",
+            role_scope=["guest"],
+            channel_scope=["web"],
+            visibility="public",
+            status="active",
+            content_version=1,
+        )
+        db_session.add(source)
+        await db_session.flush()
+        db_session.add(KnowledgeChunk(
+            source_id=source.id,
+            chunk_index=0,
+            content="contenido controlado de cache",
+            embedding=[1.0] + [0.0] * 1535,
+            chunk_metadata={},
+        ))
+        await db_session.commit()
+
+        service = RAGSearchService()
+        service.embedding_service = AsyncMock()
+        service.embedding_service.generate_embedding.return_value = [1.0] + [0.0] * 1535
+
+        first = await service.search("contenido", db_session, min_similarity=0.0)
+        cached = await service.search("contenido", db_session, min_similarity=0.0)
+        source.content_version = 2
+        await db_session.commit()
+        refreshed = await service.search("contenido", db_session, min_similarity=0.0)
+
+        assert first and not first[0].get("cache_hit", False)
+        assert cached[0]["cache_hit"] is True
+        assert refreshed and not refreshed[0].get("cache_hit", False)

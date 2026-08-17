@@ -6,6 +6,8 @@
 import os
 import sys
 import tempfile
+import asyncio
+import socket
 from pathlib import Path
 from typing import AsyncGenerator
 import pytest
@@ -104,13 +106,11 @@ async def db_session(request):
     # Cleanup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
-    await engine.dispose()
 
 
 # -------- Overrides de auth/CSRF y utilidades comunes --------
 from services.api import app  # noqa: E402
 from services.auth import current_session, require_csrf, SessionData  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
 from httpx import AsyncClient, ASGITransport  # noqa: E402
 from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
 from starlette.requests import Request  # noqa: E402
@@ -201,8 +201,10 @@ def _clear_sales_rate_limit_bucket():
 
 
 @pytest.fixture()
-def admin_client() -> TestClient:
+def admin_client():
     """Cliente HTTP con contexto admin y CSRF coherente (por si algún endpoint valida)."""
+    from fastapi.testclient import TestClient
+
     c = TestClient(app)
     c.cookies.set("csrf_token", "test-csrf")
     c.headers.update({"X-CSRF-Token": "test-csrf"})
@@ -257,6 +259,46 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
     """Cliente HTTP async genérico con contexto admin."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
+
+
+@pytest_asyncio.fixture
+async def live_asgi_server() -> AsyncGenerator[dict[str, str], None]:
+    """Sirve la aplicación con Uvicorn en loopback y el mismo event loop del test."""
+    import uvicorn
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = int(listener.getsockname()[1])
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host="127.0.0.1",
+            port=port,
+            log_level="error",
+            lifespan="off",
+            access_log=False,
+        )
+    )
+    task = asyncio.create_task(server.serve(sockets=[listener]))
+    for _ in range(200):
+        if server.started:
+            break
+        if task.done():
+            await task
+        await asyncio.sleep(0.01)
+    else:
+        server.should_exit = True
+        await task
+        raise RuntimeError("Uvicorn no inició dentro del plazo de la prueba")
+
+    try:
+        yield {"http": f"http://127.0.0.1:{port}", "ws": f"ws://127.0.0.1:{port}"}
+    finally:
+        server.should_exit = True
+        await asyncio.wait_for(task, timeout=5)
+        listener.close()
 
 
 @pytest_asyncio.fixture

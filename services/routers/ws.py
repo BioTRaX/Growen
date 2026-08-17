@@ -1,13 +1,13 @@
 # NG-HEADER: Nombre de archivo: ws.py
 # NG-HEADER: Ubicación: services/routers/ws.py
-# NG-HEADER: Descripción: WebSocket de chat que canaliza prompts al AIRouter (OpenAI/Ollama) y emite respuestas.
+# NG-HEADER: Descripción: Adaptador WebSocket del pipeline multicanal observable de Chat.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-"""WebSocket de chat que utiliza la IA de respaldo.
+"""WebSocket de chat integrado con identidad, historial y observabilidad.
 
 Flujo:
 - El cliente envía texto plain.
-- Se contextualiza con la sesión (si existe) para añadir nombre y rol.
-- Se invoca `AIRouter.run` con la tarea `short_answer` (ahora soportada por OpenAI).
+- Se recarga la sesión y el rol efectivo en cada mensaje.
+- Las rutas principales se ejecutan mediante `ChatOrchestrator`.
 - Se normaliza y se retorna como `{role: "assistant", text: ...}`.
 
 Logs añadidos:
@@ -17,13 +17,14 @@ Logs añadidos:
 """
 
 from datetime import datetime
+from dataclasses import dataclass, field
 import time
 import asyncio
 import os
 import uuid
 import logging
 import hashlib
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, WebSocket
 from sqlalchemy import select
@@ -33,16 +34,18 @@ from db.models import Session as DBSess
 from db.session import SessionLocal
 from services.auth import hash_session_id
 from services.chat.history import save_message, get_recent_history
+from services.chat.orchestrator import ChatRequestContext, chat_orchestrator
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from agent_core.config import settings as core_settings
+from agent_core.chat_policy import public_product_result
 from ai.router import AIRouter
 from ai.types import Task
 from services.chat.price_lookup import (
     extract_product_query,  # Solo parsing; lógica de resolución DEPRECATED
     resolve_price,
     serialize_result,
-    render_product_response,
+    render_product_response_for_role,
 )
 from services.chat.memory import (
     build_memory_key,
@@ -73,11 +76,59 @@ PING_INTERVAL = 30
 READ_TIMEOUT = 60
 
 
+@dataclass
+class WebSocketReply:
+    """Respuesta mutable para que el orquestador adjunte citas RAG."""
+
+    text: str
+    citations: list[dict[str, Any]] = field(default_factory=list)
+
+
+async def _load_active_session(db, raw_sid: str | None) -> DBSess | None:
+    """Resuelve sesión y usuario actuales; debe invocarse para cada mensaje."""
+
+    if not raw_sid:
+        return None
+    return await db.scalar(
+        select(DBSess)
+        .options(selectinload(DBSess.user))
+        .where(DBSess.id == hash_session_id(raw_sid), DBSess.expires_at > datetime.utcnow())
+        .execution_options(populate_existing=True)
+    )
+
+
 def _build_prompt_with_history(history: str, user_text: str) -> str:
     """Concatena historial formateado con el mensaje actual."""
     if history:
         return f"{history}\n\nUsuario: {user_text}"
     return user_text
+
+
+async def _add_rag_context(
+    prompt: str,
+    query: str,
+    db_session,
+    *,
+    role: str,
+) -> str:
+    """Añade únicamente conocimiento autorizado para el canal WebSocket."""
+
+    from services.rag.search import get_rag_search_service
+
+    context = await get_rag_search_service().search_and_format_context(
+        query=query,
+        session=db_session,
+        top_k=3,
+        min_similarity=0.5,
+        role=role,
+        channel="websocket",
+    )
+    if not context:
+        return prompt
+    return (
+        f"{prompt}\n\nContexto autorizado de Growen:\n{context}\n"
+        "Usá el contexto sólo cuando sea pertinente y no inventes datos ausentes."
+    )
 
 
 def _strip_provider_prefix(text: str) -> str:
@@ -114,6 +165,40 @@ async def _persist_chat_history(
         await db_session.commit()
     except Exception:
         logger.exception("ws.chat_history_save_error")
+
+
+async def _emit_orchestrated_response(
+    socket: WebSocket,
+    db_session,
+    context: ChatRequestContext,
+    *,
+    session_id: str,
+    user_text: str,
+    assistant_text: str,
+    response_type: str,
+    intent: str,
+    user_identifier: str,
+    extra: dict | None = None,
+) -> None:
+    """Emite y persiste respuestas deterministas dentro del pipeline común."""
+
+    async def operation() -> dict:
+        return {"text": assistant_text, "type": response_type, "intent": intent}
+
+    result = await chat_orchestrator.execute(db_session, context, operation, input_text=user_text)
+    payload = {"role": "assistant", **result, "correlation_id": context.correlation_id}
+    if extra:
+        payload.update(extra)
+    await socket.send_json(payload)
+    await _persist_chat_history(
+        db_session,
+        session_id,
+        user_text,
+        assistant_text,
+        intent=intent,
+        response_type=response_type,
+        user_identifier=user_identifier,
+    )
 
 async def ai_reply(prompt: str) -> str:
     """Genera una respuesta breve usando AIRouter.
@@ -152,7 +237,7 @@ async def _ping(socket: WebSocket) -> None:
         try:
             await socket.send_json({"role": "ping", "text": ""})
         except Exception as exc:  # pragma: no cover - logueo defensivo
-            logger.debug("No se pudo enviar ping: %s", exc)
+            logger.debug("No se pudo enviar ping error=%s", type(exc).__name__)
             break
 
 
@@ -164,12 +249,7 @@ async def ws_chat(socket: WebSocket) -> None:
     sid = socket.cookies.get("growen_session")
     if sid:
         async with SessionLocal() as db:
-            res = await db.execute(
-                select(DBSess)
-                .options(selectinload(DBSess.user))
-                .where(DBSess.id == hash_session_id(sid), DBSess.expires_at > datetime.utcnow())
-            )
-            sess = res.scalar_one_or_none()
+            sess = await _load_active_session(db, sid)
 
     host = getattr(socket.client, "host", "unknown")
     user_agent = socket.headers.get("user-agent", "unknown")
@@ -210,18 +290,28 @@ async def ws_chat(socket: WebSocket) -> None:
             correlation_id = f"{base_correlation_id}:{message_index}"
 
             if not isinstance(data, str):
-                await socket.send_json({"role": "system", "text": "Entrada invalida."})
+                await socket.send_json({"role": "system", "text": "Entrada invalida.", "correlation_id": correlation_id})
                 continue
             data = data.strip()
             if not data:
-                await socket.send_json({"role": "system", "text": "Decime algo para responder."})
+                await socket.send_json({"role": "system", "text": "Decime algo para responder.", "correlation_id": correlation_id})
                 continue
             if len(data) > 2000:
-                await socket.send_json({"role": "system", "text": "Tu mensaje es muy largo. Por favor, resumilo (max. 2000 caracteres)."})
+                await socket.send_json({"role": "system", "text": "Tu mensaje es muy largo. Por favor, resumilo (max. 2000 caracteres).", "correlation_id": correlation_id})
                 continue
 
             async with SessionLocal() as chat_db:
-                history_context = await get_recent_history(chat_db, chat_session_id, limit=6)
+                if sid:
+                    sess = await _load_active_session(chat_db, sid)
+                role = getattr(getattr(sess, "user", None), "role", None) or getattr(sess, "role", "guest") or "guest"
+                context = ChatRequestContext.build(
+                    channel="websocket",
+                    conversation_id=chat_session_id,
+                    account_role=role,
+                    user_id=getattr(getattr(sess, "user", None), "id", None),
+                    correlation_id=correlation_id,
+                )
+                history_context = await get_recent_history(chat_db, chat_session_id, max_tokens=core_settings.chat_history_max_tokens)
 
                 memory_state = get_memory(memory_key)
                 include_metrics = role in ALLOWED_PRODUCT_METRIC_ROLES
@@ -240,11 +330,16 @@ async def ws_chat(socket: WebSocket) -> None:
                     if tools_schema:
                         try:
                             prompt_with_history = _build_prompt_with_history(history_context, data)
-                            answer_raw = await ai_router.run_async(
-                                task=Task.SHORT_ANSWER.value,
-                                prompt=prompt_with_history,
-                                user_context={"role": role, "channel": "websocket", "intent": "product_lookup"},
-                                tools_schema=tools_schema,
+                            answer_raw = await chat_orchestrator.execute(
+                                chat_db,
+                                context,
+                                lambda: ai_router.run_async(
+                                    task=Task.SHORT_ANSWER.value,
+                                    prompt=prompt_with_history,
+                                    user_context={"role": role, "channel": "websocket", "intent": "product_lookup"},
+                                    tools_schema=tools_schema,
+                                ),
+                                input_text=prompt_with_history,
                             )
                             answer = _strip_provider_prefix(answer_raw)
                             await socket.send_json({
@@ -252,6 +347,7 @@ async def ws_chat(socket: WebSocket) -> None:
                                 "text": answer,
                                 "type": "product_answer",
                                 "intent": "product_tool",
+                                "correlation_id": correlation_id,
                             })
                             await _persist_chat_history(
                                 chat_db,
@@ -270,6 +366,7 @@ async def ws_chat(socket: WebSocket) -> None:
                                 "role": "assistant",
                                 "text": "Error consultando información de producto.",
                                 "type": "error",
+                                "correlation_id": correlation_id,
                             })
                             await _persist_chat_history(
                                 chat_db,
@@ -283,16 +380,24 @@ async def ws_chat(socket: WebSocket) -> None:
                             continue
                     # Fallback local sin tools: usar resolver interno (compat WS/tests)
                     try:
-                        async with SessionLocal() as db:
-                            result = await resolve_price(data, db, limit=5)
-                        payload = serialize_result(result, include_metrics=include_metrics)
-                        text = render_product_response(result)
+                        result = await chat_orchestrator.execute(
+                            chat_db,
+                            context,
+                            lambda: resolve_price(data, chat_db, limit=5),
+                            input_text=data,
+                        )
+                        payload = public_product_result(
+                            serialize_result(result, include_metrics=include_metrics),
+                            context.effective_role,
+                        )
+                        text = render_product_response_for_role(result, context.effective_role)
                         await socket.send_json({
                             "role": "assistant",
                             "text": text,
                             "type": "product_answer",
                             "intent": result.intent,
                             "data": payload,
+                            "correlation_id": correlation_id,
                         })
                         await _persist_chat_history(
                             chat_db,
@@ -311,6 +416,7 @@ async def ws_chat(socket: WebSocket) -> None:
                             "role": "assistant",
                             "text": error_text,
                             "type": "error",
+                            "correlation_id": correlation_id,
                         })
                         await _persist_chat_history(
                             chat_db,
@@ -332,21 +438,27 @@ async def ws_chat(socket: WebSocket) -> None:
                             logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id})
                         except Exception:
                             pass
-                        await socket.send_json({
-                            "role": "assistant",
-                            "type": "clarify_prompt",
-                            "intent": "clarify",
-                            "text": clarify_prompt_text(terms),
-                        })
+                        await _emit_orchestrated_response(
+                            socket, chat_db, context,
+                            session_id=chat_session_id,
+                            user_text=data,
+                            assistant_text=clarify_prompt_text(terms),
+                            response_type="clarify_prompt",
+                            intent="clarify",
+                            user_identifier=user_identifier,
+                        )
                         continue
                     if normalized in CLARIFY_CONFIRM_WORDS:
                         # Nuevo flujo: pedimos al usuario reformular con SKU exacto en lugar de relanzar ranking local
-                        await socket.send_json({
-                            "role": "assistant",
-                            "text": "Por favor pedime nuevamente el producto indicando el SKU exacto para darte precio y stock actualizado.",
-                            "type": "clarify_ack",
-                            "intent": "clarify",
-                        })
+                        await _emit_orchestrated_response(
+                            socket, chat_db, context,
+                            session_id=chat_session_id,
+                            user_text=data,
+                            assistant_text="Por favor pedime nuevamente el producto indicando el SKU exacto para darte precio y stock actualizado.",
+                            response_type="clarify_ack",
+                            intent="clarify",
+                            user_identifier=user_identifier,
+                        )
                         clear_memory(memory_key)
                         continue
                     tokens = normalized.split()
@@ -357,12 +469,15 @@ async def ws_chat(socket: WebSocket) -> None:
                             logger.info("chat.clarify_prompt", extra={"correlation_id": correlation_id})
                         except Exception:
                             pass
-                        await socket.send_json({
-                            "role": "assistant",
-                            "type": "clarify_prompt",
-                            "intent": "clarify",
-                            "text": clarify_prompt_text(terms),
-                        })
+                        await _emit_orchestrated_response(
+                            socket, chat_db, context,
+                            session_id=chat_session_id,
+                            user_text=data,
+                            assistant_text=clarify_prompt_text(terms),
+                            response_type="clarify_prompt",
+                            intent="clarify",
+                            user_identifier=user_identifier,
+                        )
                         continue
 
                 if memory_state and not memory_state.pending_clarification:
@@ -391,38 +506,54 @@ async def ws_chat(socket: WebSocket) -> None:
                         len(prompt_with_history),
                         extra={"correlation_id": correlation_id},
                     )
-                    acc = []
                     try:
-                        for chunk in router_ai.run_stream(Task.SHORT_ANSWER.value, prompt_with_history):
-                            if not acc and (chunk.startswith("openai:") or chunk.startswith("ollama:")):
-                                _, _, chunk = chunk.partition(":")
-                            if chunk:
-                                acc.append(chunk)
-                                await socket.send_json({
-                                    "role": "assistant",
-                                    "stream": "chunk",
-                                    "id": msg_id,
-                                    "text": chunk,
-                                })
-                                logger.debug(
-                                    "[ai:stream:chunk] id=%s delta_chars=%s total_chars=%s",
-                                    msg_id,
-                                    len(chunk),
-                                    sum(len(c) for c in acc),
-                                    extra={"correlation_id": correlation_id},
-                                )
-                        full = "".join(acc).strip()
+                        async def stream_operation() -> WebSocketReply:
+                            enriched_prompt = await _add_rag_context(
+                                prompt_with_history,
+                                data,
+                                chat_db,
+                                role=context.effective_role,
+                            )
+                            chunks: list[str] = []
+                            for chunk in router_ai.run_stream(Task.SHORT_ANSWER.value, enriched_prompt):
+                                if not chunks and (chunk.startswith("openai:") or chunk.startswith("ollama:")):
+                                    _, _, chunk = chunk.partition(":")
+                                if chunk:
+                                    chunks.append(chunk)
+                                    await socket.send_json({
+                                        "role": "assistant",
+                                        "stream": "chunk",
+                                        "id": msg_id,
+                                        "text": chunk,
+                                    })
+                                    logger.debug(
+                                        "[ai:stream:chunk] id=%s delta_chars=%s total_chars=%s",
+                                        msg_id,
+                                        len(chunk),
+                                        sum(len(item) for item in chunks),
+                                        extra={"correlation_id": correlation_id},
+                                    )
+                            return WebSocketReply(text="".join(chunks).strip())
+
+                        full = await chat_orchestrator.execute(
+                            chat_db,
+                            context,
+                            stream_operation,
+                            input_text=prompt_with_history,
+                        )
                         await socket.send_json({
                             "role": "assistant",
                             "stream": "end",
                             "id": msg_id,
-                            "text": full,
+                            "text": full.text,
+                            "citations": full.citations,
                             "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                            "correlation_id": correlation_id,
                         })
                         logger.debug(
                             "[ai:stream:end] id=%s total_chars=%s ms=%s",
                             msg_id,
-                            len(full),
+                            len(full.text),
                             int((time.perf_counter() - t0) * 1000),
                             extra={"correlation_id": correlation_id},
                         )
@@ -430,7 +561,7 @@ async def ws_chat(socket: WebSocket) -> None:
                             "ws_chat message",
                             extra={
                                 "prompt_chars": len(prompt_with_history),
-                                "reply_chars": len(full),
+                                "reply_chars": len(full.text),
                                 "duration_ms": int((time.perf_counter() - t0) * 1000),
                                 "auth": bool(sess),
                                 "stream": True,
@@ -441,7 +572,7 @@ async def ws_chat(socket: WebSocket) -> None:
                             chat_db,
                             chat_session_id,
                             data,
-                            full,
+                            full.text,
                             intent="general",
                             response_type="assistant_stream",
                             user_identifier=user_identifier,
@@ -453,6 +584,7 @@ async def ws_chat(socket: WebSocket) -> None:
                             "stream": "error",
                             "id": msg_id,
                             "error": "stream_failed",
+                            "correlation_id": correlation_id,
                         })
                 else:
                     try:
@@ -463,13 +595,24 @@ async def ws_chat(socket: WebSocket) -> None:
                             len(prompt_with_history),
                             extra={"correlation_id": correlation_id},
                         )
-                        raw_reply = await ai_reply(prompt_with_history)
+                        async def reply_operation() -> WebSocketReply:
+                            enriched_prompt = await _add_rag_context(
+                                prompt_with_history,
+                                data,
+                                chat_db,
+                                role=context.effective_role,
+                            )
+                            return WebSocketReply(text=await ai_reply(enriched_prompt))
+
+                        raw_reply = await chat_orchestrator.execute(
+                            chat_db, context, reply_operation, input_text=prompt_with_history
+                        )
                     except Exception as exc:  # pragma: no cover
                         logger.error("Error inesperado en ws_chat: %s", type(exc).__name__)
-                        await socket.send_json({"role": "system", "text": "No pude procesar el mensaje."})
+                        await socket.send_json({"role": "system", "text": "No pude procesar el mensaje.", "correlation_id": correlation_id})
                         continue
-                    reply = _strip_provider_prefix(raw_reply.strip())
-                    await socket.send_json({"role": "assistant", "text": reply})
+                    reply = _strip_provider_prefix(raw_reply.text.strip())
+                    await socket.send_json({"role": "assistant", "text": reply, "citations": raw_reply.citations, "correlation_id": correlation_id})
                     logger.info(
                         "ws_chat message",
                         extra={
@@ -490,16 +633,22 @@ async def ws_chat(socket: WebSocket) -> None:
                         response_type="assistant_message",
                     )
     except WebSocketDisconnect:
-        logger.warning("Cliente desconectado")
+        logger.info("Cliente WebSocket desconectado")
     except Exception as exc:
         logger.error("Error inesperado en ws_chat: %s", type(exc).__name__)
         if socket.client_state == WebSocketState.CONNECTED:
             try:
-                await socket.send_json({"role": "system", "text": "La conexión de chat encontró un error."})
+                await socket.send_json({"role": "system", "text": "La conexión de chat encontró un error.", "correlation_id": base_correlation_id})
             except Exception as send_exc:
                 logger.error("No se pudo notificar al cliente del error: %s", type(send_exc).__name__)
     finally:
         ping_task.cancel()
-        if socket.client_state == WebSocketState.CONNECTED:
-            await socket.close()
+        if (
+            socket.client_state == WebSocketState.CONNECTED
+            and socket.application_state == WebSocketState.CONNECTED
+        ):
+            try:
+                await socket.close()
+            except RuntimeError:
+                logger.debug("WebSocket ya estaba cerrado por el transporte")
 

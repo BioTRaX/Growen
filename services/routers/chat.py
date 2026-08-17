@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, ValidationError, constr
 
 from agent_core.config import settings as core_settings
+from agent_core.chat_policy import public_product_result
 from ai.router import AIRouter
 from ai.types import Task
 from db.session import get_session
@@ -51,8 +52,9 @@ from services.chat.price_lookup import (
     ProductQuery,
     extract_product_query,
     resolve_price,
+    resolve_product_info,
     serialize_result,
-    render_product_response,
+    render_product_response_for_role,
 )
 from services.chat.shared import (
     ALLOWED_PRODUCT_INTENT_ROLES,
@@ -257,7 +259,7 @@ async def _chat_endpoint_impl(
     user_identifier = f"web:{base_session_id[:24]}"
     
     # 0.1 Recuperar historial reciente para memoria conversacional
-    history_context = await get_recent_history(db, chat_session_id, limit=6)
+    history_context = await get_recent_history(db, chat_session_id, max_tokens=core_settings.chat_history_max_tokens)
     
     # 0.2 Inferir estado de conversación desde el historial para máquina de estados
     conversation_state = _infer_conversation_state(history_context, user_text)
@@ -309,8 +311,11 @@ async def _chat_endpoint_impl(
                 # Re-ejecutar la resolución usando la consulta previa almacenada
                 prior_query_text = memory_state.query.raw_text
                 result = await resolve_price(prior_query_text, db, limit=5)
-                payload = serialize_result(result, include_metrics=include_metrics)
-                text = render_product_response(result)
+                payload = public_product_result(
+                    serialize_result(result, include_metrics=include_metrics),
+                    user_role,
+                )
+                text = render_product_response_for_role(result, user_role)
                 clear_memory(memory_key)
                 return ChatOut(text=text, type="product_answer", intent=result.intent, data=payload, took_ms=payload.get("took_ms"))
             except Exception:
@@ -340,7 +345,7 @@ async def _chat_endpoint_impl(
             logger.info(f"Modo persona activo: {persona_mode}")
             
             # Obtener historial reciente para contexto
-            conversation_history = await get_recent_history(db, chat_session_id, limit=10)
+            conversation_history = await get_recent_history(db, chat_session_id, max_tokens=core_settings.chat_history_max_tokens)
             
             # Llamar a diagnose_plant
             diagnosis_result = await diagnose_plant(
@@ -457,6 +462,43 @@ async def _chat_endpoint_impl(
             # Obtener el schema de herramientas para consulta de productos
             # El provider OpenAI construye el schema basado en el rol del usuario
             provider = ai_router.get_provider(Task.SHORT_ANSWER.value)
+            if provider.name == "ollama":
+                result = (
+                    await resolve_product_info(product_query, db, limit=5)
+                    if product_query
+                    else await resolve_price(user_text, db, limit=5)
+                )
+                serialized = serialize_result(
+                    result,
+                    include_metrics=user_role in ALLOWED_PRODUCT_METRIC_ROLES,
+                )
+                public_payload = public_product_result(serialized, user_role)
+                answer = render_product_response_for_role(result, user_role)
+                await save_message(
+                    db,
+                    chat_session_id,
+                    "user",
+                    user_text,
+                    metadata={"intent": result.intent},
+                    user_identifier=user_identifier,
+                )
+                await save_message(
+                    db,
+                    chat_session_id,
+                    "assistant",
+                    answer,
+                    metadata={"type": "product_answer", "provider": "catalog_local"},
+                    user_identifier=user_identifier,
+                )
+                await db.commit()
+                clear_memory(memory_key)
+                return ChatOut(
+                    text=answer,
+                    type="product_answer",
+                    intent=result.intent,
+                    data=public_payload,
+                    took_ms=public_payload.get("took_ms"),
+                )
             tools_schema = None
             if hasattr(provider, 'build_tools_schema'):
                 tools_schema = await provider.build_tools_schema(user_role)
@@ -535,8 +577,11 @@ async def _chat_endpoint_impl(
         include_metrics = user_role in ALLOWED_PRODUCT_METRIC_ROLES
         try:
             result = await resolve_price(user_text, db, limit=5)
-            payload = serialize_result(result, include_metrics=include_metrics)
-            text = render_product_response(result)
+            payload = public_product_result(
+                serialize_result(result, include_metrics=include_metrics),
+                user_role,
+            )
+            text = render_product_response_for_role(result, user_role)
             # Si hay ambigüedad, almacenamos memoria para el flujo de aclaración
             if payload.get("needs_clarification"):
                 ensure_memory(memory_key, result.query, pending=True, rendered=text)
@@ -639,7 +684,12 @@ async def _chat_endpoint_impl(
         return ChatOut(text=reply, intent=UserIntent.CHAT_GENERAL.value)
 
 
-@router.post("/chat", response_model=ChatOut, dependencies=[Depends(require_csrf)])
+@router.post(
+    "/chat",
+    response_model=ChatOut,
+    response_model_exclude_none=True,
+    dependencies=[Depends(require_csrf)],
+)
 async def chat_endpoint(
     payload: ChatIn,
     request: Request,
@@ -669,6 +719,6 @@ async def chat_endpoint(
     async def operation() -> ChatOut:
         return await _chat_endpoint_impl(payload, request, session_data, db)
 
-    response = await chat_orchestrator.execute(db, context, operation)
+    response = await chat_orchestrator.execute(db, context, operation, input_text=payload.text)
     response.correlation_id = context.correlation_id
     return response

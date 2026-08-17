@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
+from agent_core.secrets import read_secret
 
 # Marcadores que deben sustituirse en producción
 SECRET_KEY_PLACEHOLDER = "REEMPLAZAR_SECRET_KEY"
@@ -92,7 +93,7 @@ class Settings:
     import_ai_model: str = os.getenv("IMPORT_AI_MODEL", "gpt-4o-mini")
     import_ai_timeout: int = int(os.getenv("IMPORT_AI_TIMEOUT", "40"))  # segundos
     import_ai_max_retries: int = int(os.getenv("IMPORT_AI_MAX_RETRIES", "2"))
-    openai_api_key: str | None = os.getenv("OPENAI_API_KEY") or None
+    openai_api_key: str | None = read_secret("OPENAI_API_KEY")
     import_ai_classic_min_confidence: float = float(os.getenv("IMPORT_AI_CLASSIC_MIN_CONFIDENCE", "0.55"))
 
     # Chat multicanal y Telegram. Los flags permanecen apagados por defecto.
@@ -105,10 +106,14 @@ class Settings:
     telegram_link_code_ttl_seconds: int = int(os.getenv("TELEGRAM_LINK_CODE_TTL_SECONDS", "300"))
     chat_archive_after_days: int = int(os.getenv("CHAT_ARCHIVE_AFTER_DAYS", "90"))
     chat_auto_delete_enabled: bool = os.getenv("CHAT_AUTO_DELETE_ENABLED", "0").lower() in {"1", "true", "yes"}
+    chat_history_max_tokens: int = int(os.getenv("CHAT_HISTORY_MAX_TOKENS", "1500"))
     rag_search_mode: str = os.getenv("RAG_SEARCH_MODE", "hybrid")
     rag_cache_ttl_seconds: int = int(os.getenv("RAG_CACHE_TTL_SECONDS", "300"))
     rag_context_max_tokens: int = int(os.getenv("RAG_CONTEXT_MAX_TOKENS", "3000"))
     rag_exclude_stale: bool = os.getenv("RAG_EXCLUDE_STALE", "1").lower() in {"1", "true", "yes"}
+    rag_embedding_provider: str = os.getenv("RAG_EMBEDDING_PROVIDER", "ollama")
+    rag_embedding_model: str = os.getenv("RAG_EMBEDDING_MODEL", "qwen3-embedding:4b")
+    rag_embedding_dimensions: int = int(os.getenv("RAG_EMBEDDING_DIMENSIONS", "1536"))
 
     def __post_init__(self) -> None:
         if not self.db_url:
@@ -175,8 +180,8 @@ class Settings:
         if self.env not in {"dev", "test", "testing"}:
             if not self.mcp_products_secret_key or not self.mcp_web_search_secret_key:
                 raise RuntimeError("Las claves MCP específicas deben definirse fuera de desarrollo y tests")
-        if self.telegram_transport not in {"polling", "webhook"}:
-            raise RuntimeError("TELEGRAM_TRANSPORT debe ser polling o webhook")
+        if self.telegram_transport != "polling":
+            raise RuntimeError("TELEGRAM_TRANSPORT sólo admite polling")
         if self.telegram_link_code_ttl_seconds < 60 or self.telegram_link_code_ttl_seconds > 900:
             raise RuntimeError("TELEGRAM_LINK_CODE_TTL_SECONDS debe estar entre 60 y 900")
         if self.telegram_channel_role_ceiling not in {"guest", "cliente", "proveedor", "colaborador"}:
@@ -186,16 +191,24 @@ class Settings:
         if self.telegram_role_linking_enabled and not self.telegram_admin_second_approval:
             raise RuntimeError("telegram_admin_second_approval_required")
         if self.telegram_enabled:
-            if not os.getenv("TELEGRAM_BOT_TOKEN", "").strip():
+            if not read_secret("TELEGRAM_BOT_TOKEN"):
                 raise RuntimeError("telegram_bot_token_missing")
             if self.telegram_transport == "polling" and os.getenv("TELEGRAM_DROP_PENDING_UPDATES", "0").lower() in {"1", "true", "yes"}:
                 raise RuntimeError("telegram_drop_pending_updates_forbidden")
-            if self.telegram_public_bot_enabled and not os.getenv("TELEGRAM_IDENTITY_HMAC_KEY", "").strip():
+            if self.telegram_public_bot_enabled and not read_secret("TELEGRAM_IDENTITY_HMAC_KEY"):
                 raise RuntimeError("telegram_identity_hmac_key_missing")
-            if self.telegram_role_linking_enabled and not os.getenv("TELEGRAM_IDENTITY_ENCRYPTION_KEY", "").strip():
+            if self.telegram_role_linking_enabled and not read_secret("TELEGRAM_IDENTITY_ENCRYPTION_KEY"):
                 raise RuntimeError("telegram_identity_encryption_key_missing")
         if self.chat_auto_delete_enabled:
             raise RuntimeError("CHAT_AUTO_DELETE_ENABLED no está habilitado por la política de retención vigente")
+        if self.chat_history_max_tokens < 256 or self.chat_history_max_tokens > 12000:
+            raise RuntimeError("CHAT_HISTORY_MAX_TOKENS debe estar entre 256 y 12000")
+        if self.rag_embedding_provider != "ollama":
+            raise RuntimeError("RAG_EMBEDDING_PROVIDER sólo admite ollama")
+        if self.rag_embedding_dimensions != 1536:
+            raise RuntimeError("RAG_EMBEDDING_DIMENSIONS debe ser 1536")
+        if self.env not in {"dev", "test", "testing"} and self.ai_mode == "ollama" and self.ai_allow_external:
+            raise RuntimeError("AI_ALLOW_EXTERNAL debe ser false cuando AI_MODE=ollama en producción")
 
 
 settings = Settings()

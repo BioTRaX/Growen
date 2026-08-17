@@ -14,8 +14,8 @@ import os
 import random
 import signal
 import sys
-from dataclasses import asdict, dataclass
-from datetime import datetime
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from agent_core.config import settings
+from agent_core.secrets import read_secret
 from db.models import TelegramUpdate
 from db.session import SessionLocal
 from services.chat.external_identity import subject_hmac
@@ -49,11 +50,14 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("growen.telegram.polling")
 
 API_BASE = "https://api.telegram.org"
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TOKEN = read_secret("TELEGRAM_BOT_TOKEN") or ""
 QUEUE_SIZE = max(1, int(os.getenv("TELEGRAM_POLLING_QUEUE_SIZE", "100")))
 CONCURRENCY = max(1, int(os.getenv("TELEGRAM_POLLING_CONCURRENCY", "8")))
 POLL_TIMEOUT = max(1, int(os.getenv("TELEGRAM_POLLING_TIMEOUT", "30")))
 RETRY_DELAY = max(1, int(os.getenv("TELEGRAM_POLLING_RETRY_DELAY", "5")))
+PROCESSING_TIMEOUT = max(10, int(os.getenv("TELEGRAM_PROCESSING_TIMEOUT_SECONDS", "120")))
+MAX_ATTEMPTS = max(1, int(os.getenv("TELEGRAM_UPDATE_MAX_ATTEMPTS", "5")))
+TERMINAL_STATUSES = {"succeeded", "failed", "skipped"}
 
 
 @dataclass
@@ -65,6 +69,12 @@ class WorkerHealth:
     consecutive_errors: int = 0
     duplicates: int = 0
     processed: int = 0
+
+
+@dataclass
+class SubjectLock:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
 
 
 health = WorkerHealth()
@@ -134,10 +144,22 @@ async def _claim_update(bot_hash: str, update_id: int) -> bool:
                 TelegramUpdate.update_id == update_id,
             )
         )
-        if existing and existing.status in {"succeeded", "failed", "skipped"}:
+        if existing and existing.status in TERMINAL_STATUSES:
             health.duplicates += 1
             return False
         if existing:
+            if existing.attempts >= MAX_ATTEMPTS:
+                existing.status = "failed"
+                existing.error_code = "max_attempts_exceeded"
+                existing.completed_at = datetime.utcnow()
+                await db.commit()
+                return False
+            if (
+                existing.status == "processing"
+                and existing.processing_at
+                and existing.processing_at > datetime.utcnow() - timedelta(seconds=PROCESSING_TIMEOUT)
+            ):
+                return False
             existing.status = "processing"
             existing.attempts += 1
             existing.processing_at = datetime.utcnow()
@@ -176,6 +198,44 @@ async def _finish_update(bot_hash: str, update_id: int, status: str, error_code:
             await db.commit()
 
 
+async def _retry_update(bot_hash: str, update_id: int, error_code: str) -> None:
+    async with SessionLocal() as db:
+        record = await db.scalar(
+            select(TelegramUpdate).where(
+                TelegramUpdate.bot_id_hash == bot_hash,
+                TelegramUpdate.update_id == update_id,
+            )
+        )
+        if record:
+            record.status = "failed" if record.attempts >= MAX_ATTEMPTS else "queued"
+            record.error_code = "max_attempts_exceeded" if record.attempts >= MAX_ATTEMPTS else error_code
+            record.completed_at = datetime.utcnow() if record.status == "failed" else None
+            await db.commit()
+
+
+async def _contiguous_terminal_offset(bot_hash: str, update_ids: list[int], current: int | None) -> int | None:
+    """Avanza sólo por el prefijo terminal del lote recibido."""
+    if not update_ids:
+        return current
+    ordered = sorted(set(update_ids))
+    async with SessionLocal() as db:
+        records = (
+            await db.scalars(
+                select(TelegramUpdate).where(
+                    TelegramUpdate.bot_id_hash == bot_hash,
+                    TelegramUpdate.update_id.in_(ordered),
+                )
+            )
+        ).all()
+    statuses = {int(record.update_id): record.status for record in records}
+    advanced = current
+    for update_id in ordered:
+        if statuses.get(update_id) not in TERMINAL_STATUSES:
+            break
+        advanced = update_id
+    return advanced
+
+
 async def _process_update(update: dict[str, Any], bot_hash: str) -> None:
     update_id = update.get("update_id")
     if not isinstance(update_id, int) or not await _claim_update(bot_hash, update_id):
@@ -210,13 +270,13 @@ async def _process_update(update: dict[str, Any], bot_hash: str) -> None:
         await _finish_update(bot_hash, update_id, "failed", "request_rejected")
     except Exception as exc:
         logger.warning("Update no completado error=%s", type(exc).__name__)
-        await _finish_update(bot_hash, update_id, "failed", "processing_failure")
+        await _retry_update(bot_hash, update_id, "transient_processing_failure")
 
 
 async def _queue_worker(
     queue: asyncio.Queue[dict[str, Any] | None],
     bot_hash: str,
-    subject_locks: dict[str, asyncio.Lock],
+    subject_locks: dict[str, SubjectLock],
 ) -> None:
     while True:
         update = await queue.get()
@@ -226,9 +286,15 @@ async def _queue_worker(
             message = update.get("message") or update.get("edited_message") or {}
             sender_id = (message.get("from") or {}).get("id")
             lock_key = subject_hmac("telegram", sender_id) if sender_id is not None else "invalid"
-            lock = subject_locks.setdefault(lock_key, asyncio.Lock())
-            async with lock:
-                await _process_update(update, bot_hash)
+            entry = subject_locks.setdefault(lock_key, SubjectLock())
+            entry.users += 1
+            try:
+                async with entry.lock:
+                    await _process_update(update, bot_hash)
+            finally:
+                entry.users -= 1
+                if entry.users == 0 and subject_locks.get(lock_key) is entry:
+                    subject_locks.pop(lock_key, None)
         finally:
             queue.task_done()
 
@@ -242,7 +308,7 @@ async def run_polling() -> None:
 
     bot_hash = await _verify_polling_mode()
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(maxsize=QUEUE_SIZE)
-    subject_locks: dict[str, asyncio.Lock] = {}
+    subject_locks: dict[str, SubjectLock] = {}
     workers = [asyncio.create_task(_queue_worker(queue, bot_hash, subject_locks)) for _ in range(CONCURRENCY)]
     offset = _read_offset()
     stop = asyncio.Event()
@@ -276,8 +342,10 @@ async def run_polling() -> None:
                     await queue.join()
                     terminal_ids = [item.get("update_id") for item in updates if isinstance(item.get("update_id"), int)]
                     if terminal_ids:
-                        offset = max(terminal_ids)
-                        _write_offset(offset)
+                        next_offset = await _contiguous_terminal_offset(bot_hash, terminal_ids, offset)
+                        if next_offset is not None and next_offset != offset:
+                            offset = next_offset
+                            _write_offset(offset)
                 health.consecutive_errors = 0
                 health.backlog = queue.qsize()
                 _write_health()

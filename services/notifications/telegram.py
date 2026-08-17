@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from agent_core.secrets import SecretConfigurationError, read_secret
+
 try:  # httpx opcional; si no está, el envío se omite silenciosamente
     import httpx  # type: ignore
 except Exception:  # pragma: no cover
@@ -42,7 +44,11 @@ async def send_message(
         logger.debug("TELEGRAM_ENABLED no está habilitado, omitiendo envío")
         return False
 
-    tok = token or os.getenv("TELEGRAM_BOT_TOKEN")
+    try:
+        tok = token or read_secret("TELEGRAM_BOT_TOKEN")
+    except SecretConfigurationError:
+        logger.error("Configuración del token Telegram inválida")
+        return False
     chat = chat_id or os.getenv("TELEGRAM_DEFAULT_CHAT_ID")
     if not tok:
         logger.warning("TELEGRAM_BOT_TOKEN no está configurado, no se puede enviar mensaje")
@@ -108,7 +114,10 @@ async def download_telegram_file(
     if not file_id or httpx is None:
         return None
     
-    tok = token or os.getenv("TELEGRAM_BOT_TOKEN")
+    try:
+        tok = token or read_secret("TELEGRAM_BOT_TOKEN")
+    except SecretConfigurationError:
+        return None
     if not tok:
         return None
     
@@ -178,7 +187,10 @@ async def send_photo(
         logger.debug("TELEGRAM_ENABLED no está habilitado, omitiendo envío de foto")
         return False
 
-    tok = token or os.getenv("TELEGRAM_BOT_TOKEN")
+    try:
+        tok = token or read_secret("TELEGRAM_BOT_TOKEN")
+    except SecretConfigurationError:
+        return False
     chat = chat_id or os.getenv("TELEGRAM_DEFAULT_CHAT_ID")
     
     if not tok or not chat or httpx is None:

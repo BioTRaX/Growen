@@ -213,7 +213,7 @@ async def get_image_base64_from_file_id(
         return f"data:{mime_type};base64,{base64_data}"
         
     except Exception as e:
-        logger.error(f"Error convirtiendo file_id a Base64: {e}")
+        logger.error("Error convirtiendo imagen a Base64 error=%s", type(e).__name__)
         return None
 
 
@@ -284,7 +284,7 @@ async def diagnose_plant(
                     visual_symptoms = visual_symptoms.split(":", 1)[1].strip()
                 logger.info(f"Síntomas visuales extraídos: {visual_symptoms[:100]}...")
             except Exception as e:
-                logger.error(f"Error en análisis de visión: {e}")
+                logger.error("Error en análisis de visión error=%s", type(e).__name__)
                 visual_symptoms = ""
     elif image_url:
         # Usar URL directamente (OpenAI acepta URLs públicas)
@@ -309,7 +309,7 @@ async def diagnose_plant(
                 visual_symptoms = visual_symptoms.split(":", 1)[1].strip()
             logger.info(f"Síntomas visuales extraídos: {visual_symptoms[:100]}...")
         except Exception as e:
-            logger.error(f"Error en análisis de visión: {e}")
+            logger.error("Error en análisis de visión error=%s", type(e).__name__)
             visual_symptoms = ""
     
     # Paso 2: Búsqueda RAG usando síntomas (visuales o textuales)
@@ -327,7 +327,7 @@ async def diagnose_plant(
             if rag_context:
                 logger.info("Contexto RAG encontrado para diagnóstico")
         except Exception as e:
-            logger.error(f"Error en búsqueda RAG: {e}")
+            logger.error("Error en búsqueda RAG error=%s", type(e).__name__)
             rag_context = ""
     
     # Paso 3: Generar diagnóstico completo
@@ -407,7 +407,7 @@ Responde en español rioplatense casual. Sé breve y natural.""")
         if ":" in diagnosis_response and diagnosis_response.split(":")[0].lower() in ("openai", "ollama"):
             diagnosis_response = diagnosis_response.split(":", 1)[1].strip()
     except Exception as e:
-        logger.error(f"Error generando diagnóstico: {e}")
+        logger.error("Error generando diagnóstico error=%s", type(e).__name__)
         diagnosis_response = "No pude generar un diagnóstico en este momento. Por favor, intenta de nuevo."
 
     
@@ -508,7 +508,7 @@ Responde en español rioplatense casual. Sé breve y natural.""")
                 else:
                     logger.warning(f"Error en búsqueda por tags: {resp.status_code}")
         except Exception as e:
-            logger.error(f"Error buscando productos por NPK: {e}")
+            logger.error("Error buscando productos por NPK error=%s", type(e).__name__)
     
     return {
         "diagnosis": diagnosis_response,

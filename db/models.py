@@ -2025,8 +2025,8 @@ class ChatSession(Base):
         ),
     )
 
-    session_id: Mapped[str] = mapped_column(String(100), primary_key=True)  # Ej: "telegram:12345"
-    user_identifier: Mapped[str] = mapped_column(String(100), nullable=False)  # ID externo del usuario
+    session_id: Mapped[str] = mapped_column(String(100), primary_key=True)  # Ej: "telegram:<clave-opaca>"
+    user_identifier: Mapped[str] = mapped_column(String(100), nullable=False)  # Sujeto opaco; nunca Telegram ID en claro
     status: Mapped[str] = mapped_column(String(20), default="new")  # 'new', 'reviewed', 'archived'
     tags: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
     admin_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -2138,6 +2138,57 @@ class ChatFeedbackEvent(Base):
     rating: Mapped[str] = mapped_column(String(16), nullable=False)
     channel: Mapped[str] = mapped_column(String(24), default="web", nullable=False)
     account_role: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ChatRolloutState(Base):
+    """Estado singleton que gobierna el acceso gradual de Chat y Telegram."""
+
+    __tablename__ = "chat_rollout_state"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_chat_rollout_state_singleton"),
+        CheckConstraint("status IN ('active','paused')", name="ck_chat_rollout_state_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    phase: Mapped[str] = mapped_column(String(32), default="disabled", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="paused", nullable=False)
+    auto_advance: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    phase_started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    reason_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+
+class ChatRolloutEvent(Base):
+    """Decisión de transición sin contenido conversacional ni identificadores."""
+
+    __tablename__ = "chat_rollout_events"
+    __table_args__ = (Index("ix_chat_rollout_events_created_phase", "created_at", "to_phase"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    from_phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    to_phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision: Mapped[str] = mapped_column(String(24), nullable=False)
+    result: Mapped[str] = mapped_column(String(24), nullable=False)
+    metrics: Mapped[dict] = mapped_column(JSONBCompat, default=dict, server_default="{}", nullable=False)
+    reason_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ChatRolloutCheck(Base):
+    """Resultado seguro de un gate de rollout."""
+
+    __tablename__ = "chat_rollout_checks"
+    __table_args__ = (Index("ix_chat_rollout_checks_phase_created", "phase", "created_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    check_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 

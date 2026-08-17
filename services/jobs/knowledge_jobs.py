@@ -34,6 +34,7 @@ except Exception:  # pragma: no cover
 
 from agent_core.mcp_client import mcp_client_manager
 from ai.providers.openai_provider import OpenAIProvider
+from agent_core.secrets import read_secret
 from db.models import (
     CanonicalKnowledgeAsset,
     CanonicalKnowledgeClaim,
@@ -166,7 +167,7 @@ def _local_extract(path: Path, mime: str | None) -> tuple[str, dict, str]:
 
 
 async def _transcribe_video(path: Path, metadata: dict) -> str:
-    api_key = os.getenv("OPENAI_API_KEY") or ""
+    api_key = read_secret("OPENAI_API_KEY") or ""
     if not api_key:
         metadata["transcription_status"] = "provider_unavailable"
         return ""
