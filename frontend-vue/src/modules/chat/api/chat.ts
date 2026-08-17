@@ -21,16 +21,35 @@ export interface ChatProduct {
   availability?: string
   sku?: string
   stock?: number
+  price?: number | null
+  currency?: string
+  formatted_price?: string | null
+  stock_qty?: number | null
+  stock_status?: string | null
+  supplier_name?: string | null
+  source_detail?: string | null
   images?: Array<{ url?: string } | string>
+}
+
+export interface ChatProductData {
+  products?: ChatProduct[]
+  items?: ChatProduct[]
+  results?: ChatProduct[]
+  status?: string
+  needs_clarification?: boolean
 }
 
 export interface ChatResponse {
   text: string
   type: string
   intent?: string
-  data?: { products?: ChatProduct[]; items?: ChatProduct[] } | null
+  data?: ChatProductData | null
   citations?: ChatCitation[]
   correlation_id?: string
+}
+
+export function chatProducts(data: ChatProductData | null | undefined): ChatProduct[] | undefined {
+  return data?.results ?? data?.products ?? data?.items
 }
 
 export async function sendChat(

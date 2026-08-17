@@ -2,7 +2,7 @@
 // NG-HEADER: Ubicación: frontend-vue/src/app/modules/manifest.ts
 // NG-HEADER: Descripción: Contrato tipado y validación del manifiesto único de módulos frontend.
 // NG-HEADER: Lineamientos: Ver AGENTS.md
-import rawManifest from '../../../config/modules.json'
+import rawManifest from '../../../generated/modules.runtime.json'
 import type { Role } from '../../auth/types'
 
 export type MigrationState = 'pending' | 'partial' | 'ready' | 'active'

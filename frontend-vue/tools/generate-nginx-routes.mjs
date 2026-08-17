@@ -9,7 +9,17 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const source = resolve(root, 'config/modules.json')
 const target = resolve(root, 'generated/nginx-spa-routes.conf')
+const runtimeTarget = resolve(root, 'generated/modules.runtime.json')
+const metadataTarget = resolve(root, 'generated/build-metadata.json')
 const manifest = JSON.parse(await readFile(source, 'utf8'))
+const chatRuntime = process.env.CHAT_MODULE_RUNTIME || 'legacy'
+if (!['legacy', 'vue'].includes(chatRuntime)) throw new Error('CHAT_MODULE_RUNTIME inválido')
+const chatModule = manifest.modules.find((module) => module.id === 'chat')
+if (!chatModule) throw new Error('Módulo chat ausente')
+if (chatRuntime === 'vue') {
+  chatModule.runtime = 'vue'
+  chatModule.state = 'active'
+}
 
 if (manifest.version !== 1 || !Array.isArray(manifest.modules)) throw new Error('Manifiesto frontend inválido')
 
@@ -43,4 +53,10 @@ for (const module of manifest.modules) {
 
 await mkdir(dirname(target), { recursive: true })
 await writeFile(target, `${lines.join('\n')}\n`, 'utf8')
+await writeFile(runtimeTarget, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+await writeFile(metadataTarget, `${JSON.stringify({
+  sha: process.env.BUILD_SHA || 'local',
+  chatRuntime,
+  builtAt: process.env.BUILD_DATE || 'local',
+}, null, 2)}\n`, 'utf8')
 process.stdout.write(`${target}\n`)

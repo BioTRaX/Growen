@@ -12,6 +12,10 @@ RUN npm run build
 
 FROM node:22-alpine AS vue-builder
 WORKDIR /app
+ARG CHAT_MODULE_RUNTIME=legacy
+ARG BUILD_SHA=local
+ARG BUILD_DATE=local
+ENV CHAT_MODULE_RUNTIME=${CHAT_MODULE_RUNTIME} BUILD_SHA=${BUILD_SHA} BUILD_DATE=${BUILD_DATE}
 COPY frontend-vue/package.json frontend-vue/package-lock.json ./
 RUN npm ci
 COPY frontend-vue/ ./
@@ -22,6 +26,7 @@ RUN rm -rf /usr/share/nginx/html/*
 COPY --from=react-builder /app/dist/ /usr/share/nginx/html/
 COPY --from=vue-builder /app/dist/index.html /usr/share/nginx/html/vue/index.html
 COPY --from=vue-builder /app/dist/assets/ /usr/share/nginx/html/vue-assets/assets/
+COPY --from=vue-builder /app/generated/build-metadata.json /usr/share/nginx/html/vue/build-metadata.json
 COPY --from=vue-builder /app/generated/nginx-spa-routes.conf /etc/nginx/generated-spa-routes.conf
 COPY infra/nginx/default.conf.template /etc/nginx/templates/default.conf.template
 EXPOSE 80

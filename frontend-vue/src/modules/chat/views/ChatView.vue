@@ -8,7 +8,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAuthStore } from '../../../auth/store'
 import { classifyHttpError, getHttpErrorMessage } from '../../../services/http'
 import { openWebSocket } from '../../../services/transports'
-import { sendChat, sendChatFeedback, type ChatCitation, type ChatProduct } from '../api/chat'
+import { chatProducts, sendChat, sendChatFeedback, type ChatCitation, type ChatProduct, type ChatProductData } from '../api/chat'
+import TelegramIdentityPanel from '../components/TelegramIdentityPanel.vue'
 
 interface Message {
   id: string
@@ -17,6 +18,7 @@ interface Message {
   products?: ChatProduct[]
   citations?: ChatCitation[]
   correlationId?: string
+  streamId?: string
   feedback?: 'positive' | 'negative'
 }
 
@@ -35,6 +37,7 @@ let stopped = false
 let controller: AbortController | undefined
 
 const canAttachImage = computed(() => ['colaborador', 'admin'].includes(auth.role))
+const canViewOperationalFields = computed(() => ['colaborador', 'admin'].includes(auth.role))
 const statusColor = computed(() => ({ connecting: 'warning', connected: 'success', fallback: 'info', offline: 'error' })[connection.value])
 
 function scheduleReconnect(): void {
@@ -50,19 +53,31 @@ function connect(): void {
   try {
     socket = openWebSocket('/ws')
     socket.onopen = () => { reconnectAttempt = 0; connection.value = 'connected' }
-    socket.onclose = () => { connection.value = 'fallback'; scheduleReconnect() }
+    socket.onclose = () => {
+      connection.value = 'fallback'
+      if (sending.value) {
+        sending.value = false
+        error.value = 'La conexión se interrumpió antes de recibir la respuesta. Podés volver a intentar.'
+      }
+      scheduleReconnect()
+    }
     socket.onerror = () => { connection.value = 'fallback' }
     socket.onmessage = (event) => {
+      let complete = true
       try {
-        const payload = JSON.parse(String(event.data)) as { role?: string; text?: string; type?: string; data?: { products?: ChatProduct[]; items?: ChatProduct[] }; citations?: ChatCitation[] }
+        const payload = JSON.parse(String(event.data)) as { role?: string; text?: string; type?: string; stream?: 'start'|'chunk'|'end'|'error'; id?: string; correlation_id?: string; data?: ChatProductData; citations?: ChatCitation[] }
         if (payload.role !== 'assistant' && payload.role !== 'system') return
-        const last = messages.value.at(-1)
-        if (payload.type === 'delta' && last?.role === 'assistant') last.text += payload.text ?? ''
-        else messages.value.push({ id: crypto.randomUUID(), role: payload.role, text: payload.text ?? '', products: payload.data?.products ?? payload.data?.items, citations: payload.citations })
+        complete = payload.stream !== 'start' && payload.stream !== 'chunk'
+        const streamed = payload.id ? messages.value.find((message) => message.streamId === payload.id) : undefined
+        if (payload.stream === 'start' && payload.id) messages.value.push({ id: crypto.randomUUID(), streamId: payload.id, role: 'assistant', text: '' })
+        else if (payload.stream === 'chunk' && streamed) streamed.text += payload.text ?? ''
+        else if (payload.stream === 'end' && streamed) { streamed.text = payload.text ?? streamed.text; streamed.citations = payload.citations; streamed.correlationId = payload.correlation_id }
+        else if (payload.stream === 'error' && streamed) { streamed.text = 'No pude completar la respuesta.'; streamed.correlationId = payload.correlation_id }
+        else messages.value.push({ id: crypto.randomUUID(), role: payload.role, text: payload.text ?? '', products: chatProducts(payload.data), citations: payload.citations, correlationId: payload.correlation_id })
       } catch {
         messages.value.push({ id: crypto.randomUUID(), role: 'assistant', text: String(event.data) })
       } finally {
-        sending.value = false
+        if (complete) sending.value = false
         scrollToEnd()
       }
     }
@@ -93,7 +108,7 @@ async function submit(): Promise<void> {
       id: crypto.randomUUID(),
       role: 'assistant',
       text: response.data.text,
-      products: response.data.data?.products ?? response.data.data?.items,
+      products: chatProducts(response.data.data),
       citations: response.data.citations,
       correlationId: response.correlationId,
     })
@@ -119,6 +134,21 @@ async function feedback(message: Message, rating: 'positive' | 'negative'): Prom
   message.feedback = rating
 }
 
+function productPrice(product: ChatProduct): string | undefined {
+  if (product.formatted_price) return product.formatted_price
+  const value = product.sale_price ?? product.price
+  if (value === undefined || value === null) return undefined
+  return new Intl.NumberFormat('es-AR', { style: 'currency', currency: product.currency || 'ARS' }).format(value)
+}
+
+function productAvailability(product: ChatProduct): string | undefined {
+  if (product.availability) return product.availability
+  if (product.stock_status === 'ok') return 'Disponible'
+  if (product.stock_status === 'low') return 'Disponibilidad limitada'
+  if (product.stock_status === 'out') return 'Sin disponibilidad inmediata'
+  return undefined
+}
+
 async function scrollToEnd(): Promise<void> {
   await nextTick()
   messageList.value?.scrollTo({ top: messageList.value.scrollHeight, behavior: 'smooth' })
@@ -139,6 +169,7 @@ onBeforeUnmount(() => {
 
 <template>
   <v-container class="chat-page py-6" fluid>
+    <TelegramIdentityPanel />
     <v-card class="chat-card mx-auto" max-width="1080" rounded="xl">
       <v-card-title class="d-flex align-center justify-space-between ga-3 flex-wrap pa-5">
         <div><div class="text-h5">Chat 😎</div><div class="text-body-2 text-medium-emphasis">Asistente Growen</div></div>
@@ -151,7 +182,7 @@ onBeforeUnmount(() => {
           <div class="message__bubble">{{ message.text }}</div>
           <v-row v-if="message.products?.length" dense class="mt-2">
             <v-col v-for="product in message.products" :key="product.product_id ?? product.name ?? product.title" cols="12" sm="6">
-              <v-card variant="tonal"><v-card-title class="text-subtitle-1">{{ product.name ?? product.title }}</v-card-title><v-card-text><div v-if="product.sale_price">${{ product.sale_price }}</div><div v-if="product.availability">{{ product.availability }}</div><div v-if="product.sku" class="text-caption">SKU {{ product.sku }}</div><div v-if="product.stock !== undefined" class="text-caption">Stock {{ product.stock }}</div></v-card-text></v-card>
+              <v-card variant="tonal"><v-card-title class="text-subtitle-1">{{ product.name ?? product.title }}</v-card-title><v-card-text><div v-if="productPrice(product)">{{ productPrice(product) }}</div><div v-if="productAvailability(product)">{{ productAvailability(product) }}</div><div v-if="canViewOperationalFields && product.sku" class="text-caption">SKU {{ product.sku }}</div><div v-if="canViewOperationalFields && (product.stock ?? product.stock_qty) !== undefined" class="text-caption">Stock {{ product.stock ?? product.stock_qty }}</div><div v-if="canViewOperationalFields && product.supplier_name" class="text-caption">Proveedor {{ product.supplier_name }}</div></v-card-text></v-card>
             </v-col>
           </v-row>
           <v-expansion-panels v-if="message.citations?.length" class="mt-2" variant="accordion">
