@@ -88,6 +88,7 @@ React conserva copias temporales para rollback, pero ya no es el runtime princip
 - Retrospectiva operativa de Redis, Dramatiq y batch canónico: [docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md](./docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md)
 - Skill de migración React → Vue: [.agents/skills/vue-module-migration/SKILL.md](./.agents/skills/vue-module-migration/SKILL.md)
 - Skills agénticas y compatibilidad Codex/Gemini/Copilot: [docs/AGENT_SKILLS.md](./docs/AGENT_SKILLS.md)
+- Retrospectiva Chat, Telegram, RAG y Vue (2026-08-17): [docs/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md](./docs/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md)
 - Skill de retrospectiva técnica de sesión — sólo ante cierre explícito informado por el usuario: [.agents/skills/retrospectiva-tecnica-sesion/SKILL.md](./.agents/skills/retrospectiva-tecnica-sesion/SKILL.md)
 - Relevamiento funcional del portal React y mapa de migración Vue: [docs/relevamiento_admin.md](./docs/relevamiento_admin.md)
 - **Workflow de Desarrollo (Local vs Docker)**: [docs/DEVELOPMENT_WORKFLOW.md](./docs/DEVELOPMENT_WORKFLOW.md) ⚡

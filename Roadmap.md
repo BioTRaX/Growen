@@ -5,6 +5,15 @@
 
 # Roadmap del Proyecto
 
+## Actualización 2026-08-17 — cierre factual de Chat, RAG, Telegram y Vue
+
+- [x] Publicados y verificados en `dev` los commits de backend/RAG/Telegram, Chat Vue y documentación; `origin/dev` quedó en `c66452d` antes de la retrospectiva.
+- [x] Registrada la retrospectiva factual en `docs/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md`, con incidentes, soluciones y mejoras de prevención/aceleración.
+- [x] Aprobados 66 tests backend focales, 91 tests Vue, typecheck, build, skills y head Alembic único.
+- [x] Auditado el alcance de 107 archivos sin patrones de secretos ni `.env` reales.
+- [ ] Completar smokes autenticados para los cinco roles y la matriz HTTP/WS/Telegram.
+- [ ] Validar aliases/datos canónicos de catálogo y el futuro diagnóstico por imágenes antes de activar Vue o un rollout productivo.
+
 ## Actualización 2026-08-17 — RAG cargado y Chat Vue en paridad técnica
 
 - [x] Cargadas 10 fuentes RAG clasificadas en PostgreSQL con embeddings Ollama de 1536 dimensiones.

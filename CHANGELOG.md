@@ -4,6 +4,14 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-08-17 — Cierre técnico y aprendizaje agéntico
+
+- Se publicó en `dev` el corte de Chat, Telegram, RAG local, rollout auditable y paridad Vue mediante tres commits atómicos.
+- El gate final aprobó 66 pruebas backend focales, 91 pruebas Vue, typecheck, build y head Alembic único.
+- La auditoría previa al push cubrió 107 archivos y no detectó secretos ni archivos `.env` reales.
+- Se documentaron como aprendizajes reutilizables el aislamiento de `*_FILE` en tests, la verificación de artefactos ignorados y la autorización explícita de destinos externos.
+- Continúan pendientes los smokes autenticados de cinco roles, la validación canónica del catálogo y la activación de Vue.
+
 ## 2026-08-17 — RAG operativo y paridad de Chat Vue
 
 - Se cargó en desarrollo el corpus RAG v1: 8 fuentes sintéticas/centinela y 2 documentos reales curados, todos con scopes explícitos de rol y canal.
