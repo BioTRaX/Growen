@@ -1,9 +1,14 @@
 <!-- NG-HEADER: Nombre de archivo: CHAT_MEMORY_PLAN.md -->
-<!-- NG-HEADER: Ubicación: docs/CHAT_MEMORY_PLAN.md -->
-<!-- NG-HEADER: Descripción: Plan de implementación de sistema de memoria y sesiones persistentes para el chatbot -->
+<!-- NG-HEADER: Ubicación: docs/archive/CHAT_MEMORY_PLAN.md -->
+<!-- NG-HEADER: Descripción: Documento histórico del primer sistema de memoria; no usar como contrato vigente -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
 # Plan de Memoria y Aprendizaje del Chatbot - Fase 1 y 2
+
+> **ARCHIVO HISTÓRICO:** los ejemplos `telegram:<id-numérico>` describen la
+> implementación inicial y no son seguros ni vigentes. El contrato actual usa
+> identidad basada en `message.from.id`, cifrado/HMAC y claves de conversación
+> opacas. Consultar `docs/CHAT.md` y `docs/SECURITY.md`.
 
 ## Contexto
 

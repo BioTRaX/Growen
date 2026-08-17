@@ -81,7 +81,7 @@ Devuelve JSON con:
 Uso típico: abrir la ficha del producto, y en otra pestaña consultar `/debug/enrich/{id}` para confirmar que el flujo está operativo (providers, flags, web-search) cuando el botón “Enriquecer con IA” no produce cambios.
 
 Notas:
-- Si no hay `OPENAI_API_KEY` y no corre un daemon de Ollama accesible (`OLLAMA_HOST`), la respuesta será un eco del prompt y `raw_ai_looks_json=false`. En ese caso el endpoint de enrich devolverá 502 porque la IA no entregó JSON válido.
+- Si Ollama o el modelo configurado no están accesibles, el proveedor falla cerrado; nunca devuelve el prompt como eco. El endpoint traduce el fallo a un código seguro sin exponer el prompt.
 - Si `AI_USE_WEB_SEARCH=1` pero el MCP web-search no está healthy, el enriquecimiento continúa sin resultados web (fallback, logs `mcp.web.*`).
 - El prompt de enriquecimiento alienta a incluir un "Análisis de Mercado (AR$)" dentro de "Valor de mercado estimado" y a adjuntar "Fuentes" (URLs) para trazabilidad.
 

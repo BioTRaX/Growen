@@ -5,22 +5,23 @@
 
 # Features Pendientes de Implementación
 
-> **Última actualización**: 2025-12-23  
+> **Última actualización**: 2026-08-15
 > **Fuente**: Análisis de documentación (Roadmap.md, CHAT*.md, SALES.md, MCP.md, RAG.md)
 
 ---
 
 ## 🔴 Prioridad ALTA
 
-### 1. Refactorización Core AI (Etapa 0)
+### 1. Refactorización Core AI (Etapa 0) — completada
 
-**Problema**: El router `ai/router.py` es síncrono, impidiendo uso de `chat_with_tools` para consultas MCP en tiempo real.
+**Estado actual**: `AIRouter.run_async` y el proveedor asíncrono ya soportan tools dinámicas. HTTP, Telegram polling y las rutas principales WebSocket consumen el pipeline común; no existe endpoint webhook.
 
 **Acciones requeridas**:
-- [ ] Convertir `AIRouter.run` a `async def`
-- [ ] Implementar `generate_async` en `OpenAIProvider` con soporte de tools dinámicas
-- [ ] Actualizar endpoints `/chat`, `/ws`, `/telegram/webhook` para usar `await router.run(...)`
-- [ ] Sincronizar esquemas JSON de tools entre provider y MCP
+- [x] Implementar ejecución asíncrona en `AIRouter`.
+- [x] Implementar proveedor asíncrono con tools dinámicas.
+- [x] Actualizar `/chat`, `/ws` y Telegram polling al contrato asíncrono.
+- [x] Centralizar tools y políticas para provider y MCP.
+- [ ] Migrar las respuestas de aclaración heredadas de `/ws` a `ChatOrchestrator`.
 
 **Archivos afectados**:
 - `ai/router.py`
@@ -34,14 +35,15 @@
 
 ---
 
-### 2. Endpoint RAG Search
+### 2. Endpoint RAG Search — infraestructura completada
 
-**Estado**: Solo infraestructura implementada, falta endpoint de búsqueda.
+**Estado**: El endpoint administrativo y la búsqueda híbrida con scopes, vigencia, cache y citas están implementados. No hay fuentes locales clasificadas; faltan evaluaciones por rol/canal/intención y smoke con corpus controlado.
 
 **Acciones requeridas**:
-- [ ] Crear `services/routers/rag.py` con endpoint `POST /api/v1/rag/search`
-- [ ] Implementar búsqueda por similitud coseno en pgvector
-- [ ] Integrar recuperación RAG en respuestas del chatbot
+- [x] Exponer búsqueda RAG administrativa.
+- [x] Implementar búsqueda híbrida vectorial + full-text en PostgreSQL.
+- [x] Integrar recuperación autorizada y citas en Chat.
+- [ ] Clasificar fuentes y ejecutar evaluaciones por rol, canal e intención.
 
 **Ejemplo de implementación** (de `docs/RAG.md`):
 ```python

@@ -7,9 +7,13 @@
 
 ## Chat 😎 — módulo independiente (2026-07-22)
 
+Actualización 2026-08-16: la fuente canónica continúa `ready/legacy`. En un build elegible, `CHAT_MODULE_RUNTIME=vue` genera un manifiesto de artefacto `active/vue`, agrega `/chat` a Nginx y registra SHA/runtime/fecha sin editar la fuente. El workflow productivo sólo opera desde `vue_eligible`, ejecuta quality gate y smoke de cinco roles, y restaura React más `admin_capped/paused` ante cualquier fallo.
+
 `frontend-vue/src/modules/chat/` implementa `/chat` para todos los roles con HTTP/WebSocket compartido, reconexión, fallback HTTP, streaming compatible, cancelación, cards por perfil, citas, feedback, estado de conexión y errores tipados. El borrador permanece sólo en memoria.
 
-El manifiesto queda deliberadamente en `state: ready`, `runtime: legacy`: Vue debe pasar typecheck/build, smoke autenticado por rol y paridad funcional antes de activarse. React se conserva durante dos releases estables y siete días sin incidentes críticos. Rollback: restaurar `legacy` sin revertir datos ni migraciones.
+Actualización 2026-08-17: el manifiesto continúa deliberadamente en `state: ready`, `runtime: legacy`, por lo que `frontend-vue/generated/nginx-spa-routes.conf` no contiene `/chat`. Typecheck, 91 pruebas Vue y build aprobaron. Chat consume ahora el contrato real `data.results`, muestra citas también al finalizar streaming y presenta precio/disponibilidad pública; SKU, proveedor y stock exacto sólo se renderizan para staff y el backend los elimina para perfiles públicos. WebSocket incorpora RAG autorizado bajo `ChatOrchestrator`. El smoke guest real aprobó carga, conexión, respuesta general y cero errores de consola; faltan cliente, proveedor, colaborador y admin, además de los casos integrales de cancelación y errores antes de activar el runtime.
+
+React se conserva durante dos releases estables y siete días sin incidentes críticos después de activar Vue. Rollback: restaurar `legacy` sin revertir datos ni migraciones.
 
 ## Mercado — runtime Vue activo (verificado 2026-07-25)
 

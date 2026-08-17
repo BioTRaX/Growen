@@ -4,6 +4,75 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-08-17 — RAG operativo y paridad de Chat Vue
+
+- Se cargó en desarrollo el corpus RAG v1: 8 fuentes sintéticas/centinela y 2 documentos reales curados, todos con scopes explícitos de rol y canal.
+- El gate real aprobó sin fugas: recall@5 sintético y curado 1,00, MRR 1,00, citas 100 %, presupuesto de contexto 100 % y cache separada/invalidation correcta.
+- Los documentos curados ahora se fragmentan antes de generar embeddings; se eliminó el uso de `datetime.utcnow()` en el runner RAG para Python 3.14.
+- WebSocket incorpora RAG autorizado dentro de `ChatOrchestrator` y devuelve citas tanto en respuestas normales como al finalizar streaming.
+- HTTP usa el resolver local determinista de catálogo con Ollama. HTTP y WebSocket sanitizan en backend SKU, proveedor, fuentes internas y stock exacto para perfiles públicos.
+- Chat Vue consume el contrato real `data.results`, renderiza precio/disponibilidad pública y campos operativos sólo para staff. Aprobaron typecheck, 91 pruebas Vue y build.
+- El smoke guest real aprobó carga y respuesta WebSocket sin errores de consola; la UI deja de quedar bloqueada si el socket se corta durante una respuesta.
+- `/chat` conserva `ready/legacy`: estos avances habilitan smoke local, no activación automática de tráfico Vue.
+
+- Se agregó captura segura de `telegram_canary_user_id` mediante long polling y
+  comando privado `/canary`, junto con una guía específica que separa canary y
+  controlador de rollout.
+- `OPENAI_API_KEY_FILE` usa el lector central de secretos; el generador admite
+  captura oculta y el proveedor OpenAI deja de devolver prompts como fallback.
+- Se activó el preflight local restringido al canary, se validó el primer
+  procesamiento Telegram y se corrigió el filtro JSONB de scopes RAG en
+  PostgreSQL.
+- Se eliminó el fallback legacy que clasificaba cualquier frase general como
+  consulta de precio; Telegram deriva ahora el smalltalk al chat general.
+- Se corrigió `OLLAMA_MODEL`/`ENRICH_OLLAMA_MODEL` a `llama3.1:8b`; el nombre
+  incompleto provocaba HTTP 404 antes de reservar VRAM para generación.
+- Telegram usa resolución determinista para catálogo cuando el proveedor es
+  Ollama y aplica un render público sin SKU, proveedor ni stock exacto.
+- Los fallos internos Telegram se registran como `ChatRun.failed` con códigos
+  seguros, aunque el usuario reciba un mensaje público controlado.
+
+## 2026-08-17 — Perfil Ollama con VRAM prioritaria
+
+- Se reemplazó el requisito fijo de 16 GiB de RAM libre por gates de VRAM, overhead de RAM, pagefile y disco.
+- Se agregó `scripts/ollama-preflight.ps1`, contexto explícito de 4096 y separación entre `OLLAMA_HOST` local y `OLLAMA_HOST_DOCKER`.
+- El generador de secretos admite captura interactiva oculta del token y del canary.
+- El preflight Ollama real aprobó y se agregó un modo `--development` sin autoavance para probar Telegram con un único usuario permitido.
+
+## 2026-08-16 — Chat local y rollout auditable
+
+- WebSocket asíncrono con orquestación completa y fixtures SQLite sin `dispose()` por prueba.
+- Ollama async fail-closed y RAG local de 1536 dimensiones con corpus/evaluador controlado.
+- Rate limit Redis multiproceso, polling recuperable, secretos `*_FILE` y worker Compose dedicado.
+- Migración `20260816_chat_rollout_v1`, controlador automático y activación Vue condicionada a `vue_eligible` con rollback.
+- Tráfico no habilitado: preflight de RAM/modelos y smokes productivos siguen pendientes.
+
+## 2026-08-15 — Gate explícito para retrospectivas de sesión
+
+- `retrospectiva-tecnica-sesion` sólo se activa cuando el usuario informa que llegó el final de la sesión o chat.
+- Completar una implementación, diagnóstico o migración, pedir estado o nombrar la skill sin declarar el cierre ya no genera una retrospectiva.
+- Se actualizaron las instrucciones compartidas y los ejemplos para Codex, Gemini CLI y GitHub Copilot.
+
+## 2026-08-15 — Auditoría de implementación Chat/Telegram/RAG
+
+- Se verificó el head único `20260726_canonical_knowledge_v1`, el esquema local y la ausencia de datos operativos Chat/Telegram/RAG y de sesiones Telegram numéricas legacy.
+- La suite focal backend aprobó 50 pruebas (6 omitidas); Vue aprobó typecheck, 89 pruebas y build. Persisten como deuda warnings de conexiones SQLite heredadas.
+- Se retiró el router webhook de la API, la configuración rechaza transportes distintos de `polling` y Telegram permanece apagado por flags.
+- WebSocket recarga `User.role` por mensaje y sus rutas principales —tools, fallback local, respuesta general y streaming— pasan por `ChatOrchestrator`; las aclaraciones heredadas aún deben converger.
+- `Chat 😎` incorpora streaming WebSocket sin mensajes duplicados, sanitización defensiva de cards, panel de vínculos propios y aprobación/revocación administrativa. Continúa `ready/legacy`: React conserva `/chat` hasta el smoke por rol.
+- El dashboard técnico recibe health seguro del worker; la trazabilidad estima tokens sin conservar contenido. El costo real queda pendiente de un proveedor configurado.
+- Se confirmó la rotación de secretos y que el entorno queda deliberadamente sin API keys; no se habilitó ningún flag ni worker.
+- Se reconciliaron README, Roadmap y documentación de Chat, arquitectura, Vue, pruebas, migraciones, seguridad, RAG y roles con el estado comprobado y el plan de implementación pendiente.
+- Se agregó la skill `git-secret-forensics`; `git-commit-push` deriva hacia ella
+  cualquier reescritura destructiva de historia y exige autorización separada.
+- `scripts/check-quality.ps1` incorpora `-SkillsOnly` y `-SkillName` para
+  validar skills focalmente sin confundir ese chequeo estructural con el gate
+  ampliado `-AgentOnly`; la metadata acepta LF y CRLF.
+- La retrospectiva forense registra tareas, bloqueos, soluciones y deuda
+  residual sin reproducir valores de credenciales.
+- La retrospectiva de Chat/Telegram registra evidencia de pruebas, obstáculos,
+  endurecimiento de logs y gates pendientes sin habilitar flags ni credenciales.
+
 ## 2026-07-30 — Saneamiento histórico del token Telegram
 
 - Se reescribieron con `git filter-repo` y publicaron coordinadamente `main`

@@ -6,6 +6,9 @@
 [CmdletBinding()]
 param(
     [switch]$AgentOnly,
+    [switch]$SkillsOnly,
+    [ValidatePattern('^[a-z0-9-]+$')]
+    [string]$SkillName,
     [switch]$SkipFrontend
 )
 
@@ -31,12 +34,18 @@ $skillFiles = Get-ChildItem -LiteralPath (Join-Path $root '.agents\skills') -Fil
 if (-not $skillFiles) {
     throw 'No se encontraron skills canónicas en .agents/skills.'
 }
+if ($SkillName) {
+    $skillFiles = @($skillFiles | Where-Object { $_.Directory.Name -eq $SkillName })
+    if (-not $skillFiles) {
+        throw "No existe la skill canónica solicitada: $SkillName"
+    }
+}
 foreach ($skill in $skillFiles) {
     $content = Get-Content -LiteralPath $skill.FullName -Raw -Encoding UTF8
     if (-not $content.StartsWith("---`n") -and -not $content.StartsWith("---`r`n")) {
         throw "Frontmatter inválido: $($skill.FullName)"
     }
-    if ($content -notmatch '(?m)^name: [a-z0-9-]+$' -or $content -notmatch '(?m)^description: .+$') {
+    if ($content -notmatch '(?m)^name: [a-z0-9-]+\r?$' -or $content -notmatch '(?m)^description: .+\r?$') {
         throw "Metadata incompleta: $($skill.FullName)"
     }
     if ($content -match '(?m)^\s*git add \.\s*$' -or $content -match '(?m)^\s*python(?:\.exe)?\s') {
@@ -44,17 +53,20 @@ foreach ($skill in $skillFiles) {
     }
 
     $skillName = Split-Path -Leaf $skill.DirectoryName
-    $adapter = Join-Path $root ".agent\skills\$skillName\SKILL.md"
-    if (-not (Test-Path -LiteralPath $adapter)) {
-        throw "Falta adaptador temporal para la skill $skillName."
-    }
-    $adapterContent = Get-Content -LiteralPath $adapter -Raw -Encoding UTF8
-    $canonicalReference = ".agents/skills/$skillName/SKILL.md"
-    if ($adapterContent -notlike "*$canonicalReference*" -or ($adapterContent -split "`r?`n").Count -gt 12) {
-        throw "El adaptador $adapter diverge o duplica instrucciones canónicas."
+    $legacyAdapter = Join-Path $root ".agent\skills\$skillName\SKILL.md"
+    if (Test-Path -LiteralPath $legacyAdapter) {
+        $adapterContent = Get-Content -LiteralPath $legacyAdapter -Raw -Encoding UTF8
+        $canonicalReference = ".agents/skills/$skillName/SKILL.md"
+        if ($adapterContent -notlike "*$canonicalReference*" -or ($adapterContent -split "`r?`n").Count -gt 12) {
+            throw "El adaptador legacy $legacyAdapter diverge o duplica instrucciones canónicas."
+        }
     }
 }
 Write-Host 'Skills canónicas verificadas.' -ForegroundColor Green
+
+if ($SkillsOnly) {
+    exit 0
+}
 
 $requiredDocs = @('README.md', 'Roadmap.md', 'docs\MCP.md', 'docs\DEVELOPMENT_WORKFLOW.md')
 foreach ($relativePath in $requiredDocs) {

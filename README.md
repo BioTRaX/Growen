@@ -1,5 +1,11 @@
 # Growen
 
+## Estado de Chat 😎 (2026-08-17)
+
+Chat está `preflight/active` en desarrollo y `/chat` conserva React. El perfil Ollama local aprobó con RTX 5070, contexto 4096, pagefile de 18 GB, `llama3.1:8b` al 100 % en GPU y embeddings `qwen3-embedding:4b` de 1536 dimensiones. Token, canary y claves están fuera del repositorio; PostgreSQL, Redis y el worker polling están operativos. El corpus RAG v1 fue cargado y su evaluación por rol/canal aprobó sin fugas. Durante esta fase Telegram sólo responde al canary y Vue se prueba directamente en desarrollo.
+
+Operación y gates: [docs/CHAT_DEPLOYMENT.md](docs/CHAT_DEPLOYMENT.md). Corpus: `docs/rag/corpus-manifest.v1.json` y `scripts/rag_corpus.py`.
+
 ## Aviso de seguridad — Telegram
 
 La auditoría del 2026-07-30 confirmó que un token operativo de Telegram fue
@@ -8,7 +14,8 @@ pública. La credencial está revocada; `main`, `dev` y las ramas administrables
 fueron saneadas el 2026-07-30. La purga de referencias internas `refs/pull/*`
 que conservan objetos antiguos está pendiente de GitHub Support. No reutilizar
 tokens históricos ni colocar secretos reales en ejemplos. Ver
-[informe forense y acciones de erradicación](./docs/SECURITY_INCIDENT_TELEGRAM_20260730.md).
+[informe forense y acciones de erradicación](./docs/SECURITY_INCIDENT_TELEGRAM_20260730.md)
+y [retrospectiva técnica y controles agénticos](./docs/RETROSPECTIVE_TELEGRAM_SECRET_FORENSICS_20260815.md).
 
 ## Base de Conocimiento Canónica (2026-07-26)
 
@@ -26,19 +33,20 @@ Enrich v2 investiga fuentes externas mediante MCP Web Search, genera texto/datos
 
 El despliegue local del 2026-07-25 aplicó `20260725_canonical_enrichment_v2`,
 levantó MCP Web Search, Redis, worker, API y Vue, y activó
-`ENRICH_V2_ENABLED=1`. El smoke obtuvo cinco fuentes y no aplicó campos porque el
-entorno no dispone aún de OpenAI ni Ollama. Ver
+`ENRICH_V2_ENABLED=1`. Ese smoke histórico obtuvo cinco fuentes y no aplicó
+campos porque en esa ejecución no había proveedor generativo disponible. Los
+secretos fueron rotados el 2026-08-15 y el entorno permanece sin API keys. Ver
 `docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
 
 ## Chat 😎 y Telegram seguro
 
-La base multicanal comparte autorización entre HTTP, WebSocket y Telegram. Telegram opera por polling, identifica personas mediante `from.id`, asigna `guest` por defecto y limita cualquier admin al rol efectivo `colaborador`. Los vínculos usan AES-GCM + HMAC, los permisos se vuelven a consultar desde `User.role` en cada mensaje y todas las mutaciones quedan denegadas en Telegram.
+La base multicanal comparte autorización entre HTTP, WebSocket y Telegram. Telegram está diseñado para operar por polling, identifica personas mediante `from.id`, asigna `guest` por defecto y limita cualquier admin al rol efectivo `colaborador`. Los vínculos usan AES-GCM + HMAC, los permisos se vuelven a consultar desde `User.role` en cada mensaje y todas las mutaciones quedan denegadas en Telegram.
 
-El despliegue es seguro por defecto: `TELEGRAM_ENABLED`, `TELEGRAM_PUBLIC_BOT_ENABLED` y `TELEGRAM_ROLE_LINKING_ENABLED` permanecen en `0`. Antes de habilitarlos, aplicar las tres revisiones `20260722_chat_*`, generar las claves locales con `.\.venv\Scripts\python.exe scripts\generate_chat_keys.py --write`, clasificar las fuentes RAG y ejecutar el smoke por rol. Nunca imprimir ni versionar las claves generadas.
+Estado vigente: PostgreSQL local alcanzó `20260816_chat_rollout_v1` y el singleton permanece `disabled/paused`. Los secretos se generan fuera del workspace con `.\.venv\Scripts\python.exe scripts\generate_chat_keys.py --output-dir <ruta-externa>` y se montan por `*_FILE`; no se guardan claves productivas en `.env`.
 
 La identidad cifrada requiere `cryptography>=49,<50`, declarada en `requirements-base.txt` y ya fijada en los locks del proyecto.
 
-El módulo Vue está disponible en `/chat` como `ready/legacy`; React sigue siendo el runtime productivo hasta cerrar la validación de paridad. La operación detallada está en `docs/CHAT.md`, `docs/SECURITY.md` y `docs/FRONTEND_MIGRATION_VUE.md`.
+El módulo Vue está implementado como `ready/legacy`: typecheck, 91 pruebas Vue y build aprobaron, pero la regla Nginx productiva para `/chat` no se genera mientras el runtime sea `legacy`. Ya incluye UI de vínculos/doble aprobación, HTTP/WebSocket, streaming, citas y cards compatibles con el contrato real `data.results`. La sanitización de SKU, proveedor y stock exacto se aplica también en backend. Un smoke guest real aprobó carga, conexión, respuesta general y ausencia de citas irrelevantes; React sigue siendo el runtime efectivo hasta completar el smoke autenticado de los cinco roles. La operación detallada está en `docs/CHAT.md`, `docs/SECURITY.md` y `docs/FRONTEND_MIGRATION_VUE.md`.
 
 ## Compras Vue e ingesta de remitos
 
@@ -79,6 +87,8 @@ React conserva copias temporales para rollback, pero ya no es el runtime princip
 - Retrospectiva de taxonomía plana, tags y QA: [docs/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md](./docs/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md)
 - Retrospectiva operativa de Redis, Dramatiq y batch canónico: [docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md](./docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md)
 - Skill de migración React → Vue: [.agents/skills/vue-module-migration/SKILL.md](./.agents/skills/vue-module-migration/SKILL.md)
+- Skills agénticas y compatibilidad Codex/Gemini/Copilot: [docs/AGENT_SKILLS.md](./docs/AGENT_SKILLS.md)
+- Skill de retrospectiva técnica de sesión — sólo ante cierre explícito informado por el usuario: [.agents/skills/retrospectiva-tecnica-sesion/SKILL.md](./.agents/skills/retrospectiva-tecnica-sesion/SKILL.md)
 - Relevamiento funcional del portal React y mapa de migración Vue: [docs/relevamiento_admin.md](./docs/relevamiento_admin.md)
 - **Workflow de Desarrollo (Local vs Docker)**: [docs/DEVELOPMENT_WORKFLOW.md](./docs/DEVELOPMENT_WORKFLOW.md) ⚡
 - Capa MCP (servers/tools): [docs/MCP.md](./docs/MCP.md)
@@ -424,7 +434,7 @@ Si se prefiere un layout `src/`, trasladá las carpetas anteriores a `src/` y a�
 source .venv/bin/activate
 
 # Instalar dependencias
-pip install -e .[dev]
+.\.venv\Scripts\python.exe -m pip install -e .[dev]
 
 # Configurar variables de entorno
 cp .env.example .env
@@ -462,7 +472,7 @@ De esta forma la base siempre está en el esquema más reciente sin comandos man
 
 ### Diagnóstico de migraciones
 
-El script `python scripts/debug_migrations.py` genera un reporte en `logs/migrations/report_<timestamp>.txt` con:
+El script `.\.venv\Scripts\python.exe scripts\debug_migrations.py` genera un reporte en `logs/migrations/report_<timestamp>.txt` con:
 
 - `alembic current`
 - `alembic heads`
@@ -522,27 +532,18 @@ Notas de seguridad:
 - No publiques el token del bot. Si se filtra, revocalo con `@BotFather` y generá uno nuevo.
 - Mantené `.env` fuera del control de versiones y usá gestores de secretos en entornos de despliegue.
 
-### Webhook de Telegram para el Chatbot
+### Chatbot Telegram por polling
 
-Podés hablarle al bot de Telegram y que responda con el mismo pipeline del chat HTTP:
+El transporte aprobado para la etapa actual es exclusivamente long polling. No
+se debe registrar un webhook ni exponer la API mediante túneles para probar el
+bot. La API ya no monta `POST /telegram/webhook/{token}` y la validación de
+configuración rechaza cualquier `TELEGRAM_TRANSPORT` distinto de `polling`.
 
-- Endpoint: `POST /telegram/webhook/{TELEGRAM_WEBHOOK_TOKEN}`
-- Variables:
-  - `TELEGRAM_ENABLED=1`
-  - `TELEGRAM_BOT_TOKEN=<tu token>`
-  - `TELEGRAM_WEBHOOK_TOKEN=<token de path>` (elige una cadena difícil de adivinar)
-  - `TELEGRAM_WEBHOOK_SECRET=<opcional>` para validar el header `X-Telegram-Bot-Api-Secret-Token`
-
-Pasos para configurar:
-1) Publicá temporalmente la API o usá un túnel (ngrok/localtunnel).
-2) Registrá el webhook en Telegram (opcionalmente con secret):
-   - Usá un cliente o script que lea el token desde el entorno; no copies una URL con la credencial embebida al navegador, documentación o historial de terminal.
-   - Query: `url=<PUBLIC_URL>/telegram/webhook/<TELEGRAM_WEBHOOK_TOKEN>` y `secret_token=<TELEGRAM_WEBHOOK_SECRET>` (si lo definiste).
-3) Escribí al bot: invocará el endpoint y responderá con el pipeline actual (intents de precio + fallback IA).
-
-Seguridad:
-- El path token más el secret header hacen que el webhook no sea invocable por terceros.
-- El servicio no responde a updates sin texto/chat_id.
+Para una prueba controlada, primero completar los gates de `docs/CHAT.md`, dejar
+`TELEGRAM_TRANSPORT=polling`, configurar secretos fuera del repositorio e iniciar
+el proceso sólo con `scripts/start_worker_telegram_polling.cmd`. El worker falla
+si Telegram informa un webhook activo y nunca elimina automáticamente webhook ni
+updates pendientes.
 
 ### Mejoras recientes (Productos & Compras)
 
@@ -578,7 +579,7 @@ Archivo de ejemplo: `samples/santaplanta_compra.csv` (cabeceras: `supplier_name,
 
 #### Problemas comunes
 
-- **Múltiples heads**: ejecutar `python scripts/debug_migrations.py` para identificar las revisiones y crear una migración de *merge* si es necesario.
+- **Múltiples heads**: ejecutar `.\.venv\Scripts\python.exe scripts\debug_migrations.py` para identificar las revisiones y crear una migración de *merge* si es necesario.
 - **UndefinedTable / UndefinedColumn**: revisar `logs/migrations/alembic_<timestamp>.log`; puede indicar que falta una migración previa.
 - **DuplicateTable / DuplicateIndex**: las migraciones actuales son idempotentes; reejecutarlas no debería fallar.
 - **Seeds inválidos**: asegurarse de que las columnas requeridas existan antes de insertar datos.
@@ -603,7 +604,7 @@ Orden de ejecución recomendado:
   1. `docker exec -it growen-postgres sh`
   2. `psql -U growen -d growen -c "ALTER USER growen WITH PASSWORD 'NuevaPass';"`
   3. Actualizá `.env` con la contraseña nueva y reiniciá la API.
-- Aplicá migraciones con `python -m alembic upgrade head` para crear/actualizar el esquema.
+- Aplicá migraciones con `.\.venv\Scripts\python.exe -m alembic upgrade head` para crear/actualizar el esquema.
 
 ### Fallback automático a SQLite (desarrollo)
 
@@ -865,31 +866,26 @@ COOKIE_DOMAIN=
 
 ### Variables de Telegram (Bot y Notificaciones)
 
-**⚠️ OBLIGATORIO para funcionalidad de Telegram:**
+**Configuración segura; mantener deshabilitada hasta completar el rollout:**
 
 ```env
 # Token del bot obtenido de @BotFather en Telegram
 TELEGRAM_BOT_TOKEN=<valor_emitido_por_BotFather>
 
-# Habilitar integración de Telegram (1, true o yes)
-TELEGRAM_ENABLED=1
+# Transporte aprobado
+TELEGRAM_TRANSPORT=polling
+
+# Feature flags: activar de forma gradual, nunca todas durante el primer smoke
+TELEGRAM_ENABLED=0
+TELEGRAM_PUBLIC_BOT_ENABLED=0
+TELEGRAM_ROLE_LINKING_ENABLED=0
 
 # Chat ID numérico por defecto para notificaciones
 # Obtener escribiendo al bot y ejecutando el script local seguro documentado
 TELEGRAM_DEFAULT_CHAT_ID=123456789
 ```
 
-**Opcionales (para webhook en producción):**
-
-```env
-# Token secreto para proteger el endpoint del webhook
-TELEGRAM_WEBHOOK_TOKEN=token_secreto_dificil_de_adivinar
-
-# Secret opcional para validar el header X-Telegram-Bot-Api-Secret-Token
-TELEGRAM_WEBHOOK_SECRET=secret_opcional
-```
-
-**Opcionales (para polling en desarrollo local):**
+**Polling en desarrollo local:**
 
 ```env
 # Timeout en segundos para long polling (default: 30)
@@ -902,6 +898,7 @@ TELEGRAM_POLLING_RETRY_DELAY=5
 **Notas:**
 - `TELEGRAM_BOT_TOKEN` es **obligatorio** para que funcione el chatbot y las notificaciones.
 - Si `TELEGRAM_ENABLED=0` (o no está definido), toda la funcionalidad de Telegram se desactiva.
+- No configurar `TELEGRAM_WEBHOOK_TOKEN` ni registrar webhook durante esta etapa.
 - Para obtener el `TELEGRAM_BOT_TOKEN`: crear un bot con [@BotFather](https://t.me/BotFather) en Telegram.
 - Para obtener el `TELEGRAM_DEFAULT_CHAT_ID`: escribir al bot y ejecutar `.\.venv\Scripts\python.exe scripts/check_telegram_updates.py`; no insertar el token en una URL visible.
 
@@ -947,7 +944,7 @@ Un botón en la barra permite alternar el tema y, por defecto, se respeta `prefe
 - **HTTP**: `POST /chat` con cuerpo `{ "text": "hola" }` → responde `{ "role": "assistant", "text": "..." }`.
 - **WebSocket**: se envía texto plano y cada mensaje recibido es un JSON `{ "role": "assistant", "text": "..." }`. El servidor agrega pings periódicos `{ "role": "ping" }` para mantener viva la conexión y la cierra tras 60 s sin actividad; el cliente los descarta y reintenta con backoff exponencial si se pierde el canal.
 - **Sesión**: si la cookie `growen_session` está presente, el backend incluye el nombre y rol del usuario en el prompt para personalizar la respuesta de la IA.
-- **Proveedor**: Ollama es el motor por defecto (`OLLAMA_MODEL=llama3.1`). El backend intenta primero con `stream=False` y, si la API falla, cae a modo *streaming* acumulando las partes. En ambos casos normaliza la respuesta y remueve prefijos como `ollama:` antes de reenviarla.
+- **Proveedor**: Ollama es el motor local (`OLLAMA_MODEL=llama3.1:8b`) y falla cerrado si daemon o modelo no están disponibles. Las consultas de catálogo usan resolución determinista; la conversación y RAG usan generación local.
 
 La interfaz muestra las respuestas del asistente con la etiqueta visual **Growen**.
 
@@ -1132,7 +1129,7 @@ Requisitos previos:
 Comportamiento de auto-configuración de `scripts\start.bat`:
 
 - Si no existe `.venv`, el script intentará crear un entorno virtual en `.venv` y actualizar `pip`/`setuptools`.
-- Tras crear el virtualenv, se ejecuta `python -m tools.doctor`. Si la variable de entorno `ALLOW_AUTO_PIP_INSTALL=true` está definida, el doctor intentará instalar `requirements.txt` automáticamente.
+- Tras crear el virtualenv, se ejecuta `.\.venv\Scripts\python.exe -m tools.doctor`. Si la variable de entorno `ALLOW_AUTO_PIP_INSTALL=true` está definida, el doctor intentará instalar `requirements.txt` automáticamente.
 - Si `tools.doctor` detecta problemas críticos, el script pausará y te dará la opción de abortar o continuar.
 - Si `frontend/node_modules` no existe, `scripts\start.bat` ejecutará `npm install` dentro de `frontend`.
 
@@ -1162,11 +1159,11 @@ chmod +x start.sh
 ./start.sh
 ```
 
-**Requisitos previos**: entorno virtual creado (`python -m venv .venv`), `pip install -e .`, Node.js instalado y `.env` con `DB_URL` y `OLLAMA_MODEL=llama3.1`. El backend escucha en `http://localhost:8000` y el frontend en `http://localhost:5173`.
+**Requisitos previos**: entorno virtual creado con Python 3.14.6, dependencias instaladas, Node.js y `.env` con `DB_URL` y `OLLAMA_MODEL=llama3.1:8b`. El backend escucha en `http://localhost:8000`; Vue usa `http://127.0.0.1:5176`.
 
 En Windows puede aparecer un aviso de firewall; permitir el acceso para ambos puertos. Si alguna de las aplicaciones no inicia, verificar que los puertos 8000 y 5173 estén libres.
 
-**Modelos Ollama**: instalar [Ollama](https://ollama.com/download) y ejecutar `ollama pull llama3.1`. Si la descarga falla, probar con `ollama pull llama3` u otra variante disponible. La variable `OLLAMA_MODEL` apunta por defecto a `llama3.1`.
+**Modelos Ollama**: instalar [Ollama](https://ollama.com/download) y ejecutar `ollama pull llama3.1:8b` y `ollama pull qwen3-embedding:4b`. No sustituir tags automáticamente: `OLLAMA_MODEL` debe coincidir exactamente con el modelo instalado.
 
 ## Instalación con Docker
 
@@ -1203,8 +1200,9 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `ENV`: entorno de ejecución (`dev`, `production`). En `dev` se completan orígenes locales y se flexibilizan claves por defecto para facilitar pruebas.
 - `AI_MODE`: `auto`, `openai` u `ollama`.
 - `AI_ALLOW_EXTERNAL`: si es `false`, solo se usa Ollama.
-- `OLLAMA_URL`: URL base de Ollama (por defecto `http://localhost:11434`).
-- `OLLAMA_MODEL`: modelo de Ollama (por defecto `llama3.1`).
+- `OLLAMA_HOST`: URL base de Ollama (por defecto `http://127.0.0.1:11434`).
+- `OLLAMA_MODEL`: modelo de generación local (`llama3.1:8b` en el perfil Chat actual).
+- `RAG_EMBEDDING_MODEL`: modelo local de embeddings (`qwen3-embedding:4b`).
 - `OPENAI_API_KEY`, `OPENAI_MODEL`.
 - `AI_MAX_TOKENS_SHORT`, `AI_MAX_TOKENS_LONG`: límites de tokens para respuestas cortas/largas.
 - `AI_TIMEOUT_OLLAMA_MS`, `AI_TIMEOUT_OPENAI_MS`: timeouts de peticiones a proveedores.
@@ -1239,18 +1237,17 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 
 ### Variables de Telegram (Bot y Notificaciones)
 
-**⚠️ OBLIGATORIO para funcionalidad de Telegram (chatbot y notificaciones):**
+**Mantener los flags en `0` hasta completar seguridad, migraciones y smoke:**
 
 - `TELEGRAM_BOT_TOKEN`: Token del bot obtenido de [@BotFather](https://t.me/BotFather) en Telegram. Configurarlo sólo en el gestor de secretos o `.env` ignorado; nunca documentar un valor con formato real. **Sin este token, el chatbot y las notificaciones no funcionarán.**
-- `TELEGRAM_ENABLED`: Habilitar integración de Telegram. Valores: `1`, `true` o `yes` para habilitar; `0`, `false` o `no` (o no definido) para deshabilitar.
+- `TELEGRAM_ENABLED`, `TELEGRAM_PUBLIC_BOT_ENABLED` y `TELEGRAM_ROLE_LINKING_ENABLED`: feature flags independientes. El valor ausente o `0` mantiene cada capacidad deshabilitada.
+- `TELEGRAM_TRANSPORT`: debe permanecer en `polling` durante la etapa actual.
 - `TELEGRAM_DEFAULT_CHAT_ID`: Chat ID numérico por defecto para notificaciones. Obtener escribiendo al bot y ejecutando `.\.venv\Scripts\python.exe scripts/check_telegram_updates.py` en local.
 
-**Opcionales (para webhook en producción):**
+No configurar variables de webhook ni registrar uno durante esta etapa. La API
+ya no expone el router webhook y rechaza transportes distintos de `polling`.
 
-- `TELEGRAM_WEBHOOK_TOKEN`: Token secreto para proteger el endpoint del webhook. Elegir una cadena difícil de adivinar (recomendado: generar con `python -c "import secrets; print(secrets.token_urlsafe(32))"`).
-- `TELEGRAM_WEBHOOK_SECRET`: Secret opcional para validar el header `X-Telegram-Bot-Api-Secret-Token`. Si se define, el webhook validará este header además del path token.
-
-**Opcionales (para polling en desarrollo local):**
+**Polling en desarrollo local:**
 
 - `TELEGRAM_POLLING_TIMEOUT`: Timeout en segundos para long polling (por defecto `30`).
 - `TELEGRAM_POLLING_RETRY_DELAY`: Delay en segundos entre reintentos en caso de error (por defecto `5`).

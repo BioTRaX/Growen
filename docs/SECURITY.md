@@ -5,6 +5,21 @@
 
 # Seguridad
 
+## Secretos y rollout Chat (2026-08-16)
+
+Producción usa exclusivamente `TELEGRAM_BOT_TOKEN_FILE`, `TELEGRAM_IDENTITY_ENCRYPTION_KEY_FILE`, `TELEGRAM_IDENTITY_HMAC_KEY_FILE`, `TELEGRAM_CANARY_USER_ID_FILE` y, si se habilita OpenAI, `OPENAI_API_KEY_FILE`. El lector rechaza valor+archivo, rutas relativas, symlinks, archivos no regulares y secretos directos fuera de desarrollo/tests. `scripts/generate_chat_keys.py --output-dir <ruta-externa>` rechaza destinos dentro del workspace y nunca imprime valores.
+
+El token y el canary se capturan sin eco mediante `--interactive-bot-token` y
+`--interactive-canary`. No pasarlos como argumentos, no exponerlos en salidas
+de consola ni consultarlos mediante bots de terceros. La opción recomendada
+para el canary es `--capture-canary`:
+exige un `/canary` privado y persiste `from.id` sin imprimirlo. OpenAI puede
+capturarse con `--interactive-openai-key`; almacenar la clave no habilita el
+proveedor mientras `AI_ALLOW_EXTERNAL=false`.
+Restringir la ACL del directorio al usuario operativo.
+
+El rollout nace `disabled/paused`. Fuga RAG/PII, mutación Telegram o violación de rol fuerza el retorno inmediato a ese estado. No existe endpoint para forzar avance; pause, resume y rollback requieren admin, sesión y CSRF.
+
 ## Identidad y autorización de Chat/Telegram (2026-07-22)
 
 - `message.from.id` es la identidad personal; `chat.id` sólo representa destino y conversación.
@@ -16,7 +31,9 @@
 - Logs y trazas no deben contener IDs, tokens, códigos, URLs de DB, prompts, respuestas ni argumentos/results de tools.
 - Las sesiones se archivan a los 90 días; no existe borrado automático. La eliminación o anonimización es manual y auditable.
 
-La rotación de cifrado admite temporalmente `TELEGRAM_IDENTITY_ENCRYPTION_KEY_PREVIOUS`; la clave HMAC no debe rotarse sin una migración de reindexación. Todas las banderas Telegram quedan apagadas hasta aplicar migraciones y completar smoke.
+La rotación de cifrado admite temporalmente `TELEGRAM_IDENTITY_ENCRYPTION_KEY_PREVIOUS`; la clave HMAC no debe rotarse sin una migración de reindexación. Las migraciones ya están aplicadas localmente, pero las banderas Telegram siguen apagadas hasta configurar claves efímeras, clasificar RAG y completar el smoke.
+
+Auditoría 2026-08-15: sólo PostgreSQL estaba activo; no había worker Telegram, identidades, updates ni trazas Chat. Los secretos expuestos ya fueron rotados y el entorno queda deliberadamente sin API keys. Las variables Telegram no están declaradas en `.env`, aplican defaults seguros y ningún proveedor externo puede ejecutarse sin credenciales. Polling es el único transporte admitido; la API ya no monta el router webhook.
 
 ## Manejo de secretos
 - Nunca versionar archivos `.env` ni credenciales.
@@ -45,9 +62,9 @@ La rotación de cifrado admite temporalmente `TELEGRAM_IDENTITY_ENCRYPTION_KEY_P
 - Informe, alcance y plan de erradicación:
   `docs/SECURITY_INCIDENT_TELEGRAM_20260730.md`.
 
-El `.env` local contiene además una clave OpenAI con formato real. Está ignorada
-y no se encontró en la historia, pero debe rotarse por formar parte del host
-investigado. No debe darse por eliminada hasta completar esa rotación.
+La clave OpenAI local detectada durante la auditoría fue rotada. El entorno no
+conserva API keys y debe permanecer así hasta el rollout controlado mediante el
+gestor de secretos; nunca documentar ni registrar el valor nuevo.
 
 ## Publicación Git y auditoría previa
 
@@ -158,5 +175,5 @@ Durante la importación de remitos PDF (ej. proveedor Santa Planta) se observó 
 - Los locks por servicio incluyen hashes y las imágenes usan `pip --require-hashes`.
 - `scripts/check-quality.ps1` ejecuta Ruff, Bandit, `pip-audit`, pruebas, detección básica de secretos y genera un SBOM CycloneDX reproducible.
 - `python-jose/ecdsa` y `PyPDF2` fueron retirados al detectarse vulnerabilidades; JWT usa PyJWT y PDF usa `pypdf`.
-- La clave OpenAI local detectada durante la auditoría fue eliminada y debe rotarse antes de configurar un valor nuevo.
+- Los secretos detectados durante la auditoría fueron rotados. El entorno permanece sin API keys y cualquier futura credencial debe inyectarse desde el gestor de secretos, sin aparecer en documentación, logs ni evidencia de cierre.
 

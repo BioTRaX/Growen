@@ -25,6 +25,12 @@ Este documento orienta a herramientas de asistencia de código (Copilot, Codex, 
 - No introducir dependencias sin documentarlas y agregarlas a los requirements/README.
  - Mantener documentación viva: actualizar `Roadmap.md`, `README.md` y docs bajo `docs/` cuando cambien comportamientos, endpoints, modelos, flujos o requisitos de entorno. Toda interacción de agentes debe verificar y actualizar estos documentos (incluyendo este Roadmap) como parte de la entrega.
 
+### Retrospectiva al cierre de sesión
+
+- La skill `retrospectiva-tecnica-sesion` sólo se usa cuando el usuario declara explícitamente que llegó el final de la sesión o chat.
+- Completar una tarea, implementación, diagnóstico o migración no autoriza ni activa una retrospectiva por sí solo.
+- Si el usuario no declaró el cierre, continuar el trabajo normal y reservar la retrospectiva para el final confirmado.
+
 ### Seguridad de secretos (OBLIGATORIO)
 - Nunca commits con credenciales, tokens o URLs con usuario:contraseña. Usar variables de entorno (`.env`, `env_file`) o placeholders en docs.
 - Revisar `.gitignore` antes de crear scripts con parámetros sensibles; si el script requiere credenciales locales, proveer `*.example.ps1` y agregar el real al `.gitignore`.
@@ -107,7 +113,7 @@ Formato por lenguaje:
 - Dejar notas de migración cuando corresponda.
 - Adjuntar ejemplos mínimos de uso y pruebas cuando sea razonable.
 - Mantener consistencia de idioma en commits, PRs y documentación: español.
-- Las skills canónicas residen en `.agents/skills/`; `.agent/skills/` contiene adaptadores temporales.
+- Las skills canónicas residen únicamente en `.agents/skills/`, ubicación compartida por Codex, Gemini CLI y GitHub Copilot. No crear adaptadores nuevos; `.agent/skills/` conserva sólo adaptadores legacy. Ver `docs/AGENT_SKILLS.md`.
 - La skill de Git solo puede activarse cuando el usuario solicite explícitamente stage, commit o push.
 
 ## Entorno de Ejecución Obligatorio (CRÍTICO)
@@ -305,6 +311,7 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 - `docker-compose-audit.ps1`: Audita `docker-compose.yml`, detecta imágenes públicas con tags desactualizados, permite actualizar versiones (con backup) y reconstruir/levantar el stack (`docker compose up --build -d`). Parámetros: `-OnlyReport`, `-SkipBuild`.
 
 ### Backend / Arranque / Entorno
+- `ollama-preflight.ps1`: valida GPU/VRAM, RAM, pagefile, disco, daemon y modelos del perfil local de Chat sin descargar ni borrar datos.
 - `run_api.cmd` / `run_frontend.cmd` / `start_stack.ps1`: Scripts de conveniencia para iniciar servicios locales.
 - `launch_backend.cmd`: Variante de arranque rápido backend (revisar duplicidad con `run_api.cmd`).
 - `start.bat` / `stop.bat`: Atajos globales de inicio/parada.

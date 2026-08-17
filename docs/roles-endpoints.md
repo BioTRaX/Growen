@@ -5,6 +5,15 @@
 
 # Roles por endpoint
 
+## Rollout Chat (2026-08-16)
+
+| Método/ruta | Roles | Requisitos |
+|---|---|---|
+| `GET /admin/chat-rollout` | admin | sesión |
+| `POST /admin/chat-rollout/pause\|resume\|rollback` | admin | sesión + CSRF |
+
+No existe endpoint para forzar avance. Admin en Telegram continúa limitado a colaborador y sólo lectura cuando la fase `admin_capped` esté activa.
+
 ## Conocimiento canónico (2026-07-26)
 
 | Método/ruta | Roles | Requisitos |
@@ -27,6 +36,11 @@
 | `GET /admin/chats/metrics` | colaborador, admin | agregados sin contenido ni IDs en claro |
 
 El registro central es la autoridad de tools. Invitados/clientes reciben perfil público; proveedor conserva alcance propio; colaborador recibe datos operativos; admin sólo conserva capacidades administrativas completas en web.
+
+Estado UI 2026-08-15: Vue permite generar/revocar el vínculo propio y a un
+segundo admin aprobar/revocar identidades, siempre con valores enmascarados. Los
+flags continúan apagados. No habilitar `TELEGRAM_ROLE_LINKING_ENABLED` hasta
+completar el smoke con sesión, reautenticación y CSRF reales para cada rol.
 
 ## Productos, taxonomía y tags (2026-07-18)
 
@@ -196,8 +210,8 @@ Las tools expuestas a modelos (OpenAI) vía tool-calling se documentan para traz
 
 | Tool | Descripción | Roles permitidos |
 |------|-------------|------------------|
-| get_product_info | Retorna info básica de producto (sku, name, sale_price, stock). | guest, cliente, proveedor, colaborador, admin |
-| get_product_full_info | Retorna info extendida (MVP: igual a básica; se ampliará). | colaborador, admin |
+| get_product_info | Perfil público: nombre, precio de venta y disponibilidad aproximada; SKU/stock exacto sólo se incluyen para perfiles operativos autorizados. | guest, cliente, proveedor, colaborador, admin |
+| get_product_full_info | Retorna información operativa con SKU y stock exacto. En Telegram queda limitada por el rol efectivo y sólo lectura. | colaborador, admin web; colaborador efectivo en Telegram |
 
 Invocación estándar: MCP Streamable HTTP en `/mcp`, descubrimiento con `tools/list` y ejecución con `tools/call`.
 

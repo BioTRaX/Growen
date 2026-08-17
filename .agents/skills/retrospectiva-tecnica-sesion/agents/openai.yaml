@@ -1,0 +1,9 @@
+# NG-HEADER: Nombre de archivo: openai.yaml
+# NG-HEADER: Ubicación: .agents/skills/retrospectiva-tecnica-sesion/agents/openai.yaml
+# NG-HEADER: Descripción: Metadatos de interfaz para la skill de retrospectiva técnica.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+interface:
+  display_name: "Retrospectiva técnica de sesión"
+  short_description: "Captura conocimiento técnico y mejora futuras sesiones"
+  default_prompt: "Usa $retrospectiva-tecnica-sesion para cerrar esta sesión, documentar los hallazgos y proponer mejoras reutilizables."

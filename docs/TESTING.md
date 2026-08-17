@@ -5,6 +5,17 @@
 
 # Testing
 
+## Gates Chat/Ollama/Redis/rollout (2026-08-16)
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_ws_chat.py tests\test_chat_ws_price.py tests\test_ws_role_refresh.py tests\test_ollama_local.py tests\test_chat_runtime_security.py tests\test_chat_rollout.py -q
+$env:RUN_REDIS_INTEGRATION="1"
+.\.venv\Scripts\python.exe -m pytest tests\test_chat_redis_integration.py tests\test_telegram_backpressure.py -q
+.\.venv\Scripts\python.exe scripts\rag_corpus.py --synthetic --curated --dry-run
+```
+
+WebSocket usa Uvicorn loopback y `websockets` en el mismo event loop; no debe volver a `TestClient` ni `run_until_complete`. La integración Redis usa dos procesos y un prefijo efímero. El 2026-08-17 aprobaron 38 pruebas backend focales sin warnings, 91 pruebas Vue, typecheck y build. `test_price_lookup.py` migró a la fixture async `client`; `test_chat_api.py` conserva todavía compatibilidad síncrona legacy fuera de este gate.
+
 ## Suite focalizada de conocimiento canónico
 
 ```powershell
@@ -16,7 +27,7 @@ npm.cmd test -- src/modules/products src/modules/knowledge
 npm.cmd run build
 ```
 
-PostgreSQL vacío debe crear `vector`, alcanzar `20260726_canonical_knowledge_v1` y confirmar ausencia de `market_sources`. `SMOKE_PROCESS_KNOWLEDGE=1` en `scripts/test_login_flow.py` exige login, CSRF, encolado, polling y `completed` sin imprimir secretos.
+PostgreSQL vacío debe crear `vector`, alcanzar `20260816_chat_rollout_v1` y confirmar ausencia de `market_sources`. `SMOKE_PROCESS_KNOWLEDGE=1` en `scripts/test_login_flow.py` exige login, CSRF, encolado, polling y `completed` sin imprimir secretos.
 
 ## Lineamientos generales
 
@@ -42,7 +53,11 @@ npm.cmd test
 npm.cmd run build
 ```
 
-La integración PostgreSQL limpia requiere `MIGRATION_TEST_POSTGRES_URL` y debe alcanzar `20260722_chat_observability_v3`, verificando identidades externas, deduplicación Telegram, políticas RAG y tablas de observabilidad. Los flags públicos de Telegram permanecen deshabilitados durante las pruebas salvo que el caso configure explícitamente claves efímeras.
+La integración PostgreSQL limpia requiere `MIGRATION_TEST_POSTGRES_URL` y debe alcanzar el head actual `20260816_chat_rollout_v1`. La prueba debe verificar identidades externas, deduplicación Telegram, políticas RAG, observabilidad y las tablas de rollout. Los flags públicos permanecen apagados salvo configuración explícita del caso.
+
+Auditoría 2026-08-15: la suite focal Chat/RAG/MCP aprobó 50 pruebas y omitió 6. Incluye transporte polling-only, presupuesto de historial, refresco de rol WebSocket y trazabilidad por canal. Los seis warnings —deprecación de `TestClient` y conexiones `aiosqlite` heredadas no devueltas al pool— son deuda activa; no deben ignorarse ni silenciarse antes del rollout.
+
+Vue aprobó typecheck, build y 89 pruebas. `ChatView.spec.ts` valida streaming WebSocket sin duplicados, correlación/feedback y sanitización visual de cards; `TelegramIdentityPanel.spec.ts` valida el cierre por flags y la prohibición de autoaprobación administrativa.
 
 ## Suite focalizada de Mercado observable y Vue
 

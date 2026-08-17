@@ -49,7 +49,7 @@ python scripts/index_docs.py --path "ruta/a/otros/docs"
 
 1. **Escaneo**: El script busca todos los archivos `.md` y `.txt` recursivamente
 2. **Chunking**: Cada documento se divide en fragmentos de ~1000 caracteres (overlap 200)
-3. **Embeddings**: Se generan embeddings para cada chunk usando OpenAI `text-embedding-3-small`
+3. **Embeddings**: Se generan localmente con Ollama `qwen3-embedding:4b` y 1536 dimensiones
 4. **Almacenamiento**: Los chunks y vectores se guardan en PostgreSQL con pgvector
 
 ## Detección de Cambios
@@ -60,18 +60,11 @@ El sistema calcula un hash SHA256 del contenido de cada documento:
 - Si el **hash cambió**: Se elimina la versión anterior y se reindexan los chunks
 - Flag `--force`: Fuerza reindexación incluso si el hash no cambió
 
-## Costos Estimados
+## Recursos estimados
 
-Modelo: `text-embedding-3-small` ($0.02 por 1M tokens)
-
-| Tamaño documento | Tokens aprox. | Costo aprox. |
-|------------------|---------------|--------------|
-| 1 KB texto       | ~250 tokens   | $0.000005    |
-| 10 KB texto      | ~2,500 tokens | $0.00005     |
-| 100 KB texto     | ~25,000 tokens| $0.0005      |
-| 1 MB texto       | ~250,000 tokens| $0.005      |
-
-El script muestra el costo estimado al finalizar.
+El proveedor canónico es local y no tiene costo por token. La capacidad depende
+de RAM, disco y latencia del host Ollama; consultar `docs/ollama.md` y ejecutar
+los healthchecks separados de generación y embeddings antes de indexar.
 
 ## Logs
 
@@ -125,7 +118,7 @@ python scripts/index_docs.py
 ## Requisitos
 
 - PostgreSQL con extensión `pgvector` instalada
-- Variable de entorno `OPENAI_API_KEY` configurada
+- Credencial del proveedor de embeddings inyectada desde el gestor de secretos sólo durante indexación externa; el entorno puede permanecer sin API keys mientras esa función esté deshabilitada
 - Paquetes Python: `pgvector`, `langchain-text-splitters`, `tiktoken`
 
 Ver `requirements.txt` y `docs/DEVELOPMENT_WORKFLOW.md` para más detalles.

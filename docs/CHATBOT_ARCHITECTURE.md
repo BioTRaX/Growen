@@ -5,13 +5,17 @@
 
 # Arquitectura del Chatbot Administrativo
 
+## Control de disponibilidad (2026-08-16)
+
+La autorización y el rollout son capas separadas: primero se resuelve `User.role` y el techo del canal; luego `chat_rollout_state` decide si la fase admite el rol. El controlador de cinco minutos sólo autoavanza con permanencia, muestra, health, latencia, backlog, smokes y evaluaciones aprobados. Eventos y checks guardan códigos/métricas agregadas, nunca contenido.
+
 ## Autorización por capacidades y canal (2026-07-22)
 
 Cada solicitud distingue `account_role` (valor vigente de `User.role`) de `effective_role` (rol tras el techo del canal). Telegram reduce admin a colaborador y rechaza toda mutación. Los roles canónicos son `guest`, `cliente`, `proveedor`, `colaborador` y `admin`; `anon` sólo se acepta como alias legacy de `guest`.
 
 `agent_core/chat_policy.py` es el registro único de tools, roles, capacidades, canales, lectura/escritura, perfil de datos y sanitizador. El cliente MCP, `tools/list`, decoradores y servidor vuelven a consultar el registro; una tool desconocida se deniega. Las respuestas públicas eliminan recursivamente SKU y stock exacto.
 
-El flujo es: validación/rate limit → identidad → persona → historial por tokens → RAG autorizado → tools autorizadas → modelo → sanitización → persistencia → métricas. HTTP y Telegram usan el orquestador observable; WebSocket conserva un adaptador legacy sobre las mismas políticas hasta completar la convergencia del transporte. React permanece como fallback hasta probar paridad Vue.
+El flujo es: validación/rate limit → identidad → persona → historial por tokens → RAG autorizado → tools autorizadas → modelo → sanitización → persistencia → métricas. HTTP, Telegram y todas las respuestas WebSocket —incluidas aclaraciones— usan el orquestador observable. React permanece como fallback hasta aprobar `vue_eligible` y los smokes.
 
 ## Enriquecimiento por tags de producto (2026-07-18)
 
@@ -176,30 +180,37 @@ persona_mode, system_prompt = get_persona_prompt(
 |------------|--------|
 | MCP Products Server | ✅ Implementado |
 | Tools definidas | ✅ Operativas |
-| Router asíncrono | ✅ Implementado |
-| `/chat` endpoint | ✅ Descubrimiento MCP; fallback legacy transitorio |
-| WebSocket y Telegram | ✅ Migrados a `run_async` |
+| Registro central de políticas | ✅ Implementado y denegación por defecto |
+| `POST /chat` | ✅ Orquestador, RAG/citas y trazabilidad |
+| Telegram polling | ✅ Activo en desarrollo bajo `preflight` restringido al canary |
+| WebSocket `/ws` | ✅ Respuestas, aclaraciones, streaming y RAG orquestados con citas |
+| UI de identidades Telegram | ⚠️ Usuario/admin implementados; flags apagados y smoke sesión/CSRF pendiente |
+| `Chat 😎` Vue | ⚠️ Typecheck, 90 pruebas y build aprobados; `ready/legacy` hasta smoke por rol |
 
 ### Próximos Pasos
 
-1. Mantener la venv Python 3.14.6+ y ejecutar contract tests.
-2. Validar paridad del catálogo descubierto.
-3. Retirar schemas y RPC legacy cuando no tengan uso.
+1. Completar protección automática y purga remota histórica; los secretos ya fueron rotados y no hay API keys locales.
+2. Validar la UI de vínculos/segunda aprobación con sesión real y completar smoke Vue por rol.
+3. Sustituir tokens/costo estimados por usage real cuando exista proveedor; repetir el gate RAG en el entorno objetivo antes del rollout.
+4. Ejecutar smoke por rol/canal y retirar schemas, RPC y runtime React sólo tras la ventana estable.
 
 ### Configuración
 
 ```env
 MCP_PRODUCTS_URL=http://mcp_products:8100/mcp
-OPENAI_API_KEY=sk-...  # Requerida para tool-calling
+OPENAI_API_KEY_FILE=<ruta_absoluta_fuera_del_repositorio>
+AI_ALLOW_EXTERNAL=false
 ```
 
 ---
 
 ## 5. Reglas de Auditoría
 
-Cada request del chatbot debe incluir:
-- `user_id`, `role`, `source_ip`
-- `prompt`, `artifacts`, `duration_ms`
+Cada ejecución conserva sólo identificadores opacos y metadatos operativos:
+- `correlation_id`, canal, rol real/efectivo y duración;
+- modelo/proveedor, tokens agregados, citas, tools y código de error seguro.
+
+No se registran prompts, respuestas, argumentos completos, Telegram IDs ni IP en la trazabilidad operativa de Chat.
 
 Las sugerencias en `PR/` deben incluir:
 - Diff resumido

@@ -253,7 +253,7 @@ logger.warning({
 - Si aparece `openai:` o `ollama:` al principio, el router ya intentó limpiar pero falló.
 
 **Posibles causas:**
-- No hay clave de OpenAI (`OPENAI_API_KEY`) y Ollama no está corriendo → la IA devuelve un echo del prompt o error.
+- No hay secreto OpenAI (`OPENAI_API_KEY_FILE`) y Ollama no está corriendo → la operación falla cerrada con un código seguro; nunca devuelve el prompt como respuesta.
 - La IA no respeta las instrucciones de formato.
 
 #### 9. Falta descripción en respuesta

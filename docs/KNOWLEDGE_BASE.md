@@ -174,7 +174,7 @@ Archivo en /Conocimientos
          │        │
          │        └─► EmbeddingService
          │                │
-         │                └─► OpenAI API (text-embedding-3-small)
+         │                └─► Ollama host (qwen3-embedding:4b)
          │                        │
          │                        ▼ 1536 dimensions
          │
@@ -192,17 +192,12 @@ El sistema usa hash SHA256 para detectar cambios:
 2. **Hash diferente** → Documento modificado, elimina chunks viejos y re-indexa
 3. **Flag `force_reindex`** → Ignora hash y re-indexa siempre
 
-## Costos de OpenAI
+## Operación local de embeddings
 
-El servicio usa `text-embedding-3-small`:
-
-| Volumen | Costo |
-|---------|-------|
-| 1K tokens | $0.00002 |
-| 100K tokens | $0.002 |
-| 1M tokens | $0.02 |
-
-Estimación aproximada: 1 token ≈ 4 caracteres
+El servicio usa Ollama con `qwen3-embedding:4b` y solicita exactamente 1536
+dimensiones. No consume APIs externas ni calcula costos por token. El preflight
+debe comprobar modelo, memoria, disco, latencia y longitud del vector antes de
+habilitar RAG o avanzar el rollout.
 
 ## Troubleshooting
 
@@ -215,7 +210,7 @@ El PDF puede ser un documento escaneado (imagen). Soluciones:
 ### "Error de conexión a OpenAI"
 
 Verificar:
-1. `OPENAI_API_KEY` configurada en `.env`
+1. La credencial del proveedor fue inyectada desde el gestor de secretos para esta ejecución; no es requisito mientras la indexación externa permanezca deshabilitada
 2. Créditos disponibles en la cuenta OpenAI
 3. Conexión a internet desde el servidor
 

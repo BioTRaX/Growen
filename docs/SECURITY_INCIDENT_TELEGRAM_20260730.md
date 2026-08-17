@@ -151,14 +151,14 @@ credencial debe permanecer invalidada y no reutilizarse.
 
 Severidad: alta
 
-Estado: no rastreada; rotación pendiente
+Estado: no rastreada; rotada el 2026-08-15
 
 El `.env` actual está correctamente ignorado y no está rastreado, pero contiene
 una clave OpenAI con formato real en la línea 29. La presencia local no prueba
 una publicación en Git: no se encontró ese formato en commits, reflogs ni blobs
-no alcanzables. Debe rotarse porque el host forma parte del alcance del
-incidente y la documentación anterior que la daba por eliminada estaba
-desactualizada.
+no alcanzables. El usuario confirmó su rotación el 2026-08-15 y el entorno quedó
+sin API keys. Cualquier credencial futura debe inyectarse desde el gestor de
+secretos.
 
 ### F-04 — Protección `.gitignore`
 
@@ -203,8 +203,8 @@ con la infraestructura apagada.
 ### Contención inmediata
 
 1. Mantener revocado el token filtrado; nunca restaurarlo.
-2. Rotar la clave OpenAI local y cualquier credencial que haya compartido el
-   mismo host, archivo, terminal o canal de distribución.
+2. [x] Rotar la clave OpenAI local y cualquier credencial que haya compartido
+   el mismo host, archivo, terminal o canal de distribución.
 3. Confirmar en BotFather que no existan tokens adicionales activos del bot.
 4. Revisar administradores del bot, sesiones Telegram y cuentas GitHub.
 5. Marcar la alerta de GitHub como revocada sólo después de registrar evidencia.
@@ -239,6 +239,10 @@ publicación se protegió con `--force-with-lease` contra cambios concurrentes.
   repositorio sea privado.
 
 ## Criterios de cierre
+
+La retrospectiva técnica de la sesión, sus bloqueos y los controles agénticos
+derivados se documentan en
+`docs/RETROSPECTIVE_TELEGRAM_SECRET_FORENSICS_20260815.md`.
 
 - [x] Token expuesto identificado y revocado.
 - [x] Commit, fecha, archivo, línea, blob y huella documentados.

@@ -5,6 +5,79 @@
 
 # Roadmap del Proyecto
 
+## Actualización 2026-08-17 — RAG cargado y Chat Vue en paridad técnica
+
+- [x] Cargadas 10 fuentes RAG clasificadas en PostgreSQL con embeddings Ollama de 1536 dimensiones.
+- [x] Fragmentados los documentos curados para que las citas recuperadas entren en el presupuesto de contexto.
+- [x] Aprobada la evaluación por rol, canal e intención: cero fugas, recall@5 y MRR sintéticos 1,00, recall curado 1,00, citas y presupuesto 100 %.
+- [x] Integrado RAG y citas en respuestas WebSocket normales y streaming bajo `ChatOrchestrator`.
+- [x] Alineados HTTP y WebSocket con el resolver determinista de catálogo y sanitización autoritativa para perfiles públicos.
+- [x] Corregido Chat Vue para consumir `data.results`; typecheck, 91 pruebas y build aprobados.
+- [x] Smoke guest real aprobado en `/chat`: conexión WebSocket, respuesta general, cero errores de consola y sin citas irrelevantes para smalltalk.
+- [ ] Ejecutar smoke visual autenticado en Vue para `guest`, `cliente`, `proveedor`, `colaborador` y `admin` con API/WS reales.
+- [ ] Mantener `ready/legacy` hasta completar smokes y errores tipados; React sigue disponible para rollback.
+
+## Actualización 2026-08-17 — normalización Ollama GPU
+
+- [x] Detectada RTX 5070 con 12.227 MiB de VRAM y más de 10 GiB libres; el perfil deja de exigir 16 GiB de RAM libre.
+- [x] Definido perfil VRAM prioritaria: contexto 4096, un modelo cargado, una solicitud paralela, Flash Attention y KV cache `q8_0`.
+- [x] Agregado preflight reproducible de GPU, RAM, pagefile, disco, daemon y modelos.
+- [x] Configurado pagefile de 18 GB; daemon y ambos modelos aprobaron el preflight.
+- [x] Confirmados `llama3.1:8b` al `100% GPU` con contexto 4096 y embeddings de 1536 dimensiones.
+- [x] Agregado preflight reducido de desarrollo: canary activo sin controlador ni autoavance.
+- [x] Guardar `telegram_bot_token` fuera del repositorio y configurar el entorno local.
+- [x] Capturar `telegram_canary_user_id` con `/canary` e iniciar `preflight/active` de desarrollo.
+- [x] Iniciar y verificar el worker polling con PostgreSQL, Redis y Ollama saludables.
+- [x] Corregir el falso positivo que enviaba smalltalk Telegram al intent de producto.
+- [x] Alinear el tag Ollama del pipeline real con el modelo instalado `llama3.1:8b`.
+
+## Actualización 2026-08-16 — cierre técnico y rollout de Chat 😎
+
+- [x] WebSocket usa Uvicorn loopback asíncrono; también las aclaraciones pasan por `ChatOrchestrator` con correlación, persistencia y `ChatRun`.
+- [x] Ollama usa `httpx` asíncrono y falla cerrado; embeddings `qwen3-embedding:4b` validan exactamente 1536 dimensiones.
+- [x] Corpus RAG v1 sintético/curado, centinelas y runner idempotente con evaluaciones por scope, citas y cache versionada.
+- [x] Rate limit Redis atómico validado entre dos procesos; polling recupera estados vencidos, conserva offset ante huecos y aplica backpressure.
+- [x] Secretos Telegram mediante `*_FILE`; revisión `20260816_chat_rollout_v1` aplicada localmente en `disabled/paused`.
+- [x] Build Vue con override, metadata y workflow self-hosted con rollback automático a React/`admin_capped`.
+- [x] Bloqueo Ollama resuelto el 2026-08-17.
+- [ ] El corpus y su evaluación real ya aprobaron; faltan los smokes autenticados de cinco roles antes de cualquier avance de runtime Vue.
+
+## Actualización 2026-08-15 — Retrospectiva técnica agéntica reutilizable
+
+- [x] Creada la skill canónica `retrospectiva-tecnica-sesion` para verificar entregas, registrar errores y soluciones, reconciliar documentación y preservar conocimiento técnico al cerrar una sesión.
+- [x] Restringida su activación al cierre explícito informado por el usuario; completar una tarea o nombrar la skill sin declarar el final del chat ya no dispara la retrospectiva.
+- [x] Incorporados dos carriles de mejora: prevención basada en obstáculos reales y aceleración basada en patrones repetibles, incluso cuando la implementación no presentó dificultades.
+- [x] Consolidado el descubrimiento desde una única fuente en `.agents/skills/` para Codex, Gemini CLI y GitHub Copilot; los adaptadores históricos de `.agent/skills/` dejaron de ser obligatorios.
+- [ ] Aplicar la skill sólo en futuros cierres confirmados por el usuario y ajustar sus criterios si la evidencia revela falsos positivos, omisiones o propuestas con bajo valor reutilizable.
+
+## Actualización 2026-08-15 — Auditoría de Chat 😎, Telegram y RAG
+
+Estado comprobado contra código, manifiesto Vue, PostgreSQL local y pruebas:
+
+- [x] PostgreSQL está en el head único `20260726_canonical_knowledge_v1`; la cadena `20260722_chat_*` ya está incluida y `scripts/audit_schema.py` aprobó sus verificaciones estructurales.
+- [x] La base local no contiene fuentes RAG, identidades externas, updates Telegram ni ejecuciones de Chat; tampoco quedan sesiones Telegram con ID numérico en claro.
+- [x] La suite focal backend aprobó 50 pruebas y omitió 6; Vue aprobó typecheck, 89 pruebas y build de producción.
+- [x] Telegram permanece cerrado por defecto y el worker no está en ejecución. El único servicio operativo durante la auditoría fue PostgreSQL; API, Redis, MCP, Vue y workers estaban apagados.
+- [x] `Chat 😎` compila en Vue, pero continúa `ready/legacy`; la configuración Nginx generada no publica `/chat` hacia Vue y React conserva el runtime efectivo.
+- [x] Documentada la retrospectiva del saneamiento histórico y creada la skill
+  `git-secret-forensics`, separada del flujo ordinario de commit/push.
+- [x] Secretos rotados; el entorno permanece sin API keys. Continúan pendientes la purga de referencias históricas de GitHub y la protección automática de secretos.
+- [x] Webhook retirado del router de la API y `TELEGRAM_TRANSPORT` restringido a `polling`.
+- [x] Pantallas Vue para generar/revocar vínculos propios y aprobar/revocar identidades como segundo administrador; permanecen inactivas por flags.
+- [ ] Completar la migración WebSocket al `ChatOrchestrator`: tools, fallback local, respuesta general y streaming ya generan trazabilidad y recargan `User.role`; las respuestas de aclaración legacy aún deben converger.
+- [ ] Completar observabilidad: tokens estimados y health seguro del worker ya llegan al dashboard; costo real queda pendiente de usage del proveedor y no se probará hasta configurar uno.
+- [ ] Añadir evaluaciones RAG por rol, canal e intención y smoke autenticado por cada rol. `ChatView.vue` ya tiene pruebas de streaming y sanitización de cards.
+- [ ] Corregir las conexiones SQLite no devueltas al pool detectadas como warnings en pruebas WebSocket/RAG y resolver el drift histórico reportado por `alembic check` sin mezclarlo con la cadena Chat.
+- [ ] Ejecutar rollout gradual sólo después de configurar claves efímeras, clasificar fuentes, probar rate limit distribuido/Redis, verificar logs y completar los gates de seguridad.
+- [ ] Implementar `scripts/audit-git-secrets.ps1` con salida redactada, pruebas
+  y cobertura de refs, reflogs, stashes y objetos no alcanzables.
+
+Orden de ejecución recomendado: seguridad y secretos → cierre del transporte polling → UI de identidades → orquestador WebSocket y observabilidad → RAG/evaluaciones → paridad Vue → smoke integral → activación gradual y ventana estable.
+
+Retrospectiva forense: `docs/RETROSPECTIVE_TELEGRAM_SECRET_FORENSICS_20260815.md`.
+
+Retrospectiva del avance Chat/Telegram: `docs/RETROSPECTIVE_CHAT_TELEGRAM_20260815.md`.
+
 ## Actualización 2026-07-30 — Incidente de credencial Telegram
 
 - [x] Confirmada por GitHub Secret Scanning la publicación del token operativo
@@ -25,8 +98,7 @@
   actualización mediante `git push`.
 - [ ] Invalidar clones, forks, caches y artefactos, y exigir reclonado limpio a
   los colaboradores.
-- [ ] Rotar la clave OpenAI local y registrar la invalidación sin guardar el
-  reemplazo.
+- [x] Clave OpenAI local rotada e invalidada; no se configuró reemplazo ni API keys.
 - [ ] Habilitar GitHub Push Protection y un escáner de secretos obligatorio en
   pre-commit/CI.
 - [ ] Actualizar `react-router`/`react-router-dom` y repetir `npm audit`; el
@@ -74,7 +146,8 @@ Evidencia operativa: `docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
 - [x] RAG híbrido con scopes previos al ranking, vigencia, versión, cache y citas tipadas.
 - [x] Trazabilidad sin contenido en `chat_runs`/`chat_tool_events`, métricas agregadas y archivado a 90 días.
 - [x] Módulo Vue `/chat` implementado como `Chat 😎`, conservando React como fallback.
-- [ ] Ejecutar migraciones y smoke sobre PostgreSQL con las banderas apagadas.
+- [x] Migraciones aplicadas en PostgreSQL con las banderas apagadas; head actual `20260726_canonical_knowledge_v1`.
+- [ ] Ejecutar smoke multicanal por rol con claves rotadas y datos de prueba clasificados.
 - [ ] Clasificar explícitamente todas las fuentes RAG antes de publicar conocimiento.
 - [ ] Activar Telegram por etapas y promover Chat Vue sólo tras paridad, dos releases y siete días sin incidente crítico.
 
@@ -262,7 +335,7 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 - Frontend: La ficha de producto vuelve a mostrar la "Descripción enriquecida" con vista previa HTML sanitizada para todos los roles (scripts/iframes/eventos inline se eliminan). Los usuarios con permisos de edición mantienen el textarea y pueden guardar via `PATCH /catalog/products/{id}`.
 - Frontend/Backend: El detalle `/productos/:id` se habilitó en modo lectura para el rol `guest` (ProtectedRoute + endpoint `GET /catalog/products/{id}` aceptan invitados). Los invitados ven nombre, precio y descripción, mientras que las acciones siguen restringidas a colaborador/admin.
 - Chatbot: El WebSocket `/ws` ahora comparte la misma memoria conversacional que el endpoint HTTP, inyectando el historial reciente en los prompts y persistiendo cada intercambio en `chat_messages`.
-- Chatbot - Sesiones Persistentes: Implementado sistema de sesiones persistentes (`ChatSession`) que permite mantener contexto conversacional por usuario y auditar conversaciones desde Dashboard Admin. Los mensajes ahora se relacionan con sesiones vía ForeignKey, y el handler de Telegram crea/actualiza sesiones automáticamente. Ver `docs/CHAT_MEMORY_PLAN.md`.
+- Chatbot - Sesiones Persistentes: Implementado sistema de sesiones persistentes (`ChatSession`) que permite mantener contexto conversacional por usuario y auditar conversaciones desde Dashboard Admin. Los mensajes ahora se relacionan con sesiones vía ForeignKey, y el handler de Telegram crea/actualiza sesiones opacas automáticamente. El diseño inicial quedó archivado en `docs/archive/CHAT_MEMORY_PLAN.md`; el contrato vigente está en `docs/CHAT.md`.
 
 
 - Backend: FastAPI + SQLAlchemy (async) para gestión de compras (borradores, validación, confirmación), adjuntos (PDF remito), logs y auditoría.
@@ -292,17 +365,17 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
   - ✅ Dependencias agregadas: `pgvector>=0.3.8`, `langchain-text-splitters>=0.3.0`, `tiktoken>=0.8.0`.
   - ✅ Modelos `KnowledgeSource` y `KnowledgeChunk` implementados con Vector(1536).
   - ✅ Migración aplicada: `b2d22a7ce889_add_rag_knowledge_tables_manual`.
-  - ✅ `EmbeddingService` implementado en `ai/embeddings.py` con AsyncOpenAI (modelo: text-embedding-3-small).
+  - ✅ `EmbeddingService` migrado a Ollama asíncrono con `qwen3-embedding:4b` y validación estricta de 1536 dimensiones.
   - ✅ `DocumentIngestor` implementado en `services/rag/ingest.py` con chunking inteligente (RecursiveCharacterTextSplitter).
   - ✅ Script de carga `scripts/index_docs.py` funcional con detección de cambios por hash SHA256.
   - ✅ Directorio `docs/knowledge_base/` creado con documentación completa.
-  - ✅ Testing exitoso: 2 documentos indexados (11 chunks, ~2K tokens, $0.00004 USD).
+  - ✅ Corpus sintético/curado y runner reproducible disponibles; su evaluación productiva queda bloqueada hasta superar el preflight local de Ollama.
   - 🔄 **Próximos pasos**:
     - Implementar endpoint `/api/v1/rag/search` para búsquedas semánticas.
     - Integrar recuperación RAG en respuestas del chatbot.
     - Agregar reranking para mejorar relevancia de resultados.
     - Implementar índice IVFFlat después de alcanzar 10K+ vectores.
-    - Monitorear costos de OpenAI API y latencias de búsqueda.
+    - Monitorear latencias, memoria y disponibilidad de Ollama.
 
 - **Etapa 3**: Conciencia de Roles y Seguridad — **EN PROGRESO**. JWT MCP por audiencia, control granular, rate limit y revocación distribuidos en Redis, rotación compatible por `kid`, aislamiento de contenedores y supply-chain checks ya implementados. Quedan SSO/MFA (Keycloak/Authentik) y automatizar la custodia/rotación externa de claves para un despliegue remoto.
 - **Etapa 4**: Modo Desarrollador — Indexación del repositorio local, acceso controlado al código fuente, gateway de lectura/escritura confinada a `PR/`, y memoria conversacional a largo plazo.
@@ -330,7 +403,7 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 
 **Fase 2 - Integración y Frontend (Completada)**:
   - ✅ Handler Telegram (`services/chat/telegram_handler.py`) actualizado:
-    - Usa `session_id = f"telegram:{chat_id}"` para identificar sesiones.
+    - Usa `message.from.id` para resolver la identidad y genera `session_id`/`conversation_key` opacos mediante HMAC; `chat.id` sólo identifica destino y conversación.
     - Guarda mensajes de usuario y asistente usando `save_message()`.
     - Recupera historial conversacional antes de procesar.
   - ✅ Página frontend `frontend/src/pages/admin/ChatInbox.tsx`:
@@ -346,7 +419,7 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
   - Fase 5: Aprendizaje iterativo (pipeline que procesa feedback y ajusta prompts, métricas de calidad).
 
 **Documentación**:
-  - ✅ `docs/CHAT_MEMORY_PLAN.md`: Arquitectura completa, flujos de creación/actualización, próximas fases.
+  - ✅ `docs/archive/CHAT_MEMORY_PLAN.md`: arquitectura histórica; `docs/CHAT.md` contiene el flujo vigente y seguro.
 
 ### Capa MCP Servers (estado)
 

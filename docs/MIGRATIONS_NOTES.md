@@ -5,6 +5,26 @@
 
 # Notas de migraciones
 
+## 2026-08-16 — `20260816_chat_rollout_v1`
+
+Revisión lineal desde `20260726_canonical_knowledge_v1`. Crea el singleton `chat_rollout_state`, eventos y checks sin prompts, respuestas, IDs ni secretos. El registro inicial es `disabled/paused`, con autoavance apagado. El downgrade aborta si existe trazabilidad o el estado dejó su valor inicial.
+
+El upgrade incremental local aprobó y `alembic current` coincide con el head único `20260816_chat_rollout_v1`. La prueba PostgreSQL limpia exige este head; queda pendiente ejecutarla con `MIGRATION_TEST_POSTGRES_URL`. El drift histórico de `alembic check` sigue fuera de alcance.
+
+## 2026-08-15 — verificación del estado local
+
+`alembic heads` y `alembic current` coinciden en el head único
+`20260726_canonical_knowledge_v1`. `scripts/audit_schema.py --json` aprobó todas
+sus verificaciones y la base local contiene las tablas Chat/RAG/Telegram de la
+cadena `20260722_chat_*`. No hay identidades, updates, fuentes RAG ni trazas Chat,
+y el conteo de sesiones legacy `telegram:<id-numérico>` es cero.
+
+`alembic check` continúa fallando por drift histórico amplio entre metadata y
+esquema —incluye tablas, tipos, defaults, índices y FKs ajenos al cambio Chat—.
+No se debe autogenerar una revisión masiva para “resolverlo”: primero hay que
+clasificar cada diferencia, corregir metadata/migraciones históricas por dominio
+y volver a ejecutar el check sobre una base PostgreSQL desechable desde cero.
+
 ## 2026-07-26 — Base de Conocimiento Canónica
 
 `20260726_canonical_knowledge_v1` desciende de `20260725_canonical_enrichment_v2`, crea el inventario completo de conocimiento y transforma `market_sources` en `canonical_knowledge_market_profiles`. Cada fuente genera activo, ubicación, etiqueta `market` y capacidades `price|availability|offers`; los IDs se preservan y las FKs históricas continúan válidas.
@@ -27,7 +47,7 @@ aprobó 16 verificaciones; una consulta focal confirmó la tabla de jobs,
 
 ## 2026-07-22 — cadena de Chat segura
 
-La cadena lineal parte de `20260721_market_observability_v1` y termina en un head único:
+La cadena lineal parte de `20260721_market_observability_v1` y terminó en el head único de ese corte; hoy forma parte del head posterior `20260726_canonical_knowledge_v1`:
 
 1. `20260722_chat_identity_security_v1`: identidades externas cifradas/HMAC, solicitudes de vínculo, deduplicación Telegram y sesiones opacas.
 2. `20260722_chat_rag_policy_v2`: scopes y vigencia en `knowledge_sources`, versión de contenido e índice full-text PostgreSQL. Las fuentes preexistentes quedan `disabled` y restringidas a `admin/web` hasta clasificación explícita.

@@ -13,7 +13,7 @@ Verificar que el sistema puede:
 
 1. **Leer archivos** desde el directorio `docs/knowledge_base/`
 2. **Dividir texto** en chunks usando RecursiveCharacterTextSplitter
-3. **Generar embeddings** para cada chunk usando OpenAI text-embedding-3-small
+3. **Generar embeddings** locales para cada chunk usando Ollama `qwen3-embedding:4b`
 4. **Almacenar vectores** en PostgreSQL con pgvector
 
 ## Contenido de Ejemplo
@@ -47,12 +47,12 @@ Este overlap garantiza que conceptos que cruzan límites de chunks no se pierdan
 
 ### Modelo de Embeddings
 
-Se utiliza **text-embedding-3-small** de OpenAI:
+Se utiliza **qwen3-embedding:4b** mediante Ollama:
 
 - Dimensiones: 1536
-- Costo: $0.02 por 1M tokens
-- Velocidad: ~2000 chunks por minuto en batch mode
-- Calidad: Excelente para búsqueda semántica en español
+- Ejecución: local, sin API externa
+- Validación: se rechaza cualquier vector que no tenga 1536 valores
+- Disponibilidad: sujeta a los gates de memoria, modelo y latencia del host
 
 ### Proceso de Indexación
 

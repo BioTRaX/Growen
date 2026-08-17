@@ -10,6 +10,10 @@ description: Publica cambios de Growen mediante revisión, documentación, prueb
 - No activar por finalizar una tarea ni por detectar archivos modificados.
 - Considerar autorizadas stage, commit, sincronización y push solo cuando el usuario pida explícitamente subir, pushear, commitear o actualizar el repositorio remoto.
 - Nunca usar `git add .`, `git push --force` ni incluir cambios ajenos al objetivo.
+- Si la solicitud incluye una fuga confirmada, reescritura de historia,
+  eliminación coordinada de ramas o `git-filter-repo`, aplicar primero
+  `git-secret-forensics`. El flujo normal de publicación no autoriza esas
+  operaciones destructivas.
 
 ## Flujo obligatorio
 
