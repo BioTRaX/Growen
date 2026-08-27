@@ -24,7 +24,7 @@ Hardcodear un fallback de SQLite impide que el sistema construya la URL de Postg
 import os
 from sqlalchemy.ext.asyncio import create_async_engine
 
-DB_URL = os.getenv("DB_URL", "sqlite+aiosqlite:///./growen.db")  # ❌ Fallback hardcoded
+DB_URL = os.getenv("DB_URL") or settings.db_url  # ✅ Fallback centralizado
 engine = create_async_engine(DB_URL, future=True)
 ```
 
@@ -42,7 +42,7 @@ engine = create_async_engine(DB_URL, future=True)
 
 ### Desarrollo Local
 - `DB_URL` no está seteado → usa `settings.db_url`
-- `settings.db_url` por defecto: `sqlite+aiosqlite:///./growen.db`
+- `settings.db_url` por defecto: `sqlite+aiosqlite:///./dev.db`
 - ✅ Funciona con SQLite local
 
 ### Docker / Producción

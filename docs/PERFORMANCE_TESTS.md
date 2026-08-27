@@ -1,7 +1,7 @@
-# NG-HEADER: Nombre de archivo: PERFORMANCE_TESTS.md
-# NG-HEADER: Ubicación: docs/PERFORMANCE_TESTS.md
-# NG-HEADER: Descripción: Guía de tests de performance para módulo Mercado
-# NG-HEADER: Lineamientos: Ver AGENTS.md
+<!-- NG-HEADER: Nombre de archivo: PERFORMANCE_TESTS.md -->
+<!-- NG-HEADER: Ubicación: docs/PERFORMANCE_TESTS.md -->
+<!-- NG-HEADER: Descripción: Guía de tests de performance para módulo Mercado -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
 # Tests de Performance - Módulo Mercado
 

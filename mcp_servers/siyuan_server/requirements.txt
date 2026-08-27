@@ -1,0 +1,13 @@
+# NG-HEADER: Nombre de archivo: requirements.txt
+# NG-HEADER: Ubicación: mcp_servers/siyuan_server/requirements.txt
+# NG-HEADER: Descripción: Dependencias aisladas del servidor MCP de SiYuan.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+fastapi>=0.111.0,<1.0.0
+uvicorn>=0.30.0,<1.0.0
+httpx>=0.27.0,<1.0.0
+pydantic>=2.7.0,<3.0.0
+PyJWT>=2.8.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0
+mcp>=1.27,<2
+redis>=5.0,<7
+

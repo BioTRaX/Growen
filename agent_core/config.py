@@ -180,25 +180,6 @@ class Settings:
         if self.env not in {"dev", "test", "testing"}:
             if not self.mcp_products_secret_key or not self.mcp_web_search_secret_key:
                 raise RuntimeError("Las claves MCP específicas deben definirse fuera de desarrollo y tests")
-        if self.telegram_transport != "polling":
-            raise RuntimeError("TELEGRAM_TRANSPORT sólo admite polling")
-        if self.telegram_link_code_ttl_seconds < 60 or self.telegram_link_code_ttl_seconds > 900:
-            raise RuntimeError("TELEGRAM_LINK_CODE_TTL_SECONDS debe estar entre 60 y 900")
-        if self.telegram_channel_role_ceiling not in {"guest", "cliente", "proveedor", "colaborador"}:
-            raise RuntimeError("telegram_channel_role_ceiling_too_permissive")
-        if (self.telegram_public_bot_enabled or self.telegram_role_linking_enabled) and not self.telegram_enabled:
-            raise RuntimeError("telegram_feature_requires_worker")
-        if self.telegram_role_linking_enabled and not self.telegram_admin_second_approval:
-            raise RuntimeError("telegram_admin_second_approval_required")
-        if self.telegram_enabled:
-            if not read_secret("TELEGRAM_BOT_TOKEN"):
-                raise RuntimeError("telegram_bot_token_missing")
-            if self.telegram_transport == "polling" and os.getenv("TELEGRAM_DROP_PENDING_UPDATES", "0").lower() in {"1", "true", "yes"}:
-                raise RuntimeError("telegram_drop_pending_updates_forbidden")
-            if self.telegram_public_bot_enabled and not read_secret("TELEGRAM_IDENTITY_HMAC_KEY"):
-                raise RuntimeError("telegram_identity_hmac_key_missing")
-            if self.telegram_role_linking_enabled and not read_secret("TELEGRAM_IDENTITY_ENCRYPTION_KEY"):
-                raise RuntimeError("telegram_identity_encryption_key_missing")
         if self.chat_auto_delete_enabled:
             raise RuntimeError("CHAT_AUTO_DELETE_ENABLED no está habilitado por la política de retención vigente")
         if self.chat_history_max_tokens < 256 or self.chat_history_max_tokens > 12000:
@@ -209,6 +190,30 @@ class Settings:
             raise RuntimeError("RAG_EMBEDDING_DIMENSIONS debe ser 1536")
         if self.env not in {"dev", "test", "testing"} and self.ai_mode == "ollama" and self.ai_allow_external:
             raise RuntimeError("AI_ALLOW_EXTERNAL debe ser false cuando AI_MODE=ollama en producción")
+
+
+def validate_telegram_runtime(config: Settings) -> None:
+    """Valida exclusivamente el runtime que consume actualizaciones de Telegram."""
+    if (config.telegram_public_bot_enabled or config.telegram_role_linking_enabled) and not config.telegram_enabled:
+        raise RuntimeError("telegram_feature_requires_worker")
+    if not config.telegram_enabled:
+        return
+    if config.telegram_transport != "polling":
+        raise RuntimeError("TELEGRAM_TRANSPORT sólo admite polling")
+    if config.telegram_link_code_ttl_seconds < 60 or config.telegram_link_code_ttl_seconds > 900:
+        raise RuntimeError("TELEGRAM_LINK_CODE_TTL_SECONDS debe estar entre 60 y 900")
+    if config.telegram_channel_role_ceiling not in {"guest", "cliente", "proveedor", "colaborador"}:
+        raise RuntimeError("telegram_channel_role_ceiling_too_permissive")
+    if config.telegram_role_linking_enabled and not config.telegram_admin_second_approval:
+        raise RuntimeError("telegram_admin_second_approval_required")
+    if not read_secret("TELEGRAM_BOT_TOKEN"):
+        raise RuntimeError("telegram_bot_token_missing")
+    if os.getenv("TELEGRAM_DROP_PENDING_UPDATES", "0").lower() in {"1", "true", "yes"}:
+        raise RuntimeError("telegram_drop_pending_updates_forbidden")
+    if config.telegram_public_bot_enabled and not read_secret("TELEGRAM_IDENTITY_HMAC_KEY"):
+        raise RuntimeError("telegram_identity_hmac_key_missing")
+    if config.telegram_role_linking_enabled and not read_secret("TELEGRAM_IDENTITY_ENCRYPTION_KEY"):
+        raise RuntimeError("telegram_identity_encryption_key_missing")
 
 
 settings = Settings()

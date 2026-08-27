@@ -14,6 +14,7 @@ param(
     [switch]$WithMarketWorker,
     [switch]$WithEnrichmentWorker,
     [switch]$WithKnowledgeWorker,
+    [switch]$WithSiyuanMcp,
     [switch]$CheckOnly
 )
 
@@ -49,6 +50,8 @@ $mcpProductsStdoutLog = Join-Path $runLogDir 'mcp-products.stdout.log'
 $mcpProductsStderrLog = Join-Path $runLogDir 'mcp-products.stderr.log'
 $mcpWebStdoutLog = Join-Path $runLogDir 'mcp-web-search.stdout.log'
 $mcpWebStderrLog = Join-Path $runLogDir 'mcp-web-search.stderr.log'
+$mcpSiyuanStdoutLog = Join-Path $runLogDir 'mcp-siyuan.stdout.log'
+$mcpSiyuanStderrLog = Join-Path $runLogDir 'mcp-siyuan.stderr.log'
 $enrichmentWorkerStdoutLog = Join-Path $runLogDir 'enrichment-worker.stdout.log'
 $enrichmentWorkerStderrLog = Join-Path $runLogDir 'enrichment-worker.stderr.log'
 $knowledgeWorkerStdoutLog = Join-Path $runLogDir 'knowledge-worker.stdout.log'
@@ -364,6 +367,22 @@ function Start-DevelopmentMcp {
     return $process
 }
 
+function Assert-SiyuanPrerequisites {
+    if (-not $WithSiyuanMcp) { return }
+    if (-not (Test-HttpEndpoint -Uri 'http://127.0.0.1:6806/api/system/version')) {
+        throw 'SiYuan no responde en 127.0.0.1:6806. Ejecutar scripts\setup-siyuan.ps1.'
+    }
+    $tokenFile = if ($env:SIYUAN_API_TOKEN_FILE) { $env:SIYUAN_API_TOKEN_FILE } else { Join-Path $root '..\growen-secrets\siyuan_api_token' }
+    $secretFile = if ($env:MCP_SIYUAN_SECRET_KEY_FILE) { $env:MCP_SIYUAN_SECRET_KEY_FILE } else { Join-Path $root '..\growen-secrets\mcp_siyuan_secret_key' }
+    foreach ($requiredFile in @($tokenFile, $secretFile)) {
+        if (-not [IO.Path]::IsPathRooted($requiredFile)) { $requiredFile = Join-Path $root $requiredFile }
+        if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+            throw "Falta configuración segura de SiYuan: $requiredFile. Ejecutar scripts\setup-siyuan.ps1."
+        }
+    }
+    Write-DevLog 'Prerrequisitos de SiYuan verificados.' 'OK'
+}
+
 function Ensure-DevelopmentDatabase {
     Invoke-LoggedNativeCommand -FilePath 'docker' `
         -ArgumentList @('info', '--format', '{{.ServerVersion}}') `
@@ -617,8 +636,9 @@ function Start-DevelopmentFrontend {
 try {
     Write-DevLog "Inicio del entorno de desarrollo. Raíz: $root"
     Assert-DevelopmentPrerequisites
+    Assert-SiyuanPrerequisites
     if ($CheckOnly) {
-        Write-DevLog "Configuración válida. MCP mode: $McpMode. Catalog worker: $([bool]$WithCatalogWorker). Market worker: $([bool]$WithMarketWorker). Enrichment worker: $([bool]$WithEnrichmentWorker). Knowledge worker: $([bool]$WithKnowledgeWorker). No se iniciaron servicios ni migraciones." 'OK'
+        Write-DevLog "Configuración válida. MCP mode: $McpMode. SiYuan MCP: $([bool]$WithSiyuanMcp). Catalog worker: $([bool]$WithCatalogWorker). Market worker: $([bool]$WithMarketWorker). Enrichment worker: $([bool]$WithEnrichmentWorker). Knowledge worker: $([bool]$WithKnowledgeWorker). No se iniciaron servicios ni migraciones." 'OK'
         exit 0
     }
 
@@ -627,6 +647,7 @@ try {
     $env:API_BASE_URL = 'http://127.0.0.1:8000'
     $env:MCP_PRODUCTS_URL = 'http://127.0.0.1:8100/mcp'
     $env:MCP_WEB_SEARCH_URL = 'http://127.0.0.1:8102/mcp'
+    $env:MCP_SIYUAN_URL = 'http://127.0.0.1:8104/mcp'
     $env:GROWEN_DEV_RUN_LOG_DIR = $runLogDir
 
     Ensure-FrontendDependencies
@@ -639,6 +660,7 @@ try {
     $apiProcess = Start-DevelopmentApi
     $mcpProductsProcess = $null
     $mcpWebProcess = $null
+    $mcpSiyuanProcess = $null
     if ($McpMode -in @('Core', 'All')) {
         $mcpProductsProcess = Start-DevelopmentMcp `
             -Name 'MCP Products' `
@@ -654,6 +676,14 @@ try {
             -Port 8102 `
             -StdoutLog $mcpWebStdoutLog `
             -StderrLog $mcpWebStderrLog
+    }
+    if ($WithSiyuanMcp) {
+        $mcpSiyuanProcess = Start-DevelopmentMcp `
+            -Name 'MCP SiYuan' `
+            -Module 'mcp_servers.siyuan_server.main' `
+            -Port 8104 `
+            -StdoutLog $mcpSiyuanStdoutLog `
+            -StderrLog $mcpSiyuanStderrLog
     }
     $enrichmentWorkerProcess = Start-EnrichmentWorker
     $knowledgeWorkerProcess = Start-KnowledgeWorker
@@ -698,6 +728,10 @@ try {
         mcp_web_search_reused = ($McpMode -eq 'All' -or $WithEnrichmentWorker -or $WithKnowledgeWorker) -and ($null -eq $mcpWebProcess)
         mcp_web_search_health = if ($McpMode -eq 'All' -or $WithEnrichmentWorker -or $WithKnowledgeWorker) { 'healthy' } else { 'off' }
         mcp_web_search_log_source_hint = if ($mcpWebProcess) { $mcpWebStderrLog } elseif ($McpMode -eq 'All' -or $WithEnrichmentWorker -or $WithKnowledgeWorker) { Find-PreviousLogSourceHint -Component 'mcp_web_search' -FileName 'mcp-web-search.stderr.log' } else { $null }
+        mcp_siyuan_url = if ($WithSiyuanMcp) { 'http://127.0.0.1:8104/mcp' } else { $null }
+        mcp_siyuan_pid = if ($mcpSiyuanProcess) { $mcpSiyuanProcess.Id } else { $null }
+        mcp_siyuan_health = if ($WithSiyuanMcp) { 'healthy' } else { 'off' }
+        mcp_siyuan_log_source_hint = if ($mcpSiyuanProcess) { $mcpSiyuanStderrLog } else { $null }
         frontend_url = 'http://127.0.0.1:5176'
         frontend_pid = if ($frontendProcess) { $frontendProcess.Id } else { $null }
         frontend_process_started_at = if ($frontendProcess) { $frontendProcess.StartTime.ToString('o') } else { $null }
@@ -711,6 +745,7 @@ try {
     Write-DevLog 'Entorno de desarrollo iniciado correctamente.' 'OK'
     Write-DevLog 'API: http://127.0.0.1:8000/docs' 'OK'
     Write-DevLog 'Vue: http://127.0.0.1:5176/login' 'OK'
+    if ($WithSiyuanMcp) { Write-DevLog 'MCP SiYuan: http://127.0.0.1:8104/mcp' 'OK' }
     Write-DevLog "Logs de esta ejecución: $runLogDir" 'OK'
 }
 catch {

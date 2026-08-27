@@ -155,6 +155,7 @@ export interface EnrichmentJob {
   proposal: Record<string, unknown> | null
   confidence: Record<string, number> | null
   evidence_by_field: Record<string, string[]> | null
+  provider_diagnostics: EnrichmentProviderDiagnostic[]
   sources: EnrichmentSource[]
   applied_fields: string[]
   error: { code: string | null; message: string | null } | null
@@ -164,10 +165,37 @@ export interface EnrichmentJob {
   completed_at: string | null
 }
 
+export interface EnrichmentProviderDiagnostic {
+  provider: 'openai' | 'ollama' | string
+  model: string
+  status: 'failed' | 'succeeded'
+  code: string | null
+  error_type: string | null
+  http_status: number | null
+  request_id: string | null
+  client_request_id: string
+  rate_limits: Record<string, string>
+  retryable: boolean
+  job_attempt: number
+  recorded_at: string
+}
+
 export interface EnrichmentJobCreated {
   job_id: string
   status: EnrichmentStatus
   status_url: string
+}
+
+export interface EnrichmentBatchResponse {
+  batch_id: string
+  jobs: Array<{
+    canonical_product_id: number
+    product_id: number
+    job_id: string
+    status: EnrichmentStatus
+    error: unknown
+  }>
+  skipped: Array<{ product_id: number; reason: string }>
 }
 
 export interface ProductPurchaseHistoryItem {

@@ -78,7 +78,7 @@ métricas productivas.
 
 - `docs/CHAT_DEPLOYMENT.md`: preflight, servicios, fases y rollback.
 - `docs/CHATBOT_ARCHITECTURE.md`: pipeline multicanal e identidad.
-- `docs/CHATBOT_ROLES.md`: roles y techo de Telegram.
+- `docs/SECURITY.md`: roles y techo de Telegram.
 - `docs/SECURITY.md`: secretos, HMAC, privacidad y logs.
 - `docs/CHAT.md`: contratos HTTP, WebSocket y Telegram.
 - `docs/MIGRATIONS_NOTES.md`: estado de la revisión de rollout.

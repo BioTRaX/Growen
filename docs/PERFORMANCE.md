@@ -1,3 +1,8 @@
+<!-- NG-HEADER: Nombre de archivo: PERFORMANCE.md -->
+<!-- NG-HEADER: Ubicación: docs/PERFORMANCE.md -->
+<!-- NG-HEADER: Descripción: Rendimiento y servicios bajo demanda. -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
+
 Lightweight Startup and On-Demand Services
 ==========================================
 

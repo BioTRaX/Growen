@@ -1,3 +1,8 @@
+<!-- NG-HEADER: Nombre de archivo: MARKET_SCHEDULER_QUICKSTART.md -->
+<!-- NG-HEADER: Ubicación: MARKET_SCHEDULER_QUICKSTART.md -->
+<!-- NG-HEADER: Descripción: Guía rápida del scheduler de precios de mercado. -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
+
 # Scheduler de Precios de Mercado - Guía Rápida
 
 ## Instalación

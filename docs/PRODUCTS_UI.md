@@ -116,8 +116,12 @@ Stock reutiliza el precio efectivo canónico → proveedor y los contratos de pr
 - El stock agregado es de sólo lectura; los ajustes operativos continúan en `/stock`.
 - Un producto sin canónico muestra el estado `canonical_required`, conserva sus datos internos básicos y no permite iniciar enriquecimiento hasta crear o asignar el canónico.
 - “Generar contenido” crea un job mediante `POST /canonical-products/{id}/enrichment-jobs`. La vista hace polling cancelable, presenta fuentes, propuesta, confianza y campos autoaplicados o pendientes.
+- Al reabrir la ficha, Vue recupera el último job y su panel **Diagnóstico de proveedores**. Para cada intento muestra código seguro, HTTP, request ID y límites/resets disponibles, sin exponer prompts ni respuestas remotas.
 - La aplicación manual usa `expected_content_revision`; un cambio concurrente responde `409` y nunca sobrescribe silenciosamente contenido más reciente.
 - El backend renderiza y sanitiza el HTML permitido. El proveedor IA sólo devuelve texto y datos estructurados.
+- Las descripciones se redactan como contenido publicable: voz activa, 2 a 4 oraciones breves y tono natural, sin mencionar fuentes, investigación o evidencia dentro del texto comercial.
+- Especificaciones e instrucciones se muestran como campos y listas con etiquetas legibles, no como JSON crudo. La procedencia permanece en la trazabilidad del job y no se mezcla con los valores del producto.
+- El botón **Conocimiento** abre la vista dedicada `/productos/:id/Conocimiento`, disponible para `colaborador` y `admin`. La página reutiliza el centro canónico completo sin overlay: fuentes, documentos, imágenes, videos, hechos, historial y jobs IA conservan sus operaciones y formularios.
 - Enrich v2 investiga descripción y especificaciones. No calcula, muestra ni edita valores monetarios: la card Mercado consume exclusivamente `/market`.
 - La trazabilidad y el historial se consultan en los endpoints de jobs y versiones canónicas. Ya no se usa un archivo `.txt` asociado al producto como fuente primaria.
 - Invitados y clientes acceden a la ficha en modo lectura; colaborador y admin pueden operar el enriquecimiento según sus permisos.

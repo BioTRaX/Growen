@@ -4,7 +4,8 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useAuthStore } from '../../../auth/store'
+import { useDisplay } from 'vuetify'
+import { VDialog } from 'vuetify/components'
 import { getHttpErrorMessage } from '../../../services/http'
 import {
   archiveKnowledge,
@@ -22,12 +23,13 @@ import {
 import type { KnowledgeAsset, KnowledgeAssetType, KnowledgeCapability, KnowledgeEvent, KnowledgeFact, KnowledgeJob, KnowledgeResponse } from '../types'
 
 const props = withDefaults(defineProps<{
-  modelValue: boolean
+  modelValue?: boolean
   canonicalProductId: number
   initialLabel?: string | null
-}>(), { initialLabel: null })
+  embedded?: boolean
+}>(), { modelValue: false, initialLabel: null, embedded: false })
 const emit = defineEmits<{ 'update:modelValue': [value: boolean]; changed: [] }>()
-const auth = useAuthStore()
+const { smAndDown } = useDisplay()
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
@@ -97,12 +99,16 @@ async function load(): Promise<void> {
   }
 }
 
-watch(() => props.modelValue, (open) => {
-  if (open) {
-    labelFilter.value = props.initialLabel
-    void load()
-  }
-})
+watch(
+  () => [props.modelValue, props.embedded, props.canonicalProductId] as const,
+  ([open, embedded]) => {
+    if (open || embedded) {
+      labelFilter.value = props.initialLabel
+      void load()
+    }
+  },
+  { immediate: true },
+)
 
 function openCreate(type: KnowledgeAssetType = 'web'): void {
   editing.value = null
@@ -214,17 +220,28 @@ async function upload(): Promise<void> {
 </script>
 
 <template>
-  <v-dialog :model-value="modelValue" fullscreen @update:model-value="emit('update:modelValue', $event)">
-    <v-card>
+  <component
+    :is="embedded ? 'div' : VDialog"
+    v-bind="embedded ? { class: 'knowledge-center-page' } : {
+      fullscreen: smAndDown,
+      modelValue,
+      class: 'knowledge-center-dialog',
+      maxWidth: 1040,
+      scrollable: true,
+      width: 'calc(100% - 64px)',
+    }"
+    @update:model-value="emit('update:modelValue', $event)"
+  >
+    <v-card :class="embedded ? 'knowledge-page-card' : 'knowledge-dialog-card'" :flat="embedded">
       <v-toolbar color="surface">
-        <v-btn icon="mdi-close" @click="emit('update:modelValue', false)" />
+        <v-btn v-if="!embedded" icon="mdi-close" @click="emit('update:modelValue', false)" />
         <v-toolbar-title>Conocimiento del producto</v-toolbar-title>
         <v-chip v-if="data" class="mr-4" color="primary" variant="tonal">{{ data.summary.total }} activos</v-chip>
       </v-toolbar>
       <v-progress-linear v-if="loading" indeterminate />
       <v-alert v-if="error" class="ma-4" closable type="error" @click:close="error = ''">{{ error }}</v-alert>
 
-      <v-tabs v-model="tab" class="px-4">
+      <v-tabs v-model="tab" class="knowledge-dialog-tabs px-4" show-arrows>
         <v-tab value="sources">Fuentes</v-tab>
         <v-tab value="documents">Documentos</v-tab>
         <v-tab value="images">Imágenes</v-tab>
@@ -234,7 +251,7 @@ async function upload(): Promise<void> {
         <v-tab value="ai">IA</v-tab>
       </v-tabs>
 
-      <v-window v-model="tab">
+      <v-window v-model="tab" class="knowledge-dialog-content">
         <v-window-item value="sources">
           <div class="pa-5">
             <div class="d-flex flex-wrap align-center ga-3 mb-4">
@@ -243,11 +260,11 @@ async function upload(): Promise<void> {
               <v-select v-model="labelFilter" clearable density="compact" hide-details :items="labels" label="Etiqueta" max-width="260" />
               <v-switch v-model="includeArchived" density="compact" hide-details label="Mostrar archivadas" />
             </div>
-            <v-row>
-              <v-col v-for="asset in filtered" :key="asset.id" cols="12" lg="6">
+            <v-row dense>
+              <v-col v-for="asset in filtered" :key="asset.id" cols="12">
                 <v-card :variant="asset.status === 'archived' ? 'outlined' : 'elevated'">
-                  <v-card-title class="d-flex align-center ga-2">
-                    <span>{{ asset.title }}</span>
+                  <v-card-title class="knowledge-card-title d-flex align-start ga-2">
+                    <span class="knowledge-card-heading">{{ asset.title }}</span>
                     <v-spacer />
                     <v-chip :color="confidenceColor(asset.trust_score)" size="small">{{ asset.trust_score.toFixed(0) }}</v-chip>
                   </v-card-title>
@@ -260,7 +277,7 @@ async function upload(): Promise<void> {
                     <div class="d-flex flex-wrap ga-1 mb-3">
                       <v-chip v-for="capability in asset.capabilities" :key="capability" size="x-small" variant="outlined">{{ capability }}</v-chip>
                     </div>
-                    <div v-for="location in asset.locations" :key="location.id" class="text-body-2 text-truncate">
+                    <div v-for="location in asset.locations" :key="location.id" class="knowledge-location text-body-2">
                       <a v-if="location.url" :href="location.url" rel="noopener noreferrer" target="_blank">{{ location.url }}</a>
                       <span v-else>{{ location.storage_path }}</span>
                       · {{ location.status }} · v{{ location.content_version }}
@@ -269,7 +286,7 @@ async function upload(): Promise<void> {
                       Mercado: {{ asset.market.validation_status }} · {{ asset.market.is_active ? 'activa' : 'inactiva' }}
                     </v-alert>
                   </v-card-text>
-                  <v-card-actions>
+                  <v-card-actions class="flex-wrap">
                     <v-btn prepend-icon="mdi-cog-play" size="small" variant="text" @click="process(asset)">Procesar</v-btn>
                     <v-btn v-if="asset.status !== 'archived'" prepend-icon="mdi-pencil" size="small" variant="text" @click="openEdit(asset)">Editar</v-btn>
                     <v-btn v-if="asset.status !== 'archived'" color="error" prepend-icon="mdi-archive" size="small" variant="text" @click="archive(asset)">Archivar</v-btn>
@@ -290,9 +307,9 @@ async function upload(): Promise<void> {
         <v-window-item value="ai"><div class="pa-5"><v-list><v-list-item v-for="job in jobs" :key="job.id" :title="`${job.status} · activo ${job.asset_id}`" :subtitle="job.error || job.stage || job.created_at" prepend-icon="mdi-robot" /></v-list></div></v-window-item>
       </v-window>
     </v-card>
-  </v-dialog>
+  </component>
 
-  <v-dialog v-model="editOpen" max-width="760">
+  <v-dialog v-model="editOpen" max-width="760" scrollable width="calc(100% - 32px)">
     <v-card>
       <v-card-title>{{ editing ? 'Editar conocimiento' : 'Nuevo conocimiento' }}</v-card-title>
       <v-card-text>
@@ -319,7 +336,7 @@ async function upload(): Promise<void> {
     </v-card>
   </v-dialog>
 
-  <v-dialog v-model="uploadOpen" max-width="680">
+  <v-dialog v-model="uploadOpen" max-width="680" scrollable width="calc(100% - 32px)">
     <v-card>
       <v-card-title>Subir documento, imagen o video</v-card-title>
       <v-card-text>
@@ -332,3 +349,23 @@ async function upload(): Promise<void> {
     </v-card>
   </v-dialog>
 </template>
+
+<style scoped>
+.knowledge-dialog-card {
+  display: flex;
+  flex-direction: column;
+  height: min(78vh, 760px);
+  overflow: hidden;
+}
+.knowledge-page-card { min-height: 60vh; }
+.knowledge-center-page { width: 100%; }
+.knowledge-dialog-tabs { flex: 0 0 auto; min-height: 48px; }
+.knowledge-dialog-content { flex: 1 1 0; min-height: 0; overflow-y: auto; }
+.knowledge-card-title { white-space: normal; }
+.knowledge-card-heading { min-width: 0; overflow-wrap: anywhere; }
+.knowledge-location { overflow-wrap: anywhere; word-break: break-word; }
+
+@media (max-width: 600px) {
+  .knowledge-dialog-card { height: 100%; }
+}
+</style>

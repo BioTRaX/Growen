@@ -7,14 +7,56 @@
 
 Enrich consulta primero `canonical_knowledge_assets`/hechos confirmados y sólo busca web si falta cobertura. Los descubrimientos se persisten; clasificaciones dudosas quedan `pending` y excluidas. `CanonicalEnrichmentSource` conserva evidencia inmutable con referencias al activo/versión. La capacidad `price` nunca entra en composición descriptiva.
 
+Las referencias posteriores a actualización directa de `Product.description_html`,
+archivos `.txt` o `POST /products/enrich-multiple` describen compatibilidad
+legacy y no deben utilizarse para nuevas integraciones.
+
 # Logging y Diagnóstico de Enriquecimiento IA
 
 ## Enrich v2 (vigente desde 2026-07-25)
 
+### Diagnóstico por proveedor (2026-08-17)
+
+Cada intento emite eventos JSON `provider_started`, `provider_succeeded` o
+`provider_failed`. Los eventos incluyen `job_id`, número de intento, proveedor,
+modelo y un `client_request_id` generado por Growen; nunca incluyen prompt,
+respuesta, API key ni cuerpo remoto.
+
+`GET /canonical-products/{id}/enrichment-jobs/{job_id}` expone
+`provider_diagnostics`. El arreglo queda persistido en `result_json`, conserva
+como máximo los veinte registros más recientes y permite distinguir:
+
+- OpenAI: `error.code` (por ejemplo `insufficient_quota`), HTTP,
+  `x-request-id`, límites, remanentes y resets recibidos;
+- Ollama: `timeout`, `http_error`, `empty_response`, `invalid_json` o
+  `schema_invalid`;
+- `provider_unavailable` para configuración ausente y `provider_error` como
+  último código seguro.
+
+La ficha Vue recupera el último job al abrirse y muestra esos metadatos en
+**Diagnóstico de proveedores**. Jobs creados antes de este cambio no se
+retrocompletan: hay que ejecutar un job nuevo para obtener trazabilidad. Un
+`429` con `insufficient_quota` no se resuelve reintentando ni cambiando la
+visualización de Usage; debe revisarse cuota/crédito/proyecto en el proveedor.
+
+### Perfil OpenAI de Enrich (2026-08-19)
+
+Enrich usa `gpt-5.6-luna` mediante Chat Completions con salida JSON, esfuerzo de
+razonamiento `none`, temperatura `0` y un presupuesto de salida de 2048 tokens.
+El SDK no realiza reintentos internos para este pipeline: Dramatiq reintenta sólo
+si al menos un proveedor informa un fallo transitorio. Códigos permanentes como
+`credit_balance_exhausted`, `insufficient_quota` e `invalid_api_key` terminan el
+job sin repetir solicitudes.
+
+El límite mensual de gasto de un proyecto no acredita fondos: únicamente limita
+cuánto puede consumir. Si OpenAI devuelve `credit_balance_exhausted` con Usage en
+cero, revisar la facturación de la organización/proyecto dueño de la API key y
+que el método de pago o saldo API estén activos.
+
 El flujo operativo nuevo es asíncrono y canónico. Diagnosticar en este orden:
 
 1. `GET /health/enrichment-worker`: broker, heartbeat y profundidad de `enrichment`.
-2. `GET /canonical-products/{id}/enrichment-jobs/{job_id}`: estado, etapa, proveedor/modelo, campos aplicados y error acotado.
+2. `GET /canonical-products/{id}/enrichment-jobs/{job_id}`: estado, etapa, proveedor/modelo, campos aplicados, error acotado y `provider_diagnostics`.
 3. Logs estructurados del proceso `enrichment_worker`, que incluyen IDs/estados pero nunca prompts, secretos ni documentos.
 
 Los retries reutilizan fuentes ya persistidas y mantienen un máximo de cinco URLs
@@ -30,6 +72,15 @@ Arranque local:
 ```powershell
 scripts\start-dev.ps1 -McpMode All -WithEnrichmentWorker
 ```
+
+`enrichment_worker` no depende de Telegram y debe ejecutar con todos sus flags
+apagados. Si entra en `Restarting` con `telegram_bot_token_missing`, verificar
+las sobrescrituras del servicio Compose; no copiar ni montar el token del bot.
+El secreto de OpenAI es independiente. En ejecución local puede configurarse
+mediante `OPENAI_API_KEY` o `OPENAI_API_KEY_FILE`; en Compose se exige una ruta
+absoluta del host en `OPENAI_API_KEY_FILE`, montada de sólo lectura únicamente en
+Enrich y Conocimiento. Un HTTP 429 confirma que el proveedor recibió la petición,
+pero indica cuota, crédito o rate limit insuficiente.
 
 La sección legacy siguiente se conserva únicamente para diagnosticar el fallback React mientras exista. Sus variables `AI_USE_WEB_SEARCH` y el endpoint `/debug/enrich/{product_id}` no describen el worker v2.
 

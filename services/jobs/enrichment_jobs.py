@@ -12,10 +12,12 @@ import html
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
 from datetime import datetime, timezone
+from typing import Any
 from urllib.parse import urlparse
 
 from sqlalchemy import select
@@ -63,6 +65,45 @@ TECHNICAL_FIELDS = {
     "technical_specs",
     "usage_instructions",
 }
+RATE_LIMIT_HEADERS = (
+    "x-ratelimit-limit-requests",
+    "x-ratelimit-limit-tokens",
+    "x-ratelimit-remaining-requests",
+    "x-ratelimit-remaining-tokens",
+    "x-ratelimit-reset-requests",
+    "x-ratelimit-reset-tokens",
+    "x-ratelimit-limit-project-requests",
+    "x-ratelimit-limit-project-tokens",
+    "x-ratelimit-remaining-project-requests",
+    "x-ratelimit-remaining-project-tokens",
+    "x-ratelimit-reset-project-requests",
+    "x-ratelimit-reset-project-tokens",
+)
+
+
+class ProviderResponseError(RuntimeError):
+    """Fallo de respuesta tipado, sin conservar el contenido generado."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class EnrichmentProvidersError(RuntimeError):
+    """Todos los proveedores configurados fallaron con diagnóstico seguro."""
+
+    def __init__(self, diagnostics: list[dict[str, Any]]) -> None:
+        self.diagnostics = diagnostics
+        summary = ", ".join(
+            f"{item['provider']}:{item['code']}" for item in diagnostics
+        )
+        super().__init__(f"No hay proveedor IA válido ({summary})")
+
+    @property
+    def retryable(self) -> bool:
+        """Indica si al menos un proveedor falló por una causa transitoria."""
+
+        return any(bool(item.get("retryable")) for item in self.diagnostics)
 
 
 def _heartbeat_loop() -> None:
@@ -122,50 +163,226 @@ if os.getenv("ENRICHMENT_HEARTBEAT_ENABLED", "1") == "1":
 def _parse_json_response(raw: str, prompt: str) -> dict:
     value = (raw or "").strip()
     if not value or value == prompt or value.startswith(("openai:", "ollama:")):
-        raise RuntimeError("El proveedor IA no produjo una respuesta válida")
+        raise ProviderResponseError("empty_response", "El proveedor IA no produjo una respuesta válida")
     if value.startswith("```"):
         value = value.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     try:
         parsed = json.loads(value)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("La respuesta IA no cumple el esquema JSON") from exc
+        raise ProviderResponseError("invalid_json", "La respuesta IA no cumple el esquema JSON") from exc
     if not isinstance(parsed, dict):
-        raise RuntimeError("La respuesta IA debe ser un objeto JSON")
+        raise ProviderResponseError("schema_invalid", "La respuesta IA debe ser un objeto JSON")
     description = parsed.get("description_text")
     if description is not None and not isinstance(description, str):
-        raise RuntimeError("description_text debe ser texto")
+        raise ProviderResponseError("schema_invalid", "description_text debe ser texto")
+    if description and re.search(
+        r"\b(?:según|de acuerdo con)\s+(?:la|las|el|los)\s+fuentes?\b"
+        r"|\blas?\s+fuentes?\s+(?:describe|indica|señala|reporta|menciona)\w*\b"
+        r"|\b(?:se reporta|se informa|la investigación|la evidencia)\b",
+        description,
+        flags=re.IGNORECASE,
+    ):
+        raise ProviderResponseError(
+            "schema_invalid",
+            "description_text contiene referencias al proceso de investigación",
+        )
     technical = parsed.get("technical") or {}
     if not isinstance(technical, dict):
-        raise RuntimeError("technical debe ser un objeto")
+        raise ProviderResponseError("schema_invalid", "technical debe ser un objeto")
     return parsed
 
 
-async def _generate_with_provider(prompt: str) -> tuple[dict, str, str]:
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def _safe_headers(exc: BaseException) -> dict[str, str]:
+    for item in _exception_chain(exc):
+        response = getattr(item, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers:
+            return {str(key).lower(): str(value)[:200] for key, value in headers.items()}
+    return {}
+
+
+def _provider_diagnostic(
+    provider: str,
+    model: str,
+    exc: BaseException,
+    *,
+    job_attempt: int,
+    client_request_id: str,
+) -> dict[str, Any]:
+    chain = _exception_chain(exc)
+    headers = _safe_headers(exc)
+    http_status = next(
+        (
+            int(value)
+            for item in chain
+            if (
+                value := getattr(item, "status_code", None)
+                or getattr(getattr(item, "response", None), "status_code", None)
+            ) is not None
+        ),
+        None,
+    )
+    request_id = next(
+        (str(value) for item in chain if (value := getattr(item, "request_id", None))),
+        headers.get("x-request-id"),
+    )
+    provider_code = next(
+        (str(value) for item in chain if (value := getattr(item, "code", None))),
+        None,
+    )
+    for item in chain:
+        body = getattr(item, "body", None)
+        if isinstance(body, dict):
+            error = body.get("error") if isinstance(body.get("error"), dict) else body
+            if isinstance(error, dict) and error.get("code"):
+                provider_code = str(error["code"])
+                break
+    names = {type(item).__name__ for item in chain}
+    messages = {str(item) for item in chain}
+    if provider == "ollama" and provider_code == "ollama_empty_response":
+        code = "empty_response"
+    elif provider_code:
+        code = provider_code
+    elif "ProviderResponseError" in names:
+        code = str(next((getattr(item, "code") for item in chain if hasattr(item, "code")), "schema_invalid"))
+    elif any("Timeout" in name for name in names):
+        code = "timeout"
+    elif provider == "ollama" and any("ollama_empty_response" in value for value in messages):
+        code = "empty_response"
+    elif provider == "ollama" and any("JSON" in name or "Decode" in name for name in names):
+        code = "invalid_json"
+    elif http_status is not None:
+        code = "http_error"
+    elif any("provider_unavailable" in value or "no configurad" in value for value in messages):
+        code = "provider_unavailable"
+    else:
+        code = "provider_error"
+    rate_limits = {
+        key.removeprefix("x-ratelimit-").replace("-", "_"): headers[key]
+        for key in RATE_LIMIT_HEADERS
+        if key in headers
+    }
+    return {
+        "provider": provider,
+        "model": model,
+        "status": "failed",
+        "code": code[:100],
+        "error_type": type(chain[-1]).__name__[:100],
+        "http_status": http_status,
+        "request_id": request_id[:200] if request_id else None,
+        "client_request_id": client_request_id,
+        "rate_limits": rate_limits,
+        "retryable": code not in {
+            "credit_balance_exhausted",
+            "insufficient_quota",
+            "invalid_api_key",
+            "invalid_json",
+            "schema_invalid",
+        }
+        and (http_status in {408, 409, 429} or bool(http_status and http_status >= 500) or code == "timeout"),
+        "job_attempt": job_attempt,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def _generate_with_provider(
+    prompt: str,
+    *,
+    job_id: str = "adhoc",
+    job_attempt: int = 1,
+) -> tuple[dict, str, str, list[dict[str, Any]]]:
     mode = os.getenv("ENRICH_AI_MODE", "auto").strip().lower()
     if mode not in {"auto", "openai", "ollama"}:
         raise RuntimeError("ENRICH_AI_MODE inválido")
-    errors: list[str] = []
+    diagnostics: list[dict[str, Any]] = []
     candidates = ["openai", "ollama"] if mode == "auto" else [mode]
     for name in candidates:
+        model = (
+            os.getenv("ENRICH_OPENAI_MODEL", "gpt-5.6-luna")
+            if name == "openai"
+            else os.getenv("ENRICH_OLLAMA_MODEL", "llama3.1")
+        )
+        client_request_id = f"growen-enrich-{job_id}-{job_attempt}-{name}"[:512]
+        _event(
+            "provider_started",
+            job_id=job_id,
+            job_attempt=job_attempt,
+            provider=name,
+            model=model,
+            client_request_id=client_request_id,
+        )
         try:
             if name == "openai":
                 provider = OpenAIProvider()
-                provider.model = os.getenv("ENRICH_OPENAI_MODEL", "gpt-4.1-mini")
+                provider.model = model
                 if not provider.api_key:
                     raise RuntimeError("OPENAI_API_KEY no configurada")
-                raw = await provider.generate_async(prompt, user_context={"role": "admin", "channel": "web"})
+                raw = await provider.generate_async(
+                    prompt,
+                    user_context={
+                        "role": "admin",
+                        "channel": "web",
+                        "client_request_id": client_request_id,
+                        "reasoning_effort": os.getenv(
+                            "ENRICH_OPENAI_REASONING_EFFORT", "none"
+                        ),
+                        "temperature": float(
+                            os.getenv("ENRICH_OPENAI_TEMPERATURE", "0")
+                        ),
+                        "max_output_tokens": _integer(
+                            "ENRICH_OPENAI_MAX_OUTPUT_TOKENS", 2048
+                        ),
+                        "sdk_max_retries": 0,
+                    },
+                )
             else:
                 if not os.getenv("OLLAMA_HOST"):
                     raise RuntimeError("OLLAMA_HOST no configurado")
                 provider = OllamaProvider()
-                provider.model = os.getenv("ENRICH_OLLAMA_MODEL", "llama3.1")
+                provider.model = model
                 raw = "".join(await asyncio.to_thread(lambda: list(provider.generate(prompt))))
-            return _parse_json_response(raw, prompt), name, provider.model
+            parsed = _parse_json_response(raw, prompt)
+            succeeded = {
+                "provider": name,
+                "model": provider.model,
+                "status": "succeeded",
+                "code": None,
+                "error_type": None,
+                "http_status": None,
+                "request_id": None,
+                "client_request_id": client_request_id,
+                "rate_limits": {},
+                "retryable": False,
+                "job_attempt": job_attempt,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            }
+            diagnostics.append(succeeded)
+            _event("provider_succeeded", **succeeded, job_id=job_id)
+            return parsed, name, provider.model, diagnostics
         except Exception as exc:
-            errors.append(f"{name}:{type(exc).__name__}")
+            diagnostic = _provider_diagnostic(
+                name,
+                model,
+                exc,
+                job_attempt=job_attempt,
+                client_request_id=client_request_id,
+            )
+            diagnostics.append(diagnostic)
+            _event("provider_failed", **diagnostic, job_id=job_id)
             if mode != "auto":
                 break
-    raise RuntimeError(f"No hay proveedor IA válido ({', '.join(errors)})")
+    raise EnrichmentProvidersError(diagnostics)
 
 
 def _render_description(text: str | None) -> str | None:
@@ -362,7 +579,15 @@ def _compose_prompt(product: CanonicalProduct, sources: list[dict], scope: str) 
     return (
         "Eres un investigador de catálogo. Devuelve exclusivamente JSON válido; "
         "no incluyas HTML ni precios, valores de mercado o estimaciones monetarias. "
-        "No inventes especificaciones numéricas. Cada dato técnico requiere source_url.\n\n"
+        "No inventes especificaciones numéricas. Cada dato técnico requiere source_url. "
+        "Redacta description_text en español claro, directo y natural, con 2 a 4 oraciones breves. "
+        "Describe el producto y sus beneficios en voz activa; puedes usar un tono informal moderado, "
+        "sin exageraciones comerciales ni alargar el texto. Nunca menciones la investigación, la evidencia, "
+        "las fuentes, sitios, documentos ni expresiones como 'según la fuente', 'las fuentes describen', "
+        "'se reporta' o equivalentes. La descripción debe poder publicarse tal cual en una ficha de producto. "
+        "En technical_specs y usage_instructions devuelve sólo información útil para el comprador: no incluyas "
+        "source_note, notas de fuente, procedencia ni variantes contradictorias. Ante un dato ambiguo, elige el "
+        "mejor respaldado por la fuente más confiable o déjalo fuera. Usa claves snake_case y valores concisos.\n\n"
         f"Producto canónico: {json.dumps({'name': product.name, 'brand': product.brand, 'sku': product.sku_custom or product.ng_sku}, ensure_ascii=False)}\n"
         f"Alcance: {scope}\n"
         f"Fuentes: {json.dumps(evidence, ensure_ascii=False)}\n"
@@ -532,8 +757,10 @@ async def process_canonical_enrichment_async(job_id: str) -> None:
             await _persist_sources(job, sources, db)
             job.stage = "compose"
             await db.commit()
-            generated, provider, model = await _generate_with_provider(
-                _compose_prompt(product, sources, job.scope)
+            generated, provider, model, provider_diagnostics = await _generate_with_provider(
+                _compose_prompt(product, sources, job.scope),
+                job_id=job.id,
+                job_attempt=job.attempts,
             )
             job.provider = provider
             job.model = model
@@ -541,6 +768,8 @@ async def process_canonical_enrichment_async(job_id: str) -> None:
             result, auto_fields = _build_result(product, generated, sources, job.scope)
             if not result["proposal"]:
                 raise RuntimeError("La propuesta no contiene campos respaldados")
+            prior_diagnostics = list((job.result_json or {}).get("provider_diagnostics") or [])
+            result["provider_diagnostics"] = (prior_diagnostics + provider_diagnostics)[-20:]
             job.result_json = result
             job.stage = "apply"
             await _apply_automatic_fields(product, job, result, auto_fields, db)
@@ -552,16 +781,26 @@ async def process_canonical_enrichment_async(job_id: str) -> None:
             if not job:
                 raise
             max_retries = _integer("ENRICH_JOB_MAX_RETRIES", 2)
-            job.error_code = type(exc).__name__
+            previous_result = dict(job.result_json or {})
+            if isinstance(exc, EnrichmentProvidersError):
+                prior_diagnostics = list(previous_result.get("provider_diagnostics") or [])
+                previous_result["provider_diagnostics"] = (prior_diagnostics + exc.diagnostics)[-20:]
+                job.result_json = previous_result
+                job.error_code = "ai_provider_unavailable"
+            else:
+                job.error_code = type(exc).__name__
             job.error_message = _safe_error_message(exc)
             job.stage = None
-            if job.attempts <= max_retries:
+            should_retry = not isinstance(exc, EnrichmentProvidersError) or exc.retryable
+            if job.attempts <= max_retries and should_retry:
                 job.status = "queued"
             else:
                 job.status = "failed"
                 job.completed_at = datetime.utcnow()
             await db.commit()
             _event("job_failed", job_id=job.id, status=job.status, error_code=job.error_code)
+            if not should_retry:
+                return
             raise
 
 

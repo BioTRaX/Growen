@@ -22,6 +22,7 @@ import type {
   ProductTag,
   EnrichmentJob,
   EnrichmentJobCreated,
+  EnrichmentBatchResponse,
   EnrichmentScope,
 } from '../types'
 
@@ -154,8 +155,12 @@ export async function updateSupplierBuyPrice(supplierItemId: number, buyPrice: n
   return (await http.patch<{ id: number; buy_price: number | null }>(`/products-ex/supplier-items/${supplierItemId}/buy-price`, { buy_price: buyPrice })).data
 }
 
-export async function enrichProducts(ids: number[]): Promise<void> {
-  await http.post('/products/enrich-multiple', { ids })
+export async function enrichProducts(ids: number[]): Promise<EnrichmentBatchResponse> {
+  return (await http.post<EnrichmentBatchResponse>('/canonical-products/enrichment-batches', {
+    client_request_id: crypto.randomUUID(),
+    product_ids: ids,
+    scope: 'full',
+  })).data
 }
 
 export async function fillMissingSalePrices(supplierId: number | null): Promise<{ updated: number }> {

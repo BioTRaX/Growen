@@ -16,9 +16,11 @@ description: "Cierra una sesión técnica de Growen mediante una retrospectiva f
    - **Prevención:** controles derivados de obstáculos, errores o retrabajo reales de la sesión.
    - **Aceleración:** skills, referencias, plantillas o scripts que harían más rápidas y consistentes futuras implementaciones similares, aunque esta sesión no haya presentado dificultades.
 9. Para cada mejora candidata, indicar evidencia, frecuencia esperada, beneficio, costo de mantenimiento y opción recomendada: ampliar una skill existente, crear una skill, añadir un recurso determinista, mejorar el prompt/contexto, usar una herramienta o delegar a un agente independiente. Preferir ampliar una skill existente y no proponer agentes separados sin una frontera clara de contexto, permisos o paralelismo.
-10. Basar las propuestas preventivas en problemas observados. Basar los aceleradores en pasos repetibles observados, no en herramientas hipotéticas sin caso de uso. No crear ni modificar otras skills automáticamente salvo solicitud expresa o alcance ya autorizado.
-11. Actualizar `README.md`, `Roadmap.md` y los documentos de `docs/` realmente afectados. Crear `docs/RETROSPECTIVE_<DOMINIO>_<AAAAMMDD>.md` cuando el volumen de hallazgos justifique un informe persistente. Mantener NG-HEADER y enlaces relativos válidos.
-12. Entregar el reporte con esta estructura de Growen:
+10. Basar las propuestas preventivas en problemas observados. Basar los aceleradores en pasos repetibles observados, no en herramientas hipotéticas sin caso de uso.
+11. Cuando el usuario autorice cambios del entorno agéntico, **materializar al menos una mejora prioritaria** antes de cerrar: actualizar la skill aplicable, agregar una referencia determinista, incorporar una prueba o crear/ajustar un script reutilizable. Ejecutar una validación focal y registrar el archivo modificado y la evidencia. Si no existe una mejora materializable segura, dejar la razón explícita como bloqueo.
+12. No crear ni modificar otras skills automáticamente sin autorización; la autorización explícita del usuario para mejorar el entorno agéntico sí habilita el cambio acotado y validado.
+13. Actualizar `README.md`, `Roadmap.md` y los documentos de `docs/` realmente afectados. Crear `docs/RETROSPECTIVE_<DOMINIO>_<AAAAMMDD>.md` cuando el volumen de hallazgos justifique un informe persistente. Mantener NG-HEADER y enlaces relativos válidos.
+14. Entregar el reporte con esta estructura de Growen:
    - **Contexto:** alcance, evidencia consultada y límites.
    - **Observaciones:** tareas verificadas, estado y documentación actualizada.
    - **Errores y/u outputs:** incidentes, causas, soluciones, validación y riesgos.

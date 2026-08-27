@@ -7,6 +7,8 @@
 
 > Vigencia: desde `20260726_canonical_knowledge_v1`, el scheduler consume perfiles técnicos asociados a activos confirmados con etiqueta `market`, capacidad `price`, ARS y entrega argentina confirmadas. Las referencias a `market_sources` describen el diseño histórico.
 
+No ejecutar los SQL históricos de este documento ni recrear `market_sources`.
+
 ## Resumen
 
 Sistema de programación automática para mantener actualizados los precios de mercado mediante scraping periódico. Utiliza APScheduler + Dramatiq para ejecutar tareas de forma distribuida y resiliente.

@@ -43,6 +43,7 @@ describe('useEnrichmentJob', () => {
       proposal: null,
       confidence: null,
       evidence_by_field: null,
+      provider_diagnostics: [],
       sources: [],
       applied_fields: [],
       error: null,
@@ -64,5 +65,27 @@ describe('useEnrichmentJob', () => {
     wrapper.unmount()
     await vi.advanceTimersByTimeAsync(2_000)
     expect(api.get).toHaveBeenCalledTimes(1)
+  })
+
+  it('recupera el último job al volver a abrir la ficha', async () => {
+    api.get.mockResolvedValue({
+      job_id: 'job-existing',
+      status: 'failed',
+      provider_diagnostics: [],
+    })
+    let enrichment!: ReturnType<typeof useEnrichmentJob>
+    const Host = defineComponent({
+      setup() {
+        enrichment = useEnrichmentJob(async () => undefined)
+        return () => h('div')
+      },
+    })
+    const wrapper = mount(Host)
+
+    await enrichment.resume(10, 'job-existing')
+
+    expect(api.get).toHaveBeenCalledWith(10, 'job-existing')
+    expect(enrichment.job.value?.job_id).toBe('job-existing')
+    wrapper.unmount()
   })
 })

@@ -7,9 +7,33 @@
 
 ## Fuente canónica y compatibilidad
 
-Las skills del proyecto residen únicamente en `.agents/skills/<nombre>/SKILL.md`. Esta ubicación común es descubierta por Codex, Gemini CLI y GitHub Copilot. Los archivos bajo `.agent/skills/` son adaptadores legacy preexistentes: no deben duplicar procedimientos ni usarse para skills nuevas.
+Las skills del proyecto residen únicamente en `.agents/skills/<nombre>/SKILL.md`. Esta ubicación común es descubierta por Codex, Gemini CLI, GitHub Copilot y Antigravity. Los archivos bajo `.agent/skills/` son adaptadores legacy preexistentes: sólo redirigen a la fuente canónica y no deben duplicar procedimientos ni usarse para skills nuevas.
 
-Referencias oficiales: [skills de Codex](https://learn.chatgpt.com/codex/build-skills), [skills de Gemini CLI](https://codelabs.developers.google.com/gemini-cli/how-to-create-agent-skills-for-gemini-cli) y [skills de GitHub Copilot](https://docs.github.com/en/copilot/concepts/agents/about-agent-skills).
+Referencias oficiales: [skills de Codex](https://learn.chatgpt.com/codex/build-skills), [skills de Gemini CLI](https://codelabs.developers.google.com/gemini-cli/how-to-create-agent-skills-for-gemini-cli), [skills de GitHub Copilot](https://docs.github.com/en/copilot/concepts/agents/about-agent-skills) y [skills de Antigravity](https://antigravity.google/docs/skills).
+
+## Compatibilidad con Superpowers
+
+Las skills externas de Superpowers pueden utilizarse como metodología general, pero no reemplazan ni desactivan las reglas locales de Growen. La precedencia es la siguiente:
+
+1. `AGENTS.md` y las skills canónicas de Growen (bajo `.agents/skills/`) tienen prioridad sobre cualquier flujo de Superpowers.
+2. Los gates de seguridad y Git de Growen prevalecen sobre commits automáticos, pushes, merges o publicación de ramas.
+3. Toda mutación Git requiere autorización explícita. En la rama exacta `dev`, el usuario puede autorizar la automatización para una entrega o sesión; esa autorización no elimina el gate de secretos, alcance, pruebas, documentación y remoto.
+4. Los flujos de Superpowers solo pueden operar con Python y pytest del venv de Growen (`.venv\Scripts\python.exe`) o con Docker; no se permiten ejecutables del sistema.
+5. Todo Markdown bajo `docs/superpowers/` debe incluir NG-HEADER y mantenerse alineado con la documentación viva del proyecto.
+6. Las respuestas, documentación y comunicación de skills externas deben mantenerse en español.
+
+### Matriz de solapamiento útil
+
+- `writing-skills` / `skill-scaffolder`: complementarios; la metodología TDD de Superpowers puede reforzar la creación de skills, pero Growen conserva la salida canónica en `.agents/skills/` y el frontmatter obligatorio.
+- `systematic-debugging` / `diagnose-local-services`: complementarios; la primera aporta análisis general, la segunda aporta el contexto técnico exacto de Growen (API, Docker, PostgreSQL, Redis, Dramatiq).
+- `finishing-a-development-branch`, `requesting-code-review`, `executing-plans` / `git-commit-push`: parcialmente solapados; la regla local exige autorización explícita. Sólo `dev` admite automatización ya autorizada y siempre después del gate completo.
+- `test-driven-development` / testing de Growen: complementarios; TDD define el orden metodológico, mientras Growen obliga a ejecutar pytest con `.venv\Scripts\python.exe` o Docker y a consultar `docs/TESTING.md`.
+- `verification-before-completion` / `retrospectiva-tecnica-sesion`: complementarios; la primera aporta evidencia general, la segunda exige cierre explícito y no se activa por tareas aisladas.
+- `using-git-worktrees` / `using-superpowers`: útiles como marco operativo, pero deben adaptarse a los requisitos de entorno de Growen y a los comandos Python permitidos.
+
+En resumen, Superpowers aporta disciplina y composición de flujos; Growen conserva la autoridad final sobre seguridad, entorno, idioma, documentación y publicación.
+
+Las 14 skills de Superpowers se mantienen en su instalación global y se actualizan desde el repositorio original. Growen no conserva forks locales: aplica esta capa de precedencia al descubrirlas desde el directorio compartido del usuario.
 
 ## Retrospectiva técnica de sesión
 
@@ -53,3 +77,15 @@ dejó tres controles reutilizables para futuras entregas:
 
 Estos controles amplían el contexto operativo; no sustituyen las skills
 `git-commit-push`, `git-secret-forensics` ni sus gates de autorización.
+
+La retrospectiva de [Enrich v2 y Conocimiento Vue del 2026-08-20](./RETROSPECTIVE_ENRICH_KNOWLEDGE_VUE_20260820.md)
+incorporó un control adicional a `vue-module-migration`:
+
+- elegir página, diálogo o drawer antes de implementar una superficie compuesta;
+- no aceptar pruebas/build como sustituto del smoke visual autenticado;
+- validar rutas nuevas desde la acción de origen, con datos representativos,
+  consola y composición visibles;
+- regenerar el manifiesto/Nginx cuando cambie `config/modules.json`.
+
+El checklist canónico vive junto a la skill en
+`.agents/skills/vue-module-migration/references/visual-validation-checklist.md`.

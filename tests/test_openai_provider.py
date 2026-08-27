@@ -3,6 +3,8 @@
 # NG-HEADER: Ubicación: tests/test_openai_provider.py
 # NG-HEADER: Descripción: Pruebas de OpenAIProvider (fallback y tono)
 # NG-HEADER: Lineamientos: Ver AGENTS.md
+from types import SimpleNamespace
+
 import pytest
 
 from ai.providers.openai_provider import OpenAIProvider
@@ -40,3 +42,75 @@ async def test_openai_vision_requires_explicit_flag(monkeypatch):
 
     with pytest.raises(RuntimeError, match="openai_vision_disabled"):
         await provider.generate_async("diagnóstico", images=["https://example.invalid/image.png"])
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_sends_client_request_id(monkeypatch):
+    captured = {}
+
+    class Completions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="respuesta"))]
+            )
+
+    class Client:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=Completions())
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("OPENAI_API_KEY_FILE", raising=False)
+    monkeypatch.setattr("ai.providers.openai_provider.AsyncOpenAI", Client)
+
+    provider = OpenAIProvider()
+    await provider.generate_async(
+        "sistema\n\npregunta",
+        user_context={"client_request_id": "growen-enrich-test-1-openai"},
+    )
+
+    assert captured["extra_headers"] == {
+        "X-Client-Request-Id": "growen-enrich-test-1-openai"
+    }
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_uses_luna_reasoning_parameters(monkeypatch):
+    captured = {}
+    client_options = {}
+
+    class Completions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))]
+            )
+
+    class Client:
+        def __init__(self, **kwargs):
+            client_options.update(kwargs)
+            self.chat = SimpleNamespace(completions=Completions())
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("OPENAI_API_KEY_FILE", raising=False)
+    monkeypatch.setattr("ai.providers.openai_provider.AsyncOpenAI", Client)
+
+    provider = OpenAIProvider()
+    provider.model = "gpt-5.6-luna"
+    await provider.generate_async(
+        "sistema\n\nResponde SOLO con JSON",
+        user_context={
+            "reasoning_effort": "none",
+            "temperature": 0,
+            "max_output_tokens": 2048,
+            "sdk_max_retries": 0,
+        },
+    )
+
+    assert captured["model"] == "gpt-5.6-luna"
+    assert captured["reasoning_effort"] == "none"
+    assert captured["temperature"] == 0
+    assert captured["max_completion_tokens"] == 2048
+    assert "max_tokens" not in captured
+    assert captured["response_format"] == {"type": "json_object"}
+    assert client_options["max_retries"] == 0

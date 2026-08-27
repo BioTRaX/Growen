@@ -43,8 +43,9 @@ Detalle de un producto interno. Además de los campos básicos (`id`, `title`, `
 - `canonical_ng_sku`: SKU NG-######
 - `canonical_name`: nombre del canónico
 - `preferred_title`: título preferido para mostrar en UI (si existe `product.title_canonical`, se usa; si no, `canonical_name`; como último recurso `title`)
-Metadatos de enriquecimiento IA:
-- `enrichment_sources_url`: URL pública al archivo .txt con fuentes (si existe)
+Compatibilidad temporal de enriquecimiento IA:
+- `enrichment_sources_url`: campo legacy de sólo lectura durante el rollback
+  React; el contenido vigente vive en `CanonicalProduct` y Base de Conocimiento.
 - `last_enriched_at`: fecha/hora UTC ISO cuando se realizó el último enriquecimiento (o null)
 - `enriched_by`: id del usuario que ejecutó el enriquecimiento (o null)
 
@@ -102,8 +103,10 @@ Notas:
 - Admite `q`, `supplier_id`, `category_id`, `stock`, `type`, `created_since_days`, `sort_by` y `order`.
 ---
 
-## POST /products/{id}/enrich
-Enriquece un producto interno usando IA (OpenAI/Ollama vía AIRouter). Requiere CSRF y rol `admin` o `colaborador`.
+## POST /products/{id}/enrich (adaptador legacy)
+Adapta temporalmente una solicitud por `Product.id` al job canónico de Enrich.
+No genera contenido directamente ni calcula precios de mercado. Requiere CSRF y
+rol `admin` o `colaborador`.
 
 Uso típico (desde la UI): botón “Enriquecer con IA” en la ficha del producto. Condiciones de visibilidad:
 - El usuario debe tener permisos de edición (admin o colaborador).
@@ -111,44 +114,45 @@ Uso típico (desde la UI): botón “Enriquecer con IA” en la ficha del produc
 
 Validaciones y comportamiento:
 - 404 si el producto no existe.
-- 400 si el producto no tiene `title` definido.
-- Invoca IA con un prompt que solicita un JSON con la clave “Descripción para Nice Grow” (y otros campos informativos como peso y dimensiones si se conocen).
-- Actualiza `products.description_html` con “Descripción para Nice Grow”.
-- Registra `AuditLog` con acción `enrich_ai` y campos afectados.
+- 409 si el producto no tiene canónico.
+- Crea o reutiliza un job en `/canonical-products/{id}/enrichment-jobs`.
+- Devuelve `job_id`, `canonical_product_id` y `status_url`.
 
 Parámetros:
-- `force` (query, opcional): si es `true`, fuerza reescritura aunque ya exista contenido enriquecido y reemplaza el archivo `.txt` de fuentes (si lo hay). Se audita como `reenrich`.
+- `force` (query, opcional): conserva el comportamiento de idempotencia del
+  adaptador durante el fallback; las nuevas integraciones deben usar el job
+  canónico y su `client_request_id`.
 
-Respuesta:
+Respuesta compatible:
 ```
-{ "status": "ok", "updated": true, "fields": ["description_html", ...], "sources_url": "/media/enrichment_logs/product_123_enrichment_20250101T120000Z.txt" }
+{ "status": "queued", "updated": false, "job_id": "...", "canonical_product_id": 18, "status_url": "/canonical-products/18/enrichment-jobs/..." }
 ```
 
 Notas:
-- Si la IA provee valores técnicos (peso, dimensiones, precio de mercado), el backend intentará mapearlos a los campos técnicos y persistirlos.
-- Cuando la respuesta incluye “Fuentes”, se genera un `.txt` bajo `/media/enrichment_logs/` y se expone en `enrichment_sources_url`.
-- Si `AI_USE_WEB_SEARCH=1` y `ai_allow_external=true`, el backend invoca opcionalmente el MCP `web_search` para anexar contexto de resultados (top N) al prompt. En la auditoría se incluyen `web_search_query` y `web_search_hits`.
+- El contenido nuevo se persiste sólo en el canónico y sus versiones/evidencias.
+- Las fuentes se gestionan desde la Base de Conocimiento; no se genera un
+  archivo `.txt` legacy.
 
 ---
 
-## DELETE /products/{id}/enrichment
-Elimina los datos enriquecidos por IA del producto. Requiere CSRF y rol `admin` o `colaborador`.
+## DELETE /products/{id}/enrichment (adaptador legacy)
+Limpia el contenido del canónico vinculado y conserva una versión auditable.
+Se mantiene sólo durante el ciclo de compatibilidad React.
 
 Acciones:
-- Limpia `description_html`, `weight_kg`, `height_cm`, `width_cm`, `depth_cm`, `market_price_reference` y `enrichment_sources_url`.
-- Limpia además metadatos `last_enriched_at` y `enriched_by`.
-- Si existe archivo de fuentes (`enrichment_sources_url`), intenta borrarlo del storage.
-- Registra `AuditLog` con acción `delete_enrichment` e incluye si el archivo fue eliminado.
+- No modifica valores de mercado.
+- Limpia el contenido canónico mediante una nueva revisión y auditoría.
 
 Respuesta:
 ```
-{ "status": "ok", "deleted": true }
+{ "status": "ok", "canonical_product_id": 18, "content_revision": 4, "cleared_fields": ["description_html"] }
 ```
 
 ---
 
-## POST /products/enrich-multiple
-Enriquece en lote (hasta 20) productos por sus IDs. Requiere CSRF y rol `admin` o `colaborador`.
+## POST /products/enrich-multiple (adaptador legacy)
+Adapta temporalmente IDs internos a jobs canónicos únicos. Requiere CSRF y rol
+`admin` o `colaborador`.
 
 Cuerpo:
 ```
@@ -156,13 +160,13 @@ Cuerpo:
 ```
 
 Reglas:
-- Se ignoran productos sin `title`.
-- Si `force=false` (por defecto), se omiten productos que ya tienen enriquecimiento (descripción o fuentes).
-- Límite: 20 por lote para evitar bloqueos.
+- Se omiten productos sin canónico.
+- Los productos internos que apuntan al mismo canónico generan un único job.
+- El contrato nuevo es `POST /canonical-products/enrichment-batches`.
 
 Respuesta:
 ```
-{ "enriched": 6, "skipped": 2, "errors": [/* ids que fallaron */] }
+{ "status": "queued", "batch_id": "...", "jobs": [], "skipped": [] }
 ```
 
 Auditoría:

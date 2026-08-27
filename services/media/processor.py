@@ -18,11 +18,6 @@ except ImportError:
     # pillow-heif no está instalado, HEIF/HEIC no se podrán procesar
     pass
 
-try:
-    from rembg import remove as rembg_remove  # type: ignore
-except Exception:  # pragma: no cover - optional import
-    rembg_remove = None  # type: ignore
-
 from . import get_media_root
 
 
@@ -110,8 +105,10 @@ def apply_watermark(img_path: Path, logo_path: Path, pos: str = "br", opacity: f
 
 
 def remove_bg(source: Path, dest_dir: Path | None = None) -> Path:
-    if rembg_remove is None:
-        raise RuntimeError("rembg no disponible")
+    try:
+        from rembg import remove as rembg_remove  # type: ignore
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise RuntimeError("rembg no disponible") from exc
     with Image.open(source) as im:
         out = rembg_remove(im)
         if dest_dir is None:

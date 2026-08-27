@@ -102,8 +102,8 @@ call :log "[INFO] ===== FIN PRE-FLIGHT ====="
 
 call :log "[INFO] Cerrando procesos previos..."
 if exist "%~dp0stop.bat" call "%~dp0stop.bat"
-REM Intento proactivo de matar procesos que ya escuchan en 8000/5175 antes de las comprobaciones
-for %%P in (8000 5175) do (
+REM Intento proactivo de matar procesos que ya escuchan en 8000/5176 antes de las comprobaciones
+for %%P in (8000 5176) do (
   powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-NetTCPConnection -State Listen -LocalPort %%P -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction Stop } catch {} }" >NUL 2>&1
 )
 REM pequeña espera para evitar condiciones de carrera al liberar puertos
@@ -113,8 +113,8 @@ set "AGGRESSIVE_PORT_FREE=%AGGRESSIVE_PORT_FREE%"
 if not defined AGGRESSIVE_PORT_FREE set "AGGRESSIVE_PORT_FREE=0"
 set "ALLOW_PORT_BUSY=%ALLOW_PORT_BUSY%"
 if not defined ALLOW_PORT_BUSY set "ALLOW_PORT_BUSY=0"
-call :log "[INFO] Verificando puertos 8000 y 5175 (AGGRESSIVE_PORT_FREE=%AGGRESSIVE_PORT_FREE%, ALLOW_PORT_BUSY=%ALLOW_PORT_BUSY%)..."
-for %%P in (8000 5175) do (
+call :log "[INFO] Verificando puertos 8000 y 5176 (AGGRESSIVE_PORT_FREE=%AGGRESSIVE_PORT_FREE%, ALLOW_PORT_BUSY=%ALLOW_PORT_BUSY%)..."
+for %%P in (8000 5176) do (
   if "%AGGRESSIVE_PORT_FREE%"=="1" (
     call :log "[DEBUG] Modo agresivo: intentando liberar puerto %%P (fase pre-chequeo)"
     powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process -Id (@(Get-NetTCPConnection -State Listen -LocalPort %%P -ErrorAction SilentlyContinue | Select -ExpandProperty OwningProcess) | Sort -Unique) 2>$null | ForEach-Object { try { Stop-Process -Id $_.Id -Force -ErrorAction Stop } catch {} }" >NUL 2>&1
@@ -273,10 +273,10 @@ if errorlevel 1 (
   call :log "[WARN] Falló la instalación del navegador de Playwright (chromium). El crawler podría no funcionar."
 )
 
-rem Asegurarse de que frontend tenga node_modules (si no, ejecutar npm install)
-if not exist "%ROOT%frontend\node_modules" (
-  call :log "[INFO] node_modules no encontrado en frontend; ejecutando npm install..."
-  pushd "%ROOT%frontend"
+rem Asegurar dependencias del frontend Vue canónico.
+if not exist "%ROOT%frontend-vue\node_modules" (
+  call :log "[INFO] node_modules no encontrado en frontend-vue; ejecutando npm install..."
+  pushd "%ROOT%frontend-vue"
   npm install >> "%LOG_FILE%" 2>&1
   if errorlevel 1 (
     call :log "[ERROR] Falló 'npm install' en el frontend. Revisa %LOG_FILE%."
@@ -317,20 +317,20 @@ set "LOG_LEVEL=DEBUG"
 
 start "Growen API" cmd /k call "%VENV%\activate.bat" ^&^& set LOG_LEVEL=%LOG_LEVEL% ^&^& set IMPORT_RETURN_DEBUG=%IMPORT_RETURN_DEBUG% ^&^& echo [BOOT] Lanzando uvicorn en puerto 8000 ^&^& python -m uvicorn services.api:app --reload --host 0.0.0.0 --port 8000 --loop asyncio --http h11 --log-level debug ^>> "%LOG_DIR%\backend.log" 2^>^&1
 
-call :log "[INFO] Preparando frontend..."
+call :log "[INFO] Preparando frontend Vue canónico..."
 REM Si existe carpeta dist vacía o VITE_BUILD=1, ejecutamos build para servir desde FastAPI.
-if exist "%ROOT%frontend\package.json" (
-  pushd "%ROOT%frontend"
+if exist "%ROOT%frontend-vue\package.json" (
+  pushd "%ROOT%frontend-vue"
   if "!VITE_BUILD!"=="1" (
     call :log "[INFO] Ejecutando build del frontend (VITE_BUILD=1)..."
         set /a __OKS=0
-    npm run build >> "%LOG_DIR%\frontend.log" 2>&1
+    npm run build >> "%LOG_DIR%\frontend-vue.log" 2>&1
   ) else (
   REM Si no hay assets, también build
-    if not exist "%ROOT%frontend\dist\assets" (
-      call :log "[INFO] Assets no encontrados; ejecutando build del frontend..."
+    if not exist "%ROOT%frontend-vue\dist\assets" (
+      call :log "[INFO] Assets Vue no encontrados; ejecutando build del frontend..."
         set /a __OKS=0
-      npm run build >> "%LOG_DIR%\frontend.log" 2>&1
+      npm run build >> "%LOG_DIR%\frontend-vue.log" 2>&1
     ) else (
       call :log "[INFO] Frontend ya compilado (dist/assets presente)."
     )
@@ -339,12 +339,12 @@ if exist "%ROOT%frontend\package.json" (
 )
 
 call :log "[INFO] Iniciando Vite dev server..."
-if exist "%ROOT%frontend\package.json" (
-  pushd "%ROOT%frontend"
-  start "Growen Frontend (Vite)" cmd /k npm run dev ^>> "%LOG_DIR%\frontend.log" 2^>^&1
+if exist "%ROOT%frontend-vue\package.json" (
+  pushd "%ROOT%frontend-vue"
+  start "Growen Frontend Vue (Vite)" cmd /k npm run dev ^>> "%LOG_DIR%\frontend-vue.log" 2^>^&1
   popd
 ) else (
-  call :log "[WARN] No se encontró package.json en frontend. Saltando inicio de Vite."
+  call :log "[WARN] No se encontró package.json en frontend-vue. Saltando inicio de Vite."
 )
 
 call :log "[INFO] Servicios iniciados. Esperando 3 segundos antes de mostrar resumen..."
@@ -353,14 +353,14 @@ timeout /t 3 /nobreak >NUL
 echo.
 echo ===================== RESUMEN DEL STACK (Local) =====================
 echo API:       http://localhost:8000  ^(Docs: /docs^)
-echo Frontend:  http://localhost:5173  ^(Vite dev server^)
+echo Frontend:  http://localhost:5176  ^(Vue Vite dev server^)
 echo DB:        localhost:5433  ^(Postgres en Docker^)
 echo ----------------------------------------------------------------------
 echo Login: usa tu usuario configurado en .env ^(ADMIN_USER^) y contrasenia ^(ADMIN_PASS^).
 echo En entornos de desarrollo, si dejaste el placeholder, la contrasenia temporal suele ser 'admin1234'.
 echo ----------------------------------------------------------------------
 echo [INFO] Las ventanas de API y Frontend quedaron abiertas en segundo plano.
-echo [INFO] Los logs completos están en: %LOG_DIR%\backend.log y %LOG_DIR%\frontend.log
+echo [INFO] Los logs completos están en: %LOG_DIR%\backend.log y %LOG_DIR%\frontend-vue.log
 echo [INFO] Para detener los servicios, ejecuta: stop.bat
 echo.
 echo Presiona cualquier tecla para cerrar esta ventana ^(los servicios seguirán corriendo^)...
@@ -498,8 +498,8 @@ endlocal & exit /b 0
 
 :preflight_ports
 setlocal EnableDelayedExpansion
-call :log "[INFO] Preflight Puertos: objetivo API 8000, Frontend 5175, DB 5433, Redis 6379"
-for %%P in (8000 5175) do (
+call :log "[INFO] Preflight Puertos: objetivo API 8000, Frontend Vue 5176, DB 5433, Redis 6379"
+for %%P in (8000 5176) do (
   set "__BUSY=0"
   for /f "delims=" %%L in ('netstat -ano -p TCP ^| findstr /R /C:":%%P " ^| findstr /I "LISTENING ESCUCHA"') do set "__BUSY=1"
   if "!__BUSY!"=="1" (

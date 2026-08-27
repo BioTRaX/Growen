@@ -38,9 +38,10 @@ La clave anterior es opcional y sólo se usa durante una rotación controlada.
 El detalle del modelo de acceso y diagnóstico está en `docs/TELEGRAM_CANARY.md`.
 
 OpenAI permanece opcional y apagado. Si posteriormente se habilita diagnóstico
-por imágenes, crear `openai_api_key` con `--interactive-openai-key`, configurar
-`OPENAI_API_KEY_FILE` en local o `OPENAI_API_KEY_FILE_DOCKER=/run/secrets/growen/openai_api_key`
-en Compose y mantener `AI_ALLOW_EXTERNAL=false` hasta aprobar privacidad,
+por imágenes, crear `openai_api_key` con `--interactive-openai-key` y configurar
+`OPENAI_API_KEY_FILE` con su ruta absoluta en el host. Compose lo monta en los
+runtimes IA como `/run/secrets/growen/openai_api_key`. Mantener
+`AI_ALLOW_EXTERNAL=false` hasta aprobar privacidad,
 costos y smokes del flujo de visión.
 
 ## Preflight
@@ -86,6 +87,12 @@ docker compose --profile telegram up -d telegram_worker chat_rollout_controller
 ```
 
 El worker es no-root, filesystem read-only, cola acotada y health basado en `logs/telegram_health.json`. Ollama corre en el host y se alcanza por `host.docker.internal`; el puerto 11434 no se publica mediante Compose.
+
+`telegram_worker` es el único worker que ejecuta el preflight completo de
+transporte, flags y secretos del bot. Los workers de catálogo, Mercado, Enrich
+y Conocimiento sobrescriben los flags Telegram a `0` y no montan el token. No
+se debe compartir `/run/secrets/growen/telegram_bot_token` con consumidores
+ajenos para corregir errores de arranque.
 
 ## Fases
 

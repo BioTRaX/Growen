@@ -1,3 +1,8 @@
+<!-- NG-HEADER: Nombre de archivo: MARKET_UNIT_TESTS.md -->
+<!-- NG-HEADER: Ubicación: docs/MARKET_UNIT_TESTS.md -->
+<!-- NG-HEADER: Descripción: Cobertura de pruebas unitarias de Mercado. -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
+
 # Tests Unitarios - Módulo Mercado
 
 Fecha: 2025-01-10  

@@ -1,3 +1,8 @@
+<!-- NG-HEADER: Nombre de archivo: WORKER_MARKET_FIX.md -->
+<!-- NG-HEADER: Ubicación: docs/WORKER_MARKET_FIX.md -->
+<!-- NG-HEADER: Descripción: Correcciones históricas del worker de mercado. -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
+
 # Corrección del Worker de Market - Guía Rápida
 
 **Fecha**: 2025-11-16  

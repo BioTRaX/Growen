@@ -9,11 +9,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../../../auth/store'
 import { getProductSources } from '../../market/api/market'
 import type { ProductSources } from '../../market/types'
-import KnowledgeCenterDialog from '../../knowledge/components/KnowledgeCenterDialog.vue'
 import { getHttpErrorMessage } from '../../../services/http'
 import { getProduct, getProductHistory } from '../api/products'
 import CanonicalSkuEditor from '../components/CanonicalSkuEditor.vue'
 import EnrichmentPanel from '../components/EnrichmentPanel.vue'
+import StructuredProductData from '../components/StructuredProductData.vue'
 import TagManagementDialog from '../components/TagManagementDialog.vue'
 import { useEnrichmentJob } from '../composables/useEnrichmentJob'
 import type { EnrichmentScope, ProductDetail, ProductPurchaseHistory } from '../types'
@@ -27,7 +27,6 @@ const market = ref<ProductSources | null>(null)
 const loading = ref(false)
 const error = ref('')
 const tagsOpen = ref(false)
-const knowledgeOpen = ref(false)
 const productId = Number(route.params.id)
 const canViewOperational = computed(() => auth.role === 'admin' || auth.role === 'colaborador')
 const canEditCanonicalSku = computed(() => auth.role === 'admin' || auth.role === 'colaborador')
@@ -62,6 +61,9 @@ async function load(): Promise<void> {
   try {
     product.value = await getProduct(productId)
     const requests: Promise<unknown>[] = []
+    if (product.value.canonical_product_id && product.value.enrichment?.job_id) {
+      requests.push(enrich.resume(product.value.canonical_product_id, product.value.enrichment.job_id))
+    }
     if (canViewOperational.value) {
       requests.push(getProductHistory(productId).then((value) => { history.value = value }))
       if (product.value.canonical_product_id) {
@@ -134,9 +136,9 @@ onMounted(load)
           <v-btn v-if="canViewOperational" href="/stock" prepend-icon="mdi-warehouse" variant="tonal">Gestionar stock</v-btn>
           <v-btn
             v-if="canViewOperational && product.canonical_product_id"
+            :to="{ name: 'product-knowledge', params: { id: product.id } }"
             prepend-icon="mdi-bookshelf"
             variant="tonal"
-            @click="knowledgeOpen = true"
           >
             Conocimiento
           </v-btn>
@@ -177,9 +179,9 @@ onMounted(load)
             <v-divider />
             <v-card-text>
               <div class="text-subtitle-2">Especificaciones</div>
-              <pre class="text-body-2 text-wrap">{{ valueText(product.technical_specs) }}</pre>
+              <StructuredProductData class="text-body-2" :value="product.technical_specs" />
               <div class="text-subtitle-2 mt-3">Instrucciones</div>
-              <pre class="text-body-2 text-wrap">{{ valueText(product.usage_instructions) }}</pre>
+              <StructuredProductData class="text-body-2" :value="product.usage_instructions" />
             </v-card-text>
           </v-card>
         </v-col>
@@ -265,16 +267,9 @@ onMounted(load)
       :product-ids="[product.id]"
       @saved="tagsSaved"
     />
-    <KnowledgeCenterDialog
-      v-if="product?.canonical_product_id"
-      v-model="knowledgeOpen"
-      :canonical-product-id="product.canonical_product_id"
-      @changed="load"
-    />
   </v-container>
 </template>
 
 <style scoped>
 .product-description :deep(p) { margin-bottom: 0.75rem; }
-pre { white-space: pre-wrap; word-break: break-word; }
 </style>

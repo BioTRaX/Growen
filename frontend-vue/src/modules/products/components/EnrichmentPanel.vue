@@ -34,6 +34,10 @@ function label(field: string): string {
     usage_instructions: 'Instrucciones',
   } as Record<string, string>)[field] ?? field
 }
+
+function diagnosticTitle(provider: string, code: string | null): string {
+  return `${provider === 'openai' ? 'OpenAI' : provider === 'ollama' ? 'Ollama' : provider} · ${code || 'correcto'}`
+}
 </script>
 
 <template>
@@ -62,6 +66,29 @@ function label(field: string): string {
         <span v-if="job.provider"> · {{ job.provider }} / {{ job.model }}</span>
       </p>
       <v-alert v-if="job?.error" type="error" variant="tonal">{{ job.error.message }}</v-alert>
+      <v-expansion-panels v-if="job?.provider_diagnostics.length" class="mt-4" variant="accordion">
+        <v-expansion-panel>
+          <v-expansion-panel-title>Diagnóstico de proveedores</v-expansion-panel-title>
+          <v-expansion-panel-text>
+            <v-list density="compact">
+              <v-list-item
+                v-for="(diagnostic, index) in job.provider_diagnostics"
+                :key="`${diagnostic.client_request_id}-${index}`"
+                :title="diagnosticTitle(diagnostic.provider, diagnostic.code)"
+              >
+                <template #subtitle>
+                  <div>Intento {{ diagnostic.job_attempt }} · {{ diagnostic.model }}</div>
+                  <div v-if="diagnostic.http_status">HTTP {{ diagnostic.http_status }}</div>
+                  <div v-if="diagnostic.request_id">Request ID: {{ diagnostic.request_id }}</div>
+                  <div v-if="Object.keys(diagnostic.rate_limits).length">
+                    Límites: {{ Object.entries(diagnostic.rate_limits).map(([key, value]) => `${key}=${value}`).join(' · ') }}
+                  </div>
+                </template>
+              </v-list-item>
+            </v-list>
+          </v-expansion-panel-text>
+        </v-expansion-panel>
+      </v-expansion-panels>
       <template v-if="proposalFields.length">
         <div class="text-subtitle-2 mb-2">Campos pendientes</div>
         <v-checkbox

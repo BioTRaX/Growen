@@ -11,6 +11,13 @@ La respuesta conserva IDs y campos legacy, e incorpora `knowledge_asset_id`, eti
 
 Este documento describe la implementación completa del endpoint que permite obtener las fuentes de precio de mercado configuradas para un producto.
 
+> **Sección histórica:** las secciones que mencionan `market_sources`, su DDL o
+> el modelo ORM original describen el contrato previo a
+> `20260726_canonical_knowledge_v1`. No ejecutar ese SQL ni crear esa tabla.
+> La implementación vigente usa `canonical_knowledge_assets` y
+> `canonical_knowledge_market_profiles`; el endpoint conserva el ID legacy por
+> compatibilidad.
+
 ---
 
 ## Resumen Ejecutivo

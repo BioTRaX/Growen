@@ -20,6 +20,11 @@ from ..types import Task
 class OllamaUnavailableError(RuntimeError):
     """El daemon o el modelo local no están disponibles."""
 
+    def __init__(self, code: str, *, http_status: int | None = None) -> None:
+        super().__init__(code)
+        self.code = code
+        self.status_code = http_status
+
 
 class OllamaProvider(ILLMProvider):
     name = "ollama"
@@ -73,8 +78,15 @@ class OllamaProvider(ILLMProvider):
             if not text:
                 raise OllamaUnavailableError("ollama_empty_response")
             yield text
-        except (requests.RequestException, ValueError, TypeError) as exc:
-            raise OllamaUnavailableError("ollama_generation_unavailable") from exc
+        except requests.Timeout as exc:
+            raise OllamaUnavailableError("timeout") from exc
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            raise OllamaUnavailableError("http_error", http_status=status) from exc
+        except requests.RequestException as exc:
+            raise OllamaUnavailableError("http_error") from exc
+        except (ValueError, TypeError) as exc:
+            raise OllamaUnavailableError("invalid_json") from exc
 
     async def generate_async(
         self,
@@ -98,8 +110,14 @@ class OllamaProvider(ILLMProvider):
             if not text:
                 raise OllamaUnavailableError("ollama_empty_response")
             return text
-        except (httpx.HTTPError, ValueError, TypeError) as exc:
-            raise OllamaUnavailableError("ollama_generation_unavailable") from exc
+        except httpx.TimeoutException as exc:
+            raise OllamaUnavailableError("timeout") from exc
+        except httpx.HTTPStatusError as exc:
+            raise OllamaUnavailableError("http_error", http_status=exc.response.status_code) from exc
+        except httpx.HTTPError as exc:
+            raise OllamaUnavailableError("http_error") from exc
+        except (ValueError, TypeError) as exc:
+            raise OllamaUnavailableError("invalid_json") from exc
         finally:
             if owns_client:
                 await client.aclose()

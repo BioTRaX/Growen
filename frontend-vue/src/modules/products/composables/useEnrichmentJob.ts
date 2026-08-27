@@ -40,6 +40,13 @@ export function useEnrichmentJob(onContentChanged: () => Promise<void>) {
     }
   }
 
+  async function resume(canonicalId: number, jobId: string): Promise<void> {
+    if (job.value?.job_id === jobId) return
+    stopPolling()
+    cancelled = false
+    await poll(canonicalId, jobId)
+  }
+
   async function start(canonicalId: number, productId: number, scope: EnrichmentScope): Promise<void> {
     stopPolling()
     cancelled = false
@@ -85,5 +92,5 @@ export function useEnrichmentJob(onContentChanged: () => Promise<void>) {
   }
 
   onBeforeUnmount(stopPolling)
-  return { job, loading, error, start, apply, discard, stopPolling }
+  return { job, loading, error, start, resume, apply, discard, stopPolling }
 }

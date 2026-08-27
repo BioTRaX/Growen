@@ -6,6 +6,12 @@ Chat está `preflight/active` en desarrollo y `/chat` conserva React. El perfil 
 
 Operación y gates: [docs/CHAT_DEPLOYMENT.md](docs/CHAT_DEPLOYMENT.md). Corpus: `docs/rag/corpus-manifest.v1.json` y `scripts/rag_corpus.py`.
 
+Los secretos Telegram se limitan al runtime del bot. Los workers `dramatiq`,
+Mercado, Enrich y Conocimiento deshabilitan explícitamente los flags Telegram y
+no reciben `TELEGRAM_BOT_TOKEN_FILE`, aunque compartan `.env`. La validación del
+token se ejecuta al iniciar `telegram_worker`, no al importar la configuración
+común.
+
 ## Aviso de seguridad — Telegram
 
 La auditoría del 2026-07-30 confirmó que un token operativo de Telegram fue
@@ -27,15 +33,16 @@ Arquitectura: [docs/CANONICAL_KNOWLEDGE.md](./docs/CANONICAL_KNOWLEDGE.md). Desp
 
 ## Enrich v2 y detalle canónico
 
-`/productos/:id` conserva el `Product.id` de la URL, pero cuando existe una equivalencia muestra descripción y datos técnicos del `CanonicalProduct`. El stock agregado es informativo y los ajustes se realizan en `/stock`; la imagen avanzada continúa temporalmente en `/productos/:id/imagen` React.
+`/productos/:id` conserva el `Product.id` de la URL, pero cuando existe una equivalencia muestra descripción y datos técnicos del `CanonicalProduct`. El stock agregado es informativo y los ajustes se realizan en `/stock`; la imagen avanzada continúa temporalmente en `/productos/:id/imagen` React. Para staff, **Conocimiento** navega a la vista Vue dedicada `/productos/:id/Conocimiento`, sin modal sobre la ficha.
 
-Enrich v2 investiga fuentes externas mediante MCP Web Search, genera texto/datos estructurados y registra jobs/versiones. No consulta MCP Products y nunca calcula precios. Mercado es la única autoridad de referencias monetarias.
+Enrich v2 investiga fuentes externas mediante MCP Web Search, genera texto/datos estructurados y registra jobs/versiones. No consulta MCP Products y nunca calcula precios. Mercado es la única autoridad de referencias monetarias. Cada intento de OpenAI/Ollama deja un diagnóstico seguro persistido (código, HTTP, request ID y límites disponibles) que la ficha Vue permite consultar sin guardar prompts ni respuestas remotas.
 
 El despliegue local del 2026-07-25 aplicó `20260725_canonical_enrichment_v2`,
 levantó MCP Web Search, Redis, worker, API y Vue, y activó
 `ENRICH_V2_ENABLED=1`. Ese smoke histórico obtuvo cinco fuentes y no aplicó
 campos porque en esa ejecución no había proveedor generativo disponible. Los
-secretos fueron rotados el 2026-08-15 y el entorno permanece sin API keys. Ver
+secretos de proveedores se cargan mediante variables o archivos montados y
+requieren recrear el contenedor consumidor cuando cambia su entorno. Ver
 `docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
 
 ## Chat 😎 y Telegram seguro
@@ -87,16 +94,17 @@ React conserva copias temporales para rollback, pero ya no es el runtime princip
 - Retrospectiva de taxonomía plana, tags y QA: [docs/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md](./docs/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md)
 - Retrospectiva operativa de Redis, Dramatiq y batch canónico: [docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md](./docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md)
 - Skill de migración React → Vue: [.agents/skills/vue-module-migration/SKILL.md](./.agents/skills/vue-module-migration/SKILL.md)
-- Skills agénticas y compatibilidad Codex/Gemini/Copilot: [docs/AGENT_SKILLS.md](./docs/AGENT_SKILLS.md)
+- Skills agénticas, Superpowers y compatibilidad Codex/Gemini/Copilot/Antigravity: [docs/AGENT_SKILLS.md](./docs/AGENT_SKILLS.md)
+- Retrospectiva de adaptación de Superpowers a Growen (2026-08-27): [docs/RETROSPECTIVE_SUPERPOWERS_ADAPTATION_20260827.md](./docs/RETROSPECTIVE_SUPERPOWERS_ADAPTATION_20260827.md)
 - Retrospectiva Chat, Telegram, RAG y Vue (2026-08-17): [docs/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md](./docs/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md)
 - Skill de retrospectiva técnica de sesión — sólo ante cierre explícito informado por el usuario: [.agents/skills/retrospectiva-tecnica-sesion/SKILL.md](./.agents/skills/retrospectiva-tecnica-sesion/SKILL.md)
 - Relevamiento funcional del portal React y mapa de migración Vue: [docs/relevamiento_admin.md](./docs/relevamiento_admin.md)
 - **Workflow de Desarrollo (Local vs Docker)**: [docs/DEVELOPMENT_WORKFLOW.md](./docs/DEVELOPMENT_WORKFLOW.md) ⚡
 - Capa MCP (servers/tools): [docs/MCP.md](./docs/MCP.md)
 - Arquitectura chatbot admin: [docs/CHATBOT_ARCHITECTURE.md](./docs/CHATBOT_ARCHITECTURE.md)
-- Roles del chatbot admin: [docs/CHATBOT_ROLES.md](./docs/CHATBOT_ROLES.md)
+- Roles y autorización del chatbot: [docs/SECURITY.md](./docs/SECURITY.md)
 - Compras (incluye iAVaL - Validador de IA del remito): [docs/PURCHASES.md](./docs/PURCHASES.md)
-- Persona de chat: [docs/CHAT_PERSONA.md](./docs/CHAT_PERSONA.md)
+- Persona y operación de chat: [docs/CHAT.md](./docs/CHAT.md)
 - SKU Canónico (formato, generación, secuencias): [docs/CANONICAL_SKU.md](./docs/CANONICAL_SKU.md)
 - **Logging y diagnóstico de enriquecimiento IA**: [docs/ENRICHMENT_LOGS.md](./docs/ENRICHMENT_LOGS.md)
 
@@ -218,10 +226,10 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 ## Arquitectura
 
 - **Backend**: FastAPI + WebSocket.
-- **Base de datos**: PostgreSQL 15 (Alembic para migraciones).
+- **Base de datos**: PostgreSQL 17 (Alembic para migraciones).
 - **IA**: ruteo automático entre Ollama (local) y OpenAI.
-- **Frontend productivo**: React + Vite con listas virtualizadas mediante `react-window` en `frontend/`.
-- **Frontend Vue en migración**: Vue 3 + Vuetify 3 + Pinia + Vue Router en `frontend-vue/`, disponible durante desarrollo en `http://127.0.0.1:5176` sin reemplazar todavía el build React.
+- **Frontend productivo canónico**: Vue 3 + Vuetify 3 + Pinia + Vue Router en `frontend-vue/`.
+- **Frontend React**: código legado conservado sólo para rollback; no es el frontend productivo.
 - **Plan de evolución frontend**: arquitectura objetivo en `frontend/brainstorming_Growen.md` y estado operativo en `docs/FRONTEND_MIGRATION_VUE.md`.
 - **Adapters**: exportación a TiendaNegocio via XLS.
 - **MCP real**: Products y Web Search exponen Streamable HTTP en `/mcp`; Growen descubre tools dinámicamente y las filtra por rol.
@@ -242,7 +250,9 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
   - Metadatos de trazabilidad: `last_enriched_at` y `enriched_by` se setean al enriquecer y se limpian al borrar.
   - Auditoría: acción `enrich`/`reenrich` con `prompt_hash`, `fields_generated`, `source_file` y, si `AI_USE_WEB_SEARCH=1`, `web_search_query_hash` y `web_search_hits`.
   - Robustez: si `AI_USE_WEB_SEARCH=1`, el backend realiza un preflight a `GET /health` del MCP Web Search; si no está saludable, omite la búsqueda y continúa el enriquecimiento sin bloquear.
-- Acciones masivas: `POST /products/enrich-multiple` (máximo 20 IDs por solicitud) con validaciones de título y omitidos si ya enriquecidos (a menos que `force`).
+- Acciones masivas nuevas: `POST /canonical-products/enrichment-batches`, con un
+  job por canónico único. El listado Vue usa este contrato; React y
+  `POST /products/enrich-multiple` permanecen sólo como compatibilidad temporal.
 - Flags relevantes:
   - `AI_USE_WEB_SEARCH` (0/1): activa búsqueda web MCP para anexar contexto al prompt.
   - `AI_WEB_SEARCH_MAX_RESULTS` (default 3): máxima cantidad de resultados anexados.
@@ -257,7 +267,7 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 
 - Python 3.14.6+
 - Node.js LTS
-- PostgreSQL 15
+- PostgreSQL 17
 - Opcional (dev/pruebas): SQLite 3 con `aiosqlite` (ya incluido en dependencias)
 - Docker Desktop y Docker Compose para la base PostgreSQL local.
 
@@ -598,7 +608,7 @@ Orden de ejecución recomendado:
 
 ### Base de datos (PostgreSQL) en Windows
 
-- Imagen base: `postgres:15.10-bookworm`, reforzada con `apt-get dist-upgrade` en `infra/Dockerfile.postgres` (ejecutá `docker compose build db && docker compose up -d db` tras cambios).
+- Imagen base: PostgreSQL 17 mediante la imagen `growen/postgres:pgvector`, reforzada con `apt-get dist-upgrade` en `infra/Dockerfile.postgres`.
 - En Windows suele estar ocupado el puerto 5432 por otra instalación. El docker-compose mapea Postgres del contenedor al puerto 5433 del host para evitar conflictos.
   - Verificá que `.env` tenga una URL válida, por ejemplo: `DB_URL=postgresql+psycopg://<user>:<pass>@127.0.0.1:5433/growen` (no publiques credenciales reales).
 - Si se reutiliza un volumen previo del contenedor y la contraseña del usuario `growen` no coincide, podés ajustarla sin borrar datos:
@@ -681,7 +691,7 @@ Los alcances de Workers, Imágenes, archivos físicos y aliases legacy están de
 - `alembic.ini` define `script_location = %(here)s/db/migrations`, por lo que las rutas se resuelven respecto al archivo y no al directorio actual.
 - Si `alembic_version.version_num` quedó en `VARCHAR(32)`, el arranque la ensancha automáticamente a `VARCHAR(255)` para soportar identificadores de revisión largos.
 - Cada ejecución de `scripts\run_migrations.cmd` genera un archivo en `logs\migrations\alembic_YYYYMMDD_HHMMSS.log` con todo el `stdout` y `stderr` de Alembic.
-- Si el arranque se detiene por un error de migración, revisar la ruta indicada y solucionar el problema antes de volver a ejecutar `scripts\start.bat`.
+- Si el arranque se detiene por un error de migración, revisar la ruta indicada y solucionar el problema antes de volver a ejecutar `start.bat`.
 - Al invocar Alembic manualmente, las opciones globales como `--raiseerr` y `-x log_sql=1` deben ubicarse **antes** del subcomando. `log_sql=1` activa `sqlalchemy.echo` para registrar cada consulta. Ejemplo:
 
 ```
@@ -1106,13 +1116,13 @@ Desde PowerShell, ejecutar `powershell.exe -NoProfile -ExecutionPolicy Bypass -F
 
 No mantener simultáneamente el `catalog_worker` local del panel y el contenedor `dramatiq`: ambos consumen la misma cola y los mensajes se reparten. El launcher avisa y registra `catalog_worker_competing_local_pids` si detecta esa condición; el worker local escribe en `logs/worker_catalog.log`.
 
-## Inicio rápido heredado React (`start.bat`)
+## Inicio rápido (`start.bat`)
 
-Este launcher se conserva por compatibilidad con React en el puerto 5173. No es el inicio recomendado para el desarrollo Vue actual.
+El launcher de la raíz inicia el frontend Vue canónico en el puerto 5176. React permanece como código legado de rollback.
 
 ### Windows
 
-Ejecutar **desde CMD** con doble clic en `scripts\start.bat`. El script realiza estas etapas:
+Ejecutar **desde CMD** con doble clic en `start.bat` ubicado en la raíz. El script realiza estas etapas:
 
 1. Llama a `scripts\stop.bat` para liberar los puertos **8000** y **5173**.
 2. Aplica las migraciones mediante `scripts\migrate.bat` y guarda el log en `logs\migrations\alembic_YYYYMMDD_HHMMSS.log`.
@@ -1123,16 +1133,16 @@ Ejecutar **desde CMD** con doble clic en `scripts\start.bat`. El script realiza 
 Requisitos previos:
 
 - Python 3.14.6+ (crear o reparar la venv con `scripts\bootstrap-dev.ps1`)
-- Node.js/npm instalados (si faltan paquetes de frontend, `scripts\start.bat` ejecutará `npm install` en `frontend` cuando sea necesario)
+- Node.js/npm instalados (si faltan paquetes, `start.bat` ejecutará `npm install` en `frontend-vue` cuando sea necesario)
 - `.env` completado (DB_URL, IA, etc.)
 - `frontend/.env` creado a partir de `frontend/.env.example` si se necesita ajustar `VITE_API_URL`.
 
-Comportamiento de auto-configuración de `scripts\start.bat`:
+Comportamiento de auto-configuración de `start.bat`:
 
 - Si no existe `.venv`, el script intentará crear un entorno virtual en `.venv` y actualizar `pip`/`setuptools`.
 - Tras crear el virtualenv, se ejecuta `.\.venv\Scripts\python.exe -m tools.doctor`. Si la variable de entorno `ALLOW_AUTO_PIP_INSTALL=true` está definida, el doctor intentará instalar `requirements.txt` automáticamente.
 - Si `tools.doctor` detecta problemas críticos, el script pausará y te dará la opción de abortar o continuar.
-- Si `frontend/node_modules` no existe, `scripts\start.bat` ejecutará `npm install` dentro de `frontend`.
+- Si `frontend-vue/node_modules` no existe, `start.bat` ejecutará `npm install` dentro de `frontend-vue`.
 
 Esto facilita un inicio de desarrollo “1‑clic” en máquinas nuevas.
 
@@ -1148,8 +1158,8 @@ Los `.bat` están preparados para ejecutarse desde rutas como `C:\\Nice Grow\\Ag
 
 - Todas las rutas se envuelven entre comillas.
 - Se usa `pushd`/`popd` en lugar de `cd` para cambiar de directorio.
-- `scripts\start.bat` encadena `stop` → `migrate` → `api + frontend` en ventanas separadas.
-- Para registrar cada consulta SQL en el log de migraciones ejecutar `scripts\start.bat /sql`.
+- `start.bat` encadena `stop` → `migrate` → `api + frontend-vue` en ventanas separadas.
+- Para registrar cada consulta SQL en el log de migraciones ejecutar `start.bat /sql`.
 
 Nota de compatibilidad (psycopg asíncrono): en Windows la aplicación establece `WindowsSelectorEventLoopPolicy` al iniciar para evitar errores del conector asíncrono de PostgreSQL.
 
@@ -1204,7 +1214,13 @@ Consulta `.env.example` para la lista completa. Variables destacadas:
 - `OLLAMA_HOST`: URL base de Ollama (por defecto `http://127.0.0.1:11434`).
 - `OLLAMA_MODEL`: modelo de generación local (`llama3.1:8b` en el perfil Chat actual).
 - `RAG_EMBEDDING_MODEL`: modelo local de embeddings (`qwen3-embedding:4b`).
-- `OPENAI_API_KEY`, `OPENAI_MODEL`.
+- `OPENAI_API_KEY`, `OPENAI_MODEL`; para Compose preferir
+  `OPENAI_API_KEY_FILE=<ruta absoluta del host>`. Sólo `enrichment_worker` y
+  `knowledge_worker` montan ese archivo. Mercado y Dramatiq genérico no reciben
+  credenciales OpenAI ni Telegram.
+- Enrich usa `ENRICH_OPENAI_MODEL=gpt-5.6-luna`, razonamiento `none`, temperatura
+  `0` y un máximo de `2048` tokens de salida por defecto. Estas opciones son
+  independientes del modelo general de Chat y de Conocimiento.
 - `AI_MAX_TOKENS_SHORT`, `AI_MAX_TOKENS_LONG`: límites de tokens para respuestas cortas/largas.
 - `AI_TIMEOUT_OLLAMA_MS`, `AI_TIMEOUT_OPENAI_MS`: timeouts de peticiones a proveedores.
 - `SECRET_KEY`: clave usada para firmar sesiones; en producción reemplace el

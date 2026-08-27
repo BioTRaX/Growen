@@ -146,6 +146,28 @@ class OpenAIProvider(ILLMProvider):
         system_prompt, user_prompt = self._split_prompt(prompt)
         user_role = user_context.get("role", "guest") if user_context else "guest"
         user_channel = user_context.get("channel", "web") if user_context else "web"
+        client_request_id = user_context.get("client_request_id") if user_context else None
+        reasoning_effort = (
+            str(user_context.get("reasoning_effort", "none"))
+            if user_context and self.model.startswith("gpt-5.6")
+            else None
+        )
+        temperature = float(
+            user_context.get("temperature", os.getenv("OPENAI_TEMPERATURE", "0.7"))
+            if user_context
+            else os.getenv("OPENAI_TEMPERATURE", "0.7")
+        )
+        max_output_tokens = int(
+            user_context.get("max_output_tokens", os.getenv("OPENAI_MAX_TOKENS", "512"))
+            if user_context
+            else os.getenv("OPENAI_MAX_TOKENS", "512")
+        )
+        sdk_max_retries = int(user_context.get("sdk_max_retries", 2)) if user_context else 2
+        request_options = (
+            {"extra_headers": {"X-Client-Request-Id": str(client_request_id)[:512]}}
+            if client_request_id
+            else {}
+        )
 
         if images and os.getenv("OPENAI_VISION_ENABLED", "0").lower() not in {"1", "true", "yes"}:
             raise RuntimeError("openai_vision_disabled")
@@ -184,7 +206,11 @@ class OpenAIProvider(ILLMProvider):
             ]
             vision_model = None  # Usar modelo por defecto
 
-        client = AsyncOpenAI(api_key=self.api_key, timeout=self.timeout)
+        client = AsyncOpenAI(
+            api_key=self.api_key,
+            timeout=self.timeout,
+            max_retries=sdk_max_retries,
+        )
 
         # Caso 1: Sin tools → generación simple
         if not tools_schema:
@@ -208,16 +234,30 @@ class OpenAIProvider(ILLMProvider):
                         messages=messages,
                         temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
                         max_tokens=max_tokens,
+                        **request_options,
                     )
                 else:
+                    generation_options: Dict[str, Any]
+                    if self.model.startswith("gpt-5.6"):
+                        generation_options = {
+                            "max_completion_tokens": max_output_tokens,
+                            "reasoning_effort": reasoning_effort or "none",
+                        }
+                        if generation_options["reasoning_effort"] == "none":
+                            generation_options["temperature"] = temperature
+                    else:
+                        generation_options = {
+                            "max_tokens": max_output_tokens,
+                            "temperature": temperature,
+                        }
                     resp = await client.chat.completions.create(
                         model=model_to_use,
                         messages=messages,
-                        temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
-                        max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")),
                         response_format=(
                             {"type": "json_object"} if wants_json else {"type": "text"}
                         ),
+                        **generation_options,
+                        **request_options,
                     )
                 text = resp.choices[0].message.content if resp.choices else ""
                 return text.strip()

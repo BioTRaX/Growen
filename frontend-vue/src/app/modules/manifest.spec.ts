@@ -10,6 +10,7 @@ describe('manifiesto frontend', () => {
   it('cubre rutas y aliases relevantes y activa Vue sólo con estado active', () => {
     expect(moduleForPath('/productos')?.id).toBe('products')
     expect(moduleForPath('/productos/42')?.id).toBe('product-detail')
+    expect(moduleForPath('/productos/42/Conocimiento')?.id).toBe('product-detail')
     expect(moduleForPath('/productos/42/imagen')?.id).toBe('product-image-legacy')
     expect(frontendManifest.modules.find((module) => module.id === 'images')?.aliases).toEqual([
       '/admin/imagenes',
@@ -27,6 +28,7 @@ describe('manifiesto frontend', () => {
     expect(products).toMatchObject({ state: 'active', runtime: 'vue' })
     expect(products?.routes.map((route) => route.path)).toEqual(['/productos'])
     expect(detail).toMatchObject({ state: 'active', runtime: 'vue' })
+    expect(detail?.routes.find((route) => route.name === 'product-knowledge')?.roles).toEqual(['colaborador', 'admin'])
     expect(images).toMatchObject({ state: 'partial', runtime: 'legacy' })
   })
 

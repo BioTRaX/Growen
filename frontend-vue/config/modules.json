@@ -52,7 +52,8 @@
       "state": "active",
       "runtime": "vue",
       "routes": [
-        { "path": "/productos/:id", "name": "product-detail", "title": "Detalle de producto", "component": "product-detail", "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"], "navigation": false }
+        { "path": "/productos/:id", "name": "product-detail", "title": "Detalle de producto", "component": "product-detail", "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"], "navigation": false },
+        { "path": "/productos/:id/Conocimiento", "name": "product-knowledge", "title": "Conocimiento del producto", "component": "product-knowledge", "roles": ["colaborador", "admin"], "navigation": false }
       ],
       "aliases": []
     },

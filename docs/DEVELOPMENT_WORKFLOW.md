@@ -11,6 +11,20 @@
 
 Un cambio de `.env` exige recrear el contenedor afectado con `docker compose up -d --force-recreate <servicio>`; `restart` conserva el entorno anterior. Sólo reconstruir imagen por código copiado, Dockerfile o dependencias. No levantar API Compose si `8000` ya pertenece al launcher local. En despliegue híbrido usar `KNOWLEDGE_MCP_WEB_SEARCH_URL` y `ENRICH_MCP_WEB_SEARCH_URL`.
 
+Los workers ajenos a Telegram (`dramatiq`, `market_worker`,
+`enrichment_worker` y `knowledge_worker`) fuerzan sus flags Telegram a `0` y no
+reciben el archivo del token. No montar secretos Telegram para resolver fallos
+de esos servicios: un `telegram_bot_token_missing` allí indica una regresión de
+aislamiento. La validación completa se ejecuta únicamente en el entrypoint de
+`telegram_worker`.
+
+En Compose, `OPENAI_API_KEY_FILE` debe ser una ruta absoluta del host. Sólo
+`enrichment_worker` y `knowledge_worker` la montan, de sólo lectura, como
+`/run/secrets/growen/openai_api_key`; Mercado y Dramatiq neutralizan cualquier
+valor OpenAI heredado. Si cambia el archivo no es necesario reconstruir la
+imagen: reiniciar el worker alcanza para releer su contenido. Si cambia la
+variable que apunta al archivo se debe recrear el contenedor.
+
 ## Enrich v2 local
 
 ```powershell
@@ -18,6 +32,17 @@ scripts\start-dev.ps1 -McpMode All -WithEnrichmentWorker
 ```
 
 El switch inicia/verifica Redis, MCP Web Search y un worker local con un proceso y dos threads. La API debe responder `ok=true` en `/health/enrichment-worker`. Mantener `ENRICH_V2_ENABLED=0` durante migración y diagnóstico; activarlo sólo cuando DB, MCP, Redis, heartbeat y proveedor IA estén saludables. Compose ofrece el servicio opcional `enrichment_worker` para integración y accede a Ollama del host mediante `host.docker.internal`.
+
+Para diagnosticar un proveedor, crear un job nuevo y consultar
+`provider_diagnostics` en su endpoint de estado o en la ficha Vue. Los jobs
+anteriores a 2026-08-17 no contienen ese arreglo. En logs, correlacionar
+`provider_started` y `provider_failed` mediante `job_id`, `job_attempt` y
+`client_request_id`; no habilitar logging de prompts o cuerpos HTTP.
+
+En modo híbrido, reconstruir `api`/`frontend` sólo valida sus imágenes. No
+ejecutar luego `docker compose up ... api frontend` si los puertos 8000/5176 ya
+pertenecen a launchers locales; conservar esos procesos y recrear únicamente el
+worker requerido.
 
 ### Despliegue Compose verificado
 
@@ -40,10 +65,19 @@ Si la API se recrea después del frontend —por ejemplo, al activar
 iniciar y puede conservar la IP anterior del contenedor, dejando `/health` y
 `/api/*` en 502 aunque el shell estático continúe respondiendo.
 
-El smoke del 2026-07-25 activó el flag con infraestructura saludable, pero el
-entorno no tenía OpenAI ni Ollama: la investigación obtuvo cinco fuentes y el job
-falló explícitamente sin aplicar campos. Ver
-`docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
+El smoke del 2026-08-17 confirmó worker, Redis y MCP saludables, lectura correcta
+del secreto montado y consumo del job pendiente. OpenAI respondió HTTP 429 y el
+fallback Ollama tampoco estuvo disponible, por lo que el job agotó el proveedor
+tras tres intentos y terminó `failed`, sin aplicar campos. El incidente de
+arranque por Telegram quedó resuelto; el 429 requiere revisar
+cuota/proyecto/límites del proveedor antes de repetir el flujo. Los logs también
+mostraron un cierre tardío de conexión MCP sobre un event loop ya cerrado; queda
+como deuda de ciclo de vida del cliente y no derribó el proceso ni su heartbeat.
+
+Desde 2026-08-19 Enrich usa `gpt-5.6-luna` con razonamiento `none`, temperatura
+`0` y `ENRICH_OPENAI_MAX_OUTPUT_TOKENS=2048`. Los errores permanentes de crédito,
+cuota o clave ya no se reintentan. Al cambiar estas variables en `.env`, recrear
+`enrichment_worker`; un simple `restart` no actualiza el entorno del contenedor.
 
 Guía para optimizar el ciclo de desarrollo usando servicios locales y reservar Docker para testing de integración y producción.
 

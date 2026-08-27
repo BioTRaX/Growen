@@ -542,7 +542,7 @@ Si encuentras problemas:
 ## 📚 Referencias
 
 - [Guía Completa del Sistema](./MARKET_ALERTS.md)
-- [Guía de Inicio Rápido](./MARKET_ALERTS_QUICK_START.md)
+- [Sistema de Alertas](./MARKET_ALERTS.md)
 - [Entorno Python Correcto](./PYTHON_ENVIRONMENT_SETUP.md)
 - [API Documentation](./API_PRODUCTS.md)
 

@@ -1,7 +1,7 @@
-# NG-HEADER: Nombre de archivo: test_document.md
-# NG-HEADER: Ubicación: docs/knowledge_base/test_document.md
-# NG-HEADER: Descripción: Documento de prueba para testing de ingesta RAG
-# NG-HEADER: Lineamientos: Ver AGENTS.md
+<!-- NG-HEADER: Nombre de archivo: test_document.md -->
+<!-- NG-HEADER: Ubicación: docs/knowledge_base/test_document.md -->
+<!-- NG-HEADER: Descripción: Documento de prueba para testing de ingesta RAG -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
 # Documento de Prueba para RAG
 

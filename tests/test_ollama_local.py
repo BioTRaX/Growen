@@ -32,8 +32,9 @@ async def test_ollama_generation_fails_closed():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = OllamaProvider(client=client)
-        with pytest.raises(OllamaUnavailableError, match="ollama_generation_unavailable"):
+        with pytest.raises(OllamaUnavailableError, match="http_error") as failure:
             await provider.generate_async("texto privado")
+        assert failure.value.status_code == 503
 
 
 @pytest.mark.asyncio

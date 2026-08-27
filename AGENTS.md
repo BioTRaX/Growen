@@ -39,6 +39,15 @@ Este documento orienta a herramientas de asistencia de código (Copilot, Codex, 
 ### Operativa de Git para agentes
 - Evitar `git add`, `commit` y `push` salvo que el usuario lo solicite explícitamente. Priorizar PRs y revisiones.
 
+### Compatibilidad con Superpowers
+- Las skills de Superpowers pueden complementar la metodología de trabajo, pero las reglas y precedencias de Growen prevalecen en todo caso.
+- Los flujos de Superpowers no pueden activar `git add`, `commit`, `push`, `merge` ni publicación automática sin la autorización explícita del usuario y sin cumplir el gate completo de seguridad.
+- La única rama donde se permite automatizar commit/push desde Superpowers es la rama exacta `dev`, y sólo después de verificar secretos, alcance, pruebas, documentación, remotos y estado final del cambio.
+- Los flujos de Superpowers deberán ejecutar Python y pytest exclusivamente mediante el venv de Growen (`.venv\Scripts\python.exe`) o Docker. Quedan prohibidos `python`, `pip`, `poetry` y `pytest` del sistema.
+- Todo Markdown creado bajo `docs/superpowers/` deberá llevar NG-HEADER para permitir su indexación futura y mantener la documentación viva actualizada.
+- Las respuestas, la documentación, los commits y los PRs generados mediante Superpowers deben producirse en español, aunque el origen del material sea inglés.
+- No se deben duplicar ni forzar forks locales de las 14 skills de Superpowers; la actualización debe seguirse desde su repositorio original y adaptarse localmente con reglas de precedencia.
+
 ## Encabezado obligatorio (NG-HEADER)
 Agregar al inicio de cada archivo de código y documentación `.md` (excepto `README.md`). Excepciones: `*.json`, `destinatarios.json`, binarios, imágenes, PDFs y otros archivos de datos.
 
@@ -113,7 +122,7 @@ Formato por lenguaje:
 - Dejar notas de migración cuando corresponda.
 - Adjuntar ejemplos mínimos de uso y pruebas cuando sea razonable.
 - Mantener consistencia de idioma en commits, PRs y documentación: español.
-- Las skills canónicas residen únicamente en `.agents/skills/`, ubicación compartida por Codex, Gemini CLI y GitHub Copilot. No crear adaptadores nuevos; `.agent/skills/` conserva sólo adaptadores legacy. Ver `docs/AGENT_SKILLS.md`.
+- Las skills canónicas residen únicamente en `.agents/skills/`, ubicación compartida por Codex, Gemini CLI, GitHub Copilot y Antigravity. No crear adaptadores nuevos; `.agent/skills/` conserva sólo adaptadores legacy. Ver `docs/AGENT_SKILLS.md`.
 - La skill de Git solo puede activarse cuando el usuario solicite explícitamente stage, commit o push.
 
 ## Entorno de Ejecución Obligatorio (CRÍTICO)
@@ -216,7 +225,7 @@ Antes de realizar cualquier cambio, el agente DEBE consultar la documentación r
 | **API / Endpoints** | `services/api.py`, `services/routers/*.py`, documentos específicos en `docs/API_*.md` |
 | **Workers / Jobs asíncronos** | `docs/IMAGES.md`, `docs/API_MARKET.md`, `workers/*.py`, `services/jobs/*.py` |
 | **Frontend / UI** | `frontend-vue/src/**`, `frontend/src/**` (fallback React), `docs/FRONTEND_DEBUG.md`, `docs/PRODUCTS_UI.md` |
-| **Autenticación / Seguridad** | `docs/SECURITY.md`, `docs/CHATBOT_ROLES.md`, `services/auth.py` |
+| **Autenticación / Seguridad** | `docs/SECURITY.md`, `services/auth.py` |
 | **Docker / Infraestructura** | `docker-compose.yml`, `infra/Dockerfile.*`, sección "Convenciones Docker" en este archivo |
 | **Tests** | `pytest.ini`, `tests/**`, sección correspondiente en `docs/` |
 | **Scraping / Precios de mercado** | `docs/API_MARKET.md`, `workers/market_scraping.py`, `services/jobs/market_scheduler.py` |
@@ -225,7 +234,7 @@ Antes de realizar cualquier cambio, el agente DEBE consultar la documentación r
 | **Catálogos** | `docs/CATALOGS_OPERATIONS.md`, `services/routers/catalog.py` |
 | **Clientes / Ventas** | `docs/SALES.md`, `services/routers/sales.py`, `services/routers/customers.py` |
 | **Compras / Proveedores** | `docs/PURCHASES.md`, `docs/SUPPLIERS.md`, `services/routers/purchases.py` |
-| **Chat / IA** | `docs/CHAT.md`, `docs/CHATBOT_ARCHITECTURE.md`, `docs/CHAT_PERSONA.md`, `ai/` |
+| **Chat / IA** | `docs/CHAT.md`, `docs/CHATBOT_ARCHITECTURE.md`, `ai/` |
 | **MCP Servers** | `docs/MCP.md`, `mcp_servers/`, sección "MCP Servers" en este archivo |
 
 ### Por tipo de operación
@@ -253,7 +262,7 @@ Antes de realizar cualquier cambio, el agente DEBE consultar la documentación r
 
 **❌ Incorrecto** (falla en Docker con Postgres):
 ```python
-DB_URL = os.getenv("DB_URL", "sqlite+aiosqlite:///./growen.db")
+DB_URL = os.getenv("DB_URL") or settings.db_url
 engine = create_async_engine(DB_URL, future=True)
 ```
 

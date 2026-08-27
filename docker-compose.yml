@@ -229,6 +229,12 @@ services:
       DB_NAME: ${POSTGRES_DB:-growen}
       REDIS_URL: redis://redis:6379/0
       GOOGLE_APPLICATION_CREDENTIALS: /app/certs/growen-drive.json
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: ""
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_PUBLIC_BOT_ENABLED: "0"
+      TELEGRAM_ROLE_LINKING_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN_FILE: ""
     depends_on:
       - db
       - redis
@@ -277,6 +283,12 @@ services:
       MARKET_CONCURRENCY: ${MARKET_CONCURRENCY:-4}
       MARKET_PRICE_FRESHNESS_DAYS: ${MARKET_PRICE_FRESHNESS_DAYS:-7}
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: ""
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_PUBLIC_BOT_ENABLED: "0"
+      TELEGRAM_ROLE_LINKING_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN_FILE: ""
     depends_on:
       - db
       - redis
@@ -310,8 +322,14 @@ services:
       MCP_WEB_SEARCH_URL: ${ENRICH_MCP_WEB_SEARCH_URL:-http://mcp_web_search:8002/mcp}
       OLLAMA_HOST: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
       OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-4096}
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: /run/secrets/growen/openai_api_key
       ENRICHMENT_HEARTBEAT_ENABLED: "1"
       ENRICHMENT_HEARTBEAT_TTL_SECONDS: ${ENRICHMENT_HEARTBEAT_TTL_SECONDS:-60}
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_PUBLIC_BOT_ENABLED: "0"
+      TELEGRAM_ROLE_LINKING_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN_FILE: ""
     depends_on:
       - db
       - redis
@@ -321,6 +339,10 @@ services:
       - "localhost:host-gateway"
     volumes:
       - ./logs:/app/logs
+      - type: bind
+        source: ${OPENAI_API_KEY_FILE:-../growen-secrets/openai_api_key}
+        target: /run/secrets/growen/openai_api_key
+        read_only: true
     restart: unless-stopped
     profiles: ["optional"]
     command:
@@ -362,6 +384,12 @@ services:
       KNOWLEDGE_HEARTBEAT_ENABLED: "1"
       KNOWLEDGE_HEARTBEAT_TTL_SECONDS: ${KNOWLEDGE_HEARTBEAT_TTL_SECONDS:-60}
       MEDIA_ROOT: /app/media
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: /run/secrets/growen/openai_api_key
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_PUBLIC_BOT_ENABLED: "0"
+      TELEGRAM_ROLE_LINKING_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN_FILE: ""
     depends_on:
       - db
       - redis
@@ -372,6 +400,10 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./Devs/Imagenes:/app/media
+      - type: bind
+        source: ${OPENAI_API_KEY_FILE:-../growen-secrets/openai_api_key}
+        target: /run/secrets/growen/openai_api_key
+        read_only: true
     restart: unless-stopped
     profiles: ["optional"]
     command:
@@ -495,6 +527,77 @@ services:
     networks:
       - backend
       - egress
+  siyuan:
+    image: b3log/siyuan:v3.8.1
+    container_name: growen-siyuan
+    command: ["serve", "--workspace=/siyuan/workspace/"]
+    profiles: ["siyuan"]
+    environment:
+      TZ: ${TZ:-America/Argentina/Buenos_Aires}
+      SIYUAN_ACCESS_AUTH_CODE: ${SIYUAN_ACCESS_AUTH_CODE:-}
+    ports:
+      - "127.0.0.1:6806:6806"
+    volumes:
+      - type: bind
+        source: ${SIYUAN_WORKSPACE_DIR:-../growen-siyuan/workspace}
+        target: /siyuan/workspace
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:6806/api/system/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+    # La imagen oficial ejecuta un chown inicial del workspace como root y
+    # luego aplica sus propios privilegios; no se fuerza user/cap_drop aquí.
+    networks:
+      - backend
+      - host_access
+  mcp_siyuan:
+    build:
+      context: .
+      dockerfile: mcp_servers/siyuan_server/Dockerfile
+    container_name: growen-mcp-siyuan
+    profiles: ["siyuan"]
+    depends_on:
+      siyuan:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      SIYUAN_BASE_URL: http://siyuan:6806
+      SIYUAN_API_TOKEN_FILE: /run/secrets/growen/siyuan_api_token
+      SIYUAN_NOTEBOOK_NAME: ${SIYUAN_NOTEBOOK_NAME:-Nice Grow}
+      SIYUAN_NOTEBOOK_ID: ${SIYUAN_NOTEBOOK_ID:-}
+      SIYUAN_ALLOWED_PATH_PREFIX: ${SIYUAN_ALLOWED_PATH_PREFIX:-/Growen}
+      SIYUAN_TIMEOUT_SECONDS: ${SIYUAN_TIMEOUT_SECONDS:-10}
+      MCP_SIYUAN_SECRET_KEY_FILE: /run/secrets/growen/mcp_siyuan_secret_key
+      MCP_JWT_KEY_ID: ${MCP_SIYUAN_KEY_ID:-siyuan-v1}
+      MCP_JWT_AUDIENCE: ${MCP_SIYUAN_JWT_AUDIENCE:-growen-mcp-siyuan}
+      MCP_JWT_ISSUER: ${MCP_JWT_ISSUER:-growen-api}
+      MCP_JWT_MAX_TTL_SECONDS: ${MCP_JWT_MAX_TTL_SECONDS:-600}
+      MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-60}
+      MCP_RATE_LIMIT_BACKEND: redis
+      MCP_TOKEN_REVOCATION_BACKEND: redis
+      MCP_RATE_LIMIT_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "127.0.0.1:8104:8104"
+    volumes:
+      - type: bind
+        source: ${GROWEN_SECRET_DIR:-../growen-secrets}
+        target: /run/secrets/growen
+        read_only: true
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+      - host_access
 volumes:
   pgdata:
   redis_data:

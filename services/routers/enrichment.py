@@ -91,6 +91,7 @@ def serialize_job(job: CanonicalEnrichmentJob) -> dict:
         "proposal": result.get("proposal"),
         "confidence": result.get("confidence"),
         "evidence_by_field": result.get("field_sources"),
+        "provider_diagnostics": result.get("provider_diagnostics") or [],
         "sources": [
             {
                 "url": source.url,

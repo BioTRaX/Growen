@@ -1,3 +1,8 @@
+<!-- NG-HEADER: Nombre de archivo: INSTALL_PDF_TOOLS.md -->
+<!-- NG-HEADER: Ubicación: docs/INSTALL_PDF_TOOLS.md -->
+<!-- NG-HEADER: Descripción: Instalación de herramientas PDF. -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
+
 # Instalación de Herramientas PDF
 
 Guía para instalar las herramientas necesarias para el servicio `pdf_import` en Windows.

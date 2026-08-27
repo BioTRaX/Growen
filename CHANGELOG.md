@@ -4,6 +4,62 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-08-27 — batch de Enrich Vue sobre contrato canónico
+
+- El listado operativo Vue dejó de enviar `POST /products/enrich-multiple` y
+  ahora crea batches en `POST /canonical-products/enrichment-batches`.
+- Se agregó contrato TypeScript y prueba del cliente para garantizar un job por
+  canónico y evitar regresiones hacia el endpoint legacy.
+- React y los adaptadores backend se conservan temporalmente para rollback.
+- El import pesado opcional de `rembg` pasó a ser diferido hasta la operación
+  de quitar fondo, evitando bloquear la carga de `services.api` y pytest.
+
+## 2026-08-27 — limpieza de código inalcanzable y auditoría de migraciones
+
+- Se eliminó la implementación legacy inalcanzable de enriquecimiento masivo,
+  individual y borrado en `services/routers/catalog.py`.
+- Se agregó una prueba estática para impedir que esos adaptadores vuelvan a
+  conservar sentencias después de su retorno.
+- Se mantienen temporalmente los endpoints adaptadores, los campos legacy de
+  `Product` y el alias `MarketSource` porque todavía tienen consumidores activos.
+- Se documentó que la base local usa `20260816_chat_rollout_v1` y que
+  `market_sources` ya no existe.
+
+## 2026-08-20 — presentación editorial de Enrich v2
+
+- Las descripciones generadas hablan directamente del producto con frases breves y tono natural; ya no deben mencionar fuentes, evidencia ni el proceso de investigación.
+- Especificaciones e instrucciones se presentan como campos y listas legibles en lugar de JSON crudo.
+- El acceso de Producto a Conocimiento deja de usar un modal y navega a `/productos/:id/Conocimiento`, una vista completa con espacio propio para fuentes, medios, hechos, historial y jobs IA. Mercado conserva su diálogo contextual reutilizando el mismo componente.
+- La retrospectiva de sesión evolucionó `vue-module-migration` con un checklist de elección página/diálogo/drawer, regeneración de rutas y smoke visual autenticado desde la acción de origen.
+
+## 2026-08-19 — Enrich adopta GPT-5.6 Luna
+
+- El proveedor OpenAI de Enrich usa `gpt-5.6-luna` con razonamiento `none`,
+  temperatura `0`, JSON y un máximo de 2048 tokens de salida.
+- Se desactivaron los reintentos internos del SDK para este pipeline; Dramatiq
+  sólo reintenta cuando existe al menos un fallo transitorio.
+- `credit_balance_exhausted`, `insufficient_quota` e `invalid_api_key` se
+  clasifican como permanentes y terminan el job sin repetir solicitudes.
+- El smoke mínimo alcanzó el modelo, pero OpenAI respondió HTTP 429 porque la
+  organización no tiene créditos disponibles; el límite mensual de USD 120 no
+  constituye saldo API.
+
+## 2026-08-17 — Diagnóstico tipado de proveedores Enrich
+
+- Enrich emite eventos estructurados por inicio, éxito y fallo de cada proveedor con correlación por job e intento.
+- Los jobs persisten hasta veinte diagnósticos seguros: código del proveedor, HTTP, request ID, límites/resets y condición reintentable, sin prompts ni cuerpos remotos.
+- Ollama diferencia `timeout`, `http_error`, `empty_response`, `invalid_json` y `schema_invalid`; OpenAI conserva códigos como `insufficient_quota` aun cuando el SDK envuelva la excepción.
+- La ficha Vue recupera el último job y muestra los diagnósticos; se agregaron pruebas backend, de contrato y de componente.
+
+## 2026-08-17 — Aislamiento de Telegram por runtime
+
+- La validación de transporte, flags y secretos Telegram dejó de ejecutarse al construir la configuración global y ahora pertenece al arranque explícito de `telegram_worker`.
+- `dramatiq`, `market_worker`, `enrichment_worker` y `knowledge_worker` fuerzan los flags Telegram a `0` y eliminan `TELEGRAM_BOT_TOKEN_FILE` de su entorno efectivo.
+- Enrich y Conocimiento ya no requieren ni reciben el token del bot; se agregaron pruebas de configuración y Compose para evitar regresiones.
+- Los secretos OpenAI también quedaron acotados por dominio: Enrich y Conocimiento reciben un archivo de sólo lectura en `/run/secrets/growen/openai_api_key`; Dramatiq genérico y Mercado neutralizan tanto el valor como la ruta heredados de `.env`.
+- Se reconstruyeron y recrearon los cuatro workers. Los health checks de Enrich, Conocimiento y Mercado respondieron `ok=true`; el job pendiente fue consumido y terminó `failed` tras tres intentos porque OpenAI respondió HTTP 429 y Ollama no estuvo disponible, ya fuera del problema de arranque.
+- Se documentó que un worker ajeno a Telegram en `Restarting` con `telegram_bot_token_missing` indica contaminación de entorno, no una dependencia funcional.
+
 ## 2026-08-17 — Cierre técnico y aprendizaje agéntico
 
 - Se publicó en `dev` el corte de Chat, Telegram, RAG local, rollout auditable y paridad Vue mediante tres commits atómicos.

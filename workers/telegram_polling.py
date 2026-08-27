@@ -26,7 +26,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from agent_core.config import settings
+from agent_core.config import settings, validate_telegram_runtime
 from agent_core.secrets import read_secret
 from db.models import TelegramUpdate
 from db.session import SessionLocal
@@ -367,6 +367,7 @@ async def run_polling() -> None:
 
 def main() -> None:
     try:
+        validate_telegram_runtime(settings)
         asyncio.run(run_polling())
     except KeyboardInterrupt:
         pass

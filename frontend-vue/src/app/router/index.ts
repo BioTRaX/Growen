@@ -13,6 +13,7 @@ const loaders: Record<string, RouteComponent> = {
   chat: () => import('../../modules/chat/views/ChatView.vue'),
   products: () => import('../../modules/products/views/ProductsImpactView.vue'),
   'product-detail': () => import('../../modules/products/views/ProductDetailView.vue'),
+  'product-knowledge': () => import('../../modules/products/views/ProductKnowledgeView.vue'),
   stock: () => import('../../modules/stock/views/StockView.vue'),
   'stock-shortages': () => import('../../modules/stock/views/StockShortagesView.vue'),
   market: () => import('../../modules/market/views/MarketView.vue'),

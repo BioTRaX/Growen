@@ -123,6 +123,7 @@ async def test_invalid_ai_schema_does_not_fail_knowledge_ingestion(monkeypatch):
     async def invalid_json(*_args, **_kwargs):
         return "respuesta sin estructura"
 
+    monkeypatch.delenv("OPENAI_API_KEY_FILE", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "test-only")
     monkeypatch.setattr(
         "services.jobs.knowledge_jobs.OpenAIProvider.generate_async",

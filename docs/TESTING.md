@@ -16,6 +16,11 @@ $env:RUN_REDIS_INTEGRATION="1"
 
 WebSocket usa Uvicorn loopback y `websockets` en el mismo event loop; no debe volver a `TestClient` ni `run_until_complete`. La integración Redis usa dos procesos y un prefijo efímero. El 2026-08-17 aprobaron 38 pruebas backend focales sin warnings, 91 pruebas Vue, typecheck y build. `test_price_lookup.py` migró a la fixture async `client`; `test_chat_api.py` conserva todavía compatibilidad síncrona legacy fuera de este gate.
 
+La prueba `tests/test_worker_runtime_isolation.py` valida que ningún worker
+ajeno a Telegram herede sus flags o el archivo del token desde `.env`. Las
+pruebas que definen un secreto directo deben eliminar temporalmente su variante
+`*_FILE` para no producir una configuración ambigua.
+
 ## Suite focalizada de conocimiento canónico
 
 ```powershell
@@ -35,11 +40,23 @@ PostgreSQL vacío debe crear `vector`, alcanzar `20260816_chat_rollout_v1` y con
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\test_enrichment_v2_rules.py tests\test_enrichment_v2_api_contract.py tests\test_product_canonical_detail.py mcp_servers\web_search_server\tests -q
+.\.venv\Scripts\python.exe -m pytest tests\test_openai_provider.py tests\test_ollama_local.py -q -p no:randomly
 cd frontend-vue
 npm.cmd test -- src/modules/products src/app/modules/manifest.spec.ts
 npm.cmd run typecheck
 npm.cmd run build
 ```
+
+El gate de Enrich verifica además que los fallos OpenAI conserven únicamente
+`error.code`, HTTP, `x-request-id` y headers `x-ratelimit-*` permitidos; Ollama
+debe discriminar timeout, HTTP, respuesta vacía, JSON inválido y esquema inválido.
+La UI debe recuperar el último job y renderizar estos diagnósticos sin depender
+del mensaje remoto.
+
+La cobertura del proveedor debe comprobar que `gpt-5.6-luna` usa
+`max_completion_tokens`, razonamiento `none`, temperatura determinista y cero
+reintentos internos para Enrich. Los códigos permanentes de facturación o clave
+deben quedar marcados como no reintentables.
 
 El upgrade PostgreSQL vacío debe crear previamente `vector`, alcanzar `20260725_canonical_enrichment_v2`, crear `canonical_enrichment_jobs` y confirmar la ausencia de `products.market_price_reference`. `alembic check` puede seguir señalando drift histórico ajeno; se clasifica en `MIGRATIONS_NOTES.md` y no se incorpora a esta revisión.
 
@@ -516,3 +533,10 @@ Los tests en `tests/performance/` tienen fixtures especiales en su propio `conft
 ---
 
 Actualizado: 2026-07-14
+## Aislamiento de multimedia opcional
+
+`services.media.processor` carga `rembg` de forma diferida únicamente cuando se
+invoca `remove_bg`. Las pruebas de API y de catálogo no necesitan inicializar
+`numba`/modelos de segmentación al importar `services.api`. Si se prueba quitar
+fondo, la dependencia debe estar instalada y el caso debe cubrir explícitamente
+el error `rembg no disponible`.

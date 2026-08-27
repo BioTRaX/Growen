@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from agent_core.config import Settings, settings
+from agent_core.config import Settings, settings, validate_telegram_runtime
 from db.models import User
 from services.api import app
 from services.auth import SessionData
@@ -22,8 +22,37 @@ def test_telegram_webhook_is_not_exposed() -> None:
 
 
 def test_telegram_transport_rejects_webhook() -> None:
+    config = Settings(
+        telegram_enabled=True,
+        telegram_public_bot_enabled=False,
+        telegram_role_linking_enabled=False,
+        telegram_transport="webhook",
+    )
     with pytest.raises(RuntimeError, match="sólo admite polling"):
-        Settings(telegram_transport="webhook")
+        validate_telegram_runtime(config)
+
+
+def test_non_telegram_runtime_does_not_require_bot_secret(monkeypatch) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN_FILE", raising=False)
+    config = Settings(
+        telegram_enabled=False,
+        telegram_public_bot_enabled=False,
+        telegram_role_linking_enabled=False,
+    )
+    validate_telegram_runtime(config)
+
+
+def test_telegram_runtime_requires_bot_secret(monkeypatch) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN_FILE", raising=False)
+    config = Settings(
+        telegram_enabled=True,
+        telegram_public_bot_enabled=False,
+        telegram_role_linking_enabled=False,
+    )
+    with pytest.raises(RuntimeError, match="telegram_bot_token_missing"):
+        validate_telegram_runtime(config)
 
 
 def test_missing_worker_health_is_safe(monkeypatch, tmp_path) -> None:

@@ -8,12 +8,13 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from db.models import CanonicalProduct
+from db.models import CanonicalEnrichmentJob, CanonicalProduct
 from services.auth import SessionData
 from services.routers.enrichment import (
     EnrichmentApplyRequest,
     apply_enrichment_job,
     create_enrichment_job,
+    serialize_job,
 )
 
 
@@ -89,3 +90,29 @@ async def test_apply_uses_optimistic_content_revision(db_session):
             SessionData(None, None, "admin"),
         )
     assert conflict.value.status_code == 409
+
+
+def test_job_contract_exposes_persisted_provider_diagnostics():
+    job = CanonicalEnrichmentJob(
+        id="diagnostic-job",
+        canonical_product_id=1,
+        client_request_id="diagnostic-request",
+        scope="full",
+        result_json={
+            "provider_diagnostics": [
+                {
+                    "provider": "openai",
+                    "model": "gpt-4.1-mini",
+                    "status": "failed",
+                    "code": "insufficient_quota",
+                    "http_status": 429,
+                }
+            ]
+        },
+    )
+    job.sources = []
+
+    payload = serialize_job(job)
+
+    assert payload["provider_diagnostics"][0]["code"] == "insufficient_quota"
+    assert payload["provider_diagnostics"][0]["http_status"] == 429

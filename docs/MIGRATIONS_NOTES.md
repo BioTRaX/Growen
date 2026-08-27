@@ -5,6 +5,19 @@
 
 # Notas de migraciones
 
+## 2026-08-27 — auditoría y limpieza de compatibilidad
+
+La base local quedó verificada en `20260816_chat_rollout_v1`, con un único
+registro de versión observado y sin la tabla histórica `market_sources`.
+Los campos legacy de `products` se conservan deliberadamente durante el ciclo
+de rollback React. No se creó una migración destructiva ni se reescribieron
+revisiones históricas.
+
+Se retiró el código inalcanzable posterior a los retornos de los adaptadores de
+enriquecimiento en `services/routers/catalog.py`. Los endpoints adaptadores y
+el alias ORM `MarketSource` permanecen hasta completar la migración de sus
+consumidores y el ciclo de deprecación documentado.
+
 ## 2026-08-16 — `20260816_chat_rollout_v1`
 
 Revisión lineal desde `20260726_canonical_knowledge_v1`. Crea el singleton `chat_rollout_state`, eventos y checks sin prompts, respuestas, IDs ni secretos. El registro inicial es `disabled/paused`, con autoavance apagado. El downgrade aborta si existe trazabilidad o el estado dejó su valor inicial.
@@ -452,7 +465,7 @@ Contexto: se detectó que el contenedor de Postgres 17.6 no podía iniciar con e
 Pasos ejecutados (Windows PowerShell + Docker):
 
 - Backup crudo del volumen `growen_pgdata` a `backups/pg/raw-YYYYMMDD-HHMMSS/pgdata.tar` (uso de `alpine:3.19` con `tar`).
-- Dump lógico con contenedor temporal `postgres:15.10-bookworm` usando `pg_dump -Fc`:
+- Dump lógico con el contenedor PostgreSQL vigente usando `pg_dump -Fc`:
   - Artefacto resultante verificado en: `backups/pg/raw-20251010-113335/growen_15.dump` (≈190 KB).
 - Limpieza de referencias y recreación del volumen:
   - Se eliminaron contenedores que referenciaban el volumen y luego `docker volume rm growen_pgdata`.

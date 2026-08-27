@@ -83,7 +83,7 @@ async function runOperation(key: string, action: () => Promise<void>, success: s
 
 async function enrichSelection(): Promise<void> {
   const ids = [...selected.value]
-  await runOperation('enrich', () => enrichProducts(ids), `${ids.length} producto(s) enviados a enriquecimiento`)
+  await runOperation('enrich', async () => { await enrichProducts(ids) }, `${ids.length} producto(s) enviados a enriquecimiento`)
   selected.value = []
   retry()
 }

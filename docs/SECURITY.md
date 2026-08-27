@@ -9,6 +9,17 @@
 
 Producción usa exclusivamente `TELEGRAM_BOT_TOKEN_FILE`, `TELEGRAM_IDENTITY_ENCRYPTION_KEY_FILE`, `TELEGRAM_IDENTITY_HMAC_KEY_FILE`, `TELEGRAM_CANARY_USER_ID_FILE` y, si se habilita OpenAI, `OPENAI_API_KEY_FILE`. El lector rechaza valor+archivo, rutas relativas, symlinks, archivos no regulares y secretos directos fuera de desarrollo/tests. `scripts/generate_chat_keys.py --output-dir <ruta-externa>` rechaza destinos dentro del workspace y nunca imprime valores.
 
+El token del bot se monta únicamente en `telegram_worker` y en runtimes del
+dominio que lo requieran explícitamente. `dramatiq`, `market_worker`,
+`enrichment_worker` y `knowledge_worker` sobrescriben los flags Telegram a `0`
+y eliminan `TELEGRAM_BOT_TOKEN_FILE` de su entorno efectivo. No ampliar sus
+montajes de secretos como solución a errores de configuración.
+
+El archivo OpenAI sigue el mismo principio de mínimo privilegio:
+`enrichment_worker` y `knowledge_worker` lo reciben como bind mount de sólo
+lectura; `dramatiq` y `market_worker` fuerzan vacíos `OPENAI_API_KEY` y
+`OPENAI_API_KEY_FILE`. La ruta del host no debe aparecer en logs operativos.
+
 El token y el canary se capturan sin eco mediante `--interactive-bot-token` y
 `--interactive-canary`. No pasarlos como argumentos, no exponerlos en salidas
 de consola ni consultarlos mediante bots de terceros. La opción recomendada
@@ -33,7 +44,11 @@ El rollout nace `disabled/paused`. Fuga RAG/PII, mutación Telegram o violación
 
 La rotación de cifrado admite temporalmente `TELEGRAM_IDENTITY_ENCRYPTION_KEY_PREVIOUS`; la clave HMAC no debe rotarse sin una migración de reindexación. Las migraciones ya están aplicadas localmente, pero las banderas Telegram siguen apagadas hasta configurar claves efímeras, clasificar RAG y completar el smoke.
 
-Auditoría 2026-08-15: sólo PostgreSQL estaba activo; no había worker Telegram, identidades, updates ni trazas Chat. Los secretos expuestos ya fueron rotados y el entorno queda deliberadamente sin API keys. Las variables Telegram no están declaradas en `.env`, aplican defaults seguros y ningún proveedor externo puede ejecutarse sin credenciales. Polling es el único transporte admitido; la API ya no monta el router webhook.
+Auditoría histórica 2026-08-15: sólo PostgreSQL estaba activo; no había worker
+Telegram, identidades, updates ni trazas Chat. Desde el rollout local posterior,
+los flags pueden declararse en `.env`, pero cada servicio debe reducirlos según
+su dominio. Polling es el único transporte admitido; la API no monta el router
+webhook y la presencia de un secreto no habilita por sí sola un proveedor.
 
 ## Manejo de secretos
 - Nunca versionar archivos `.env` ni credenciales.

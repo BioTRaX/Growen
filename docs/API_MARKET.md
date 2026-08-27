@@ -11,6 +11,10 @@
 
 Enrich v2 no genera, aplica ni elimina valores monetarios. `products.market_price_reference` fue retirado en `20260725_canonical_enrichment_v2`; las referencias, fuentes, observaciones ARS, vigencia, promedio e histórico permanecen bajo `/market` y `CanonicalProduct`. La card del detalle Vue consulta únicamente estos contratos.
 
+Las consultas y ejemplos que todavía nombran `market_sources` en este documento
+son históricos. La tabla no existe desde `20260726_canonical_knowledge_v1` y no
+debe recrearse; usar activos y perfiles de la Base de Conocimiento.
+
 ## Estado operativo vigente (verificado 2026-07-26)
 
 Mercado está en `state: active` y `runtime: vue` para `colaborador|admin`. Nginx dirige `/mercado` a Vue. El consumidor Docker dedicado `market_worker`, separado del contenedor liviano `dramatiq`, consume exclusivamente `market`, publica heartbeat y expone health de broker, consumidor y profundidad lista/diferida. El diagnóstico canónico es `scripts\diagnose_market.ps1` y el arranque diario es `scripts\start-dev.ps1 -WithMarketWorker`.

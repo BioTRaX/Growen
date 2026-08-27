@@ -21,10 +21,9 @@ Backend (Python)
 - Otros para PDF avanzado (ya en core/extra): reportlab, weasyprint (no Windows)
  - Exportación PDF (WeasyPrint): `weasyprint` (HTML→PDF con CSS). En Windows requiere dependencias de Cairo/Pango/GTK; ver notas abajo.
 
-Install (entorno limpio):
+Install (entorno limpio; siempre dentro de la venv):
 ```
-python -m venv .venv && . .venv/Scripts/activate  # or source .venv/bin/activate
-pip install -r requirements.txt
+\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 Environment (common):
@@ -41,8 +40,9 @@ Jobs (optional):
 REDIS_URL=redis://localhost:6379/0
 ```
 
-Frontend (Node)
-- Core: react, react-dom, vite, typescript
+Frontend (Node, canónico)
+- Core: vue, vue-router, pinia, vuetify, vite, typescript
+- `frontend/` React se conserva únicamente como código legado de rollback.
 - Scripts: `npm run dev`, `npm run build`, `npm run doctor`
 
 Install:

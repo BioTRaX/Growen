@@ -108,3 +108,39 @@ Antes de considerar Enrich v2 plenamente operativo debe documentarse un segundo
 smoke con proveedor real, propuesta estructurada válida y revisión/aplicación sin
 sobrescribir `content_revision`. Actualizar este documento y cualquier instrucción
 que resulte desactualizada durante esa ejecución.
+
+Desde 2026-08-17 el endpoint del job y la ficha Vue exponen
+`provider_diagnostics`. Esta mejora no completa datos históricos: el próximo
+smoke debe crear un job nuevo y registrar código, HTTP, request ID y límites del
+proveedor, además del resultado funcional.
+
+### Despliegue de observabilidad — 2026-08-17
+
+- Builds Docker de `enrichment_worker`, `api` y `frontend`: aprobados.
+- `enrichment_worker` recreado: `ok=true`, broker disponible, heartbeat versión
+  2 y cola vacía; Dramatiq informó proceso listo.
+- API local en `127.0.0.1:8000`: HTTP 200; Vue local en
+  `127.0.0.1:5176/productos/18`: HTTP 200.
+- API/frontend Compose quedaron en estado `Created` porque el puerto 8000 ya
+  pertenecía al launcher local. No se interrumpió ese proceso: éste es un
+  despliegue híbrido válido y los contenedores no son el runtime efectivo.
+- No se creó un job real adicional para evitar consumo externo no solicitado.
+  El próximo intento manual será el primer smoke que persista la nueva
+  taxonomía de proveedor.
+
+### Diagnóstico real y migración de modelo — 2026-08-19
+
+- El job del producto interno `18` alcanzó OpenAI y Ollama después de completar
+  la búsqueda de fuentes.
+- OpenAI devolvió HTTP 429 con `credit_balance_exhausted`; Ollama respondió pero
+  su contenido no validó como JSON. No hubo bloqueo de Redis, MCP ni worker.
+- Enrich migró a `gpt-5.6-luna` con razonamiento `none`, temperatura `0`, salida
+  máxima de 2048 tokens y reintentos internos del SDK desactivados.
+- Se reconstruyó y recreó exclusivamente `enrichment_worker`; respondió
+  `healthy`, con broker, heartbeat, modelo y secreto montado correctamente.
+- La llamada mínima llegó a OpenAI después de habilitar permisos, pero volvió a
+  recibir `credit_balance_exhausted`. El mensaje remoto indicó que la
+  organización no posee créditos; no se lanzó otro job completo para evitar una
+  solicitud fallida adicional.
+- Queda pendiente repetir el smoke después de activar saldo o facturación en la
+  organización asociada a la API key.
