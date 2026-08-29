@@ -15,7 +15,27 @@ import { generateCatalog, headLatestCatalog } from '../services/catalogs'
 import { baseURL as base } from '../services/http'
 import CatalogHistoryModal from '../components/CatalogHistoryModal'
 import { useToast } from '../components/ToastProvider'
-import http from '../services/http'
+import { enqueueCanonicalEnrichment } from '../services/enrichment'
+
+function groupEnrichmentSelection(ids: number[], items: ProductItem[]) {
+  const itemsById = new Map(items.map((item) => [item.product_id, item]))
+  const representativeByCanonical = new Map<number, number>()
+  const membersByRepresentative = new Map<number, number[]>()
+  for (const productId of ids) {
+    const canonicalId = itemsById.get(productId)?.canonical_product_id
+    const representative = canonicalId == null
+      ? productId
+      : representativeByCanonical.get(canonicalId) ?? productId
+    if (canonicalId != null && !representativeByCanonical.has(canonicalId)) {
+      representativeByCanonical.set(canonicalId, representative)
+    }
+    membersByRepresentative.set(
+      representative,
+      [...(membersByRepresentative.get(representative) || []), productId],
+    )
+  }
+  return { representatives: [...membersByRepresentative.keys()], membersByRepresentative }
+}
 
 export default function Stock() {
   const { push } = useToast()
@@ -171,14 +191,29 @@ export default function Stock() {
               try {
                 setBulkEnriching(true)
                 const ids = Array.from(selected)
-                await http.post('/products/enrich-multiple', { ids })
-                push({ kind: 'success', message: 'Productos enviados a enriquecimiento' })
-                clearSelection()
-                // refrescar página 1
+                const grouped = groupEnrichmentSelection(ids, items)
+                const batchOutcome = await enqueueCanonicalEnrichment(grouped.representatives, 'react-batch')
+                const acceptedIds = batchOutcome.acceptedIds.flatMap(
+                  (representative) => grouped.membersByRepresentative.get(representative) || [representative],
+                )
+                const failures = batchOutcome.failures.flatMap((failure) =>
+                  (grouped.membersByRepresentative.get(failure.productId) || [failure.productId])
+                    .map((productId) => ({ productId, reason: failure.reason })),
+                )
+                const failedIds = failures.map((failure) => failure.productId)
+                setSelected(new Set(failedIds))
+                if (!acceptedIds.length) {
+                  push({ kind: 'error', message: failures[0]?.reason || 'Ningún producto pudo enviarse a enriquecimiento' })
+                  return
+                }
+                if (failedIds.length) {
+                  push({ kind: 'info', message: `Enriquecimiento parcial: ${acceptedIds.length} enviado, ${failedIds.length} no procesado` })
+                } else {
+                  push({ kind: 'success', message: 'Productos enviados a enriquecimiento' })
+                }
                 setPage(1)
-                setItems([])
               } catch (e: any) {
-                push({ kind: 'error', message: e?.response?.data?.detail || 'Error al enriquecer productos' })
+                push({ kind: 'error', message: e?.response?.data?.detail || e?.message || 'Error al enriquecer productos' })
               } finally {
                 setBulkEnriching(false)
               }

@@ -108,6 +108,15 @@ Adapta temporalmente una solicitud por `Product.id` al job canónico de Enrich.
 No genera contenido directamente ni calcula precios de mercado. Requiere CSRF y
 rol `admin` o `colaborador`.
 
+Las interfaces actuales de React y Vue ya utilizan el contrato canónico de
+batches/jobs. Este endpoint se conserva sólo para compatibilidad y rollback.
+
+El contrato canónico devuelve HTTP 202 con `jobs` y `skipped`. Cada elemento de
+`jobs` puede incluir `error` si el job fue persistido pero no pudo despacharse;
+por eso los consumidores deben evaluar el cuerpo y no interpretar el código HTTP
+como éxito total. Stock conserva seleccionados los IDs fallidos para permitir
+reintento y ProductDetail muestra el motivo operativo correspondiente.
+
 Uso típico (desde la UI): botón “Enriquecer con IA” en la ficha del producto. Condiciones de visibilidad:
 - El usuario debe tener permisos de edición (admin o colaborador).
 - El producto debe tener `title`.

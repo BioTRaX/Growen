@@ -10,6 +10,7 @@ import { serviceStatus, startService, tailServiceLogs, ServiceLogItem } from '..
 import { useAuth } from '../auth/AuthContext'
 import { getProductDetailStylePref, putProductDetailStylePref, ProductDetailStyle, updateSalePrice, updateSupplierBuyPrice, updateCanonicalSku } from '../services/productsEx'
 import { listProductVariants, linkSupplierProduct, ProductVariantItem, patchProduct, updateVariantSku, deleteProducts } from '../services/products'
+import { enqueueCanonicalEnrichment as submitCanonicalEnrichment } from '../services/enrichment'
 import { listCategories, Category } from '../services/categories'
 import SupplierAutocomplete from '../components/supplier/SupplierAutocomplete'
 import type { SupplierSearchItem } from '../services/suppliers'
@@ -292,36 +293,42 @@ export default function ProductDetail() {
     return currentDesc !== originalDesc
   }, [desc, prod])
 
-  // Enriquecer con IA: dispara POST al backend y refresca datos
+  async function enqueueCanonicalEnrichment(): Promise<void> {
+    const outcome = await submitCanonicalEnrichment([pid], `react-enrich-${pid}`)
+    if (!outcome.acceptedIds.length) {
+      throw new Error(outcome.failures[0]?.reason || 'El producto no pudo enviarse a enriquecimiento')
+    }
+  }
+
+  // Enriquecer con IA: crea un job canónico y refresca datos
   const handleEnrich = async () => {
     if (isDescDirty && !window.confirm('La descripción tiene cambios manuales que se perderán. ¿Deseas sobrescribirlos con el enriquecimiento de IA?')) {
       return
     }
     try {
       setLoading(true)
-      // Nota: el cliente http ya incluye el prefijo base (ej.: /api)
-      await http.post(`/products/${pid}/enrich`)
-      showToast('success', 'Producto enriquecido con IA')
+      await enqueueCanonicalEnrichment()
+      showToast('success', 'Producto enviado a enriquecimiento')
       await refresh()
     } catch (e: any) {
-      showToast('error', e?.response?.data?.detail || 'Error al enriquecer producto')
+      showToast('error', e?.response?.data?.detail || e?.message || 'Error al enriquecer producto')
     } finally {
       setLoading(false)
     }
   }
 
-  // Reenriquecer con IA (force=true)
+  // Reenriquecer con IA: un client_request_id nuevo permite crear otro job
   const handleReenrich = async () => {
     if (isDescDirty && !window.confirm('La descripción tiene cambios manuales que se perderán. ¿Deseas sobrescribirlos con el enriquecimiento de IA?')) {
       return
     }
     try {
       setLoading(true)
-      await http.post(`/products/${pid}/enrich?force=true`)
-      showToast('success', 'Reenriquecimiento ejecutado')
+      await enqueueCanonicalEnrichment()
+      showToast('success', 'Reenriquecimiento enviado')
       await refresh()
     } catch (e: any) {
-      showToast('error', e?.response?.data?.detail || 'Error al reenriquecer producto')
+      showToast('error', e?.response?.data?.detail || e?.message || 'Error al reenriquecer producto')
     } finally {
       setLoading(false)
     }

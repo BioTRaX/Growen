@@ -89,3 +89,13 @@ incorporó un control adicional a `vue-module-migration`:
 
 El checklist canónico vive junto a la skill en
 `.agents/skills/vue-module-migration/references/visual-validation-checklist.md`.
+
+## Auditoría ejecutable del entorno agéntico
+
+`scripts/audit_agentic_environment.py` valida de forma determinista que existan
+los documentos de gobernanza, que las skills canónicas tengan frontmatter válido
+y que los adaptadores legacy redirijan a `.agents/skills/` sin duplicar reglas.
+`scripts/check-quality.ps1 -AgentOnly` lo ejecuta automáticamente. La prueba
+`tests/test_audit_agentic_environment.py` cubre el directorio de trabajo por
+defecto, la gobernanza requerida y el rechazo de frontmatter cuyo delimitador de
+cierre no aparezca inmediatamente después de `description`.

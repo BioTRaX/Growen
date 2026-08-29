@@ -24,6 +24,7 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 - [ ] Completar la paridad funcional pendiente y los smokes visuales autenticados.
 - [ ] Retirar gradualmente el fallback React después de dos releases estables y siete días sin incidentes críticos.
 - [ ] Migrar los consumidores React restantes a contratos canónicos antes de eliminar código legado.
+- [ ] Retirar los adaptadores públicos de Enrich después del ciclo estable de compatibilidad.
 
 ## IA, Mercado y operaciones
 

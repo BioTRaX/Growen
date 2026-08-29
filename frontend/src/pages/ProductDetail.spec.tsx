@@ -10,8 +10,11 @@ import http from '../services/http'
 import { AuthProvider } from '../auth/AuthContext'
 import { ThemeProvider } from '../theme/ThemeProvider'
 
+const { mockShowToast } = vi.hoisted(() => ({ mockShowToast: vi.fn() }))
+
 // Mock de servicios y contextos
 vi.mock('../services/http')
+vi.mock('../components/Toast', () => ({ showToast: mockShowToast }))
 vi.mock('react-router-dom', async (importOriginal) => {
     const original = await importOriginal<typeof import('react-router-dom')>()
     return {
@@ -24,12 +27,14 @@ const mockProd = {
   id: 1,
   title: 'Test Product',
   stock: 10,
+  canonical_product_id: 101,
   description_html: '<p>Original description</p>',
   images: [],
 }
 
 describe('ProductDetail Enrichment', () => {
   beforeEach(() => {
+    mockShowToast.mockReset()
     // Mockear las llamadas http que el componente y sus providers necesitan
     vi.mocked(http.get).mockImplementation(async (url) => {
         if (url.includes('/auth/me')) {
@@ -49,7 +54,13 @@ describe('ProductDetail Enrichment', () => {
         }
         return { data: {} };
     });
-    vi.mocked(http.post).mockResolvedValue({ data: { status: 'ok' } });
+    vi.mocked(http.post).mockResolvedValue({
+      data: {
+        batch_id: 'batch-ok',
+        jobs: [{ product_id: 1, canonical_product_id: 101, job_id: 'job-1', status: 'queued', error: null }],
+        skipped: [],
+      },
+    });
     vi.spyOn(window, 'confirm').mockReturnValue(false); // Por defecto, el usuario cancela
   })
 
@@ -117,8 +128,31 @@ describe('ProductDetail Enrichment', () => {
 
     // Como el usuario confirmó, la llamada a la API debe realizarse
     await waitFor(() => {
-      expect(http.post).toHaveBeenCalledWith('/products/1/enrich')
+      expect(http.post).toHaveBeenCalledWith('/canonical-products/enrichment-batches', {
+        client_request_id: expect.any(String),
+        product_ids: [1],
+        scope: 'full',
+      })
     })
     expect(http.post).toHaveBeenCalledTimes(1)
+  })
+
+  it('muestra el error de despacho en lugar de informar éxito', async () => {
+    vi.mocked(http.post).mockResolvedValueOnce({
+      data: {
+        batch_id: 'batch-error',
+        jobs: [{ product_id: 1, canonical_product_id: 101, job_id: 'job-1', status: 'pending', error: 'Enrich deshabilitado' }],
+        skipped: [],
+      },
+    })
+    renderComponent()
+    await screen.findByText('Test Product')
+
+    fireEvent.click(screen.getByText('Enriquecer con IA'))
+
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith('error', 'Enrich deshabilitado')
+    })
+    expect(mockShowToast).not.toHaveBeenCalledWith('success', expect.any(String))
   })
 })

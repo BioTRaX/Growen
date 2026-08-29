@@ -64,6 +64,12 @@ foreach ($skill in $skillFiles) {
 }
 Write-Host 'Skills canónicas verificadas.' -ForegroundColor Green
 
+if (-not (Test-Path -LiteralPath $python)) {
+    throw 'No existe la venv. Ejecutar scripts\bootstrap-dev.ps1.'
+}
+Invoke-QualityCommand $python @('scripts/audit_agentic_environment.py')
+Write-Host 'Entorno agéntico verificado.' -ForegroundColor Green
+
 if ($SkillsOnly) {
     exit 0
 }
@@ -140,9 +146,6 @@ if ($AgentOnly) {
     exit 0
 }
 
-if (-not (Test-Path -LiteralPath $python)) {
-    throw 'No existe la venv. Ejecutar scripts\bootstrap-dev.ps1.'
-}
 Invoke-QualityCommand $python @('-c', 'import sys; raise SystemExit(0 if (3, 14, 6) <= sys.version_info[:3] < (3, 15, 0) else 1)')
 Invoke-QualityCommand $python @('-m', 'ruff', 'check', 'agent_core/mcp_client.py', 'agent_core/tool_security.py', 'mcp_servers/security.py', 'mcp_servers/products_server', 'mcp_servers/web_search_server', 'services/auth.py', 'ai/providers/openai_provider.py')
 Invoke-QualityCommand $python @('-m', 'bandit', '-q', '-r', 'agent_core/tool_security.py', 'mcp_servers/security.py', 'mcp_servers/web_search_server/tools.py', 'services/auth.py')

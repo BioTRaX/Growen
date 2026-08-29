@@ -4,6 +4,20 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-08-29 — consumidores React de Enrich y auditoría agéntica
+
+- ProductDetail y Stock del fallback React crean batches mediante
+  `POST /canonical-products/enrichment-batches`; los adaptadores legacy quedan
+  disponibles únicamente para compatibilidad y rollback.
+- La UI interpreta `jobs[].error` y `skipped`, evita falsos éxitos y conserva
+  seleccionados en Stock los productos que no pudieron procesarse.
+- El auditor ejecutable del entorno agéntico valida gobernanza, frontmatter
+  canónico y adaptadores legacy desde `scripts/check-quality.ps1 -AgentOnly`.
+- La auditoría usa el directorio de trabajo por defecto y rechaza bloques de
+  frontmatter cuyo delimitador no siga inmediatamente a `description`.
+- La carga opcional de `rembg` permanece diferida para aislar el arranque de API
+  y las pruebas de la cadena multimedia pesada.
+
 ## 2026-08-27 — batch de Enrich Vue sobre contrato canónico
 
 - El listado operativo Vue dejó de enviar `POST /products/enrich-multiple` y
