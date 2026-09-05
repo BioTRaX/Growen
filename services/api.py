@@ -64,6 +64,7 @@ from .routers import (
     enrichment,
     canonical_knowledge,
     chat_rollout,
+    meli,
 )
 from services.auth import require_csrf  # para override condicional en dev
 from services.routers import bug_report  # router para reportes de bugs
@@ -199,7 +200,7 @@ async def log_requests(request: Request, call_next):
         # Devolver error con tono argento, breve y claro (sin faltar el respeto)
         return JSONResponse(
             {
-                "detail": "Uy, algo se rompiA3 de nuestro lado. Tranqui: ya lo estamos mirando. Si podAs, probA de nuevo mAs tarde.",
+                "detail": "Uy, algo se rompió de nuestro lado. Ya lo estamos revisando. Probá de nuevo más tarde.",
             },
             status_code=500,
         )
@@ -390,6 +391,7 @@ app.include_router(customers.router)
 app.include_router(sales.router)
 app.include_router(reports.router)
 app.include_router(market.router)
+app.include_router(meli.router)
 app.include_router(alerts.router)
 app.include_router(media.router)
 app.include_router(image_jobs.router)

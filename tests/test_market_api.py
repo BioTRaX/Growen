@@ -15,14 +15,17 @@ Valida:
 - Formato de respuesta
 """
 
+from decimal import Decimal
+
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import CanonicalKnowledgeAsset, CanonicalProduct, Category, ProductEquivalence, Supplier, SupplierProduct, User, MarketSource
+from db.models import CanonicalKnowledgeAsset, CanonicalProduct, Category, ProductEquivalence, Supplier, SupplierProduct, User, MarketSource, MarketUpdateJob
 from services.api import app
+from services.market.pricing import persist_source_observation
 
 
 @pytest.mark.asyncio
@@ -455,7 +458,10 @@ async def test_get_product_sources_with_data(client_collab: AsyncClient, db: Asy
         url="https://www.mercadolibre.com.ar/producto",
         last_price=Decimal("1350.00"),
         last_checked_at=datetime.utcnow() - timedelta(hours=2),
-        is_mandatory=True
+        is_mandatory=True,
+        validation_status="verified",
+        ars_confirmed=True,
+        argentina_delivery_confirmed=True,
     )
     
     source2 = MarketSource(
@@ -464,7 +470,10 @@ async def test_get_product_sources_with_data(client_collab: AsyncClient, db: Asy
         url="https://www.santaplanta.com.ar/producto",
         last_price=Decimal("1420.00"),
         last_checked_at=datetime.utcnow() - timedelta(days=1),
-        is_mandatory=True
+        is_mandatory=True,
+        validation_status="verified",
+        ars_confirmed=True,
+        argentina_delivery_confirmed=True,
     )
     
     # Crear fuente adicional
@@ -474,7 +483,10 @@ async def test_get_product_sources_with_data(client_collab: AsyncClient, db: Asy
         url="https://www.ejemplo.com/producto",
         last_price=None,
         last_checked_at=None,
-        is_mandatory=False
+        is_mandatory=False,
+        validation_status="verified",
+        ars_confirmed=True,
+        argentina_delivery_confirmed=True,
     )
     
     db.add_all([source1, source2, source3])
@@ -547,7 +559,10 @@ async def test_get_product_sources_fields_validation(client_collab: AsyncClient,
         url="https://test.com/product",
         last_price=Decimal("100.00"),
         last_checked_at=datetime.utcnow(),
-        is_mandatory=True
+        is_mandatory=True,
+        validation_status="verified",
+        ars_confirmed=True,
+        argentina_delivery_confirmed=True,
     )
     db.add(source)
     await db.commit()
@@ -1001,6 +1016,118 @@ async def test_refresh_market_prices_no_sources(client_collab: AsyncClient, db: 
     data = resp.json()
     assert data["status"] == "queued"
     assert data["product_id"] == product.id
+
+
+@pytest.mark.asyncio
+async def test_force_price_detection_enqueues_only_requested_source(
+    client_collab: AsyncClient, db: AsyncSession, monkeypatch
+):
+    product = CanonicalProduct(name="Producto detección focal")
+    db.add(product)
+    await db.flush()
+    source = MarketSource(
+        product_id=product.id,
+        source_name="Competidor en cuarentena",
+        url="https://example.com/producto",
+        is_active=False,
+        validation_status="warning",
+    )
+    db.add(source)
+    await db.commit()
+    sent: list[int] = []
+    monkeypatch.setattr("workers.market_scraping.process_market_item_task.send", sent.append)
+    monkeypatch.setattr("services.routers.market.validate_public_url", lambda _url: None)
+
+    response = await client_collab.post(f"/market/sources/{source.id}/detect-price")
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["source_id"] == source.id
+    assert sent == [payload["item_id"]]
+    job = await db.get(MarketUpdateJob, payload["job_id"])
+    assert job.config_snapshot["target_source_id"] == source.id
+    assert job.config_snapshot["force_price_detection"] is True
+
+
+@pytest.mark.asyncio
+async def test_manual_validation_without_price_remains_quarantined(
+    client_collab: AsyncClient, db: AsyncSession, monkeypatch
+):
+    product = CanonicalProduct(name="Producto sin captura")
+    db.add(product)
+    await db.flush()
+    source = MarketSource(
+        product_id=product.id,
+        source_name="Competidor pendiente",
+        url="https://example.com/pendiente",
+        is_active=False,
+        validation_status="warning",
+    )
+    db.add(source)
+    await db.commit()
+    monkeypatch.setattr("services.routers.market.validate_public_url", lambda _url: None)
+
+    response = await client_collab.post(
+        f"/market/sources/{source.id}/manual-validation",
+        json={
+            "ars_confirmed": True,
+            "argentina_delivery_confirmed": True,
+            "evidence_note": "La página informa precio en pesos y entrega nacional.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_active"] is False
+    assert response.json()["requires_price_detection"] is True
+    await db.refresh(source)
+    assert source.validation_status == "warning"
+    assert source.validation_detail["manual_validation"]["evidence_note"].startswith("La página")
+
+
+@pytest.mark.asyncio
+async def test_manual_validation_with_captured_price_activates_source_and_reference(
+    client_collab: AsyncClient, db: AsyncSession, monkeypatch
+):
+    product = CanonicalProduct(name="Producto validado")
+    db.add(product)
+    await db.flush()
+    source = MarketSource(
+        product_id=product.id,
+        source_name="Competidor validable",
+        url="https://example.com/validado",
+        currency="ARS",
+        is_active=False,
+        validation_status="warning",
+    )
+    db.add(source)
+    await db.flush()
+    await persist_source_observation(
+        db,
+        product_id=product.id,
+        source=source,
+        price=Decimal("3700.00"),
+        capture_method="static",
+    )
+    await db.commit()
+    monkeypatch.setattr("services.routers.market.validate_public_url", lambda _url: None)
+
+    response = await client_collab.post(
+        f"/market/sources/{source.id}/manual-validation",
+        json={
+            "ars_confirmed": True,
+            "argentina_delivery_confirmed": True,
+            "evidence_note": "Validación visual: precio ARS y envío a Argentina.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_active"] is True
+    assert response.json()["market_price_reference"] == 3700.0
+    await db.refresh(source)
+    await db.refresh(product)
+    assert source.asset.status == "confirmed"
+    assert source.validation_status == "verified"
+    assert product.market_price_reference == Decimal("3700.00")
 
 
 # ==================== Tests POST /products/{id}/sources ====================

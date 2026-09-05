@@ -39,6 +39,7 @@ const loaders: Record<string, RouteComponent> = {
   'admin-technical-dashboard': () => import('../../modules/admin/views/TechnicalDashboardView.vue'),
   'admin-chat-inbox': () => import('../../modules/admin/views/ChatInboxView.vue'),
   'product-images': () => import('../../modules/images/views/ProductImagesView.vue'),
+  'product-images-gallery': () => import('../../modules/images/views/ProductImagesGalleryView.vue'),
   pending: () => import('../../views/MigrationPendingView.vue'),
 }
 
@@ -75,6 +76,12 @@ export const router = createRouter({
       name: 'forbidden',
       component: () => import('../../views/ForbiddenView.vue'),
       meta: { title: 'Acceso denegado', public: true },
+    },
+    {
+      path: '/productos/:id/imagenes',
+      name: 'product-images-gallery',
+      component: loaders['product-images-gallery'],
+      meta: { title: 'Galería de Producto', roles: ['admin', 'colaborador'] },
     },
     { path: '/:pathMatch(.*)*', redirect: '/login' },
   ],

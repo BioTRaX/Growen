@@ -4,6 +4,35 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-09-05 — branching efímero y cierre agéntico secuencial
+
+- Todo trabajo agéntico comienza en una rama efímera creada desde `dev`; quedan prohibidos los commits directos a la rama de integración.
+- `Cerrar sesión` y `Cerremos sesión` activan retrospectiva, evolución del entorno, compuerta de riesgo, documentación, sincronización, resolución verificable, merge y push.
+- El auditor y las pruebas cubren triggers exactos y contratos esenciales de las skills Git y de retrospectiva.
+- La matriz Growen/Superpowers separa metodología general de reglas locales para reducir duplicación y consumo de contexto. No se agregaron dependencias.
+- La compuerta de seguridad elevó `cryptography` a `>=50,<51`, `pypdf` a `>=6.16.1,<7` y `pip` a `>=26.2,<27`; los locks con hashes se regeneraron para todos los runtimes.
+- Los locks React y Vue actualizaron dependencias transitivas vulnerables de Brace Expansion, Browserslist, Nano ID, PostCSS y React Router; `npm audit` quedó sin hallazgos y el gate ahora bloquea desde severidad moderada.
+- La retrospectiva consolidada documenta implementaciones, incidentes, evolución agéntica y riesgos residuales del cierre.
+
+## 2026-08-31 — worker transaccional MeLi, Cloudflare Tunnel y Swarm
+
+- Se agregó el dominio `services/meli`, con configuración fail-fast, OAuth Authorization Code + PKCE, cifrado AES-256-GCM, cuentas múltiples, webhooks idempotentes y outbox durable.
+- `meli_sync_worker` consume una cola exclusiva y sincroniza stock entero Growen → MeLi sólo para ítems clásicos cuya propiedad fue verificada; inventario multiorigen falla cerrado.
+- El gateway público sólo expone health, callback y webhook; `cloudflared` comparte con él una red interna exclusiva y usa token por archivo.
+- Compose incorpora el perfil `meli`; `docker-stack.yml` agrega el stack Growen reproducible con réplicas MeLi, overlays separadas y secretos Swarm externos.
+- Se añadió la revisión Alembic `20260831_meli_sync_v1`, pruebas focales y guías de integración/Swarm. No se agregaron dependencias Python.
+
+## 2026-08-30 — detección focal y validación manual de fuentes de Mercado
+
+- El detalle Vue abre cada fuente web en una pestaña segura del navegador y
+  permite encolar una detección de precio para esa fuente, sin redescubrir ni
+  procesar competidores ajenos.
+- Colaboradores y administradores pueden confirmar ARS y entrega en Argentina
+  con evidencia obligatoria, usuario y fecha auditables.
+- Un precio detectado se conserva visible aun si la fuente continúa en
+  cuarentena; sólo participa del promedio al completar ambas validaciones.
+- No se agregaron dependencias ni cambios de esquema.
+
 ## 2026-08-29 — consumidores React de Enrich y auditoría agéntica
 
 - ProductDetail y Stock del fallback React crean batches mediante
@@ -17,6 +46,44 @@
   frontmatter cuyo delimitador no siga inmediatamente a `description`.
 - La carga opcional de `rembg` permanece diferida para aislar el arranque de API
   y las pruebas de la cadena multimedia pesada.
+
+## 2026-08-29 — Crono persiste tiempo y estados en SiYuan
+
+- El widget Crono descubre las columnas numéricas `Minutos` y `Segundos`,
+  acumula y normaliza ambos valores y los persiste antes de marcar el checkbox.
+- Las ejecuciones menores a un minuto ya no pierden el tiempo registrado: por
+  ejemplo, una ejecución de dos segundos guarda `0` minutos y `2` segundos.
+- Se agregó una prueba Node de regresión y documentación del contrato de la
+  Attribute View; sólo este widget queda versionado dentro de
+  `siyuan-widgets/`.
+- La columna `Estado` se reconcilia como `Sin iniciar`, cambia a `Iniciada` con
+  Play y se guarda como `Completada` antes de marcar el checkbox con Stop.
+- `Categoria` se presenta en el centro de la tarjeta con etiquetas coloreadas
+  de sólo lectura, sin enviar mutaciones sobre esa columna.
+- `sync-siyuan-widget.ps1` compara hashes por defecto y sincroniza con `-Apply`
+  sólo archivos runtime, sin borrar extras ni leer secretos; una prueba pytest
+  cubre drift, aplicación y exclusión de documentación.
+
+## 2026-08-28 — Mercado automático: descubrimiento y extracción
+
+- Una solicitud individual o masiva completa cobertura hasta tres competidores, valida candidatas y extrae precios dentro del `market_worker`.
+- Los jobs persistentes exponen etapa, cobertura, confirmadas, cuarentena y resultados por fuente; una reconciliación cierra leases vencidos y la finalización bloquea la cabecera para evitar contadores perdidos.
+- Web Search usa el cliente MCP autenticado compartido; el encolado devuelve `503 market_worker_unavailable` antes de crear el job si Redis o el heartbeat no están saludables.
+- Las fuentes automáticas fallidas quedan en cuarentena. El borrado archiva con histórico recuperable y se agregó restauración, edición, revalidación y redescubrimiento forzado en Vue.
+- La revisión `20260828_market_pipeline_v2` cierra trabajos activos anteriores con causa auditable y agrega etapas y contadores de descubrimiento.
+- El worker usa conexiones SQLAlchemy sin pool compartido entre los event loops de Dramatiq, evitando fallos concurrentes `bound to a different event loop`.
+- La imagen mínima incorpora el runtime del cliente MCP autenticado y conserva el marcador Linux/Windows de `pywin32` al regenerar locks.
+- El adaptador de Web Search acepta `error: null` como respuesta exitosa; una regresión TDD cubre este contrato.
+- Los resultados por fuente priorizan fallos HTTP/scraping sobre validaciones posteriores y registran el intento de navegador incluso cuando el fallback dinámico no encuentra precio.
+
+## 2026-08-27 — edición privada segura y sincronización SiYuan
+
+- El MCP SiYuan separa `/Growen` gobernado por Git de `/Negocio` y `/Operación` privados.
+- `admin` y agentes STDIO locales pueden crear y actualizar documentos privados; `colaborador` sólo busca y lee `/Growen` sin recibir snippets privados.
+- `read_siyuan_document` devuelve una revisión SHA-256 y la nueva tool `update_siyuan_document` exige esa revisión, crea historial y no reintenta escrituras.
+- `create_siyuan_task_database` crea por MCP una sección privada `Tareas` con base table, fila inicial y campos de fecha, estado y última modificación; su reejecución reconcilia la columna vacía generada por SiYuan 3.8.1.
+- El publicador Git → SiYuan incorpora estado externo, actualización incremental, conflictos explícitos, forzado confirmado y reporte de documentos huérfanos sin borrarlos.
+- Se agregaron auditoría anonimizada, variables de raíces privadas y cobertura focal de permisos, historial, concurrencia, manifiestos y smoke.
 
 ## 2026-08-27 — batch de Enrich Vue sobre contrato canónico
 

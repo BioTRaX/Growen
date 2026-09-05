@@ -5,6 +5,22 @@
 
 # Notas de migraciones
 
+## 2026-09-05 — Permisos MeLi extensos (`20260905_meli_scopes_text`)
+
+Validación: 12 pruebas aprobadas (OAuth, gateway, upgrade incremental con datos y downgrade protegido, cadena completa en PostgreSQL temporal). Aplicada al entorno local: head `20260905_meli_scopes_text`, columna `scopes` confirmada como `text`, gateway reconstruido con readiness HTTP 200 y callback público incompleto HTTP 422. `alembic check` sigue reportando drift global (por ejemplo `sku_sequences`, defaults y constraints de usuarios); no se corrigió deriva ajena a este cambio. La autorización real posterior al despliegue quedó confirmada el 2026-09-05: cuenta activa con scopes de 505 caracteres y ambos tokens cifrados persistidos.
+
+La revisión incremental convierte únicamente `meli_accounts.scopes` de `VARCHAR(500)` a `TEXT`, conservando datos y nulabilidad. Los permisos funcionales actuales de MeLi pueden superar 500 caracteres; el callback obtenía tokens pero fallaba al insertar la cuenta. No se modifica la revisión histórica ni se recortan permisos. El downgrade toma un lock exclusivo y rechaza la reversión si existe algún valor mayor a 500 caracteres, evitando pérdida de datos. Esta migración no corrige el drift histórico ajeno a MeLi.
+
+## 2026-08-31 — Mercado Libre transaccional (`20260831_meli_sync_v1`)
+
+La revisión posterior a `20260828_market_pipeline_v2` crea `meli_accounts`, `meli_oauth_states`, `meli_notifications`, `meli_item_links` y `meli_sync_jobs`. Los tokens y verificadores se guardan únicamente como ciphertext; las notificaciones conservan un sobre mínimo y los jobs forman el outbox de la cola `meli_sync`. El downgrade se bloquea cuando alguna tabla contiene datos para evitar perder autorizaciones o trazabilidad; con tablas vacías elimina índices y tablas en orden inverso. Aplicar `alembic upgrade head` antes de iniciar gateway o worker. La cadena completa desde una base PostgreSQL temporal vacía alcanzó `20260831_meli_sync_v1` el 2026-08-31 y aprobó las tablas/constraints críticas.
+
+## 2026-08-28 — `20260828_market_pipeline_v2`
+
+Revisión incremental posterior a `20260816_chat_rollout_v1`. Agrega a `market_update_items` la etapa persistente y los contadores de competidores existentes, fuentes descubiertas, confirmadas y en cuarentena; `market_update_source_results.operation` distingue validación de extracción.
+
+Durante el upgrade, cualquier item previo todavía `queued|running` se cierra como `failed/completed` con `stale_before_pipeline_v2` y se reconcilian los contadores de su cabecera. No se reencola automáticamente porque el trabajo anterior no posee un lease recuperable. El downgrade está bloqueado: eliminaría cobertura y resultados auditables. Validar con `alembic heads` y `tests/test_migrations_fresh_postgres.py`; el head esperado es `20260828_market_pipeline_v2`.
+
 ## 2026-08-27 — auditoría y limpieza de compatibilidad
 
 La base local quedó verificada en `20260816_chat_rollout_v1`, con un único

@@ -16,6 +16,9 @@
 ## Commits
 - Mensajes en español y en modo imperativo.
 - Un commit por funcionalidad o corrección clara.
+- Crear una rama efímera desde el estado actual de `dev` antes de modificar archivos.
+- No hacer commits directos a `dev`; integrarla únicamente durante el cierre validado de la sesión.
+- Ejecutar Git por terminal y resolver conflictos verificables antes del merge final.
 
 ## Prompts a agentes
 - Estructurar solicitudes según `AGENTS.md`.

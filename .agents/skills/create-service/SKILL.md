@@ -1,12 +1,14 @@
 ---
 name: create-service
-description: Diseña e implementa servicios, workers y jobs de Growen respetando patrones existentes, Python 3.14.6, Docker y observabilidad. Usar al crear procesos de fondo, servicios MCP o componentes operativos independientes.
+description: Usar al crear o modificar un servicio HTTP/MCP, worker, scheduler o job asíncrono de Growen.
 ---
 
 # Crear un servicio
 
 1. Leer `AGENTS.md` y la documentación del dominio; decidir entre Dramatiq, scheduler, worker continuo o servidor HTTP/MCP.
 2. Reutilizar el patrón más cercano bajo `services/jobs/`, `workers/` o `mcp_servers/`.
+   Si el servicio muta documentos o bases de datos de SiYuan, aplicar
+   `references/siyuan-mcp-mutations.md`.
 3. Modelar explícitamente dependencias, productor, broker, consumidores, colas y modos local/Docker antes de implementar.
 4. Agregar NG-HEADER, variables de entorno, timeouts, apagado seguro y eventos estructurados con `service`, `event`, identificador de trabajo, duración y resultado.
 5. Usar `DB_URL = os.getenv("DB_URL") or settings.db_url` si el servicio crea un engine.

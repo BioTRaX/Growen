@@ -62,10 +62,12 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=appuser:appuser mcp_servers/products_server /app/mcp_servers/products_server
 COPY --chown=appuser:appuser mcp_servers/__init__.py mcp_servers/security.py /app/mcp_servers/
+COPY --chown=appuser:appuser infra/swarm-entrypoint.sh /app/infra/swarm-entrypoint.sh
 
 # NG-COMMENT: Ajuste de permisos conservador (lectura para archivos, ejecución para dirs).
 RUN find /app -type f -exec chmod 0644 {} \; && \
-        find /app -type d -exec chmod 0755 {} \;
+        find /app -type d -exec chmod 0755 {} \; && \
+        chmod 0755 /app/infra/swarm-entrypoint.sh
 
 USER appuser
 

@@ -1,6 +1,6 @@
 ---
 name: git-secret-forensics
-description: Audita y sanea secretos expuestos en el árbol actual y la historia Git de Growen. Usar ante fugas confirmadas, Secret Scanning, git-filter-repo, rotación de credenciales o purga coordinada de referencias remotas.
+description: Usar ante una fuga confirmada, alerta de Secret Scanning, rotación de credenciales, git-filter-repo o purga coordinada de referencias Git.
 ---
 
 # Saneamiento forense de secretos Git

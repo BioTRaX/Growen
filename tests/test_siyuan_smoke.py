@@ -6,12 +6,19 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
+from mcp_servers.siyuan_server.tools import DocumentConflictError
 from scripts import smoke_siyuan_mcp as smoke
 
 
 class FakeService:
+    def __init__(self) -> None:
+        self.created_markdown = ""
+        self.revision = ""
+
     async def list_notebooks(self):
         return {"items": [{"id": "box", "name": "Nice Grow", "closed": False}], "count": 1}
 
@@ -20,13 +27,44 @@ class FakeService:
 
     async def read_document(self, document_id: str):
         if document_id == "20260827120000-abcdefg":
-            return {"document_id": document_id, "hpath": "/Growen/README", "markdown": "Growen"}
-        return {"document_id": document_id, "hpath": "/Growen/Pruebas MCP/Test", "markdown": smoke.SMOKE_MARKDOWN}
+            return {
+                "document_id": document_id,
+                "hpath": "/Growen/README",
+                "markdown": "Growen",
+                "revision_sha256": hashlib.sha256(b"Growen").hexdigest(),
+            }
+        return {
+            "document_id": document_id,
+            "hpath": "/Operación/Pruebas MCP/Test",
+            "markdown": self.created_markdown,
+            "revision_sha256": self.revision,
+        }
 
     async def create_document(self, path: str, markdown: str):
-        assert path.startswith("/Growen/Pruebas MCP/")
+        assert path.startswith("/Operación/Pruebas MCP/")
         assert markdown == smoke.SMOKE_MARKDOWN
+        self.created_markdown = markdown
+        self.revision = hashlib.sha256(markdown.encode()).hexdigest()
         return {"document_id": "20260827130000-hijklmn", "hpath": path, "created": True}
+
+    async def update_document(
+        self,
+        document_id: str,
+        markdown: str,
+        expected_revision_sha256: str,
+    ):
+        if expected_revision_sha256 != self.revision:
+            raise DocumentConflictError("document_conflict")
+        previous = self.revision
+        self.created_markdown = markdown
+        self.revision = hashlib.sha256(markdown.encode()).hexdigest()
+        return {
+            "document_id": document_id,
+            "hpath": "/Operación/Pruebas MCP/Test",
+            "updated": True,
+            "previous_revision_sha256": previous,
+            "revision_sha256": self.revision,
+        }
 
 
 @pytest.mark.asyncio
@@ -36,4 +74,5 @@ async def test_smoke_reads_existing_creates_and_reads_back() -> None:
     assert result["status"] == "ok"
     assert result["existing_document_id"] == "20260827120000-abcdefg"
     assert result["created_document_id"] == "20260827130000-hijklmn"
+    assert result["conflict_verified"] is True
     assert "markdown" not in result

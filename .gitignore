@@ -1,4 +1,4 @@
-﻿# =========================
+# =========================
 # Growen - .gitignore
 # =========================
 
@@ -122,6 +122,23 @@ scripts/pg_migrate_15_to_17.ps1
 scripts/*.local.ps1
 
 # Media (archivos subidos y derivados)
+backup/
+backups/
+*.bak
+*.old
+*.orig
+
+# Scripts locales con credenciales o parámetros sensibles (usar *.example.ps1)
+scripts/pg_migrate_15_to_17.ps1
+scripts/*.local.ps1
+scratch/
+infra/cloudflare/*.json.local
+**/cloudflare_meli_tunnel_token
+**/meli_app_id
+**/meli_client_secret
+**/meli_token_encryption_key
+
+# Media (archivos subidos y derivados)
 Imagenes/
 Productos/
 
@@ -130,3 +147,8 @@ Devs/
 
 # Carpeta de conocimientos (documentos PDF que no deben estar en el repositorio)
 Conocimientos/
+
+# Widgets locales de SiYuan
+siyuan-widgets/*
+!siyuan-widgets/crono/
+!siyuan-widgets/crono/**

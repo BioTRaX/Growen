@@ -5,6 +5,10 @@
 
 # Flujo de Trabajo: Desarrollo Local → Docker Producción
 
+## Perfil transaccional MeLi
+
+La integración MeLi se prueba con `docker compose --profile meli up -d --build`; no se mezcla con `market_worker`. Requiere migración head, cuatro archivos secretos externos y `MELI_REDIRECT_URI` HTTPS. El gateway no publica puerto local y se alcanza únicamente mediante Cloudflare Tunnel. Para producción multinodo usar `docker-stack.yml` y `scripts/deploy-swarm.ps1`; detalles en `docs/MELI_INTEGRATION.md` y `docs/DOCKER_SWARM.md`.
+
 ## Base de Conocimiento local
 
 `scripts\start-dev.ps1 -McpMode All -WithKnowledgeWorker` inicia/verifica Redis, MCP y el consumidor `canonical_knowledge`. Confirmar `/health/knowledge-worker`.
@@ -546,7 +550,7 @@ docker compose up -d --build
 docker compose down
 ```
 
-Antes del push, auditar secretos sin imprimir valores, resolver `git remote get-url origin` y confirmar rama/destino. Usar staging por rutas explícitas; no usar `git add .`. Si el remoto no puede verificarse como confiable o privado, detenerse hasta contar con aprobación explícita informada. Ver `docs/SECURITY.md` y `.agents/skills/git-commit-push/SKILL.md`.
+Antes del push, auditar secretos sin imprimir valores, resolver `git remote get-url origin` y confirmar rama/destino. Usar staging por rutas explícitas. `git add .` sólo se permite durante la resolución final cuando el inventario demuestra que todo el worktree pertenece al cierre; ante cambios ajenos, detenerse o agregar rutas explícitas. Si el remoto no puede verificarse como confiable o privado, detenerse hasta contar con aprobación explícita informada. Ver `docs/SECURITY.md` y `.agents/skills/git-commit-push/SKILL.md`.
 
 ## Troubleshooting Común
 
@@ -699,21 +703,24 @@ environment:
 ```
 main (protegida)
   ↑
-  merge después de testing Docker
+  promoción controlada
   ↑
-develop (tu branch de trabajo)
+dev (integración; sin commits directos)
   ↑
-  desarrollo local rápido
+  merge al cerrar la sesión
   ↑
-feature/nueva-funcionalidad
+feat|fix|docs|chore/nombre-tarea (efímera)
 ```
 
 **Workflow**:
-1. Desarrollar en `feature/*` con API local
-2. Tests pasan → merge a `develop`
-3. Testing Docker en `develop` → todo OK
-4. Ejecutar localmente `scripts/check-quality.ps1`.
-5. Si se necesita una validación remota limpia, lanzar manualmente `Quality gate manual` en GitHub Actions.
+1. Desde el estado actual de `dev`, inventariar el worktree y crear una rama efímera nueva antes de editar.
+2. Desarrollar y validar en la rama efímera. Está prohibido confirmar directamente en `dev`.
+3. Ante `Cerrar sesión` o `Cerremos sesión`, ejecutar retrospectiva, evolución agéntica, compuerta de riesgo y actualización documental; confirmar en la rama efímera sólo los cambios atribuidos a la sesión.
+4. Con esos commits creados, ejecutar `git fetch` y `git merge origin/dev`; resolver autónomamente conflictos cuya intención sea verificable y repetir el quality gate.
+5. Cambiar a `dev`, fusionar la rama efímera, ejecutar `git push origin dev` y verificar igualdad de referencias.
+6. Si se necesita una validación remota limpia, lanzar manualmente `Quality gate manual` en GitHub Actions.
+
+Una propuesta de riesgo muy alto o un conflicto ambiguo detiene el cierre antes de integrar. No usar `ours`, `theirs` o force-push como atajos. `git add .` sólo es válido cuando el inventario demuestra que todo el worktree pertenece a la sesión.
 
 El workflow remoto usa `workflow_dispatch`: no tiene triggers de `push` ni `pull_request`, por lo que no consume créditos automáticamente. CI significa repetir instalación, lint, tests y build en un runner limpio para detectar dependencias implícitas o diferencias respecto de la máquina local.
 

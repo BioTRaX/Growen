@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 
-import { getProductImages, approveImage, listImageReviews, processProductImage, rejectImage, setPrimaryProductImage, type ImageReview, type ProductImages } from '../../../services/adminOperations'
+import { getProductImages, approveImage, listImageReviews, processProductImage, rejectImage, setPrimaryProductImage, getGlobalLogo, uploadGlobalLogo, type ImageReview, type ProductImages } from '../../../services/adminOperations'
 import { getHttpErrorMessage } from '../../../services/http'
 import { listProducts } from '../../products/api/products'
 import type { ProductListItem } from '../../products/types'
@@ -22,10 +22,18 @@ const products = ref<ProductListItem[]>([])
 const productImages = ref<ProductImages>()
 const selectedImageIds = ref<number[]>([])
 
+const logoInfo = ref<{ exists: boolean; url: string | null; width: number | null; height: number | null } | null>(null)
+const uploadingLogo = ref(false)
+const logoInputRef = ref<HTMLInputElement | null>(null)
+const cacheTs = ref(Date.now())
+
 async function refresh(): Promise<void> {
   loading.value = true
   error.value = ''
-  try { items.value = await listImageReviews() }
+  try {
+    items.value = await listImageReviews()
+    logoInfo.value = await getGlobalLogo()
+  }
   catch (reason) { error.value = getHttpErrorMessage(reason) }
   finally { loading.value = false }
 }
@@ -58,6 +66,27 @@ async function selectProduct(product: ProductListItem): Promise<void> { try { pr
 async function processOne(imageId: number, action: 'remove-bg' | 'watermark' | 'logo' | 'webp'): Promise<void> { if (!productImages.value) return; processing.value = imageId; try { await processProductImage(productImages.value.product_id, imageId, action); productImages.value = await getProductImages(productImages.value.product_id) } catch (reason) { error.value = getHttpErrorMessage(reason) } finally { processing.value = undefined } }
 async function processSelected(): Promise<void> { for (const imageId of selectedImageIds.value) await processOne(imageId, 'webp') }
 async function setPrimary(imageId: number): Promise<void> { if (!productImages.value) return; await setPrimaryProductImage(productImages.value.product_id, imageId); productImages.value = await getProductImages(productImages.value.product_id) }
+
+async function handleUploadLogo(event: Event): Promise<void> {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+  if (!file.name.toLowerCase().endsWith('.png')) {
+    alert('Por favor selecciona un archivo PNG (para preservar transparencia)')
+    return
+  }
+  uploadingLogo.value = true
+  try {
+    await uploadGlobalLogo(file)
+    logoInfo.value = await getGlobalLogo()
+    cacheTs.value = Date.now()
+    alert('Logo subido correctamente')
+  } catch (reason) { error.value = getHttpErrorMessage(reason) }
+  finally {
+    uploadingLogo.value = false
+    if (logoInputRef.value) logoInputRef.value.value = ''
+  }
+}
 
 onMounted(refresh)
 </script>
@@ -95,6 +124,20 @@ onMounted(refresh)
         <v-card-actions><v-spacer /><v-btn variant="text" @click="rejectDialog = false">Cancelar</v-btn><v-btn color="error" :loading="processing !== undefined" @click="confirmReject">Rechazar</v-btn></v-card-actions>
       </v-card>
     </v-dialog>
-    <v-card class="mt-8"><v-card-title>Selector y procesamiento</v-card-title><v-card-text><v-text-field v-model="productQuery" label="Buscar producto" append-inner-icon="mdi-magnify" @click:append-inner="searchProducts" @keyup.enter="searchProducts" /><v-list v-if="products.length" density="compact" max-height="240" class="overflow-y-auto"><v-list-item v-for="product in products" :key="product.product_id" :title="product.preferred_name ?? product.name" :subtitle="product.canonical_sku ?? ''" @click="selectProduct(product)" /></v-list></v-card-text><template v-if="productImages"><v-divider/><v-card-item :title="productImages.product_name" :subtitle="productImages.canonical_sku ?? ''"><template #append><v-btn :disabled="!selectedImageIds.length" @click="processSelected">Generar WebP seleccionadas</v-btn></template></v-card-item><v-row class="pa-4"><v-col v-for="image in productImages.images" :key="image.id" cols="12" sm="6" lg="4"><v-card><v-img :src="image.display_url ?? image.url ?? ''" height="180" cover/><v-card-text><v-checkbox-btn v-model="selectedImageIds" :value="image.id" label="Seleccionar"/><v-chip v-if="image.is_primary" size="small" color="primary">Portada</v-chip><v-chip v-if="image.has_webp" size="small" color="success">WebP</v-chip></v-card-text><v-card-actions class="flex-wrap"><v-btn size="small" variant="text" @click="setPrimary(image.id)">Portada</v-btn><v-btn size="small" variant="text" @click="processOne(image.id, 'webp')">WebP</v-btn><v-btn size="small" variant="text" @click="processOne(image.id, 'remove-bg')">Quitar fondo</v-btn><v-btn size="small" variant="text" @click="processOne(image.id, 'watermark')">Watermark</v-btn><v-btn size="small" variant="text" @click="processOne(image.id, 'logo')">Logo</v-btn></v-card-actions></v-card></v-col></v-row></template></v-card>
+    <v-card class="mt-8">
+      <v-card-title class="d-flex align-center justify-space-between flex-wrap ga-3">
+        <span>Selector y procesamiento</span>
+        <div class="d-flex align-center ga-3">
+          <div v-if="logoInfo?.exists" class="bg-grey-darken-3 pa-1 rounded" :title="`${logoInfo.width}×${logoInfo.height}px`">
+            <v-img :src="`${logoInfo.url}?t=${cacheTs}`" height="32" width="auto" max-width="120" style="min-width: 32px;" contain />
+          </div>
+          <span v-else class="text-caption text-medium-emphasis">Sin logo</span>
+          <input ref="logoInputRef" type="file" accept=".png,image/png" class="d-none" @change="handleUploadLogo" />
+          <v-btn :loading="uploadingLogo" prepend-icon="mdi-upload" variant="tonal" size="small" @click="logoInputRef?.click()">
+            {{ logoInfo?.exists ? 'Cambiar Logo' : 'Subir Logo' }}
+          </v-btn>
+        </div>
+      </v-card-title>
+      <v-card-text><v-text-field v-model="productQuery" label="Buscar producto" append-inner-icon="mdi-magnify" @click:append-inner="searchProducts" @keyup.enter="searchProducts" /><v-list v-if="products.length" density="compact" max-height="240" class="overflow-y-auto"><v-list-item v-for="product in products" :key="product.product_id" :title="product.preferred_name ?? product.name" :subtitle="product.canonical_sku ?? ''" @click="selectProduct(product)" /></v-list></v-card-text><template v-if="productImages"><v-divider/><v-card-item :title="productImages.product_name" :subtitle="productImages.canonical_sku ?? ''"><template #append><v-btn :disabled="!selectedImageIds.length" @click="processSelected">Generar WebP seleccionadas</v-btn></template></v-card-item><v-row class="pa-4"><v-col v-for="image in productImages.images" :key="image.id" cols="12" sm="6" lg="4"><v-card><v-img :src="image.display_url ?? image.url ?? ''" height="180" cover/><v-card-text><v-checkbox-btn v-model="selectedImageIds" :value="image.id" label="Seleccionar"/><v-chip v-if="image.is_primary" size="small" color="primary">Portada</v-chip><v-chip v-if="image.has_webp" size="small" color="success">WebP</v-chip></v-card-text><v-card-actions class="flex-wrap"><v-btn size="small" variant="text" :to="`/productos/${productImages.product_id}/imagenes`" color="primary">Galería</v-btn><v-btn size="small" variant="text" @click="setPrimary(image.id)">Portada</v-btn><v-btn size="small" variant="text" @click="processOne(image.id, 'webp')">WebP</v-btn><v-btn size="small" variant="text" @click="processOne(image.id, 'remove-bg')">Quitar fondo</v-btn><v-btn size="small" variant="text" @click="processOne(image.id, 'watermark')">Watermark</v-btn><v-btn size="small" variant="text" @click="processOne(image.id, 'logo')">Logo</v-btn></v-card-actions></v-card></v-col></v-row></template></v-card>
   </v-container>
 </template>

@@ -54,8 +54,12 @@ def _build_openai_final_response(content: str):
 
 @pytest.fixture
 def mock_openai_cycle(monkeypatch):
+    from agent_core.config import settings as core_settings
+
     monkeypatch.setenv("AI_DISABLE_OLLAMA", "true")
+    monkeypatch.delenv("OPENAI_API_KEY_FILE", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(core_settings, "ai_allow_external", True)
     # Primera llamada devuelve tool_call; segunda llamada devuelve texto final
     first = _build_openai_tool_call_response("get_product_info", {"sku": "SKU123"})
     second = _build_openai_final_response("El producto SKU123 cuesta 100.")

@@ -158,6 +158,11 @@ def test_alembic_upgrade_head_from_empty_postgres() -> None:
             "alembic_version",
             "customers",
             "knowledge_sources",
+            "meli_accounts",
+            "meli_oauth_states",
+            "meli_notifications",
+            "meli_item_links",
+            "meli_sync_jobs",
             "knowledge_chunks",
             "products",
             "sales",
@@ -276,7 +281,21 @@ def test_alembic_upgrade_head_from_empty_postgres() -> None:
 
         with target_engine.connect() as connection:
             versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            assert versions == ["20260816_chat_rollout_v1"]
+            assert versions == ["20260905_meli_scopes_text"]
+            assert connection.execute(text("SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='meli_accounts' AND column_name='scopes'")).scalar_one() == "text"
+
+            market_item_columns = {column["name"] for column in schema.get_columns("market_update_items")}
+            assert {
+                "stage",
+                "competitors_existing",
+                "sources_discovered",
+                "sources_confirmed",
+                "sources_quarantined",
+            } <= market_item_columns
+            source_result_columns = {
+                column["name"] for column in schema.get_columns("market_update_source_results")
+            }
+            assert "operation" in source_result_columns
     finally:
         if target_engine is not None:
             target_engine.dispose()

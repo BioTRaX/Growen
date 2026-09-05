@@ -5,5 +5,5 @@
 
 interface:
   display_name: "Retrospectiva técnica de sesión"
-  short_description: "Captura conocimiento técnico y mejora futuras sesiones"
-  default_prompt: "Usa $retrospectiva-tecnica-sesion para cerrar esta sesión, documentar los hallazgos y proponer mejoras reutilizables."
+  short_description: "Cierra una rama efímera y evoluciona el entorno"
+  default_prompt: "Cerrar sesión"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import importlib
+import json
 
 import jwt
 import pytest
@@ -75,8 +76,18 @@ def test_mcp_secret_loader_reads_file_without_logging_value(tmp_path, monkeypatc
     assert settings_module.load_mcp_secret() == "mcp-file-secret"
 
 
+def test_settings_parse_private_prefixes_without_weakening_git_root(monkeypatch) -> None:
+    monkeypatch.setenv("SIYUAN_ALLOWED_PATH_PREFIX", "/Growen/")
+    monkeypatch.setenv("SIYUAN_PRIVATE_PATH_PREFIXES", " /Negocio/, /Operación ")
+
+    settings = settings_module.SiYuanSettings.from_env()
+
+    assert settings.allowed_path_prefix == "/Growen"
+    assert settings.private_path_prefixes == ("/Negocio", "/Operación")
+
+
 @pytest.mark.asyncio
-async def test_stdio_catalog_exposes_four_annotated_tools() -> None:
+async def test_stdio_catalog_exposes_six_annotated_tools() -> None:
     tools = await server_module.mcp.list_tools()
     by_name = {tool.name: tool for tool in tools}
 
@@ -85,11 +96,18 @@ async def test_stdio_catalog_exposes_four_annotated_tools() -> None:
         "search_siyuan_docs",
         "read_siyuan_document",
         "create_siyuan_document",
+        "update_siyuan_document",
+        "create_siyuan_task_database",
     }
     assert by_name["search_siyuan_docs"].annotations.readOnlyHint is True
     assert by_name["create_siyuan_document"].annotations.readOnlyHint is False
     assert by_name["create_siyuan_document"].annotations.destructiveHint is False
     assert by_name["create_siyuan_document"].annotations.idempotentHint is False
+    assert by_name["update_siyuan_document"].annotations.readOnlyHint is False
+    assert by_name["update_siyuan_document"].annotations.destructiveHint is True
+    assert by_name["update_siyuan_document"].annotations.idempotentHint is False
+    assert by_name["create_siyuan_task_database"].annotations.destructiveHint is True
+    assert by_name["create_siyuan_task_database"].annotations.idempotentHint is False
 
 
 def test_http_transport_requires_bearer_token(http_client) -> None:
@@ -126,7 +144,49 @@ def test_http_transport_exposes_catalog_to_admin(http_client) -> None:
         },
     )
     assert response.status_code == 200
-    assert len(response.json()["result"]["tools"]) == 4
+    assert len(response.json()["result"]["tools"]) == 6
+
+
+def test_http_transport_exposes_only_read_tools_to_collaborator(http_client) -> None:
+    response = http_client.post(
+        "/mcp/",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        headers={
+            "Authorization": f"Bearer {_token('colaborador')}",
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 200
+    names = {tool["name"] for tool in response.json()["result"]["tools"]}
+    assert names == {
+        "list_siyuan_notebooks",
+        "search_siyuan_docs",
+        "read_siyuan_document",
+    }
+
+
+def test_document_write_audit_hashes_identity_and_omits_private_path(caplog, monkeypatch) -> None:
+    monkeypatch.setattr(server_module, "_claims_or_none", lambda: None)
+
+    with caplog.at_level("INFO", logger="growen.mcp.audit"):
+        server_module._audit_document_write(
+            tool_name="update_siyuan_document",
+            status="success",
+            document_id="20260827123456-abcdefg",
+            hpath="/Negocio/Plan comercial secreto",
+            previous_revision_sha256="a" * 64,
+            revision_sha256="b" * 64,
+        )
+
+    entry = json.loads(caplog.records[-1].message)
+    assert entry["subject_hash"] != "local-stdio"
+    assert entry["document_id_hash"] != "20260827123456-abcdefg"
+    assert entry["document_root"] == "/Negocio"
+    assert entry["previous_revision_sha256"] == "a" * 64
+    assert entry["revision_sha256"] == "b" * 64
+    assert "Plan comercial" not in caplog.records[-1].message
 
 
 def test_http_transport_rejects_expired_token(http_client) -> None:

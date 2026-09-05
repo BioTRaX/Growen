@@ -5,6 +5,48 @@
 
 # Testing
 
+## Suite focal del pipeline automático de Mercado (2026-08-28)
+
+Actualización 2026-08-30: `test_market_api.py`, `test_market_pipeline.py` y
+`test_market_worker.py` cubren el job focal por fuente, la persistencia del
+precio en cuarentena y la activación únicamente tras validación manual completa.
+En Vue, ejecutar también `src/modules/market/api/market.spec.ts` y
+`src/modules/market/components/MarketDetailDrawer.spec.ts` para validar los
+payloads, el enlace seguro y las acciones visibles del detalle.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_market_pipeline.py tests\test_market_api.py tests\test_market_pricing.py tests\test_market_worker.py tests\test_source_finder.py tests\test_health_dramatiq.py tests\test_migrations_fresh_postgres.py -q -p no:randomly
+cd frontend-vue
+npm.cmd test -- src/modules/market/api/market.spec.ts src/modules/market/priceComparison.spec.ts
+npm.cmd run typecheck
+npm.cmd run build
+```
+
+La suite cubre deduplicación por competidor, tope de cobertura, omisión de MCP con cobertura completa, cierre de leases, contrato de etapas/resultados y rechazo `503` sin job huérfano. También verifica `NullPool` en el worker multihilo y que una respuesta MCP exitosa con `error: null` no se interprete como fallo. Para la cadena limpia, configurar `MIGRATION_TEST_POSTGRES_URL`; debe alcanzar `20260828_market_pipeline_v2`. El smoke operativo requiere Redis, MCP Web Search autenticado y `market_worker` con heartbeat, y debe terminar un lote controlado con hasta tres dominios por producto.
+
+## Suite focal MCP SiYuan
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest mcp_servers\siyuan_server\tests tests\test_publish_docs_to_siyuan.py tests\test_siyuan_smoke.py -q -p no:randomly
+docker compose --profile siyuan config --quiet
+```
+
+La cobertura verifica raíces por rol, autorización previa a exportar, revisión SHA-256, historial obligatorio, ausencia de reintentos de escritura, conflictos, resultado incierto, sincronización Git → SiYuan y manifiestos sin contenido. El smoke de mutación debe ejecutarse sobre un workspace desechable porque no existe borrado automático.
+
+## Suite focal del widget Crono de SiYuan
+
+```powershell
+node --test siyuan-widgets/crono/tests/crono-core.test.cjs
+.\.venv\Scripts\python.exe -m pytest tests\test_sync_siyuan_widget.py -q -p no:randomly
+.\scripts\sync-siyuan-widget.ps1 -WidgetName crono
+```
+
+La prueba Node cubre minutos, segundos, estados, serialización de Attribute
+Views y categorías. Pytest ejecuta el sincronizador sobre directorios temporales
+y comprueba drift, aplicación y exclusión de documentación. El último comando
+es un diagnóstico por hash contra el workspace operativo; sólo agregar `-Apply`
+con autorización explícita para actualizar archivos runtime.
+
 ## Gates Chat/Ollama/Redis/rollout (2026-08-16)
 
 ```powershell

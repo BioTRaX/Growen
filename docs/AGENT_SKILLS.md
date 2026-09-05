@@ -17,19 +17,25 @@ Las skills externas de Superpowers pueden utilizarse como metodología general, 
 
 1. `AGENTS.md` y las skills canónicas de Growen (bajo `.agents/skills/`) tienen prioridad sobre cualquier flujo de Superpowers.
 2. Los gates de seguridad y Git de Growen prevalecen sobre commits automáticos, pushes, merges o publicación de ramas.
-3. Toda mutación Git requiere autorización explícita. En la rama exacta `dev`, el usuario puede autorizar la automatización para una entrega o sesión; esa autorización no elimina el gate de secretos, alcance, pruebas, documentación y remoto.
+3. Todo trabajo se realiza en una rama efímera creada desde `dev`; los commits directos a `dev` están prohibidos. Un trigger válido de cierre autoriza la integración secuencial, sin eliminar los gates de secretos, alcance, pruebas, documentación, remoto y riesgo.
 4. Los flujos de Superpowers solo pueden operar con Python y pytest del venv de Growen (`.venv\Scripts\python.exe`) o con Docker; no se permiten ejecutables del sistema.
 5. Todo Markdown bajo `docs/superpowers/` debe incluir NG-HEADER y mantenerse alineado con la documentación viva del proyecto.
 6. Las respuestas, documentación y comunicación de skills externas deben mantenerse en español.
 
-### Matriz de solapamiento útil
+### Matriz de responsabilidad y carga mínima
 
-- `writing-skills` / `skill-scaffolder`: complementarios; la metodología TDD de Superpowers puede reforzar la creación de skills, pero Growen conserva la salida canónica en `.agents/skills/` y el frontmatter obligatorio.
-- `systematic-debugging` / `diagnose-local-services`: complementarios; la primera aporta análisis general, la segunda aporta el contexto técnico exacto de Growen (API, Docker, PostgreSQL, Redis, Dramatiq).
-- `finishing-a-development-branch`, `requesting-code-review`, `executing-plans` / `git-commit-push`: parcialmente solapados; la regla local exige autorización explícita. Sólo `dev` admite automatización ya autorizada y siempre después del gate completo.
-- `test-driven-development` / testing de Growen: complementarios; TDD define el orden metodológico, mientras Growen obliga a ejecutar pytest con `.venv\Scripts\python.exe` o Docker y a consultar `docs/TESTING.md`.
-- `verification-before-completion` / `retrospectiva-tecnica-sesion`: complementarios; la primera aporta evidencia general, la segunda exige cierre explícito y no se activa por tareas aisladas.
-- `using-git-worktrees` / `using-superpowers`: útiles como marco operativo, pero deben adaptarse a los requisitos de entorno de Growen y a los comandos Python permitidos.
+| Skill de Growen | Superpowers relacionada | Responsabilidad exclusiva de Growen |
+|---|---|---|
+| `skill-scaffolder` | `writing-skills` | Fuente `.agents/skills`, frontmatter, compatibilidad y quality gate local |
+| `diagnose-local-services` | `systematic-debugging` | Recorrido UI → API → Redis/Dramatiq → PostgreSQL, puertos, PID y logs por ejecución |
+| `database-migrations` | `systematic-debugging`, `verification-before-completion` | Alembic, drift histórico, PostgreSQL y comandos del venv |
+| `git-commit-push` | `verification-before-completion` | Autorización, ramas efímeras, secretos, remoto y merge final hacia `dev` |
+| `retrospectiva-tecnica-sesion` | `verification-before-completion` | Triggers exactos, evolución agéntica, riesgo y cierre secuencial |
+| `create-service` | `writing-plans`, `test-driven-development` | Dramatiq, MCP, Docker y operación de servicios Growen |
+| `vue-module-migration` | `brainstorming`, `test-driven-development` | Paridad React/Vue, Vuetify, rollback y smoke autenticado |
+| `git-secret-forensics` | Sin equivalente directo | Rotación, `git-filter-repo`, referencias remotas y evidencia redactada |
+
+No cargar una skill de Superpowers sólo porque comparte vocabulario con la tarea. Cargarla cuando su metodología sea necesaria y luego aplicar únicamente la capa local relevante. Las skills locales no deben copiar ciclos, checklists ni explicaciones completas del pack.
 
 En resumen, Superpowers aporta disciplina y composición de flujos; Growen conserva la autoridad final sobre seguridad, entorno, idioma, documentación y publicación.
 
@@ -37,10 +43,10 @@ Las 14 skills de Superpowers se mantienen en su instalación global y se actuali
 
 ## Retrospectiva técnica de sesión
 
-Usar `retrospectiva-tecnica-sesion` únicamente cuando el usuario informe de
-forma explícita que llegó el final de la sesión o chat y solicite el cierre, la
-retrospectiva o las lecciones aprendidas. Completar una implementación,
-diagnóstico o migración no activa la skill por sí solo.
+Usar `retrospectiva-tecnica-sesion` únicamente ante `Cerrar sesión` o
+`Cerremos sesión`. Si existe trabajo pendiente ambiguo, pedir confirmación antes
+de comenzar. Completar una implementación, solicitar una retrospectiva o decir
+«terminamos» no activa la skill por sí solo.
 
 Una vez satisfecho ese gate, la skill permite:
 
@@ -50,16 +56,11 @@ Una vez satisfecho ese gate, la skill permite:
 - proponer controles preventivos nacidos de problemas reales;
 - detectar aceleradores reutilizables aun cuando el trabajo haya sido exitoso y sencillo.
 
-Invocación sugerida:
-
-- Codex: «Éste es el final del chat; usá `$retrospectiva-tecnica-sesion`».
-- Gemini CLI: comprobarla con `/skills` y declarar el cierre antes de solicitarla por nombre.
-- GitHub Copilot CLI: «Terminamos la sesión; ejecutá `/retrospectiva-tecnica-sesion`».
+Invocación sugerida en cualquier agente: `Cerrar sesión` o `Cerremos sesión`.
 
 No son triggers suficientes: «terminá la implementación», «actualizá la
-documentación», «dame el estado» o nombrar la skill sin declarar que finaliza la
-sesión. En esos casos se continúa trabajando y la retrospectiva se reserva para
-cuando el usuario confirme el cierre.
+documentación», «dame el estado», «terminamos», «final del chat» o nombrar la
+skill. En esos casos se continúa trabajando.
 
 Las propuestas deben diferenciar entre ampliar una skill existente, crear una nueva, añadir un script o referencia, mejorar el contexto y delegar trabajo. Una sesión sin errores también puede justificar un acelerador si contiene pasos repetibles con beneficio claro.
 
@@ -89,6 +90,32 @@ incorporó un control adicional a `vue-module-migration`:
 
 El checklist canónico vive junto a la skill en
 `.agents/skills/vue-module-migration/references/visual-validation-checklist.md`.
+
+La retrospectiva de [SiYuan MCP del 2026-08-28](./RETROSPECTIVE_SIYUAN_MCP_20260828.md)
+incorporó un contrato especializado a `create-service` para mutaciones
+documentales y Attribute Views:
+
+- crear historial y revalidar autoridad antes de toda escritura;
+- tratar resultados ambiguos como estado incierto, sin reintento automático;
+- reconciliar únicamente artefactos generados y vacíos que puedan demostrarse;
+- aceptar la tool mediante MCP real, API semántica y verificación visual, en ese
+  orden.
+
+La referencia canónica vive en
+`.agents/skills/create-service/references/siyuan-mcp-mutations.md`.
+
+La retrospectiva del [widget Crono de SiYuan del 2026-08-29](./RETROSPECTIVE_SIYUAN_WIDGET_CRONO_20260829.md)
+evaluó crear una skill especializada, pero el escenario de control sin esa skill
+ya produjo el procedimiento correcto. Para evitar duplicación, el aprendizaje
+mecánico se materializó en `scripts/sync-siyuan-widget.ps1`:
+
+- comparar siempre la fuente versionada con la copia operativa realmente servida;
+- mantener el diagnóstico por hash como comportamiento predeterminado;
+- copiar sólo archivos runtime mediante `-Apply`, sin borrar extras ni leer secretos;
+- aceptar cambios de Attribute Views con pruebas puras, API semántica y smoke visual.
+
+La decisión deja una frontera clara: las skills conservan criterios y juicio; el
+script automatiza la sincronización repetible que no merece una skill propia.
 
 ## Auditoría ejecutable del entorno agéntico
 

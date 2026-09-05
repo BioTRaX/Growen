@@ -1,0 +1,267 @@
+# NG-HEADER: Nombre de archivo: docker-stack.yml
+# NG-HEADER: Ubicación: docker-stack.yml
+# NG-HEADER: Descripción: Stack Swarm de producción Growen con servicios MeLi altamente disponibles.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+version: "3.9"
+
+x-python-env: &python-env
+  DB_URL: ""
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_USER: growen
+  DB_NAME: growen
+  DB_PASS_FILE: /run/secrets/postgres_password
+  REDIS_URL: redis://redis:6379/0
+
+x-python-deploy: &python-deploy
+  restart_policy: {condition: on-failure, delay: 5s, max_attempts: 5, window: 120s}
+  update_config: {parallelism: 1, delay: 15s, order: start-first, failure_action: rollback}
+  rollback_config: {parallelism: 1, order: stop-first}
+
+services:
+  db:
+    image: ${GROWEN_POSTGRES_IMAGE:-growen/postgres:pgvector}
+    environment:
+      POSTGRES_USER: growen
+      POSTGRES_DB: growen
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    networks: [backend]
+    deploy:
+      replicas: 1
+      placement: {constraints: ["node.labels.growen_stateful == true"]}
+      restart_policy: {condition: on-failure}
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis_data:/data]
+    networks: [backend]
+    deploy:
+      replicas: 1
+      placement: {constraints: ["node.labels.growen_stateful == true"]}
+      restart_policy: {condition: on-failure}
+
+  api:
+    image: ${GROWEN_API_IMAGE:?GROWEN_API_IMAGE es obligatorio}
+    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    command: ["/app/infra/wait-for.sh", "db:5432", "uvicorn", "services.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *python-env
+      SECRET_KEY_FILE: /run/secrets/secret_key
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+      INTERNAL_SERVICE_TOKEN_FILE: /run/secrets/internal_service_token
+    secrets: [postgres_password, secret_key, telegram_bot_token, internal_service_token]
+    networks: [backend, egress]
+    deploy:
+      <<: *python-deploy
+      replicas: 2
+      placement: {max_replicas_per_node: 1}
+
+  frontend:
+    image: ${GROWEN_FRONTEND_IMAGE:?GROWEN_FRONTEND_IMAGE es obligatorio}
+    networks: [backend, public]
+    ports:
+      - target: 80
+        published: ${GROWEN_HTTP_PORT:-8080}
+        protocol: tcp
+        mode: ingress
+    deploy:
+      <<: *python-deploy
+      replicas: 2
+      placement: {max_replicas_per_node: 1}
+
+  telegram_worker:
+    image: ${GROWEN_TELEGRAM_IMAGE:?GROWEN_TELEGRAM_IMAGE es obligatorio}
+    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    environment:
+      <<: *python-env
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+      TELEGRAM_IDENTITY_ENCRYPTION_KEY_FILE: /run/secrets/telegram_identity_encryption_key
+      TELEGRAM_IDENTITY_HMAC_KEY_FILE: /run/secrets/telegram_identity_hmac_key
+      TELEGRAM_CANARY_USER_ID_FILE: /run/secrets/telegram_canary_user_id
+      CHAT_RATE_LIMIT_BACKEND: redis
+      AI_MODE: ollama
+      AI_ALLOW_EXTERNAL: "false"
+    secrets:
+      - postgres_password
+      - telegram_bot_token
+      - telegram_identity_encryption_key
+      - telegram_identity_hmac_key
+      - telegram_canary_user_id
+    networks: [backend, egress]
+    deploy: {<<: *python-deploy, replicas: 1}
+
+  chat_rollout_controller:
+    image: ${GROWEN_TELEGRAM_IMAGE}
+    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    command: ["python", "workers/chat_rollout.py"]
+    environment: {<<: *python-env, CHAT_ROLLOUT_INTERVAL_SECONDS: "300"}
+    secrets: [postgres_password]
+    networks: [backend]
+    deploy: {<<: *python-deploy, replicas: 1}
+
+  dramatiq:
+    image: ${GROWEN_DRAMATIQ_IMAGE:?GROWEN_DRAMATIQ_IMAGE es obligatorio}
+    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    command: ["dramatiq", "services.jobs.images", "services.jobs.catalog_jobs", "--queues", "images", "catalog", "--processes", "2", "--threads", "4"]
+    environment: {<<: *python-env}
+    secrets: [postgres_password]
+    networks: [backend, egress]
+    deploy: {<<: *python-deploy, replicas: 1}
+
+  market_worker:
+    image: ${GROWEN_MARKET_WORKER_IMAGE:?GROWEN_MARKET_WORKER_IMAGE es obligatorio}
+    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    command: ["dramatiq", "workers.market_scraping", "--queues", "market", "--processes", "1", "--threads", "2"]
+    environment: {<<: *python-env}
+    secrets: [postgres_password]
+    networks: [backend, egress]
+    deploy: {<<: *python-deploy, replicas: 1}
+
+  enrichment_worker:
+    image: ${GROWEN_DRAMATIQ_IMAGE}
+    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    command: ["dramatiq", "services.jobs.enrichment_jobs", "--queues", "enrichment", "--processes", "1", "--threads", "2"]
+    environment: {<<: *python-env}
+    secrets: [postgres_password]
+    networks: [backend, egress]
+    deploy: {<<: *python-deploy, replicas: 1}
+
+  knowledge_worker:
+    image: ${GROWEN_DRAMATIQ_IMAGE}
+    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    command: ["dramatiq", "services.jobs.knowledge_jobs", "--queues", "canonical_knowledge", "--processes", "1", "--threads", "1"]
+    environment: {<<: *python-env}
+    secrets: [postgres_password]
+    networks: [backend, egress]
+    deploy: {<<: *python-deploy, replicas: 1}
+
+  mcp_products:
+    image: ${GROWEN_MCP_PRODUCTS_IMAGE:?GROWEN_MCP_PRODUCTS_IMAGE es obligatorio}
+    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    command: ["uvicorn", "mcp_servers.products_server.main:app", "--host", "0.0.0.0", "--port", "8100"]
+    environment:
+      API_BASE_URL: http://api:8000
+      INTERNAL_SERVICE_TOKEN_FILE: /run/secrets/internal_service_token
+      MCP_PRODUCTS_SECRET_KEY_FILE: /run/secrets/mcp_products_secret_key
+      MCP_RATE_LIMIT_BACKEND: redis
+      MCP_RATE_LIMIT_REDIS_URL: redis://redis:6379/0
+    secrets: [internal_service_token, mcp_products_secret_key]
+    networks: [backend]
+    deploy: {<<: *python-deploy, replicas: 2}
+
+  mcp_web_search:
+    image: ${GROWEN_MCP_WEB_SEARCH_IMAGE:?GROWEN_MCP_WEB_SEARCH_IMAGE es obligatorio}
+    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    command: ["uvicorn", "mcp_servers.web_search_server.main:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      MCP_WEB_SEARCH_SECRET_KEY_FILE: /run/secrets/mcp_web_search_secret_key
+      MCP_RATE_LIMIT_BACKEND: redis
+      MCP_RATE_LIMIT_REDIS_URL: redis://redis:6379/0
+    secrets: [mcp_web_search_secret_key]
+    networks: [backend, egress]
+    deploy: {<<: *python-deploy, replicas: 2}
+
+  siyuan:
+    image: b3log/siyuan:v3.8.1
+    command: ["serve", "--workspace=/siyuan/workspace/"]
+    volumes: [siyuan_workspace:/siyuan/workspace]
+    networks: [backend]
+    deploy:
+      replicas: 1
+      placement: {constraints: ["node.labels.growen_stateful == true"]}
+      restart_policy: {condition: on-failure}
+
+  mcp_siyuan:
+    image: ${GROWEN_MCP_SIYUAN_IMAGE:?GROWEN_MCP_SIYUAN_IMAGE es obligatorio}
+    environment:
+      SIYUAN_BASE_URL: http://siyuan:6806
+      SIYUAN_API_TOKEN_FILE: /run/secrets/siyuan_api_token
+      MCP_SIYUAN_SECRET_KEY_FILE: /run/secrets/mcp_siyuan_secret_key
+      SIYUAN_ALLOWED_PATH_PREFIX: /Growen
+      SIYUAN_PRIVATE_PATH_PREFIXES: /Negocio,/Operación
+    secrets: [siyuan_api_token, mcp_siyuan_secret_key]
+    networks: [backend]
+    deploy: {<<: *python-deploy, replicas: 2}
+
+  meli_webhook_gateway:
+    image: ${GROWEN_MELI_IMAGE:?GROWEN_MELI_IMAGE es obligatorio}
+    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    command: ["uvicorn", "services.meli.app:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log"]
+    environment:
+      <<: *python-env
+      MELI_APP_ID_FILE: /run/secrets/meli_app_id
+      MELI_CLIENT_SECRET_FILE: /run/secrets/meli_client_secret
+      MELI_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/meli_token_encryption_key
+      MELI_REDIRECT_URI: ${MELI_REDIRECT_URI:?MELI_REDIRECT_URI es obligatorio}
+      ENV: production
+    secrets: [postgres_password, meli_app_id, meli_client_secret, meli_token_encryption_key]
+    networks: [backend, egress, meli_ingress]
+    deploy:
+      <<: *python-deploy
+      replicas: 2
+      placement: {max_replicas_per_node: 1}
+
+  meli_sync_worker:
+    image: ${GROWEN_MELI_IMAGE}
+    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    command: ["dramatiq", "workers.meli_sync", "--queues", "meli_sync", "--processes", "1", "--threads", "4"]
+    environment:
+      <<: *python-env
+      MELI_APP_ID_FILE: /run/secrets/meli_app_id
+      MELI_CLIENT_SECRET_FILE: /run/secrets/meli_client_secret
+      MELI_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/meli_token_encryption_key
+      MELI_REDIRECT_URI: ${MELI_REDIRECT_URI}
+      ENV: production
+    secrets: [postgres_password, meli_app_id, meli_client_secret, meli_token_encryption_key]
+    networks: [backend, egress]
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/meli_worker_health.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      <<: *python-deploy
+      replicas: 2
+      placement: {max_replicas_per_node: 1}
+
+  meli_cloudflared:
+    image: cloudflare/cloudflared:2026.8.3
+    command: ["tunnel", "--no-autoupdate", "--loglevel", "info", "run", "--token-file", "/run/secrets/cloudflare_meli_tunnel_token"]
+    secrets: [cloudflare_meli_tunnel_token]
+    networks: [meli_ingress, cloudflare_egress]
+    deploy:
+      <<: *python-deploy
+      replicas: 2
+      placement: {max_replicas_per_node: 1}
+
+secrets:
+  postgres_password: {external: true}
+  secret_key: {external: true}
+  telegram_bot_token: {external: true}
+  internal_service_token: {external: true}
+  telegram_identity_encryption_key: {external: true}
+  telegram_identity_hmac_key: {external: true}
+  telegram_canary_user_id: {external: true}
+  mcp_products_secret_key: {external: true}
+  mcp_web_search_secret_key: {external: true}
+  siyuan_api_token: {external: true}
+  mcp_siyuan_secret_key: {external: true}
+  meli_app_id: {external: true}
+  meli_client_secret: {external: true}
+  meli_token_encryption_key: {external: true}
+  cloudflare_meli_tunnel_token: {external: true}
+
+volumes:
+  pgdata:
+  redis_data:
+  siyuan_workspace:
+
+networks:
+  backend: {driver: overlay, internal: true, attachable: false}
+  egress: {driver: overlay, attachable: false}
+  public: {driver: overlay, attachable: false}
+  meli_ingress: {driver: overlay, internal: true, attachable: false}
+  cloudflare_egress: {driver: overlay, attachable: false}
