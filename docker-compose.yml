@@ -570,6 +570,7 @@ services:
       SIYUAN_NOTEBOOK_NAME: ${SIYUAN_NOTEBOOK_NAME:-Nice Grow}
       SIYUAN_NOTEBOOK_ID: ${SIYUAN_NOTEBOOK_ID:-}
       SIYUAN_ALLOWED_PATH_PREFIX: ${SIYUAN_ALLOWED_PATH_PREFIX:-/Growen}
+      SIYUAN_PRIVATE_PATH_PREFIXES: ${SIYUAN_PRIVATE_PATH_PREFIXES:-/Negocio,/Operación}
       SIYUAN_TIMEOUT_SECONDS: ${SIYUAN_TIMEOUT_SECONDS:-10}
       MCP_SIYUAN_SECRET_KEY_FILE: /run/secrets/growen/mcp_siyuan_secret_key
       MCP_JWT_KEY_ID: ${MCP_SIYUAN_KEY_ID:-siyuan-v1}
@@ -598,6 +599,123 @@ services:
     networks:
       - backend
       - host_access
+  meli_webhook_gateway:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.meli-worker
+    image: growen/meli-sync:${MELI_IMAGE_TAG:-current}
+    profiles: ["meli"]
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      MELI_APP_ID_FILE: /run/secrets/growen/meli_app_id
+      MELI_CLIENT_SECRET_FILE: /run/secrets/growen/meli_client_secret
+      MELI_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/growen/meli_token_encryption_key
+      MELI_REDIRECT_URI: ${MELI_REDIRECT_URI:-}
+      MELI_ALLOWED_TOPICS: ${MELI_ALLOWED_TOPICS:-items,orders_v2,questions,messages}
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: ""
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_BOT_TOKEN_FILE: ""
+      PGAPPNAME: growen-meli-gateway
+    command: ["/app/infra/wait-for.sh", "db:5432", "uvicorn", "services.meli.app:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log"]
+    depends_on:
+      - db
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - type: bind
+        source: ${GROWEN_SECRET_DIR:-../growen-secrets}
+        target: /run/secrets/growen
+        read_only: true
+    networks:
+      - backend
+      - egress
+      - meli_ingress
+  meli_sync_worker:
+    image: growen/meli-sync:${MELI_IMAGE_TAG:-current}
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.meli-worker
+    profiles: ["meli"]
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      MELI_APP_ID_FILE: /run/secrets/growen/meli_app_id
+      MELI_CLIENT_SECRET_FILE: /run/secrets/growen/meli_client_secret
+      MELI_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/growen/meli_token_encryption_key
+      MELI_REDIRECT_URI: ${MELI_REDIRECT_URI:-}
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: ""
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_BOT_TOKEN_FILE: ""
+      PGAPPNAME: growen-meli-worker
+    command: ["/app/infra/wait-for.sh", "db:5432", "dramatiq", "workers.meli_sync", "--queues", "meli_sync", "--processes", "1", "--threads", "${MELI_WORKER_THREADS:-4}"]
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/meli_worker_health.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - type: bind
+        source: ${GROWEN_SECRET_DIR:-../growen-secrets}
+        target: /run/secrets/growen
+        read_only: true
+    networks:
+      - backend
+      - egress
+  meli_cloudflared:
+    image: cloudflare/cloudflared:2026.8.3
+    profiles: ["meli"]
+    command: ["tunnel", "--no-autoupdate", "--loglevel", "info", "run", "--token-file", "/run/secrets/growen/cloudflare_meli_tunnel_token"]
+    depends_on:
+      - meli_webhook_gateway
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - type: bind
+        source: ${CLOUDFLARE_MELI_TUNNEL_TOKEN_FILE:-../growen-secrets/cloudflare_meli_tunnel_token}
+        target: /run/secrets/growen/cloudflare_meli_tunnel_token
+        read_only: true
+    networks:
+      - meli_ingress
+      - cloudflare_egress
 volumes:
   pgdata:
   redis_data:
@@ -609,4 +727,8 @@ networks:
   host_access:
     driver: bridge
   egress:
+    driver: bridge
+  meli_ingress:
+    internal: true
+  cloudflare_egress:
     driver: bridge

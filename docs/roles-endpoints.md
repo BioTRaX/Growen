@@ -5,6 +5,17 @@
 
 # Roles por endpoint
 
+## Mercado Libre transaccional (2026-08-31)
+
+| Método/ruta | Roles | Requisitos |
+|---|---|---|
+| `POST /integrations/meli/oauth/authorizations` | admin | sesión + CSRF; genera OAuth PKCE de un uso |
+| `POST /integrations/meli/item-links` | admin | sesión + CSRF; vincula y encola stock |
+| `GET /integrations/meli/oauth/callback` | público en gateway | `state` válido de un uso |
+| `POST /integrations/meli/webhook` | público en gateway | JSON, App ID/topic/path/tamaño válidos |
+
+Las rutas públicas sólo existen en `services.meli.app`; Cloudflare no publica la API administrativa. El webhook no ejecuta IA ni stock inline.
+
 ## Rollout Chat (2026-08-16)
 
 | Método/ruta | Roles | Requisitos |
@@ -212,6 +223,12 @@ Las tools expuestas a modelos (OpenAI) vía tool-calling se documentan para traz
 |------|-------------|------------------|
 | get_product_info | Perfil público: nombre, precio de venta y disponibilidad aproximada; SKU/stock exacto sólo se incluyen para perfiles operativos autorizados. | guest, cliente, proveedor, colaborador, admin |
 | get_product_full_info | Retorna información operativa con SKU y stock exacto. En Telegram queda limitada por el rol efectivo y sólo lectura. | colaborador, admin web; colaborador efectivo en Telegram |
+| list_siyuan_notebooks | Lista notebooks sin contenido documental. | colaborador, admin, agente STDIO local |
+| search_siyuan_docs | Busca en raíces autorizadas; colaborador sólo consulta `/Growen`. | colaborador, admin, agente STDIO local |
+| read_siyuan_document | Lee Markdown y devuelve revisión SHA-256; colaborador sólo accede a `/Growen`. | colaborador, admin, agente STDIO local |
+| create_siyuan_document | Crea sin sobrescribir bajo `/Negocio` o `/Operación`. | admin, agente STDIO local |
+| update_siyuan_document | Actualiza un documento privado con revisión esperada e historial. | admin, agente STDIO local |
+| create_siyuan_task_database | Crea o reconcilia una base de tareas estructurada dentro de un documento privado. | admin, agente STDIO local |
 
 Invocación estándar: MCP Streamable HTTP en `/mcp`, descubrimiento con `tools/list` y ejecución con `tools/call`.
 

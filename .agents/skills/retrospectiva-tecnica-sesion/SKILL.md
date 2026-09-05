@@ -1,31 +1,60 @@
 ---
 name: retrospectiva-tecnica-sesion
-description: "Cierra una sesión técnica de Growen mediante una retrospectiva factual: verifica tareas y evidencia, documenta errores y soluciones, detecta desactualizaciones y propone mejoras reutilizables. Usar únicamente cuando el usuario informe explícitamente que llegó el final de la sesión o chat y solicite el cierre, la retrospectiva o las lecciones aprendidas. No activarla por completar una implementación, diagnóstico o migración si el usuario no declaró el fin de la sesión."
+description: "Usar únicamente cuando el usuario escriba Cerrar sesión o Cerremos sesión y solicite finalizar el trabajo técnico de Growen."
 ---
 
-# Elaborar retrospectivas técnicas de sesión
+# Cerrar una sesión técnica
 
-1. Confirmar el gate de activación: el usuario debe informar explícitamente que éste es el final de la sesión o chat. Son válidas expresiones inequívocas como «terminamos la sesión», «éste es el final del chat» o «cerrá la sesión con una retrospectiva». Nombrar la skill, completar una tarea, pedir estado o solicitar documentación sin declarar el cierre no satisface el gate. Si falta esa declaración, no elaborar ni persistir la retrospectiva; continuar la tarea normal o indicar brevemente que se reservará para el cierre.
-2. Leer `AGENTS.md`, el historial disponible, los outputs de herramientas, el diff actual y la documentación del dominio afectado. No afirmar acceso a mensajes u outputs ausentes; declarar cualquier límite de evidencia.
-3. Delimitar la sesión analizada. Separar cambios propios, cambios preexistentes del worktree y acciones externas. No atribuir resultados sin evidencia.
-4. Contrastar cada tarea supuestamente terminada contra código, pruebas, logs, estado del sistema o documentación. Clasificarla como completada, parcial, bloqueada o no verificada.
-5. Registrar errores de implementación, fallos post-implementación, bloqueos ambientales y resultados inesperados. Incluir síntoma, causa raíz confirmada o hipótesis explícita, impacto, solución aplicada, evidencia posterior y riesgo residual.
-6. Documentar las soluciones con precisión reutilizable: archivos o componentes afectados, decisión técnica, validación ejecutada y condición que evitaría una regresión. No copiar secretos ni outputs sensibles.
-7. Revisar vigencia. Corregir documentación desactualizada cuando la evidencia actual la contradiga. Corregir lógica fuera de la tarea principal sólo cuando el desajuste esté verificado y el cambio sea seguro y autorizado; en caso contrario, registrarlo como pendiente concreto sin afirmar que quedó resuelto.
-8. Evaluar mejoras agénticas en dos carriles:
-   - **Prevención:** controles derivados de obstáculos, errores o retrabajo reales de la sesión.
-   - **Aceleración:** skills, referencias, plantillas o scripts que harían más rápidas y consistentes futuras implementaciones similares, aunque esta sesión no haya presentado dificultades.
-9. Para cada mejora candidata, indicar evidencia, frecuencia esperada, beneficio, costo de mantenimiento y opción recomendada: ampliar una skill existente, crear una skill, añadir un recurso determinista, mejorar el prompt/contexto, usar una herramienta o delegar a un agente independiente. Preferir ampliar una skill existente y no proponer agentes separados sin una frontera clara de contexto, permisos o paralelismo.
-10. Basar las propuestas preventivas en problemas observados. Basar los aceleradores en pasos repetibles observados, no en herramientas hipotéticas sin caso de uso.
-11. Cuando el usuario autorice cambios del entorno agéntico, **materializar al menos una mejora prioritaria** antes de cerrar: actualizar la skill aplicable, agregar una referencia determinista, incorporar una prueba o crear/ajustar un script reutilizable. Ejecutar una validación focal y registrar el archivo modificado y la evidencia. Si no existe una mejora materializable segura, dejar la razón explícita como bloqueo.
-12. No crear ni modificar otras skills automáticamente sin autorización; la autorización explícita del usuario para mejorar el entorno agéntico sí habilita el cambio acotado y validado.
-13. Actualizar `README.md`, `Roadmap.md` y los documentos de `docs/` realmente afectados. Crear `docs/RETROSPECTIVE_<DOMINIO>_<AAAAMMDD>.md` cuando el volumen de hallazgos justifique un informe persistente. Mantener NG-HEADER y enlaces relativos válidos.
-14. Entregar el reporte con esta estructura de Growen:
-   - **Contexto:** alcance, evidencia consultada y límites.
-   - **Observaciones:** tareas verificadas, estado y documentación actualizada.
-   - **Errores y/u outputs:** incidentes, causas, soluciones, validación y riesgos.
-   - **Objetivo:** conocimiento que se busca preservar para próximas sesiones.
-   - **Propuesta de código o pasos:** prevención, aceleración y prioridad de cada mejora.
-   - **Criterios de aceptación:** comprobar que el reporte es factual, que los cambios están documentados, que se actualizó todo elemento desactualizado verificable y que los pendientes no se presentan como completados.
+## Activación
 
-Mantener el reporte breve cuando no existan incidentes. La ausencia de errores no exime de identificar patrones exitosos que merezcan reutilización.
+Los únicos triggers directos son `Cerrar sesión` y `Cerremos sesión`, sin distinguir mayúsculas ni puntuación final. Frases como `Terminamos la sesión`, `final del chat`, nombrar la skill, pedir una retrospectiva o completar una tarea no activa este flujo.
+
+Si aparece un trigger válido y existe trabajo pendiente ambiguo, solicitar confirmación breve sobre si debe completarse o descartarse antes de cerrar. La respuesta despeja la ambigüedad; no reemplaza el trigger.
+
+**REQUIRED BACKGROUND:** usar `superpowers:verification-before-completion` para contrastar afirmaciones. No cargar otras skills de cierre de Superpowers: el gate Git de Growen es canónico.
+
+## Flujo secuencial obligatorio
+
+### 1. Análisis retrospectivo
+
+Leer historial disponible, outputs, diff y documentos afectados. Delimitar la sesión, separar cambios propios y preexistentes, y clasificar tareas como completadas, parciales, bloqueadas o no verificadas. Documentar dificultades, errores, causa confirmada o hipótesis, implementación, solución, evidencia y riesgo residual sin copiar secretos.
+
+### 2. Evolución agéntica
+
+Proponer una evolución del entorno agéntico basada en trabajo observado. Evitar duplicar Superpowers: ampliar una skill canónica sólo para reglas o contexto propios de Growen; usar scripts para controles mecánicos. Materializar al menos una mejora prioritaria segura y validarla. Si no existe, registrar el motivo.
+
+### 3. Compuerta de riesgo
+
+- **Bajo:** documentación o validaciones locales reversibles.
+- **Medio:** cambios acotados y reversibles en skills, scripts o contratos con pruebas.
+- **Riesgo muy alto:** reescritura de historia, force-push, eliminación amplia, secretos, mutaciones externas irreversibles, migraciones destructivas o un conflicto cuya intención no pueda demostrarse.
+
+Implementar las mejoras de riesgo bajo o medio. Ante riesgo muy alto, informar únicamente el estado y la propuesta, preguntar si se avanza y detener el flujo hasta recibir respuesta explícita.
+
+### 4. Actualización de documentación
+
+Actualizar `README.md`, `Roadmap.md`, documentación de dominio y todo contenido verificablemente desactualizado encontrado. Mantener NG-HEADER y diferenciar pendientes de resultados comprobados.
+
+### 5. Flujo de auto-merge
+
+Aplicar `git-commit-push` y su gate completo:
+
+1. Confirmar la rama efímera actual, agregar sólo los cambios atribuidos a la sesión y crear los commits atómicos de trabajo.
+2. Ejecutar `git fetch` y `git merge origin/dev`.
+3. Ante conflictos, usar `git diff --name-only --diff-filter=U`, localizar `<<<<<<<`, `=======` y `>>>>>>>`, entender ambas intenciones y resolver reescribiendo correctamente.
+4. Validar la resolución. Si no quedan conflictos, ejecutar `git add .` sólo después de confirmar que todo el worktree pertenece al cierre y crear el commit de fusión cuando corresponda.
+5. Repetir pruebas, documentación, secretos y alcance sobre el árbol fusionado.
+6. Ejecutar `git switch dev`, fusionar la rama efímera y ejecutar `git push origin dev`.
+7. Verificar que `HEAD`, `dev` y `origin/dev` coincidan. Si `dev` avanzó durante el proceso, volver a la rama efímera y repetir sincronización y validación.
+
+### 6. Output final
+
+Después de un cierre exitoso, imprimir exclusivamente este checklist con su estado comprobado, sin introducción, explicación ni epílogo:
+
+- [x] Análisis retrospectivo completado
+- [x] Evolución agéntica implementada/propuesta
+- [x] Actualización de documentación
+- [x] Merge a Dev
+- [x] Final de sesión
+
+Si el flujo se detiene por riesgo muy alto, no imprimir el checklist final.

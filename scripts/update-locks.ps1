@@ -48,7 +48,8 @@ python-magic==0.4.27 ; platform_system != "Windows" \
 "@
         $content = $content.Replace('python-magic-bin==', $linuxMagic + 'python-magic-bin==')
     }
-    Set-Content -LiteralPath $absolute -Value $content -Encoding utf8
+    $content = $content.TrimEnd() + [Environment]::NewLine
+    Set-Content -LiteralPath $absolute -Value $content -Encoding utf8 -NoNewline
 }
 
 Push-Location $root
@@ -56,11 +57,13 @@ try {
     Invoke-Compile 'requirements-lock.txt' @('requirements.txt')
     Invoke-Compile 'requirements-api-lock.txt' @('requirements-base.txt', 'requirements-ml.txt', 'requirements-pdf.txt')
     Invoke-Compile 'requirements-worker-lock.txt' @('requirements-worker.txt')
+    Invoke-Compile 'requirements-market-worker-lock.txt' @('requirements-market-worker.txt')
     Invoke-Compile 'mcp_servers/products_server/requirements-lock.txt' @('mcp_servers/products_server/requirements.txt')
     Invoke-Compile 'mcp_servers/web_search_server/requirements-lock.txt' @('mcp_servers/web_search_server/requirements.txt')
     Add-LockMetadata 'requirements-lock.txt' 'Lock reproducible multiplataforma con hashes para Python 3.14.' -AddLinuxMagic
     Add-LockMetadata 'requirements-api-lock.txt' 'Lock con hashes para la imagen API Python 3.14.' -AddLinuxMagic
     Add-LockMetadata 'requirements-worker-lock.txt' 'Lock con hashes para workers Python 3.14.' -AddLinuxMagic
+    Add-LockMetadata 'requirements-market-worker-lock.txt' 'Lock con hashes para el worker Mercado Python 3.14.'
     Add-LockMetadata 'mcp_servers/products_server/requirements-lock.txt' 'Lock con hashes del MCP Products Python 3.14.'
     Add-LockMetadata 'mcp_servers/web_search_server/requirements-lock.txt' 'Lock con hashes del MCP Web Search Python 3.14.'
 }

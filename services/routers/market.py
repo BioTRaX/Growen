@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 from decimal import Decimal
@@ -23,6 +24,7 @@ from db.models import (
     CanonicalKnowledgeAsset,
     CanonicalKnowledgeAssetCapability,
     CanonicalKnowledgeLabel,
+    CanonicalKnowledgeLocation,
     CanonicalProduct,
     Category,
     ProductEquivalence,
@@ -45,12 +47,71 @@ from services.market.pricing import (
     recompute_market_reference,
 )
 from services.market.source_validation import initial_validation, validate_public_url
-from services.knowledge.service import archive_asset
+from services.knowledge.service import archive_asset, restore_asset
 
 # Logger para errores del módulo
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/market", tags=["market"])
+
+
+def _market_sources_for_product_query(product_id: int):
+    """Carga perfiles mediante relaciones canónicas, sin híbridos escalares legacy."""
+    return (
+        select(MarketSource)
+        .join(CanonicalKnowledgeAsset, CanonicalKnowledgeAsset.id == MarketSource.asset_id)
+        .options(
+            selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.locations),
+            selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.labels),
+            selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.capabilities),
+        )
+        .where(CanonicalKnowledgeAsset.canonical_product_id == product_id)
+    )
+
+
+def _market_source_by_url_query(product_id: int, url: str):
+    return (
+        _market_sources_for_product_query(product_id)
+        .join(
+            CanonicalKnowledgeLocation,
+            and_(
+                CanonicalKnowledgeLocation.asset_id == CanonicalKnowledgeAsset.id,
+                CanonicalKnowledgeLocation.is_primary.is_(True),
+            ),
+        )
+        .where(CanonicalKnowledgeLocation.url == url)
+    )
+
+
+async def _load_market_source(db: AsyncSession, source_id: int) -> MarketSource | None:
+    """Carga el perfil y su activo/ubicaciones sin IO implícito async."""
+    return await db.scalar(
+        select(MarketSource)
+        .options(
+            selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.locations),
+            selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.labels),
+            selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.capabilities),
+        )
+        .where(MarketSource.id == source_id)
+    )
+
+
+async def _require_market_worker() -> None:
+    """Evita crear jobs que no tendrán consumidor operativo."""
+    if os.getenv("RUN_INLINE_JOBS", "0") == "1":
+        return
+    from services.routers.health import health_market_worker
+
+    health = await health_market_worker()
+    if not health.get("ok"):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "market_worker_unavailable",
+                "message": "El worker de Mercado o Redis no está disponible.",
+                "retriable": True,
+            },
+        )
 
 
 def _market_product_name(product: CanonicalProduct) -> str:
@@ -360,6 +421,8 @@ class MarketSourceItem(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     trust_score: float = 0
     exclude_from_enrichment: bool = False
+    origin: str = "manual"
+    asset_status: str = "confirmed"
     source_name: str = Field(description="Nombre de la tienda o sitio")
     url: Optional[str] = Field(None, description="URL de la fuente")
     currency: Optional[str] = Field(None, description="Moneda del precio (ARS, USD, etc.)")
@@ -391,6 +454,8 @@ class ProductSourcesResponse(BaseModel):
     market_price_max: Optional[float] = Field(None, description="Precio máximo calculado desde fuentes")
     mandatory: list[MarketSourceItem] = Field(description="Fuentes obligatorias")
     additional: list[MarketSourceItem] = Field(description="Fuentes adicionales")
+    quarantined: list[MarketSourceItem] = Field(default_factory=list, description="Fuentes automáticas pendientes o rechazadas")
+    archived: list[MarketSourceItem] = Field(default_factory=list, description="Fuentes archivadas recuperables")
 
 
 @router.get(
@@ -434,10 +499,8 @@ async def get_product_sources(
         raise HTTPException(status_code=404, detail=f"Producto con ID {product_id} no encontrado")
     
     # Obtener fuentes de precio ordenadas por is_mandatory DESC, created_at ASC
-    query_sources = (
-        select(MarketSource)
-        .where(MarketSource.product_id == product_id)
-        .order_by(MarketSource.is_mandatory.desc(), MarketSource.created_at.asc())
+    query_sources = _market_sources_for_product_query(product_id).order_by(
+        MarketSource.is_mandatory.desc(), MarketSource.created_at.asc()
     )
     result_sources = await db.execute(query_sources)
     sources = result_sources.scalars().all()
@@ -445,6 +508,8 @@ async def get_product_sources(
     # Separar fuentes obligatorias y adicionales
     mandatory_sources = []
     additional_sources = []
+    quarantined_sources = []
+    archived_sources = []
     prices = []  # Para calcular min/max
     
     for source in sources:
@@ -455,6 +520,8 @@ async def get_product_sources(
             capabilities=sorted(item.capability_code for item in source.asset.capabilities if item.enabled),
             trust_score=source.asset.trust_score,
             exclude_from_enrichment=source.asset.exclude_from_enrichment,
+            origin=source.asset.origin,
+            asset_status=source.asset.status,
             source_name=source.source_name,
             url=source.url,
             last_price=float(source.last_price) if source.last_price else None,
@@ -473,10 +540,22 @@ async def get_product_sources(
         )
         
         # Recopilar precios válidos para cálculo de rango
-        if source.last_price is not None:
+        if (
+            source.last_price is not None
+            and source.asset.status == "confirmed"
+            and source.is_active
+            and source.validation_status == "verified"
+            and source.currency == "ARS"
+            and source.ars_confirmed is True
+            and source.argentina_delivery_confirmed is True
+        ):
             prices.append(float(source.last_price))
-        
-        if source.is_mandatory:
+
+        if source.asset.status == "archived":
+            archived_sources.append(item)
+        elif not source.is_active or source.validation_status != "verified":
+            quarantined_sources.append(item)
+        elif source.is_mandatory:
             mandatory_sources.append(item)
         else:
             additional_sources.append(item)
@@ -497,6 +576,8 @@ async def get_product_sources(
         market_price_max=market_price_max_val,
         mandatory=mandatory_sources,
         additional=additional_sources,
+        quarantined=quarantined_sources,
+        archived=archived_sources,
     )
 
 
@@ -690,11 +771,9 @@ async def update_product_market_reference(
             market_price_updated_at=None,
         )
     
-    manual_source = await db.scalar(select(MarketSource).where(
-        MarketSource.product_id == product_id,
+    manual_source = await db.scalar(_market_sources_for_product_query(product_id).where(
         MarketSource.source_type == "manual",
-        MarketSource.url.is_(None),
-        MarketSource.source_name == "Carga manual general",
+        CanonicalKnowledgeAsset.title == "Carga manual general",
     ))
     if not manual_source:
         manual_source = MarketSource(
@@ -777,6 +856,30 @@ class RefreshMarketResponse(BaseModel):
     deduplicated: bool = False
 
 
+class RefreshMarketRequest(BaseModel):
+    force_rediscovery: bool = False
+
+
+class DetectSourcePriceResponse(BaseModel):
+    status: str
+    source_id: int
+    product_id: int
+    job_id: str
+    item_id: int
+    deduplicated: bool = False
+
+
+class ManualSourceValidationRequest(BaseModel):
+    ars_confirmed: bool
+    argentina_delivery_confirmed: bool
+    evidence_note: str = Field(min_length=10, max_length=1000)
+
+    @field_validator("evidence_note")
+    @classmethod
+    def normalize_evidence_note(cls, value: str) -> str:
+        return value.strip()
+
+
 @router.post(
     "/products/{product_id}/refresh-market",
     response_model=RefreshMarketResponse,
@@ -802,6 +905,7 @@ class RefreshMarketResponse(BaseModel):
 )
 async def refresh_market_prices(
     product_id: int,
+    request: RefreshMarketRequest | None = None,
     db: AsyncSession = Depends(get_session),
     session_data: SessionData = Depends(current_session),
 ):
@@ -822,12 +926,15 @@ async def refresh_market_prices(
     """
     from workers.market_scraping import process_market_item_task
 
+    await _require_market_worker()
+
     persistent = await create_update_job(
         db,
         [product_id],
         trigger="manual",
         requested_by_user_id=session_data.user.id if session_data.user else None,
         correlation_id=str(uuid4()),
+        force_rediscovery=bool(request and request.force_rediscovery),
     )
     queued_item = persistent.items[0]
     if queued_item.status == "not_found":
@@ -917,6 +1024,7 @@ async def refresh_market_prices(
 class BatchRefreshMarketRequest(BaseModel):
     """Request para actualización masiva de precios de mercado"""
     product_ids: list[int] = Field(description="Lista de IDs de productos a actualizar", min_length=1, max_length=100)
+    force_rediscovery: bool = False
 
 
 class BatchRefreshMarketItem(BaseModel):
@@ -985,7 +1093,7 @@ async def batch_refresh_market_prices(
         HTTPException 502: Error al comunicarse con el servicio de scraping
         HTTPException 500: Error interno del servidor
     """
-    product_ids = request.product_ids
+    product_ids = list(dict.fromkeys(request.product_ids))
     
     # Validar límites
     if len(product_ids) == 0:
@@ -1002,12 +1110,15 @@ async def batch_refresh_market_prices(
     
     from workers.market_scraping import process_market_item_task
 
+    await _require_market_worker()
+
     persistent = await create_update_job(
         db,
         product_ids,
         trigger="batch",
         requested_by_user_id=session_data.user.id if session_data.user else None,
         correlation_id=str(uuid4()),
+        force_rediscovery=request.force_rediscovery,
     )
     persistent_results: list[BatchRefreshMarketItem] = []
     for queued_item in persistent.items:
@@ -1457,10 +1568,7 @@ async def add_market_source(
             validate_public_url(payload.url)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        existing_source = await db.scalar(select(MarketSource).where(
-            MarketSource.product_id == product_id,
-            MarketSource.url == payload.url,
-        ))
+        existing_source = await db.scalar(_market_source_by_url_query(product_id, payload.url))
         if existing_source:
             raise HTTPException(status_code=409, detail="Ya existe esa URL para el producto")
 
@@ -1514,18 +1622,15 @@ async def add_market_source(
     "/sources/{source_id}",
     status_code=204,
     dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
-    summary="Eliminar fuente de precio",
+    summary="Archivar fuente de precio",
     description="""
-    Elimina una fuente de precio de mercado.
+    Archiva una fuente de precio de mercado conservando su auditoría e histórico.
     
     Validaciones:
     - Fuente debe existir (404 si no)
     - Solo usuarios autorizados pueden eliminar
     
-    La eliminación es permanente y no se puede deshacer.
-    Si el producto tiene precios calculados desde esta fuente,
-    se recomienda actualizar con POST /products/{id}/refresh-market
-    después de eliminarla.
+    La fuente deja de participar del promedio y puede restaurarse posteriormente.
     
     Roles permitidos: admin, colaborador
     """,
@@ -1549,7 +1654,11 @@ async def delete_market_source(
         HTTPException 404: Fuente no encontrada
     """
     # 1. Verificar que la fuente existe
-    query_source = select(MarketSource).where(MarketSource.id == source_id)
+    query_source = select(MarketSource).options(
+        selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.locations),
+        selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.labels),
+        selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.capabilities),
+    ).where(MarketSource.id == source_id)
     result = await db.execute(query_source)
     source = result.scalar_one_or_none()
     
@@ -1574,6 +1683,61 @@ async def delete_market_source(
     
     # 3. Retornar 204 No Content (FastAPI maneja automáticamente sin body)
     return None
+
+
+@router.post(
+    "/sources/{source_id}/restore",
+    response_model=AddSourceResponse,
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+    summary="Restaurar fuente archivada",
+)
+async def restore_market_source(
+    source_id: int,
+    db: AsyncSession = Depends(get_session),
+    session_data: SessionData = Depends(current_session),
+):
+    source = await db.scalar(
+        select(MarketSource)
+        .options(
+            selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.locations),
+            selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.labels),
+            selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.capabilities),
+        )
+        .where(MarketSource.id == source_id)
+    )
+    if not source:
+        raise HTTPException(status_code=404, detail=f"Fuente con ID {source_id} no encontrada")
+    if source.asset.status != "archived":
+        raise HTTPException(status_code=409, detail="La fuente no está archivada")
+
+    await restore_asset(db, source.asset, session_data.user.id if session_data.user else None)
+    source.is_active = (
+        source.validation_status == "verified"
+        and source.currency == "ARS"
+        and source.ars_confirmed is True
+        and source.argentina_delivery_confirmed is True
+    )
+    source.asset.exclude_from_enrichment = False
+    await db.commit()
+    await recompute_market_reference(
+        db,
+        product_id=source.product_id,
+        created_by_user_id=session_data.user.id if session_data.user else None,
+    )
+    return AddSourceResponse(
+        id=source.id,
+        product_id=source.product_id,
+        source_name=source.source_name,
+        url=source.url,
+        is_mandatory=source.is_mandatory,
+        currency=source.currency,
+        source_type=source.source_type,
+        last_price=float(source.last_price) if source.last_price is not None else None,
+        last_checked_at=source.last_checked_at.isoformat() if source.last_checked_at else None,
+        created_at=source.created_at.isoformat(),
+        validation_status=source.validation_status,
+        is_active=source.is_active,
+    )
 
 
 # ==================== PATCH /sources/{source_id} ====================
@@ -1645,7 +1809,11 @@ async def update_market_source(
         HTTPException 400: URL duplicada
     """
     # 1. Verificar que la fuente existe
-    query_source = select(MarketSource).where(MarketSource.id == source_id)
+    query_source = select(MarketSource).options(
+        selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.locations),
+        selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.labels),
+        selectinload(MarketSource.asset).selectinload(CanonicalKnowledgeAsset.capabilities),
+    ).where(MarketSource.id == source_id)
     result = await db.execute(query_source)
     source = result.scalar_one_or_none()
     
@@ -1661,9 +1829,7 @@ async def update_market_source(
             validate_public_url(request.url)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        query_duplicate = select(MarketSource).where(
-            MarketSource.product_id == source.product_id,
-            MarketSource.url == request.url,
+        query_duplicate = _market_source_by_url_query(source.product_id, request.url).where(
             MarketSource.id != source_id
         )
         result_dup = await db.execute(query_duplicate)
@@ -1748,6 +1914,149 @@ async def revalidate_market_source(source_id: int, db: AsyncSession = Depends(ge
     return {"source_id": source.id, "validation_status": source.validation_status, "detail": source.validation_detail}
 
 
+@router.post(
+    "/sources/{source_id}/detect-price",
+    response_model=DetectSourcePriceResponse,
+    status_code=202,
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+    summary="Forzar detección de precio de una fuente",
+)
+async def detect_market_source_price(
+    source_id: int,
+    db: AsyncSession = Depends(get_session),
+    session_data: SessionData = Depends(current_session),
+):
+    """Encola extracción estática/dinámica para una única fuente, incluso en cuarentena."""
+    from workers.market_scraping import process_market_item_task
+
+    source = await _load_market_source(db, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Fuente no encontrada")
+    if source.asset.status == "archived":
+        raise HTTPException(status_code=409, detail="La fuente está archivada; restaurala antes de detectar el precio")
+    if source.source_type == "manual" or not source.url:
+        raise HTTPException(status_code=422, detail="La detección automática requiere una fuente web con URL")
+    try:
+        validate_public_url(source.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _require_market_worker()
+    persistent = await create_update_job(
+        db,
+        [source.product_id],
+        trigger="source_price_detection",
+        requested_by_user_id=session_data.user.id if session_data.user else None,
+        correlation_id=str(uuid4()),
+        target_source_id=source.id,
+    )
+    queued_item = persistent.items[0]
+    if queued_item.item_id is None or queued_item.job_id is None:
+        raise HTTPException(status_code=404, detail="Producto de la fuente no encontrado")
+    if queued_item.deduplicated:
+        active_job = await db.get(MarketUpdateJob, queued_item.job_id)
+        if not active_job or (active_job.config_snapshot or {}).get("target_source_id") != source.id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "market_product_job_active",
+                    "message": "El producto ya tiene otra actualización activa; reintentá al finalizar.",
+                    "retriable": True,
+                },
+            )
+    else:
+        try:
+            process_market_item_task.send(queued_item.item_id)
+        except Exception as exc:
+            await complete_item(
+                db,
+                queued_item.item_id,
+                status="failed",
+                sources_total=0,
+                sources_succeeded=0,
+                sources_failed=0,
+                market_price_reference=None,
+                error_code="broker_enqueue_failed",
+                error_message=str(exc),
+            )
+            raise HTTPException(status_code=500, detail="Error interno al encolar la detección") from exc
+    return DetectSourcePriceResponse(
+        status=queued_item.status,
+        source_id=source.id,
+        product_id=source.product_id,
+        job_id=queued_item.job_id,
+        item_id=queued_item.item_id,
+        deduplicated=queued_item.deduplicated,
+    )
+
+
+@router.post(
+    "/sources/{source_id}/manual-validation",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+    summary="Registrar validación manual auditada de una fuente web",
+)
+async def manually_validate_market_source(
+    source_id: int,
+    payload: ManualSourceValidationRequest,
+    db: AsyncSession = Depends(get_session),
+    session_data: SessionData = Depends(current_session),
+):
+    source = await _load_market_source(db, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Fuente no encontrada")
+    if source.asset.status == "archived":
+        raise HTTPException(status_code=409, detail="La fuente está archivada")
+    if source.source_type == "manual" or not source.url:
+        raise HTTPException(status_code=422, detail="Este flujo valida únicamente fuentes web")
+    try:
+        validate_public_url(source.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    actor_user_id = session_data.user.id if session_data.user else None
+    detail = dict(source.validation_detail or {})
+    detail["manual_validation"] = {
+        "ars_confirmed": payload.ars_confirmed,
+        "argentina_delivery_confirmed": payload.argentina_delivery_confirmed,
+        "evidence_note": payload.evidence_note,
+        "actor_user_id": actor_user_id,
+        "validated_at": datetime.utcnow().isoformat(),
+    }
+    source.validation_detail = detail
+    source.ars_confirmed = payload.ars_confirmed
+    source.argentina_delivery_confirmed = payload.argentina_delivery_confirmed
+    validations_complete = payload.ars_confirmed and payload.argentina_delivery_confirmed
+    has_captured_price = source.last_price is not None and source.last_price > 0
+    source.is_active = bool(validations_complete and has_captured_price)
+    source.validation_status = "verified" if source.is_active else "warning"
+    source.asset.status = "confirmed" if source.is_active else "pending"
+    if source.is_active:
+        source.last_error_code = None
+        source.last_error_message = None
+    elif validations_complete:
+        source.last_error_code = "price_not_detected"
+        source.last_error_message = "Las validaciones están completas, pero falta detectar un precio ARS"
+    else:
+        source.last_error_code = "manual_validation_incomplete"
+        source.last_error_message = "La validación manual de ARS y entrega en Argentina está incompleta"
+    reference, coverage, snapshot = await recompute_market_reference(
+        db,
+        product_id=source.product_id,
+        created_by_user_id=actor_user_id,
+    )
+    await db.commit()
+    return {
+        "source_id": source.id,
+        "product_id": source.product_id,
+        "validation_status": source.validation_status,
+        "is_active": source.is_active,
+        "requires_price_detection": not has_captured_price,
+        "market_price_reference": float(reference) if reference is not None else None,
+        "reference_observation_id": snapshot.id if snapshot else None,
+        "effective_sources_count": coverage.effective,
+        "manual_validation": detail["manual_validation"],
+    }
+
+
 # ==================== POST /products/{id}/discover-sources ====================
 
 class DiscoveredSource(BaseModel):
@@ -1772,6 +2081,7 @@ class DiscoverSourcesResponse(BaseModel):
     dependencies=[Depends(require_csrf), Depends(require_roles("admin", "colaborador"))],
     response_model=DiscoverSourcesResponse,
     status_code=200,
+    deprecated=True,
 )
 async def discover_product_sources(
     product_id: int,
@@ -1818,7 +2128,14 @@ async def discover_product_sources(
         )
     
     # 2. Obtener fuentes existentes para evitar duplicados
-    query_sources = select(MarketSource.url).where(MarketSource.product_id == product_id)
+    query_sources = (
+        select(CanonicalKnowledgeLocation.url)
+        .join(CanonicalKnowledgeAsset, CanonicalKnowledgeAsset.id == CanonicalKnowledgeLocation.asset_id)
+        .where(
+            CanonicalKnowledgeAsset.canonical_product_id == product_id,
+            CanonicalKnowledgeLocation.is_primary.is_(True),
+        )
+    )
     result_sources = await db.execute(query_sources)
     existing_urls = [row[0] for row in result_sources.all()]
     
@@ -1838,6 +2155,16 @@ async def discover_product_sources(
         max_results=max_results,
         user_role="admin",  # Siempre usar admin para MCP (el endpoint ya valida roles)
     )
+    if not discovery_result.get("success"):
+        error = discovery_result.get("error") or {}
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": error.get("code", "market_discovery_failed") if isinstance(error, dict) else "market_discovery_failed",
+                "message": error.get("message", str(error)) if isinstance(error, dict) else str(error),
+                "retriable": True,
+            },
+        )
     
     # 5. Convertir a schema de respuesta
     return DiscoverSourcesResponse(
@@ -1945,6 +2272,7 @@ class AddSuggestedSourceResponse(BaseModel):
     dependencies=[Depends(require_csrf), Depends(require_roles("admin", "colaborador"))],
     response_model=AddSuggestedSourceResponse,
     status_code=201,
+    deprecated=True,
 )
 async def add_source_from_suggestion(
     product_id: int,
@@ -1992,12 +2320,7 @@ async def add_source_from_suggestion(
         )
     
     # 2. Verificar que la URL no esté duplicada
-    query_existing = select(MarketSource).where(
-        and_(
-            MarketSource.product_id == product_id,
-            MarketSource.url == request.url
-        )
-    )
+    query_existing = _market_source_by_url_query(product_id, request.url)
     result_existing = await db.execute(query_existing)
     existing_source = result_existing.scalar_one_or_none()
     
@@ -2130,6 +2453,7 @@ class BatchAddSuggestedSourcesResponse(BaseModel):
     dependencies=[Depends(require_csrf), Depends(require_roles("admin", "colaborador"))],
     response_model=BatchAddSuggestedSourcesResponse,
     status_code=201,
+    deprecated=True,
 )
 async def batch_add_sources_from_suggestions(
     product_id: int,
@@ -2174,7 +2498,14 @@ async def batch_add_sources_from_suggestions(
         )
     
     # 2. Obtener URLs existentes para verificar duplicados
-    query_existing = select(MarketSource.url).where(MarketSource.product_id == product_id)
+    query_existing = (
+        select(CanonicalKnowledgeLocation.url)
+        .join(CanonicalKnowledgeAsset, CanonicalKnowledgeAsset.id == CanonicalKnowledgeLocation.asset_id)
+        .where(
+            CanonicalKnowledgeAsset.canonical_product_id == product_id,
+            CanonicalKnowledgeLocation.is_primary.is_(True),
+        )
+    )
     result_existing = await db.execute(query_existing)
     existing_urls = {row[0] for row in result_existing.all()}
     

@@ -40,7 +40,8 @@ export interface TelegramWorkerHealth { enabled: boolean; public_bot_enabled: bo
 export interface ChatMetrics { runs: number; succeeded: number; failed: number; latency_ms: { p50?: number | null; p95?: number | null; p99?: number | null }; tokens: { input: number; output: number }; estimated_cost: number; rag: { used: number; with_citations: number; cache_hits: number }; tools: Record<string, number>; telegram_updates: Record<string, number>; telegram_worker: TelegramWorkerHealth; feedback: Record<string, number> }
 export interface HealthSummary { status: string; details: Record<string, unknown> }
 export interface ImageReview { image_id: number; product_id: number; title?: string; url?: string; status: string }
-export interface ProductImage { id: number; display_url?: string | null; url?: string | null; is_primary: boolean; locked: boolean; has_webp: boolean; size_human?: string }
+export interface ImageVersion { path: string | null; width: number | null; height: number | null; size_bytes: number | null; size_human: string; mime: string | null }
+export interface ProductImage { id: number; display_url?: string | null; url?: string | null; path?: string; mime?: string | null; width?: number | null; height?: number | null; bytes?: number | null; size_human?: string; is_primary: boolean; locked: boolean; alt_text?: string | null; title_text?: string | null; checksum_sha256?: string | null; created_at?: string | null; updated_at?: string | null; versions?: Record<string, ImageVersion>; has_webp: boolean }
 export interface ProductImages { product_id: number; product_name: string; canonical_sku?: string | null; images: ProductImage[]; total: number }
 export interface ChatQualityMetrics { feedback: Record<string, number>; intents: Record<string, number>; sentiments: Record<string, number>; total_feedback: number }
 export interface PromptVersion { id: number; prompt_key: string; version: number; status: string; content: string; reason?: string | null; metrics?: Record<string, unknown> | null; created_at?: string | null }
@@ -86,6 +87,12 @@ export const approveImage = async (id: number) => (await http.post(`/products/im
 export const rejectImage = async (id: number, note: string) => (await http.post(`/products/images/${id}/review/reject`, { note })).data
 export const getProductImages = async (productId: number) => (await http.get<ProductImages>(`/products/${productId}/images`)).data
 export const setPrimaryProductImage = async (productId: number, imageId: number) => (await http.post(`/products/${productId}/images/${imageId}/set-primary`)).data
+export const rotateProductImage = async (productId: number, imageId: number, degrees: number) => (await http.post(`/products/${productId}/images/${imageId}/rotate`, { degrees })).data
+export const cropProductImageSquare = async (productId: number, imageId: number, margin_percent: number) => (await http.post(`/products/${productId}/images/${imageId}/crop-square`, null, { params: { margin_percent } })).data
+export const cropProductImageCustom = async (productId: number, imageId: number, cropData: { x: number; y: number; width: number; height: number }) => (await http.post(`/products/${productId}/images/${imageId}/crop-custom`, cropData)).data
+export const deleteProductImage = async (productId: number, imageId: number) => (await http.delete(`/products/${productId}/images/${imageId}`)).data
+export const getGlobalLogo = async () => (await http.get<{ exists: boolean; url: string | null; width: number | null; height: number | null }>('/admin/images/logo')).data
+export const uploadGlobalLogo = async (file: File) => { const body = new FormData(); body.append('file', file); return (await http.post('/admin/images/logo/upload', body)).data }
 export const processProductImage = async (productId: number, imageId: number, action: 'remove-bg' | 'watermark' | 'logo' | 'webp') => {
   const suffix = action === 'webp' ? 'generate-webp' : `process/${action}`
   const payload = action === 'watermark' ? { position: 'br', opacity: 0.18 } : action === 'logo' ? { position: 'br', scale: 20, opacity: 0.9 } : undefined

@@ -1,0 +1,28 @@
+# NG-HEADER: Nombre de archivo: Dockerfile.meli-worker
+# NG-HEADER: Ubicación: infra/Dockerfile.meli-worker
+# NG-HEADER: Descripción: Imagen multi-stage compartida por gateway y worker transaccional MeLi.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+FROM python:3.14.6-slim-bookworm AS builder
+ENV PIP_NO_CACHE_DIR=1 VENV_PATH=/opt/venv
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential gcc libffi-dev \
+ && rm -rf /var/lib/apt/lists/*
+RUN python -m venv "$VENV_PATH" && "$VENV_PATH/bin/pip" install --upgrade pip setuptools wheel
+WORKDIR /app
+COPY requirements-api-lock.txt ./
+RUN "$VENV_PATH/bin/pip" install --require-hashes -r requirements-api-lock.txt
+
+FROM python:3.14.6-slim-bookworm AS runtime
+ENV PYTHONUNBUFFERED=1 VENV_PATH=/opt/venv PATH=/opt/venv/bin:$PATH
+RUN addgroup --system app && adduser --system --ingroup app --home /app app
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+COPY . .
+RUN chown -R app:app /app \
+ && chmod +x /app/infra/wait-for.sh \
+ && sed -i 's/\r$//' /app/infra/wait-for.sh
+USER app
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+ CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/live', timeout=3)" || exit 1
+CMD ["uvicorn", "services.meli.app:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log"]

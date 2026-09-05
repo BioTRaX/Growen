@@ -47,7 +47,18 @@ Endpoints locales:
 
 - Products: `http://localhost:8100/mcp`.
 - Web Search: `http://localhost:8102/mcp`.
+- SiYuan: `http://localhost:8104/mcp` con el perfil opcional `siyuan`.
 - Health: reemplazar `/mcp` por `/health`.
+
+## Documentación SiYuan por autoridad
+
+El notebook `Nice Grow` separa `/Growen`, cuya autoridad es Git, de `/Negocio` y `/Operación`, cuya autoridad es SiYuan. Los agentes STDIO locales y `admin` pueden leer las tres raíces y mutar sólo las privadas; `colaborador` busca y lee exclusivamente `/Growen`. La restricción se incorpora al SQL fijo antes de consultar y una lectura por ID valida notebook y ruta antes de exportar contenido.
+
+`read_siyuan_document` devuelve `revision_sha256` y revalida la ruta después de exportar. `update_siyuan_document(document_id, markdown, expected_revision_sha256)` crea historial, revalida ruta y revisión inmediatamente antes de una única escritura; nunca reintenta. Un conflicto no escribe y cualquier resultado incierto o sin efecto observable obliga a releer. `create_siyuan_document` también queda limitado a áreas privadas.
+
+`create_siyuan_task_database(document_id)` es una mutación estructurada y acotada para áreas privadas: agrega el encabezado `Tareas`, una base table, una fila `Nueva tarea` y los campos `Fecha`, `Estado` y `Última modificación`. La segunda invocación reconcilia la columna `Select` vacía generada por SiYuan 3.8.1 sin duplicar bloques.
+
+La réplica `/Growen/Documentación técnica` se actualiza con `scripts/publish_docs_to_siyuan.py`. El publicador mantiene estado fuera del repo, bloquea ejecuciones concurrentes, persiste checkpoints atómicos después de cada operación confirmada, detecta divergencias y sólo permite que Git prevalezca con `--apply --force-conflicts`. No elimina ni mueve documentos huérfanos.
 
 ## Descubrimiento e invocación
 
@@ -62,6 +73,12 @@ Tools actuales:
 | Products | `get_product_full_info` | admin, colaborador |
 | Web Search | `search_web` | admin, colaborador |
 | Web Search | `fetch_web_document` | admin, colaborador |
+| SiYuan | `list_siyuan_notebooks` | admin, colaborador, agente STDIO local |
+| SiYuan | `search_siyuan_docs` | admin y local: todas las raíces; colaborador: `/Growen` |
+| SiYuan | `read_siyuan_document` | admin y local: todas las raíces; colaborador: `/Growen` |
+| SiYuan | `create_siyuan_document` | admin, agente STDIO local; sólo áreas privadas |
+| SiYuan | `update_siyuan_document` | admin, agente STDIO local; sólo áreas privadas |
+| SiYuan | `create_siyuan_task_database` | admin, agente STDIO local; sólo áreas privadas |
 
 ## Seguridad
 
@@ -83,12 +100,16 @@ MCP_PROTOCOL_VERSION=2025-11-25
 MCP_JWT_ISSUER=growen-api
 MCP_PRODUCTS_JWT_AUDIENCE=growen-mcp-products
 MCP_WEB_SEARCH_JWT_AUDIENCE=growen-mcp-web-search
+MCP_SIYUAN_JWT_AUDIENCE=growen-mcp-siyuan
 MCP_TOOL_CATALOG_TTL_SECONDS=60
 MCP_RATE_LIMIT_PER_MINUTE=60
 MCP_LEGACY_RPC_ENABLED=0
 # Solo al exponer detrás de proxy/LAN; listas explícitas separadas por coma
 MCP_ALLOWED_HOSTS=
 MCP_ALLOWED_ORIGINS=
+SIYUAN_ALLOWED_PATH_PREFIX=/Growen
+SIYUAN_PRIVATE_PATH_PREFIXES=/Negocio,/Operación
+SIYUAN_PUBLISH_STATE_FILE=../growen-siyuan/publish-state.json
 ```
 
 `MCP_PRODUCTS_SECRET_KEY` y `MCP_WEB_SEARCH_SECRET_KEY` deben ser aleatorios, diferentes y tener al menos 32 bytes. Cada servidor valida una audience y un `kid` propios; durante una rotación puede configurarse únicamente la clave anterior correspondiente. El bootstrap genera valores locales sin mostrarlos.

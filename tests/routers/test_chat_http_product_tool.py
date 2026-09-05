@@ -59,9 +59,13 @@ class _FakeOpenAI:
 @pytest.fixture(autouse=True)
 def patch_openai(monkeypatch):
     import ai.providers.openai_provider as mod
+    from agent_core.config import settings as core_settings
+
     monkeypatch.setattr(mod, "AsyncOpenAI", _FakeOpenAI)
+    monkeypatch.delenv("OPENAI_API_KEY_FILE", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("AI_DISABLE_OLLAMA", "true")
+    monkeypatch.setattr(core_settings, "ai_allow_external", True)
 
 @pytest.fixture
 def patch_httpx(monkeypatch):

@@ -934,6 +934,10 @@ class MarketUpdateItem(Base):
             "status IN ('queued','running','partial','succeeded','failed','cancelled')",
             name="ck_market_update_items_status",
         ),
+        CheckConstraint(
+            "stage IN ('queued','discovering','validating','extracting','completed')",
+            name="ck_market_update_items_stage",
+        ),
         Index("ix_market_update_items_job_status", "job_id", "status"),
         Index("ix_market_update_items_product_created", "product_id", "created_at"),
         Index(
@@ -953,7 +957,12 @@ class MarketUpdateItem(Base):
         ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
     )
     status: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
+    stage: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    competitors_existing: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sources_discovered: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sources_confirmed: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sources_quarantined: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     sources_total: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     sources_succeeded: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     sources_failed: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
@@ -991,6 +1000,7 @@ class MarketUpdateSourceResult(Base):
     source_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("canonical_knowledge_market_profiles.id", ondelete="SET NULL"), nullable=True
     )
+    operation: Mapped[str] = mapped_column(String(24), default="extraction", server_default="extraction", nullable=False)
     status: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
     attempt: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -2423,3 +2433,116 @@ class AIPromptEvaluation(Base):
     safety_passed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     details: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class MeliAccount(Base):
+    """Autorización OAuth cifrada de una cuenta seller de Mercado Libre."""
+
+    __tablename__ = "meli_accounts"
+    __table_args__ = (
+        UniqueConstraint("application_id", "seller_id", name="uq_meli_accounts_application_seller"),
+        CheckConstraint("status IN ('active','revoked','error')", name="ck_meli_accounts_status"),
+        Index("ix_meli_accounts_status_expires", "status", "token_expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    application_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seller_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    site_id: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    scopes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    access_token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    token_expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    token_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    last_error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class MeliOAuthState(Base):
+    """State OAuth de un uso; nunca persiste el valor crudo."""
+
+    __tablename__ = "meli_oauth_states"
+    __table_args__ = (Index("ix_meli_oauth_states_expires_consumed", "expires_at", "consumed_at"),)
+
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    code_verifier_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    redirect_uri: Mapped[str] = mapped_column(String(800), nullable=False)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class MeliNotification(Base):
+    """Sobre mínimo durable de una notificación no confiable."""
+
+    __tablename__ = "meli_notifications"
+    __table_args__ = (
+        CheckConstraint("status IN ('queued','processing','succeeded','failed','skipped')", name="ck_meli_notifications_status"),
+        Index("ix_meli_notifications_status_received", "status", "received_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("meli_accounts.id", ondelete="SET NULL"))
+    application_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seller_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    topic: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource: Mapped[str] = mapped_column(String(1000), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    processing_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class MeliItemLink(Base):
+    """Mapeo explícito de stock Growen a ítem o variación MeLi."""
+
+    __tablename__ = "meli_item_links"
+    __table_args__ = (
+        UniqueConstraint("account_id", "item_id", "variation_id", name="uq_meli_item_links_target"),
+        Index("ix_meli_item_links_product_active", "product_id", "active"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("meli_accounts.id", ondelete="CASCADE"), nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    item_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    variation_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_synced_quantity: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class MeliSyncJob(Base):
+    """Outbox durable procesado exclusivamente por la cola meli_sync."""
+
+    __tablename__ = "meli_sync_jobs"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_meli_sync_jobs_dedupe_key"),
+        CheckConstraint("kind IN ('notification','stock','reconcile')", name="ck_meli_sync_jobs_kind"),
+        CheckConstraint("status IN ('queued','running','succeeded','failed','skipped')", name="ck_meli_sync_jobs_status"),
+        Index("ix_meli_sync_jobs_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("meli_accounts.id", ondelete="CASCADE"))
+    notification_id: Mapped[Optional[str]] = mapped_column(ForeignKey("meli_notifications.id", ondelete="CASCADE"))
+    item_link_id: Mapped[Optional[int]] = mapped_column(ForeignKey("meli_item_links.id", ondelete="CASCADE"))
+    payload_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

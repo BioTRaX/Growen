@@ -23,6 +23,22 @@ Una fuente automática sólo aporta si su activo está confirmado, conserva etiq
 
 Este archivo es la fuente canónica para API, reglas operativas y ejecución de Mercado. `docs/MERCADO_INTEGRACION_FRONTEND.md` conserva únicamente el baseline React de 2025; los documentos `MARKET_CURRENT_STATE_*` y `RETROSPECTIVE_MARKET_*` son evidencia histórica, no fuentes del estado vigente.
 
+## Contrato automático vigente (2026-08-28)
+
+`POST /market/products/{id}/refresh-market` acepta `{ "force_rediscovery": false }`. `POST /market/products/batch-refresh` acepta `{ "product_ids": [...], "force_rediscovery": false }`, deduplica IDs y admite de 1 a 100 productos únicos. Ambos endpoints crean o reutilizan un job persistente y el worker ejecuta por item `queued → discovering → validating → extracting → completed`.
+
+Antes de persistir el job, la API verifica Redis y el heartbeat dedicado. Si alguno no está saludable responde `503` con `detail.code=market_worker_unavailable`; no queda un job huérfano. El worker conserva fuentes confirmadas existentes, busca sólo competidores faltantes hasta tres dominios, respeta los dominios archivados como exclusiones y, salvo `force_rediscovery`, omite Web Search cuando la cobertura ya está completa.
+
+Una candidata automática se crea inactiva con origen `market_discovery`. Sólo pasa a confirmada cuando la URL supera SSRF, la extracción produce precio ARS y existe evidencia de entrega argentina. El resto permanece visible en `quarantined`, con código y mensaje seguro, y nunca participa del promedio. `GET /market/products/{id}/sources` separa `mandatory`, `additional`, `quarantined` y `archived`.
+
+`GET /market/jobs/{id}` mantiene sus campos y agrega `config_snapshot`; cada item expone `stage`, `competitors_existing`, `sources_discovered`, `sources_confirmed`, `sources_quarantined` y `source_results` con operación, duración, HTTP, navegador, observación, error y reintentabilidad.
+
+`DELETE /market/sources/{id}` archiva y recalcula el promedio; no elimina observaciones ni auditoría. `POST /market/sources/{id}/restore` restaura una fuente archivada. La edición y revalidación continúan disponibles. `POST /market/sources/{id}/detect-price` encola extracción focal estática con fallback dinámico, incluso para una fuente en cuarentena. `POST /market/sources/{id}/manual-validation` registra confirmaciones de ARS y entrega argentina con evidencia, actor y fecha. La fuente sólo queda activa cuando ambas confirmaciones son verdaderas y existe un precio capturado. Los endpoints `discover-sources`, `from-suggestion` y `batch-from-suggestions` están deprecados y sólo se conservan para compatibilidad; el consumidor Vue no depende de ellos y sus errores ya no se transforman en listas vacías exitosas.
+
+La imagen mínima de `market_worker` incluye FastAPI, HTTPX, MCP, PyJWT y Passlib porque reutiliza las reglas transaccionales de `services.knowledge.service` y el cliente MCP autenticado compartido. El lock reproducible se genera desde `requirements-market-worker.txt`; `scripts/update-locks.ps1` repone el marcador de plataforma de `pywin32` y no deben instalarse dependencias manualmente dentro del contenedor. Como Dramatiq ejecuta un `asyncio.run` por mensaje/hilo, el engine del worker usa `NullPool` y no comparte conexiones asíncronas entre event loops.
+
+La auditoría por fuente conserva `http_status`, `used_browser`, duración, observación y error estructurado. Si no se obtiene precio, el fallo HTTP o de scraping tiene prioridad sobre comprobaciones posteriores de moneda o entrega; una candidata incompleta permanece inactiva y en cuarentena.
+
 En los contratos de producto, `preferred_name`/`product_name` contienen siempre el nombre canónico y `product_sku` contiene `sku_custom`, `ng_sku` o el fallback por ID. Para extraer precios se prioriza JSON-LD Schema.org `Product → Offer → priceSpecification`, seguido por metadata/contenedores del producto; las clases genéricas y regex son únicamente fallback, porque pueden incluir carrito, cuotas y productos relacionados.
 
 El agregado `market_price_reference` es el promedio aritmético de la observación ARS efectiva más reciente de cada fuente activa. Todas pesan igual; `is_mandatory` sólo ordena y destaca. Las capturas automáticas vencen por defecto a los siete días y las manuales siguen vigentes hasta ser reemplazadas. Una fuente confirmada como no ARS, sin entrega argentina o insegura se rechaza y no puede guardarse como fuente efectiva.
@@ -40,6 +56,8 @@ La comparación usa `Decimal` sin redondear para clasificar: `(precio_venta - pr
 | POST | `/market/products/batch-refresh` | Crea items idempotentes para una selección |
 | POST | `/market/sources/{id}/observations` | Registra una observación manual ARS auditable |
 | POST | `/market/sources/{id}/revalidate` | Revalida URL, moneda y alcance argentino |
+| POST | `/market/sources/{id}/detect-price` | Encola detección de precio para una sola fuente web |
+| POST | `/market/sources/{id}/manual-validation` | Audita confirmación manual de ARS y entrega argentina |
 
 Los estados de job son `queued`, `running`, `partial`, `succeeded`, `failed` y `cancelled`. Un fallo al publicar en Redis marca el item como terminal `failed`; nunca queda un `202` huérfano. `PATCH /market/products/{id}/market-reference` está deprecado y sólo se conserva para el fallback React: internamente crea una observación manual; `0` retira la referencia vigente y no se promedia.
 

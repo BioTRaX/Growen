@@ -1,6 +1,6 @@
 ---
 name: database-migrations
-description: Gestiona cambios de esquema PostgreSQL con Alembic, diagnóstico de heads, revisión de operaciones y pruebas de migración. Usar al cambiar db/models.py, crear revisiones o investigar drift del esquema.
+description: Usar al cambiar db/models.py, crear o revisar una revisión Alembic, o investigar drift del esquema PostgreSQL.
 ---
 
 # Gestionar migraciones

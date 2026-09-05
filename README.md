@@ -1,5 +1,17 @@
 # Growen
 
+Cierre MeLi del 2026-09-05: túnel y OAuth real operativos, primera cuenta vinculada con tokens cifrados. Las pruebas reales de notificaciones, stock y renovación siguen pendientes. Ver [retrospectiva de la activación](docs/RETROSPECTIVE_MELI_CLOUDFLARE_20260905.md) y [retrospectiva consolidada de sesión](docs/RETROSPECTIVE_SESSION_20260905.md).
+
+Antes de vincular una cuenta MeLi, aplicar la migración `20260905_meli_scopes_text`, que permite guardar listas extensas de permisos funcionales sin truncarlas.
+
+La vinculación MeLi requiere Acceso Offline habilitado en DevCenter y aprobado por el vendedor. Growen solicita `read write offline_access`; si falta el token de renovación, informa el permiso faltante en lugar de atribuirlo al vencimiento del enlace.
+
+Para activar MeLi, el CNAME del túnel debe estar en modo **Proxied**; un conector Healthy no valida el acceso HTTPS ni OAuth. Ver la sección de activación inicial en [la guía MeLi](docs/MELI_INTEGRATION.md).
+
+## Mercado Libre transaccional
+
+Growen incorpora un dominio MeLi aislado del análisis de Mercado: gateway FastAPI mínimo, worker Dramatiq exclusivo `meli_sync`, OAuth con PKCE, tokens cifrados, webhooks idempotentes y stock Growen → MeLi para inventario clásico. Cloudflare Tunnel publica sólo callback/webhook y no comparte red con API, PostgreSQL ni Redis. Compose usa el perfil `meli`; producción dispone de un stack Swarm con réplicas y secretos externos. Configuración y operación: [docs/MELI_INTEGRATION.md](docs/MELI_INTEGRATION.md) y [docs/DOCKER_SWARM.md](docs/DOCKER_SWARM.md).
+
 ## Estado de Chat 😎 (2026-08-17)
 
 Chat está `preflight/active` en desarrollo y `/chat` conserva React. El perfil Ollama local aprobó con RTX 5070, contexto 4096, pagefile de 18 GB, `llama3.1:8b` al 100 % en GPU y embeddings `qwen3-embedding:4b` de 1536 dimensiones. Token, canary y claves están fuera del repositorio; PostgreSQL, Redis y el worker polling están operativos. El corpus RAG v1 fue cargado y su evaluación por rol/canal aprobó sin fugas. Durante esta fase Telegram sólo responde al canary y Vue se prueba directamente en desarrollo.
@@ -81,23 +93,34 @@ Los lotes son idempotentes. Un reintento de un lote que falló antes de procesar
 
 ## Stock y Mercado en Vue
 
-El manifiesto activo dirige `/stock`, `/stock/shortages` y `/mercado` a Vue. Stock conserva filtros en la URL, edición decimal de existencias y precios, control optimista mediante `expected_stock`, exportaciones y trazabilidad de faltantes. Mercado ofrece filtros, actualización individual o masiva, polling hasta estado terminal, fuentes auditables, observaciones manuales, descubrimiento e histórico ARS.
+El manifiesto activo dirige `/stock`, `/stock/shortages` y `/mercado` a Vue. Stock conserva filtros en la URL, edición decimal de existencias y precios, control optimista mediante `expected_stock`, exportaciones y trazabilidad de faltantes. Mercado ofrece filtros, actualización individual o masiva, polling hasta estado terminal, fuentes auditables, observaciones manuales, descubrimiento e histórico ARS. Desde el detalle, cada URL abre en una pestaña segura y una fuente web puede ejecutar detección focal o registrar validación manual auditada de ARS y entrega argentina.
 
 React conserva copias temporales para rollback, pero ya no es el runtime principal de estas rutas. Su eliminación requiere smoke autenticado y la ventana de estabilidad definida. Los contratos vigentes están en `docs/STOCK.md` y `docs/API_MARKET.md`; el estado de migración se mantiene en `docs/FRONTEND_MIGRATION_VUE.md`.
 
 ## Documentación
 
+Mercado ejecuta un pipeline persistente `descubrir → validar → extraer` para una selección de hasta 100 productos y conserva hasta tres competidores confirmados por producto. Requiere Redis, `market_worker` con heartbeat y MCP Web Search autenticado; las candidatas incompletas quedan en cuarentena y las fuentes archivadas se pueden restaurar. Ver [API de Mercado](./docs/API_MARKET.md).
+
+El notebook local `Nice Grow` expone documentación mediante MCP SiYuan. Git conserva la autoridad sobre `/Growen`; `/Negocio` y `/Operación` son espacios privados administrables por `admin` y agentes STDIO locales. Los colaboradores sólo pueden buscar y leer `/Growen`. Las actualizaciones privadas requieren revisión SHA-256 e historial; los agentes autorizados también pueden crear una base estructurada de tareas mediante una tool acotada. La réplica técnica se sincroniza desde Git con control de conflictos. Ver [docs/MCP.md](./docs/MCP.md), [MCP SiYuan](./mcp_servers/siyuan_server/README.md) y la [retrospectiva técnica](./docs/RETROSPECTIVE_SIYUAN_MCP_20260828.md).
+
+El widget local [Crono](./siyuan-widgets/crono/README.md) convierte filas
+pendientes de una Attribute View en tarjetas temporizadas y persiste el total en
+las columnas numéricas `Minutos` y `Segundos`, junto con el ciclo
+`Sin iniciar → Iniciada → Completada`, antes de completar cada tarea. La
+categoría se muestra centrada con su color de SiYuan y permanece de sólo lectura.
+
 - Hoja de ruta: [Roadmap.md](./Roadmap.md)
 - Stock y Faltantes: [docs/STOCK.md](./docs/STOCK.md)
 - Mercado: [docs/API_MARKET.md](./docs/API_MARKET.md)
 - Retrospectiva técnica de Productos Vue: [docs/RETROSPECTIVE_PRODUCTS_20260718.md](./docs/RETROSPECTIVE_PRODUCTS_20260718.md)
+- Retrospectiva del widget Crono y su aprendizaje agéntico: [docs/RETROSPECTIVE_SIYUAN_WIDGET_CRONO_20260829.md](./docs/RETROSPECTIVE_SIYUAN_WIDGET_CRONO_20260829.md)
 - Retrospectiva de taxonomía plana, tags y QA: [docs/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md](./docs/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md)
 - Retrospectiva operativa de Redis, Dramatiq y batch canónico: [docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md](./docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md)
 - Skill de migración React → Vue: [.agents/skills/vue-module-migration/SKILL.md](./.agents/skills/vue-module-migration/SKILL.md)
 - Skills agénticas, Superpowers y compatibilidad Codex/Gemini/Copilot/Antigravity: [docs/AGENT_SKILLS.md](./docs/AGENT_SKILLS.md)
 - Retrospectiva de adaptación de Superpowers a Growen (2026-08-27): [docs/RETROSPECTIVE_SUPERPOWERS_ADAPTATION_20260827.md](./docs/RETROSPECTIVE_SUPERPOWERS_ADAPTATION_20260827.md)
 - Retrospectiva Chat, Telegram, RAG y Vue (2026-08-17): [docs/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md](./docs/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md)
-- Skill de retrospectiva técnica de sesión — sólo ante cierre explícito informado por el usuario: [.agents/skills/retrospectiva-tecnica-sesion/SKILL.md](./.agents/skills/retrospectiva-tecnica-sesion/SKILL.md)
+- Skill de retrospectiva técnica de sesión — sólo ante `Cerrar sesión` o `Cerremos sesión`: [.agents/skills/retrospectiva-tecnica-sesion/SKILL.md](./.agents/skills/retrospectiva-tecnica-sesion/SKILL.md)
 - Relevamiento funcional del portal React y mapa de migración Vue: [docs/relevamiento_admin.md](./docs/relevamiento_admin.md)
 - **Workflow de Desarrollo (Local vs Docker)**: [docs/DEVELOPMENT_WORKFLOW.md](./docs/DEVELOPMENT_WORKFLOW.md) ⚡
 - Capa MCP (servers/tools): [docs/MCP.md](./docs/MCP.md)
@@ -107,6 +130,10 @@ React conserva copias temporales para rollback, pero ya no es el runtime princip
 - Persona y operación de chat: [docs/CHAT.md](./docs/CHAT.md)
 - SKU Canónico (formato, generación, secuencias): [docs/CANONICAL_SKU.md](./docs/CANONICAL_SKU.md)
 - **Logging y diagnóstico de enriquecimiento IA**: [docs/ENRICHMENT_LOGS.md](./docs/ENRICHMENT_LOGS.md)
+
+### Flujo Git para agentes
+
+Cada sesión técnica crea una rama efímera desde el estado actual de `dev`; los commits directos a `dev` están prohibidos. Los comandos `Cerrar sesión` y `Cerremos sesión` activan retrospectiva, evolución agéntica, documentación, sincronización con `origin/dev`, resolución verificable de conflictos, merge final y push. La composición con Superpowers evita copiar metodología general dentro de las skills locales; ver [skills agénticas](./docs/AGENT_SKILLS.md) y [workflow de desarrollo](./docs/DEVELOPMENT_WORKFLOW.md).
 
 ## Primer Arranque en Desarrollo (Windows)
 

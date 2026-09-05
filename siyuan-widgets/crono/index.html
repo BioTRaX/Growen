@@ -1,0 +1,33 @@
+<!-- NG-HEADER: Nombre de archivo: index.html -->
+<!-- NG-HEADER: Ubicación: siyuan-widgets/crono/index.html -->
+<!-- NG-HEADER: Descripción: Interfaz del widget de seguimiento de tareas Crono para SiYuan. -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crono</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h2>Crono</h2>
+            <div class="controls">
+                <input type="text" id="av-id" value="20260828101028-w717hlz" placeholder="ID del AV" title="ID de la base de datos (Attribute View) de SiYuan" />
+                <button id="btn-load">Recargar</button>
+            </div>
+        </header>
+        <main>
+            <div id="loading" class="hidden">Cargando tareas...</div>
+            <div id="error" class="hidden"></div>
+            <ul id="task-list">
+                <!-- Las tareas se renderizan aquí -->
+            </ul>
+        </main>
+    </div>
+    <script src="crono-core.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

@@ -5,6 +5,12 @@
 
 # Seguridad
 
+## Mercado Libre y Cloudflare Tunnel
+
+`MELI_APP_ID`, `MELI_CLIENT_SECRET`, `MELI_TOKEN_ENCRYPTION_KEY` y el token del túnel se cargan por archivos externos o secretos Swarm; producción rechaza valores directos. Access token, refresh token y PKCE se cifran con AES-256-GCM y AAD por propósito/cuenta. No se registran URLs OAuth completas, headers Authorization, payloads de recursos ni secretos. El webhook valida tamaño, tipo, aplicación, topic y path, pero se trata siempre como aviso no autenticado: el worker consulta MeLi con Bearer y verifica seller antes de actuar.
+
+`meli_cloudflared` sólo está conectado a `meli_ingress` y `cloudflare_egress`; la última regla ingress es `http_status:404`. La configuración no permite alcanzar otros servicios Docker. Ver rotación y operación en `docs/MELI_INTEGRATION.md`.
+
 ## Secretos y rollout Chat (2026-08-16)
 
 Producción usa exclusivamente `TELEGRAM_BOT_TOKEN_FILE`, `TELEGRAM_IDENTITY_ENCRYPTION_KEY_FILE`, `TELEGRAM_IDENTITY_HMAC_KEY_FILE`, `TELEGRAM_CANARY_USER_ID_FILE` y, si se habilita OpenAI, `OPENAI_API_KEY_FILE`. El lector rechaza valor+archivo, rutas relativas, symlinks, archivos no regulares y secretos directos fuera de desarrollo/tests. `scripts/generate_chat_keys.py --output-dir <ruta-externa>` rechaza destinos dentro del workspace y nunca imprime valores.
@@ -98,6 +104,18 @@ gestor de secretos; nunca documentar ni registrar el valor nuevo.
 ## Permisos por rol
 - Asignar el mínimo de permisos necesarios a cada rol.
 - Consultar documentación funcional para detalles específicos.
+
+## Documentación privada en SiYuan
+
+- `/Growen` es una réplica gobernada por Git. Las tools MCP de creación y actualización rechazan esa raíz; sólo el publicador local puede sincronizarla.
+- `/Negocio` y `/Operación` son privadas y canónicas en SiYuan. Sólo `admin` y agentes STDIO ejecutados localmente pueden leerlas o mutarlas.
+- `colaborador` consulta únicamente `/Growen`. La raíz permitida forma parte del SQL fijo y los IDs se autorizan antes de exportar Markdown, evitando filtraciones por snippets o acceso directo.
+- Toda actualización privada exige el SHA-256 devuelto por la lectura anterior, crea historial, revalida ruta y revisión inmediatamente antes de escribir y no se reintenta. Los conflictos se rechazan y un resultado incierto o sin efecto observable obliga a releer.
+- La creación de bases de tareas está fijada por contrato: el modelo sólo aporta el ID documental; no controla SQL, IDs de vistas, tipos de columnas ni DOM. La tool vuelve a autorizar la raíz privada y crea historial antes de mutar.
+- La auditoría de escritura conserva actor e ID hasheados, raíz, resultado y hashes de revisión. Nunca registra Markdown, ruta privada completa, token ni parámetros sensibles.
+- El estado del publicador se almacena fuera del repositorio y no contiene contenido documental. El publicador usa bloqueo exclusivo y checkpoints atómicos para evitar pérdida de baseline entre procesos. `--force-conflicts` requiere `--apply` y constituye la confirmación explícita para que Git prevalezca.
+- La API `updateBlock` de SiYuan no ofrece compare-and-swap. La doble revalidación y el historial reducen el riesgo, pero no eliminan una edición simultánea desde la UI en el último instante; debe evitarse la coedición del mismo documento y releerse ante incertidumbre.
+- STDIO se considera un canal local administrativo y no debe exponerse por red; HTTP continúa exigiendo JWT, audience, issuer, expiración, rol, JTI y rate limit.
 
 ## Contrato de sesión y CSRF
 

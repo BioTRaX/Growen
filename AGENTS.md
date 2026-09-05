@@ -27,9 +27,11 @@ Este documento orienta a herramientas de asistencia de código (Copilot, Codex, 
 
 ### Retrospectiva al cierre de sesión
 
-- La skill `retrospectiva-tecnica-sesion` sólo se usa cuando el usuario declara explícitamente que llegó el final de la sesión o chat.
-- Completar una tarea, implementación, diagnóstico o migración no autoriza ni activa una retrospectiva por sí solo.
-- Si el usuario no declaró el cierre, continuar el trabajo normal y reservar la retrospectiva para el final confirmado.
+- Los únicos triggers directos de `retrospectiva-tecnica-sesion` son `Cerrar sesión` y `Cerremos sesión`, sin distinguir mayúsculas ni puntuación final.
+- Si existe trabajo pendiente ambiguo al recibir un trigger válido, solicitar una confirmación breve antes de cerrar.
+- Completar una tarea, pedir una retrospectiva, decir «terminamos» o declarar el final del chat no activa el cierre ni el auto-merge.
+- El cierre sigue este orden obligatorio: análisis retrospectivo, evolución agéntica, compuerta de riesgo, documentación, sincronización de la rama efímera, resolución verificable, validación, merge a `dev` y push.
+- Las evoluciones de riesgo bajo o medio se implementan y validan. Una propuesta de riesgo muy alto detiene todo el flujo hasta recibir confirmación explícita.
 
 ### Seguridad de secretos (OBLIGATORIO)
 - Nunca commits con credenciales, tokens o URLs con usuario:contraseña. Usar variables de entorno (`.env`, `env_file`) o placeholders en docs.
@@ -37,16 +39,21 @@ Este documento orienta a herramientas de asistencia de código (Copilot, Codex, 
 - Si se detecta exposición accidental, remover inmediatamente el archivo del repo, reemplazar por versión sin secretos y comunicar para rotar las credenciales expuestas.
 
 ### Operativa de Git para agentes
-- Evitar `git add`, `commit` y `push` salvo que el usuario lo solicite explícitamente. Priorizar PRs y revisiones.
+- Antes de modificar archivos, crear desde el estado actual de `dev` una rama efímera nueva (`feat/*`, `fix/*`, `docs/*` o `chore/*`) e inventariar cambios preexistentes.
+- Está estrictamente prohibido hacer commits directos a `dev`; `dev` sólo recibe el merge final de una rama efímera validada.
+- Ejecutar todas las operaciones Git por terminal.
+- Stage, commit y push requieren una solicitud explícita o un trigger válido de cierre. Un cierre válido autoriza la integración secuencial de la sesión, pero no elimina los gates de secretos, alcance, pruebas, documentación, remoto y riesgo.
+- Resolver autónomamente conflictos textuales cuando la intención pueda demostrarse y validarse. Detenerse ante ambigüedad o riesgo muy alto; nunca usar force-push.
 
 ### Compatibilidad con Superpowers
 - Las skills de Superpowers pueden complementar la metodología de trabajo, pero las reglas y precedencias de Growen prevalecen en todo caso.
 - Los flujos de Superpowers no pueden activar `git add`, `commit`, `push`, `merge` ni publicación automática sin la autorización explícita del usuario y sin cumplir el gate completo de seguridad.
-- La única rama donde se permite automatizar commit/push desde Superpowers es la rama exacta `dev`, y sólo después de verificar secretos, alcance, pruebas, documentación, remotos y estado final del cambio.
+- Superpowers nunca confirma trabajo directamente en `dev`. Sus pasos de commit, merge o push se subordinan a la rama efímera y a `git-commit-push`.
 - Los flujos de Superpowers deberán ejecutar Python y pytest exclusivamente mediante el venv de Growen (`.venv\Scripts\python.exe`) o Docker. Quedan prohibidos `python`, `pip`, `poetry` y `pytest` del sistema.
 - Todo Markdown creado bajo `docs/superpowers/` deberá llevar NG-HEADER para permitir su indexación futura y mantener la documentación viva actualizada.
 - Las respuestas, la documentación, los commits y los PRs generados mediante Superpowers deben producirse en español, aunque el origen del material sea inglés.
 - No se deben duplicar ni forzar forks locales de las 14 skills de Superpowers; la actualización debe seguirse desde su repositorio original y adaptarse localmente con reglas de precedencia.
+- Las skills canónicas locales conservan sólo reglas, comandos y contratos específicos de Growen. La metodología general se referencia por nombre y no se copia, para evitar trabajo duplicado y consumo innecesario de tokens.
 
 ## Encabezado obligatorio (NG-HEADER)
 Agregar al inicio de cada archivo de código y documentación `.md` (excepto `README.md`). Excepciones: `*.json`, `destinatarios.json`, binarios, imágenes, PDFs y otros archivos de datos.
@@ -123,7 +130,7 @@ Formato por lenguaje:
 - Adjuntar ejemplos mínimos de uso y pruebas cuando sea razonable.
 - Mantener consistencia de idioma en commits, PRs y documentación: español.
 - Las skills canónicas residen únicamente en `.agents/skills/`, ubicación compartida por Codex, Gemini CLI, GitHub Copilot y Antigravity. No crear adaptadores nuevos; `.agent/skills/` conserva sólo adaptadores legacy. Ver `docs/AGENT_SKILLS.md`.
-- La skill de Git solo puede activarse cuando el usuario solicite explícitamente stage, commit o push.
+- La skill de Git se activa al iniciar una rama efímera, ante una solicitud explícita de stage, commit o push, o durante un cierre válido.
 
 ## Entorno de Ejecución Obligatorio (CRÍTICO)
 
@@ -318,6 +325,8 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 
 ### Auditoría / Compose
 - `docker-compose-audit.ps1`: Audita `docker-compose.yml`, detecta imágenes públicas con tags desactualizados, permite actualizar versiones (con backup) y reconstruir/levantar el stack (`docker compose up --build -d`). Parámetros: `-OnlyReport`, `-SkipBuild`.
+- `provision-meli-tunnel.ps1`: provisiona idempotentemente el túnel remoto Cloudflare, sus rutas limitadas y el CNAME; lee credenciales desde archivo y soporta `-WhatIf`.
+- `deploy-swarm.ps1`: valida Swarm, imágenes, secretos externos, label stateful y render del stack antes del despliegue; soporta `-WhatIf`.
 
 ### Backend / Arranque / Entorno
 - `ollama-preflight.ps1`: valida GPU/VRAM, RAM, pagefile, disco, daemon y modelos del perfil local de Chat sin descargar ni borrar datos.
@@ -348,7 +357,13 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 - `fix_bom.ps1`: Quita BOM en archivos que puedan romper imports o tooling.
 
 ### Servicios / Scheduler / Monitoreo
-- (Pendiente de centralizar) Scripts relacionados a `services` si se añaden: mantener aquí enumeración.
+- `meli_worker_health.py`: healthcheck interno del consumidor `meli_sync` mediante heartbeat Redis; no consulta ni imprime secretos.
+
+### SiYuan / Documentación
+- `publish_docs_to_siyuan.py`: sincroniza Markdown gobernado por Git hacia `/Growen`, mantiene estado externo por hash, detecta conflictos y no elimina huérfanos. Usar `--apply --force-conflicts` sólo después de revisar el manifiesto.
+- `smoke_siyuan_mcp.py`: valida lectura, creación privada, actualización con revisión y rechazo de una revisión obsoleta; ejecutarlo únicamente sobre un workspace SiYuan desechable.
+- `invoke_siyuan_task_database.py`: invoca por MCP STDIO la creación acotada de una base de tareas en un documento privado autorizado.
+- `sync-siyuan-widget.ps1`: compara hashes entre `siyuan-widgets/<nombre>` y el workspace operativo. Sin `-Apply` es sólo lectura; `-Apply` requiere autorización y copia únicamente archivos runtime `.html`, `.css`, `.js` y `.json`, sin borrar extras.
 
 ### Notas de uso para agentes
 - Antes de crear un nuevo script, validar si la funcionalidad ya existe.

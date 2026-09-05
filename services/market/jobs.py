@@ -8,13 +8,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import CanonicalProduct, MarketUpdateItem, MarketUpdateJob
+from db.models import CanonicalProduct, MarketUpdateItem, MarketUpdateJob, MarketUpdateSourceResult
 
 
 ACTIVE_STATUSES = ("queued", "running")
@@ -43,8 +43,12 @@ async def create_update_job(
     trigger: str,
     requested_by_user_id: int | None = None,
     correlation_id: str | None = None,
+    force_rediscovery: bool = False,
+    competitor_limit: int = 3,
+    target_source_id: int | None = None,
 ) -> EnqueueResult:
     """Crea items sólo para productos sin trabajo activo y reporta deduplicados."""
+    await expire_stale_items(db)
     unique_ids = list(dict.fromkeys(product_ids))
     bind = db.get_bind()
     if bind.dialect.name == "postgresql":
@@ -74,7 +78,16 @@ async def create_update_job(
             requested_by_user_id=requested_by_user_id,
             correlation_id=correlation_id,
             total_items=len(new_product_ids),
-            config_snapshot={"currency": "ARS", "freshness_days": 7},
+            config_snapshot={
+                "currency": "ARS",
+                "freshness_days": 7,
+                "force_rediscovery": force_rediscovery,
+                "competitor_limit": competitor_limit,
+                **({
+                    "target_source_id": target_source_id,
+                    "force_price_detection": True,
+                } if target_source_id is not None else {}),
+            },
         )
         db.add(job)
         await db.flush()
@@ -105,6 +118,7 @@ async def claim_item(db: AsyncSession, item_id: int) -> MarketUpdateItem | None:
     if not item or item.status != "queued":
         return None
     item.status = "running"
+    item.stage = "discovering"
     item.attempts += 1
     item.started_at = datetime.utcnow()
     job = await db.get(MarketUpdateJob, item.job_id)
@@ -133,6 +147,7 @@ async def complete_item(
     if not item or item.status in TERMINAL_STATUSES:
         return
     item.status = status
+    item.stage = "completed"
     item.sources_total = sources_total
     item.sources_succeeded = sources_succeeded
     item.sources_failed = sources_failed
@@ -146,7 +161,9 @@ async def complete_item(
 
 
 async def finalize_job(db: AsyncSession, job_id: str) -> None:
-    job = await db.get(MarketUpdateJob, job_id)
+    job = await db.scalar(
+        select(MarketUpdateJob).where(MarketUpdateJob.id == job_id).with_for_update()
+    )
     if not job:
         return
     statuses = list((await db.execute(
@@ -170,6 +187,40 @@ async def finalize_job(db: AsyncSession, job_id: str) -> None:
     job.completed_at = datetime.utcnow()
 
 
+async def expire_stale_items(
+    db: AsyncSession,
+    *,
+    now: datetime | None = None,
+    queued_timeout_seconds: int = 120,
+    running_timeout_seconds: int = 360,
+) -> int:
+    """Finaliza leases vencidos y libera la deduplicación por producto."""
+    current = now or datetime.utcnow()
+    queued_cutoff = current - timedelta(seconds=queued_timeout_seconds)
+    running_cutoff = current - timedelta(seconds=running_timeout_seconds)
+    stale = list((await db.execute(
+        select(MarketUpdateItem).where(
+            ((MarketUpdateItem.status == "queued") & (MarketUpdateItem.created_at < queued_cutoff))
+            | ((MarketUpdateItem.status == "running") & (MarketUpdateItem.started_at < running_cutoff))
+        ).with_for_update()
+    )).scalars())
+    if not stale:
+        return 0
+    job_ids: set[str] = set()
+    for item in stale:
+        item.status = "failed"
+        item.stage = "completed"
+        item.error_code = "market_job_stalled"
+        item.error_message = "El worker no completó el trabajo dentro del tiempo operativo"
+        item.completed_at = current
+        job_ids.add(item.job_id)
+    await db.flush()
+    for job_id in sorted(job_ids):
+        await finalize_job(db, job_id)
+    await db.commit()
+    return len(stale)
+
+
 async def job_payload(db: AsyncSession, job_id: str) -> dict | None:
     job = await db.get(MarketUpdateJob, job_id)
     if not job:
@@ -177,10 +228,33 @@ async def job_payload(db: AsyncSession, job_id: str) -> dict | None:
     items = list((await db.execute(
         select(MarketUpdateItem).where(MarketUpdateItem.job_id == job_id).order_by(MarketUpdateItem.id)
     )).scalars())
+    item_ids = [item.id for item in items]
+    source_results = list((await db.execute(
+        select(MarketUpdateSourceResult)
+        .where(MarketUpdateSourceResult.item_id.in_(item_ids))
+        .order_by(MarketUpdateSourceResult.id)
+    )).scalars()) if item_ids else []
+    results_by_item: dict[int, list[dict]] = {item_id: [] for item_id in item_ids}
+    for result in source_results:
+        results_by_item[result.item_id].append({
+            "id": result.id,
+            "source_id": result.source_id,
+            "operation": result.operation,
+            "status": result.status,
+            "attempt": result.attempt,
+            "duration_ms": result.duration_ms,
+            "http_status": result.http_status,
+            "used_browser": result.used_browser,
+            "observation_id": result.observation_id,
+            "error_code": result.error_code,
+            "error_message": result.error_message,
+            "retryable": result.retryable,
+        })
     return {
         "id": job.id,
         "trigger": job.trigger,
         "status": job.status,
+        "config_snapshot": job.config_snapshot or {},
         "total_items": job.total_items,
         "processed_items": job.processed_items,
         "success_count": job.success_count,
@@ -193,13 +267,19 @@ async def job_payload(db: AsyncSession, job_id: str) -> dict | None:
                 "id": item.id,
                 "product_id": item.product_id,
                 "status": item.status,
+                "stage": item.stage,
                 "attempts": item.attempts,
+                "competitors_existing": item.competitors_existing,
+                "sources_discovered": item.sources_discovered,
+                "sources_confirmed": item.sources_confirmed,
+                "sources_quarantined": item.sources_quarantined,
                 "sources_total": item.sources_total,
                 "sources_succeeded": item.sources_succeeded,
                 "sources_failed": item.sources_failed,
                 "market_price_reference": float(item.market_price_reference) if item.market_price_reference is not None else None,
                 "error_code": item.error_code,
                 "error_message": item.error_message,
+                "source_results": results_by_item[item.id],
             }
             for item in items
         ],

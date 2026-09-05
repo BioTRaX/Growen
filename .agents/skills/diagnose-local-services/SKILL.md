@@ -1,9 +1,11 @@
 ---
 name: diagnose-local-services
-description: Diagnostica fallos del stack local Growen correlacionando UI, API, PostgreSQL, Redis, Dramatiq, Docker Compose y logs por ejecución. Usar cuando un servicio figura activo pero no responde, un lote queda pendiente o los logs parecen vacíos.
+description: Usar cuando un servicio local de Growen figura activo pero no responde, un job queda pendiente o los logs de la ejecución parecen vacíos.
 ---
 
 # Diagnosticar servicios locales
+
+**REQUIRED BACKGROUND:** aplicar `superpowers:systematic-debugging` para el método causal. Esta skill sólo define la topología y las comprobaciones propias de Growen.
 
 1. Leer `AGENTS.md`, `.agent/workflows/python-commands.md`, `docs/DEVELOPMENT_WORKFLOW.md` y la documentación del dominio afectado.
 2. Registrar el modo real de cada componente: proceso local, servicio Compose, puerto host, red interna, URL y archivo o comando de logs.

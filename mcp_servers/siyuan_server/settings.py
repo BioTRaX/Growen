@@ -62,15 +62,25 @@ class SiYuanSettings:
     notebook_name: str
     notebook_id: str | None
     allowed_path_prefix: str
+    private_path_prefixes: tuple[str, ...]
     timeout_seconds: float
 
     @classmethod
     def from_env(cls) -> "SiYuanSettings":
+        private_path_prefixes = tuple(
+            prefix.strip().rstrip("/")
+            for prefix in os.getenv(
+                "SIYUAN_PRIVATE_PATH_PREFIXES",
+                "/Negocio,/Operación",
+            ).split(",")
+            if prefix.strip().rstrip("/")
+        )
         return cls(
             base_url=os.getenv("SIYUAN_BASE_URL", "http://localhost:6806").rstrip("/"),
             notebook_name=os.getenv("SIYUAN_NOTEBOOK_NAME", "Nice Grow").strip(),
             notebook_id=os.getenv("SIYUAN_NOTEBOOK_ID", "").strip() or None,
             allowed_path_prefix=os.getenv("SIYUAN_ALLOWED_PATH_PREFIX", "/Growen").rstrip("/"),
+            private_path_prefixes=private_path_prefixes,
             timeout_seconds=float(os.getenv("SIYUAN_TIMEOUT_SECONDS", "10")),
         )
 

@@ -6,6 +6,10 @@
 
 # Tests unitarios puros (sin dependencias de DB)
 
+import pytest
+
+from workers.discovery import source_finder
+
 from workers.discovery.source_finder import (
     build_search_query,
     is_valid_ecommerce_url,
@@ -169,7 +173,7 @@ class TestExtractValidUrls:
         ]
         valid = extract_valid_urls(results)
         assert len(valid) == 1
-    
+
     def test_filter_excluded_extensions(self):
         results = [
             {
@@ -180,7 +184,7 @@ class TestExtractValidUrls:
         ]
         valid = extract_valid_urls(results)
         assert len(valid) == 0
-    
+
     def test_allow_high_priority_without_price(self):
         """Dominios de alta prioridad se incluyen aunque no tengan indicadores de precio"""
         results = [
@@ -192,3 +196,27 @@ class TestExtractValidUrls:
         ]
         valid = extract_valid_urls(results)
         assert len(valid) == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_accepts_mcp_error_null(monkeypatch):
+    """La envoltura MCP puede incluir ``error: null`` en respuestas exitosas."""
+
+    async def fake_search(*args, **kwargs):
+        return {
+            "items": [
+                {
+                    "url": "https://articulo.mercadolibre.com.ar/MLA-123",
+                    "title": "Vamp Humuskashi",
+                    "snippet": "Comprar por $ 12.000 con envío a todo el país",
+                }
+            ],
+            "error": None,
+        }
+
+    monkeypatch.setattr(source_finder, "call_mcp_web_search", fake_search)
+
+    result = await source_finder.discover_price_sources("Vamp Humuskashi")
+
+    assert result["success"] is True
+    assert result["valid_sources"] == 1

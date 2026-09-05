@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -28,6 +31,12 @@ from .tools import SiYuanService
 
 READ_ROLES = {"admin", "colaborador"}
 WRITE_ROLES = {"admin"}
+WRITE_TOOL_NAMES = {
+    "create_siyuan_document",
+    "create_siyuan_task_database",
+    "update_siyuan_document",
+}
+_audit_logger = logging.getLogger("growen.mcp.audit")
 
 
 def _claims_or_none():
@@ -46,16 +55,16 @@ class RoleAwareFastMCP(FastMCP):
         if claims.role == "admin":
             return tools
         if claims.role == "colaborador":
-            return [tool for tool in tools if tool.name != "create_siyuan_document"]
+            return [tool for tool in tools if tool.name not in WRITE_TOOL_NAMES]
         return []
 
 
 mcp = RoleAwareFastMCP(
     "Growen SiYuan",
     instructions=(
-        "Documentación Nice Grow. Buscar y leer antes de crear. Las escrituras sólo pueden hacerse "
-        "bajo /Growen, no sobrescriben documentos y requieren aprobación. No existen tools de SQL libre, "
-        "actualización, movimiento o eliminación."
+        "Documentación Nice Grow. Git gobierna /Growen; las escrituras MCP sólo pueden hacerse "
+        "en las áreas privadas configuradas y requieren aprobación. Las actualizaciones exigen la "
+        "revisión SHA-256 leída previamente. No existen tools de SQL libre, movimiento o eliminación."
     ),
     stateless_http=True,
     json_response=True,
@@ -89,6 +98,13 @@ def _configured_client() -> tuple[SiYuanClient, SiYuanSettings]:
     )
 
 
+def _visible_path_prefixes(settings: SiYuanSettings) -> tuple[str, ...]:
+    claims = _claims_or_none()
+    if claims is None or claims.role == "admin":
+        return (settings.allowed_path_prefix, *settings.private_path_prefixes)
+    return (settings.allowed_path_prefix,)
+
+
 async def _execute(method: str, **kwargs: Any) -> dict[str, Any]:
     client, settings = _configured_client()
     async with client:
@@ -96,7 +112,9 @@ async def _execute(method: str, **kwargs: Any) -> dict[str, Any]:
             client=client,
             notebook_name=settings.notebook_name,
             notebook_id=settings.notebook_id,
-            allowed_path_prefix=settings.allowed_path_prefix,
+            git_path_prefix=settings.allowed_path_prefix,
+            private_path_prefixes=settings.private_path_prefixes,
+            visible_path_prefixes=_visible_path_prefixes(settings),
         )
         operation = getattr(service, method)
         return await operation(**kwargs)
@@ -114,6 +132,49 @@ CREATE_ANNOTATIONS = ToolAnnotations(
     idempotentHint=False,
     openWorldHint=False,
 )
+UPDATE_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+
+
+def _document_root(hpath: str | None) -> str | None:
+    parts = str(hpath or "").split("/")
+    return f"/{parts[1]}" if len(parts) > 1 and parts[1] else None
+
+
+def _audit_document_write(
+    *,
+    tool_name: str,
+    status: str,
+    document_id: str | None = None,
+    hpath: str | None = None,
+    previous_revision_sha256: str | None = None,
+    revision_sha256: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    claims = _claims_or_none()
+    subject = claims.sub if claims else "local-stdio"
+    entry: dict[str, Any] = {
+        "event": "siyuan_document_write",
+        "subject_hash": hashlib.sha256(subject.encode("utf-8")).hexdigest()[:16],
+        "tool_name": tool_name,
+        "status": status,
+    }
+    if document_id:
+        entry["document_id_hash"] = hashlib.sha256(document_id.encode("utf-8")).hexdigest()[:16]
+    root = _document_root(hpath)
+    if root:
+        entry["document_root"] = root
+    if previous_revision_sha256:
+        entry["previous_revision_sha256"] = previous_revision_sha256
+    if revision_sha256:
+        entry["revision_sha256"] = revision_sha256
+    if error_code:
+        entry["error_code"] = error_code
+    _audit_logger.info(json.dumps(entry, ensure_ascii=False, sort_keys=True))
 
 
 @mcp.tool(annotations=READ_ANNOTATIONS)
@@ -139,15 +200,90 @@ async def read_siyuan_document(document_id: str) -> dict[str, Any]:
 
 @mcp.tool(annotations=CREATE_ANNOTATIONS)
 async def create_siyuan_document(path: str, markdown: str) -> dict[str, Any]:
-    """Crea sin sobrescribir una página Markdown bajo el prefijo autorizado."""
+    """Crea sin sobrescribir una página Markdown en un área privada autorizada."""
     await _authorize("create_siyuan_document", write=True)
-    return await _execute("create_document", path=path, markdown=markdown)
+    try:
+        result = await _execute("create_document", path=path, markdown=markdown)
+    except Exception as exc:
+        _audit_document_write(
+            tool_name="create_siyuan_document",
+            status="error",
+            hpath=path,
+            error_code=type(exc).__name__,
+        )
+        raise
+    _audit_document_write(
+        tool_name="create_siyuan_document",
+        status="success",
+        document_id=str(result.get("document_id") or ""),
+        hpath=str(result.get("hpath") or path),
+    )
+    return result
+
+
+@mcp.tool(annotations=UPDATE_ANNOTATIONS)
+async def create_siyuan_task_database(document_id: str) -> dict[str, Any]:
+    """Añade a un documento privado una sección Tareas con una base estructurada."""
+    await _authorize("create_siyuan_task_database", write=True)
+    try:
+        result = await _execute("create_task_database", document_id=document_id)
+    except Exception as exc:
+        _audit_document_write(
+            tool_name="create_siyuan_task_database",
+            status="error",
+            document_id=document_id,
+            error_code=type(exc).__name__,
+        )
+        raise
+    _audit_document_write(
+        tool_name="create_siyuan_task_database",
+        status="success",
+        document_id=document_id,
+        hpath=str(result.get("hpath") or ""),
+    )
+    return result
+
+
+@mcp.tool(annotations=UPDATE_ANNOTATIONS)
+async def update_siyuan_document(
+    document_id: str,
+    markdown: str,
+    expected_revision_sha256: str,
+) -> dict[str, Any]:
+    """Actualiza un documento privado si conserva la revisión SHA-256 esperada."""
+    await _authorize("update_siyuan_document", write=True)
+    try:
+        result = await _execute(
+            "update_document",
+            document_id=document_id,
+            markdown=markdown,
+            expected_revision_sha256=expected_revision_sha256,
+        )
+    except Exception as exc:
+        _audit_document_write(
+            tool_name="update_siyuan_document",
+            status="error",
+            document_id=document_id,
+            error_code=type(exc).__name__,
+        )
+        raise
+    _audit_document_write(
+        tool_name="update_siyuan_document",
+        status="success",
+        document_id=document_id,
+        hpath=str(result.get("hpath") or ""),
+        previous_revision_sha256=str(result.get("previous_revision_sha256") or ""),
+        revision_sha256=str(result.get("revision_sha256") or ""),
+    )
+    return result
 
 
 __all__ = [
     "create_siyuan_document",
+    "create_siyuan_task_database",
     "list_siyuan_notebooks",
     "mcp",
     "read_siyuan_document",
     "search_siyuan_docs",
+    "update_siyuan_document",
 ]

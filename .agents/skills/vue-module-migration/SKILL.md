@@ -1,6 +1,6 @@
 ---
 name: vue-module-migration
-description: Planifica, implementa y valida migraciones incrementales de módulos React a Vue 3 en Growen, preservando contratos, rutas, permisos y fallback. Usar al migrar pantallas o capacidades desde frontend/ hacia frontend-vue/, recuperar paridad funcional o revisar un corte Vue.
+description: Usar al migrar una pantalla o capacidad de frontend/ a frontend-vue/, recuperar paridad React/Vue o revisar un corte Vue de Growen.
 ---
 
 # Migrar un módulo a Vue
