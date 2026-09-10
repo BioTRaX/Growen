@@ -8,7 +8,7 @@
 > **ARCHIVO HISTÓRICO:** los ejemplos `telegram:<id-numérico>` describen la
 > implementación inicial y no son seguros ni vigentes. El contrato actual usa
 > identidad basada en `message.from.id`, cifrado/HMAC y claves de conversación
-> opacas. Consultar `docs/CHAT.md` y `docs/SECURITY.md`.
+> opacas. Consultar `docs/architecture/CHAT.md` y `docs/operations/SECURITY.md`.
 
 ## Contexto
 
@@ -206,6 +206,6 @@ El módulo `services/chat/history.py` mantiene compatibilidad hacia atrás:
 - `services/chat/history.py`: Lógica de persistencia
 - `services/chat/telegram_handler.py`: Integración con Telegram
 - `frontend/src/pages/admin/ChatInbox.tsx`: UI de administración
-- `docs/CHAT.md`: Documentación general del chatbot
+- `docs/architecture/CHAT.md`: Documentación general del chatbot
 - `scripts/archive_old_chat_sessions.py`: Script de archivado automático
 

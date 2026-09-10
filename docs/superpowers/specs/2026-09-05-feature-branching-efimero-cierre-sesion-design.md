@@ -179,8 +179,8 @@ cierre completado.
 - `scripts/audit_agentic_environment.py`
 - `tests/test_audit_agentic_environment.py`
 - `tests/test_retrospective_skill.py`
-- `docs/AGENT_SKILLS.md`
-- `docs/DEVELOPMENT_WORKFLOW.md`
+- `docs/development/AGENT_SKILLS.md`
+- `docs/development/DEVELOPMENT_WORKFLOW.md`
 - `CONTRIBUTING.md`
 - `README.md`
 - `Roadmap.md`

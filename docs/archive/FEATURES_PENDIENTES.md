@@ -6,7 +6,7 @@
 # Features Pendientes de Implementación
 
 > **Última actualización**: 2026-08-15
-> **Fuente**: Análisis de documentación (Roadmap.md, CHAT*.md, SALES.md, MCP.md, RAG.md)
+> **Fuente**: Análisis de documentación (Roadmap.md, CHAT*.md, ../features/SALES.md, ../architecture/MCP.md, ../architecture/RAG.md)
 
 ---
 
@@ -45,7 +45,7 @@
 - [x] Integrar recuperación autorizada y citas en Chat.
 - [ ] Clasificar fuentes y ejecutar evaluaciones por rol, canal e intención.
 
-**Ejemplo de implementación** (de `docs/RAG.md`):
+**Ejemplo de implementación** (de `docs/architecture/RAG.md`):
 ```python
 @router.post("/search")
 async def search_knowledge(query: str, top_k: int = 5, session: AsyncSession = Depends(get_session)):
@@ -141,7 +141,7 @@ De `docs/CHAT_PERSONA.md`:
 
 ### 9. Knowledge Base - Mejoras UI
 
-De `docs/KNOWLEDGE_BASE.md`:
+De `docs/features/KNOWLEDGE_BASE.md`:
 - [ ] Soporte para subcarpetas anidadas en `/Conocimientos`
 - [ ] Vista previa de contenido de chunks
 - [ ] Estadísticas de uso por documento
@@ -163,7 +163,7 @@ De `docs/KNOWLEDGE_BASE.md`:
 
 ## 📋 Checklist de Features por Documento
 
-### De SALES.md
+### De ../features/SALES.md
 
 | Feature | Estado |
 |---------|--------|
@@ -174,7 +174,7 @@ De `docs/KNOWLEDGE_BASE.md`:
 | Estructura StockLedger detallada | ⏸️ Pendiente |
 | Cache Redis multi-proceso | ⏸️ Pendiente |
 
-### De RAG.md
+### De ../architecture/RAG.md
 
 | Feature | Estado |
 |---------|--------|
@@ -183,7 +183,7 @@ De `docs/KNOWLEDGE_BASE.md`:
 | Reranking | ⏸️ Pendiente |
 | Monitoreo y métricas | ⏸️ Pendiente |
 
-### De MCP.md
+### De ../architecture/MCP.md
 
 | Feature | Estado |
 |---------|--------|
@@ -197,7 +197,7 @@ De `docs/KNOWLEDGE_BASE.md`:
 
 ## Referencias Cruzadas
 
-- **Arquitectura detallada**: `docs/CHATBOT_ARCHITECTURE.md`
+- **Arquitectura detallada**: `docs/architecture/CHATBOT_ARCHITECTURE.md`
 - **Roadmap completo**: `Roadmap.md`
-- **Estado del RAG**: `docs/RAG.md`
-- **Estado del Chat**: `docs/CHAT.md`
+- **Estado del RAG**: `docs/architecture/RAG.md`
+- **Estado del Chat**: `docs/architecture/CHAT.md`

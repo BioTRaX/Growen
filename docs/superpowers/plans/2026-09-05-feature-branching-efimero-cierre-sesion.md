@@ -109,8 +109,8 @@ Superpowers. Los adaptadores legacy sólo redirigen.
 **Archivos:**
 
 - Modificar: `AGENTS.md`
-- Modificar: `docs/AGENT_SKILLS.md`
-- Modificar: `docs/DEVELOPMENT_WORKFLOW.md`
+- Modificar: `docs/development/AGENT_SKILLS.md`
+- Modificar: `docs/development/DEVELOPMENT_WORKFLOW.md`
 - Modificar: `CONTRIBUTING.md`
 - Modificar: `README.md`
 - Modificar: `Roadmap.md`

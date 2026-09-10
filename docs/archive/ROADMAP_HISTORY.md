@@ -11,7 +11,7 @@
 - [x] Restringidos Python y pytest al venv de Growen o Docker, evitando instalaciones y falsos fallos del entorno del sistema.
 - [x] Adaptada la publicación Git: autorización explícita obligatoria, automatización sólo en la rama exacta `dev` y gate completo previo de secretos, alcance, pruebas, documentación y remoto.
 - [x] Documentados idioma español, NG-HEADER obligatorio bajo `docs/superpowers/` y política de actualización desde el repositorio original sin forks locales.
-- [x] Registrada la retrospectiva factual en `docs/RETROSPECTIVE_SUPERPOWERS_ADAPTATION_20260827.md`, diferenciando validación estructural y smoke pendiente en clientes.
+- [x] Registrada la retrospectiva factual en `docs/retrospectives/RETROSPECTIVE_SUPERPOWERS_ADAPTATION_20260827.md`, diferenciando validación estructural y smoke pendiente en clientes.
 - [ ] Validar periódicamente el descubrimiento después de actualizaciones de Codex, Copilot, Gemini CLI o Antigravity y documentar cualquier cambio de compatibilidad.
 - [ ] Documentar los cambios y actualizar cualquier referencia que resulte desactualizada durante la próxima actualización de Superpowers.
 
@@ -61,7 +61,7 @@
 ## Actualización 2026-08-17 — cierre factual de Chat, RAG, Telegram y Vue
 
 - [x] Publicados y verificados en `dev` los commits de backend/RAG/Telegram, Chat Vue y documentación; `origin/dev` quedó en `c66452d` antes de la retrospectiva.
-- [x] Registrada la retrospectiva factual en `docs/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md`, con incidentes, soluciones y mejoras de prevención/aceleración.
+- [x] Registrada la retrospectiva factual en `docs/retrospectives/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md`, con incidentes, soluciones y mejoras de prevención/aceleración.
 - [x] Aprobados 66 tests backend focales, 91 tests Vue, typecheck, build, skills y head Alembic único.
 - [x] Auditado el alcance de 107 archivos sin patrones de secretos ni `.env` reales.
 - [ ] Completar smokes autenticados para los cinco roles y la matriz HTTP/WS/Telegram.
@@ -136,9 +136,9 @@ Estado comprobado contra código, manifiesto Vue, PostgreSQL local y pruebas:
 
 Orden de ejecución recomendado: seguridad y secretos → cierre del transporte polling → UI de identidades → orquestador WebSocket y observabilidad → RAG/evaluaciones → paridad Vue → smoke integral → activación gradual y ventana estable.
 
-Retrospectiva forense: `docs/RETROSPECTIVE_TELEGRAM_SECRET_FORENSICS_20260815.md`.
+Retrospectiva forense: `docs/retrospectives/RETROSPECTIVE_TELEGRAM_SECRET_FORENSICS_20260815.md`.
 
-Retrospectiva del avance Chat/Telegram: `docs/RETROSPECTIVE_CHAT_TELEGRAM_20260815.md`.
+Retrospectiva del avance Chat/Telegram: `docs/retrospectives/RETROSPECTIVE_CHAT_TELEGRAM_20260815.md`.
 
 ## Actualización 2026-07-30 — Incidente de credencial Telegram
 
@@ -166,7 +166,7 @@ Retrospectiva del avance Chat/Telegram: `docs/RETROSPECTIVE_CHAT_TELEGRAM_202608
 - [ ] Actualizar `react-router`/`react-router-dom` y repetir `npm audit`; el
   barrido del 2026-07-30 detectó una vulnerabilidad alta corregible.
 
-Evidencia y plan: `docs/SECURITY_INCIDENT_TELEGRAM_20260730.md`.
+Evidencia y plan: `docs/retrospectives/SECURITY_INCIDENT_TELEGRAM_20260730.md`.
 
 ## Actualización 2026-07-25 — Detalle canónico Vue y Enrich v2
 
@@ -183,7 +183,7 @@ Evidencia y plan: `docs/SECURITY_INCIDENT_TELEGRAM_20260730.md`.
   válida y aplicar/revisar campos con `content_revision`. Documentar el resultado
   y actualizar cualquier instrucción desactualizada.
 
-Evidencia operativa: `docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
+Evidencia operativa: `docs/features/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
 - [x] `/productos/:id` quedó activo en Vue con contenido canónico, inventario vinculado sin duplicados, stock agregado de sólo lectura, Mercado separado y polling cancelable.
 - [x] `/productos/:id/imagen` permanece como módulo React independiente para rollback granular.
 - [x] Upgrade desde PostgreSQL vacío validado hasta `20260725_canonical_enrichment_v2`; requiere `vector` antes de recorrer el historial RAG.
@@ -194,7 +194,7 @@ Evidencia operativa: `docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
 
 - [x] Contrastados manifiesto, Nginx, vistas Vue, clientes HTTP, permisos y pruebas de Stock y Mercado.
 - [x] Confirmado `state: active` y `runtime: vue` para `/stock`, `/stock/shortages` y `/mercado`.
-- [x] Creado `docs/STOCK.md` como contrato operativo y definido `docs/API_MARKET.md` como fuente canónica de Mercado.
+- [x] Creado `docs/features/STOCK.md` como contrato operativo y definido `docs/features/API_MARKET.md` como fuente canónica de Mercado.
 - [x] Eliminadas afirmaciones `legacy/pending` desactualizadas y marcado el documento de integración React de Mercado como histórico.
 - [ ] Ejecutar smoke visual autenticado por rol para ambos módulos.
 - [ ] Validar concurrencia real de Stock/Faltantes sobre PostgreSQL.
@@ -321,7 +321,7 @@ Evidencia operativa: `docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
 ## Actualización 2026-07-17 — Baseline funcional del portal React
 
 - [x] Inventariadas las rutas productivas, roles, vistas, formularios, acciones y endpoints consumidos por la SPA React.
-- [x] Documentado el mapeo a una arquitectura Plugin-based UI con Sidebar + Main Content en `docs/relevamiento_admin.md`.
+- [x] Documentado el mapeo a una arquitectura Plugin-based UI con Sidebar + Main Content en `docs/features/relevamiento_admin.md`.
 - [x] Identificadas inconsistencias de permisos visibles, aliases de imágenes, contratos iAVaL legacy y el alcance real de “Adjuntar Excel”.
 - [ ] Usar el relevamiento como checklist de paridad por plugin antes de retirar cada dominio React.
 
@@ -378,9 +378,9 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 ## Contexto
 ## Actualizaciones recientes
 
-- Base de datos/Migraciones: Se reparó la instalación completa desde PostgreSQL vacío. La revisión RAG autogenerada `cf0f6e70fe89` quedó como no-op, se preservaron la implementación manual `b2d22a7ce889` y el merge `fa50a5cba1bb`, y se agregó `20260714_schema_integrity` para garantizar índices y constraints omitidos por ramas históricas. Se incorporó una prueba PostgreSQL temporal de `alembic upgrade head`; resultado local: 53 tablas, único head y auditoría sin faltantes. Ver `docs/MIGRATIONS_NOTES.md`.
+- Base de datos/Migraciones: Se reparó la instalación completa desde PostgreSQL vacío. La revisión RAG autogenerada `cf0f6e70fe89` quedó como no-op, se preservaron la implementación manual `b2d22a7ce889` y el merge `fa50a5cba1bb`, y se agregó `20260714_schema_integrity` para garantizar índices y constraints omitidos por ramas históricas. Se incorporó una prueba PostgreSQL temporal de `alembic upgrade head`; resultado local: 53 tablas, único head y auditoría sin faltantes. Ver `docs/features/MIGRATIONS_NOTES.md`.
 
-- Frontend/Migración Vue: La imagen productiva compila React y Vue. `frontend-vue/config/modules.json` decide el runtime por dominio; React es el fallback general para rutas todavía no activadas o sujetas a rollback. Estado y comandos en `docs/FRONTEND_MIGRATION_VUE.md`.
+- Frontend/Migración Vue: La imagen productiva compila React y Vue. `frontend-vue/config/modules.json` decide el runtime por dominio; React es el fallback general para rutas todavía no activadas o sujetas a rollback. Estado y comandos en `docs/development/FRONTEND_MIGRATION_VUE.md`.
 
 - Frontend/Productos Vue: Catálogo, detalle principal, Stock e Imágenes tienen rutas Vue activas. La imagen avanzada `/productos/:id/imagen` y otras capacidades declaradas como legacy permanecen en React hasta completar su corte.
 
@@ -397,7 +397,7 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
 - Frontend: La ficha de producto vuelve a mostrar la "Descripción enriquecida" con vista previa HTML sanitizada para todos los roles (scripts/iframes/eventos inline se eliminan). Los usuarios con permisos de edición mantienen el textarea y pueden guardar via `PATCH /catalog/products/{id}`.
 - Frontend/Backend: El detalle `/productos/:id` se habilitó en modo lectura para el rol `guest` (ProtectedRoute + endpoint `GET /catalog/products/{id}` aceptan invitados). Los invitados ven nombre, precio y descripción, mientras que las acciones siguen restringidas a colaborador/admin.
 - Chatbot: El WebSocket `/ws` ahora comparte la misma memoria conversacional que el endpoint HTTP, inyectando el historial reciente en los prompts y persistiendo cada intercambio en `chat_messages`.
-- Chatbot - Sesiones Persistentes: Implementado sistema de sesiones persistentes (`ChatSession`) que permite mantener contexto conversacional por usuario y auditar conversaciones desde Dashboard Admin. Los mensajes ahora se relacionan con sesiones vía ForeignKey, y el handler de Telegram crea/actualiza sesiones opacas automáticamente. El diseño inicial quedó archivado en `docs/archive/CHAT_MEMORY_PLAN.md`; el contrato vigente está en `docs/CHAT.md`.
+- Chatbot - Sesiones Persistentes: Implementado sistema de sesiones persistentes (`ChatSession`) que permite mantener contexto conversacional por usuario y auditar conversaciones desde Dashboard Admin. Los mensajes ahora se relacionan con sesiones vía ForeignKey, y el handler de Telegram crea/actualiza sesiones opacas automáticamente. El diseño inicial quedó archivado en `docs/archive/CHAT_MEMORY_PLAN.md`; el contrato vigente está en `docs/architecture/CHAT.md`.
 
 
 - Backend: FastAPI + SQLAlchemy (async) para gestión de compras (borradores, validación, confirmación), adjuntos (PDF remito), logs y auditoría.
@@ -481,7 +481,7 @@ Este documento resume el estado actual del proyecto, las funcionalidades ya impl
   - Fase 5: Aprendizaje iterativo (pipeline que procesa feedback y ajusta prompts, métricas de calidad).
 
 **Documentación**:
-  - ✅ `docs/archive/CHAT_MEMORY_PLAN.md`: arquitectura histórica; `docs/CHAT.md` contiene el flujo vigente y seguro.
+  - ✅ `docs/archive/CHAT_MEMORY_PLAN.md`: arquitectura histórica; `docs/architecture/CHAT.md` contiene el flujo vigente y seguro.
 
 ### Capa MCP Servers (estado)
 
@@ -554,7 +554,7 @@ Próximos pasos MCP:
 
 Hito 0 — Consolidación iAVaL (estado actual y cierre)
 - Documentación específica del flujo iAVaL
-  - Detallar en `docs/PURCHASES.md` el flujo, precondiciones, campos afectados, mensajes de error comunes y ejemplos de salida.
+  - Detallar en `docs/features/PURCHASES.md` el flujo, precondiciones, campos afectados, mensajes de error comunes y ejemplos de salida.
   - Documentar variables de entorno para IA: `OPENAI_API_KEY`, `OPENAI_MODEL`, `AI_DISABLE_OLLAMA=true`, timeouts.
 - Pruebas automatizadas
   - Backend: tests de preview/apply con IA mockeada (JSON determinista), validando diffs y actualización de compra.
@@ -680,7 +680,7 @@ Hito 5.1 - Funcionalidad "Mercado" (comparación de precios)
 - Objetivo
   - Permitir a admins y colaboradores comparar rápidamente los precios de venta internos con los rangos actuales del mercado para tomar decisiones de precios informadas.
 - Estado actual: **backend observable y módulo Vue activos; React permanece como fallback temporal**
-  - Documentación completa en `docs/MERCADO.md` con plan de 10 secciones (alcance, UI/UX, modelo de datos, fuentes, worker scraping, seguridad, testing, futuras mejoras).
+  - Documentación completa en `docs/features/MERCADO.md` con plan de 10 secciones (alcance, UI/UX, modelo de datos, fuentes, worker scraping, seguridad, testing, futuras mejoras).
   - Componente frontend `Market.tsx` implementado con tabla de productos mostrando: nombre, precio venta (ARS), rango mercado (min-máx), última actualización, categoría y botón de detalle.
   - Navegación configurada: nueva ruta `/mercado` protegida (solo admin/colaborador), botón "Mercado" agregado en `AppToolbar` junto a "Productos".
   - Filtros implementados: búsqueda por nombre/SKU, filtro por proveedor (autocomplete) y categoría (dropdown).
@@ -689,8 +689,8 @@ Hito 5.1 - Funcionalidad "Mercado" (comparación de precios)
 - Estado operativo actualizado el 2026-07-21: worker `market_worker` Docker saludable, heartbeat vigente y cola `market` sin mensajes pendientes; las fuentes y observaciones quedan auditadas por producto y trabajo.
 - Implementado: consumidor dedicado, jobs persistentes e idempotentes, histórico de tres años, política ARS/promedio y observabilidad por cola, producto y fuente.
 - Migración Vue: módulo `market` activo en Vue sobre `/mercado`; React se conserva como fallback durante un ciclo estable.
-- Auditoría y plan: `docs/MARKET_CURRENT_STATE_20260721.md`.
-- Evolución 2026-07-26: Centro Vue **Conocimiento**, worker dedicado y Enrich knowledge-first desplegados; evidencia en `docs/CANONICAL_KNOWLEDGE_DEPLOYMENT_SMOKE_20260726.md`.
+- Auditoría y plan: `docs/features/MARKET_CURRENT_STATE_20260721.md`.
+- Evolución 2026-07-26: Centro Vue **Conocimiento**, worker dedicado y Enrich knowledge-first desplegados; evidencia en `docs/features/CANONICAL_KNOWLEDGE_DEPLOYMENT_SMOKE_20260726.md`.
 - Seguridad Mercado 2026-07-26: scraping, promedio y agregados sólo aceptan conocimiento validado; el perfil migrado conserva ARS pero requiere confirmar entrega argentina desde **Conocimiento** antes de volver a participar.
 - Detalle Producto 2026-07-26: edición confirmada del SKU canónico activa en Vue para staff, con formato estricto, normalización, auditoría y rechazo transaccional de duplicados.
 - Criterios de aceptación
@@ -724,7 +724,7 @@ Pendiente siguiente iteración Ventas:
 - Paginación y filtros avanzados en historial de stock (fuente, rango fechas, tipo de movimiento).
 - Prorrateo de descuento global a líneas para métrica de margen por producto.
 - Entregables
-  - Documentación viva: `docs/CHATBOT_ARCHITECTURE.md`, `docs/SECURITY.md`, `README.md` y `docs/roles-endpoints.md`.
+  - Documentación viva: `docs/architecture/CHATBOT_ARCHITECTURE.md`, `docs/operations/SECURITY.md`, `README.md` y `docs/features/roles-endpoints.md`.
   - Suite de pruebas (unitarias/integración) para autenticación, gateway del repositorio, RAG y auditoría.
   - Scripts de soporte (`scripts/build_chatbot_index.py`, diagnósticos de auditoría) documentados en `AGENTS.md`.
 
@@ -733,7 +733,7 @@ Hito 5 — Pruebas y documentación cruzada
   - Backend: unit/integration para endpoints nuevos (`variants/sku`, `supplier-products/link`, `suppliers/search`, confirmación idempotente).
   - Frontend: pruebas del componente `SupplierAutocomplete` y flujo de agregar SKU de proveedor.
 - Documentación
-  - Actualizar `docs/PURCHASES.md`, `docs/SUPPLIERS.md` y esta hoja de ruta al finalizar cada hito.
+  - Actualizar `docs/features/PURCHASES.md`, `docs/features/SUPPLIERS.md` y esta hoja de ruta al finalizar cada hito.
 
 Hito 6 — Despliegue y migraciones
 - Migraciones
@@ -842,8 +842,8 @@ El enriquecimiento de productos con IA (`POST /products/{id}/enrich`) está func
 - ≥50% de productos enriquecidos tienen al menos 2 campos técnicos completados (peso o dimensiones)
 
 ### Documentación Relacionada
-- `docs/ENRICHMENT_LOGS.md` - Logging y diagnóstico de enriquecimiento
-- `docs/PRODUCTS_UI.md` - UI de productos y enriquecimiento
+- `docs/features/ENRICHMENT_LOGS.md` - Logging y diagnóstico de enriquecimiento
+- `docs/features/PRODUCTS_UI.md` - UI de productos y enriquecimiento
 - `mcp_servers/web_search_server/` - Servidor MCP de búsqueda web
 
 ---
@@ -926,7 +926,7 @@ Hito 8 — Módulo MCP de Ventas Conversacionales
 - [x] Servicios administrativos Vue: resumen, workers, health, start/stop, auto-start, dependencias, logs/SSE y MCP con permisos alineados al backend.
 - [x] Usuarios y Backups Vue con capacidades admin, formularios, confirmaciones, reset seguro y descarga autenticada.
 - [x] Completar panel admin Vue: Drive Sync, Diagnóstico de catálogos, Scheduler, Conocimiento y Chat Inbox.
-- [x] Retrospectiva y handoff técnico del corte administrativo en `docs/RETROSPECTIVE_FRONTEND_ADMIN_20260718.md`; registra el 500 sin evidencia suficiente y el reinicio requerido ante un Vite desactualizado.
+- [x] Retrospectiva y handoff técnico del corte administrativo en `docs/retrospectives/RETROSPECTIVE_FRONTEND_ADMIN_20260718.md`; registra el 500 sin evidencia suficiente y el reinicio requerido ante un Vite desactualizado.
 
 Pendiente operativo: ejecutar migración y pruebas concurrentes contra PostgreSQL real en integración antes del corte productivo.
 
@@ -965,7 +965,7 @@ Pendiente operativo: ejecutar migración y pruebas concurrentes contra PostgreSQ
 - Vincular commits/PRs relevantes y anotar brevemente el impacto.
 
 ---
-Notas de mantenimiento: Si se modifica la lógica de migraciones o diagnósticos, actualizar también `docs/MIGRATIONS_NOTES.md` y el inventario en `AGENTS.md`.
+Notas de mantenimiento: Si se modifica la lógica de migraciones o diagnósticos, actualizar también `docs/features/MIGRATIONS_NOTES.md` y el inventario en `AGENTS.md`.
 
 
 

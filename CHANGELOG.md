@@ -4,6 +4,54 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-09-10 — compuertas operativas para el rollout LAN
+
+- Se incorporaron PKI LAN, registro privado TLS con autenticación, construcción
+  y análisis Trivy, SBOM, publicación inmutable y prueba Alembic efímera.
+- El despliegue separa `Preflight`, `Bootstrap` y `Application`, ofrece override
+  `SingleNode` y exige imágenes por digest y secretos TLS versionados.
+- Los identificadores anónimos de Chat/WebSocket usan HMAC-SHA256; los SHA-1 de
+  compatibilidad histórica declaran explícitamente que no son criptográficos.
+- El smoke LAN lee credenciales desde archivos, exige una CA explícita y valida
+  HTTPS, sesión, diagnósticos ausentes y cabeceras defensivas.
+- Se retiró la integración de Notion, su SDK, configuración, CLI y endpoints. Los
+  reportes quedan en logs locales y la documentación privada canónica reside en
+  SiYuan.
+- Se generó fuera del repositorio la PKI persistente LAN `2026091002`, cuyas
+  hojas contienen IP SAN y AKI, y se crearon secretos Swarm TLS versionados sin
+  eliminar los anteriores. No se migraron datos ni se desplegó la aplicación.
+- El conjunto Python modificado y el gate Ruff vigente terminan en cero; el
+  barrido global conserva 798 incidencias legacy y queda registrado en Roadmap
+  como deuda bloqueante para una futura compuerta de lint de todo el árbol.
+- El servidor quedó configurado y verificado en `192.168.100.100/24` manual,
+  con gateway `192.168.100.1` activo. El registro privado quedó saludable con
+  TLS y autenticación; reserva DHCP, firewall, confianza de CA en Docker,
+  publicación de imágenes y despliegue de la aplicación continúan pendientes.
+- La generación de certificados añade AKI enlazado con la CA. Una prueba de
+  regresión valida AKI, IP SAN y correspondencia entre certificados y claves.
+
+## 2026-09-09 — endurecimiento para la primera puesta en producción
+
+- Las descargas privadas de Compras, Ventas y Conocimiento requieren sesión y
+  rol; las respuestas no revelan la existencia de recursos ajenos.
+- La API productiva falla cerrada ante autenticación, TLS, hosts, proxies,
+  orígenes, Redis, raíces de media o secretos inválidos; los routers de debug
+  sólo se montan en desarrollo.
+- Se separaron `PUBLIC_MEDIA_ROOT` y `PRIVATE_MEDIA_ROOT`, con migración local
+  idempotente, dry-run, hashes y preservación de originales.
+- La descarga remota de imágenes valida DNS y peer, bloquea redes no globales,
+  revalida redirecciones y limita MIME, tiempo y tamaño.
+- Login usa rate limit Redis por IP confiable e identificador normalizado; los
+  cambios de contraseña, rol o estado activo invalidan las sesiones del usuario.
+- Swarm termina TLS en la LAN `192.168.100.100`, aplica cabeceras defensivas,
+  restringe CORS y monta secretos externos por dominio. No se desplegó ni se
+  aplicó la migración en esta entrega.
+- El incidente histórico de Telegram figura cerrado por confirmación operativa;
+  no quedan acciones pendientes asociadas a su erradicación.
+- Se actualizó WeasyPrint a `70.0` por `CVE-2026-55073`, Vitest y sus paquetes
+  internos a `4.1.11` por `GHSA-82fw-gwwq-j7x9`, y `pip-tools` a `7.6.1` para
+  compatibilidad con pip 26.2. No se agregaron dependencias nuevas.
+
 ## 2026-09-05 — branching efímero y cierre agéntico secuencial
 
 - Todo trabajo agéntico comienza en una rama efímera creada desde `dev`; quedan prohibidos los commits directos a la rama de integración.
@@ -227,8 +275,9 @@
 - Se eliminaron cuatro ramas Dependabot que heredaban el secreto y una
   clonación independiente confirmó cero coincidencias en 130 referencias de
   ramas y tags.
-- Diez referencias internas `refs/pull/*`, administradas por GitHub, todavía
-  alcanzan el objeto antiguo. Su purga queda pendiente de GitHub Support.
+- En el cierre original, diez referencias internas `refs/pull/*` administradas
+  por GitHub aún alcanzaban el objeto. La actualización operativa de 2026-09-09
+  confirma su purga y el cierre del incidente sin pendientes.
 
 ## 2026-07-26 — Edición segura del SKU canónico
 

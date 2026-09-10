@@ -307,5 +307,5 @@ Esperado: "¿Seré un bot? No lo sé, mi nombre es Growen. ¿Cómo estás?"
 - `ai/persona.py`: Definición de personas y lógica de máquina de estados
 - `ai/router.py`: Integración con AIRouter
 - `services/routers/chat.py`: Endpoint principal de chat y inferencia de estado
-- `docs/RAG.md`: Sistema de Knowledge Base usado por CULTIVATOR
-- `docs/API_PRODUCTS.md`: Documentación de endpoints de productos y tags
+- `docs/architecture/RAG.md`: Sistema de Knowledge Base usado por CULTIVATOR
+- `docs/features/API_PRODUCTS.md`: Documentación de endpoints de productos y tags

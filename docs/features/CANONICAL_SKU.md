@@ -1,0 +1,196 @@
+<!-- NG-HEADER: Nombre de archivo: CANONICAL_SKU.md -->
+<!-- NG-HEADER: Ubicación: docs/features/CANONICAL_SKU.md -->
+<!-- NG-HEADER: Descripción: Especificación de SKU canónico, flags, generación y pruebas -->
+<!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
+
+# SKU Canónico (Especificación y Guía)
+
+## Contexto
+El proyecto adopta un formato **canónico obligatorio** para los SKUs internos de productos con el objetivo de:
+
+- Unificar criterios de búsqueda y deduplicación.
+- Habilitar generación automática consistente por categoría/subcategoría.
+- Reducir conflictos históricos de SKUs arbitrarios (`INT-xxxx`, variaciones libres, etc.).
+- Facilitar una futura consolidación de migraciones y auditorías de integridad.
+
+## Formato
+Regex formal:
+```
+^[A-Z]{3}_[0-9]{4}_[A-Z0-9]{3}$
+```
+
+Esta es la expresión contractual única: los separadores son guiones bajos y la secuencia tiene siempre cuatro dígitos.
+
+### Asignación concurrente
+
+Desde `20260717_canonical_batch_tracking`, el alta individual y el batch comparten `db/sku_generator.py`. PostgreSQL inicializa la fila por prefijo con `INSERT ... ON CONFLICT DO NOTHING`, la bloquea mediante `SELECT ... FOR UPDATE`, valida el límite `9999` y actualiza la secuencia dentro de la transacción que crea el canónico. La restricción única de `canonical_products.sku_custom` permanece como defensa final.
+
+`POST /canonical-products/sku-preview` y el legado `GET /catalog/next-seq` no reservan números. Sus valores son orientativos y nunca deben persistirse automáticamente como SKU definitivo.
+
+Estructura: `PPP_NNNN_SSS`
+- `PPP`: Prefijo de 3 letras derivado de `category_name` normalizado.
+- `NNNN`: Secuencia incremental (relleno con ceros a 4 dígitos) aislada por prefijo.
+- `SSS`: Sufijo de 3 caracteres alfanuméricos derivado de `subcategory_name` (o la categoría si no se provee subcategoría).
+
+Ejemplos válidos:
+- `FLO_0001_FER`
+- `FLO_0002_FLO` (cuando subcategoría se omite y se replica categoría)
+- `NEU_0123_GRO`
+
+Ejemplos inválidos (y motivo):
+- `AB_0001_DEF` (prefijo < 3 letras)
+- `ABCD_0001_DEF` (prefijo > 3 letras)
+- `ABC_001_DEF` (número con menos de 4 dígitos)
+- `ABC_0001_DEFG` (sufijo > 3 caracteres)
+- `ABC0001DEF` (faltan guiones bajos separadores)
+
+## Flags / Variables de entorno
+| Variable | Default | Descripción |
+|---------|---------|-------------|
+| `CANONICAL_SKU_STRICT` | `1` | Si está activa se exige que `sku` cumpla el patrón cuando se envía explícitamente. |
+| `FORCE_CANONICAL` | `0` | Si se activa fuerza generación canónica ignorando un SKU suministrado (para migraciones masivas). |
+
+## Flujo de creación de producto
+1. El cliente puede enviar un campo `sku` ya canónico que pase validación.
+2. Alternativamente puede solicitar generación automática enviando `generate_canonical = true` junto con:
+   - `category_name` (obligatorio para generar).
+   - `subcategory_name` (opcional; si falta se reutiliza la categoría para el sufijo).
+3. El backend normaliza `category_name` / `subcategory_name` a códigos de 3 caracteres ([A-Z0-9], rellenando o truncando según helper `normalize_code`).
+4. Se obtiene / crea fila de secuencia en tabla `sku_sequences` para el prefijo.
+5. Se incrementa de forma transaccional y se compone el SKU final.
+6. Se persiste en `products.canonical_sku` (columna canónica) y/o se usa como `sku_root` en la respuesta.
+
+Notas operativas:
+- En entorno de pruebas (Pytest) el flag `CANONICAL_SKU_STRICT` se desactiva por defecto para compatibilidad con payloads legacy; tests específicos pueden forzar modo estricto.
+- Si se recibe un SKU que aparenta ser canónico pero carece de guiones bajos (p. ej. `ABC0001DEF`), se rechaza con `422 invalid_canonical_sku`.
+- Si el SKU canónico ya existe y el alta llega con un proveedor diferente, se vincula creando `SupplierProduct` y la respuesta incluye `linked: true` (sin duplicar `Variant`). Si el proveedor y `supplier_sku` son iguales a uno existente, se responde `409 duplicate_sku`.
+
+## Tabla de secuencias: `sku_sequences`
+Campos mínimos:
+- `prefix` (PK)
+- `current_value` (int)
+
+Garantiza aislamiento por categoría (prefijo). La lógica de incremento:
+1. Se selecciona la fila con bloqueo (`SELECT ... FOR UPDATE` en PostgreSQL; en SQLite el bloqueo es a nivel de DB/tabla y se simplifica la semántica).
+2. Se incrementa `current_value` y se confirma la transacción.
+
+### Consideraciones de concurrencia
+- PostgreSQL: uso de transacciones cortas; ideal mantener operaciones dependientes fuera de la misma transacción para reducir contención si se escala.
+- SQLite (entorno de pruebas): los locks eran causa de errores `database is locked`; se mitigó con un `commit` inmediato tras el incremento (ver implementación en `db/sku_generator.py`).
+
+## Fallback / Entorno SQLite
+Durante pruebas (SQLite) puede ocurrir que la columna `canonical_sku` o la tabla `sku_sequences` aún no existan (DB limpia). Se implementó:
+- Creación perezosa (`CREATE TABLE IF NOT EXISTS`) dentro del generador para `sku_sequences`.
+- Ajuste en `tests/conftest.py` que asegura la columna y tabla antes de correr casos.
+
+Esto evita divergencias entre entorno de CI y el esquema objetivo (PostgreSQL).
+
+## Validación y errores
+Respuestas esperadas al crear producto:
+- 200 / 201: creación (o vinculación si el SKU ya existe con otro supplier y se permite linking).
+- 409: conflicto (`duplicate_sku` o `duplicate_supplier_sku`).
+- 400: falta `category_name` cuando se solicitó generación (`missing_category_name`).
+- 422: formato de SKU inválido en modo estricto.
+
+## Lineamientos para pruebas
+1. Usar siempre formato canónico en nuevos tests; evitar patrones legacy (`INT-xxxx`).
+2. Para probar duplicados: generar un SKU válido y reenviar exactamente el mismo payload verificando 409.
+3. Para aislar secuencias por prefijo: crear productos con categorías distintas y comprobar que los números empiezan en `0001` por prefijo.
+4. Evitar dependencias en valores absolutos de secuencia entre tests (riesgo de orden no determinista). Generar valores dinámicos usando categorías únicas si se requiere independencia.
+5. Si se necesita cubrir comportamiento pre-consolidación, marcar el test con `@pytest.mark.legacy` y documentar su fecha de retiro planificada.
+
+## Auditoría
+El script `scripts/audit_schema.py` valida presencia (o salta en SQLite) de objetos clave. Se recomienda extenderlo para:
+- Confirmar existencia de `products.canonical_sku`.
+- Confirmar integridad de índices asociados si se agregan (futuro: índice único parcial si aplica).
+
+## Migraciones y consolidación
+Se planificó una migración de consolidación que capture el estado estable posterior a la introducción de `sku_sequences` (ver `docs/features/MIGRATIONS_NOTES.md` sección "Plan de consolidación futura").
+
+## Ejemplos de uso (API)
+Crear con SKU explícito válido:
+```
+POST /catalog/products
+{
+  "title": "Fertilizante Floración",
+  "initial_stock": 5,
+  "supplier_id": 1,
+  "supplier_sku": "SUP-FLO-01",
+  "sku": "FLO_0001_FER"
+}
+```
+
+Generación automática:
+```
+POST /catalog/products
+{
+  "title": "Fertilizante Multipropósito",
+  "initial_stock": 0,
+  "supplier_id": 1,
+  "supplier_sku": "SUP-FLO-02",
+  "generate_canonical": true,
+  "category_name": "Floración",
+  "subcategory_name": "Fertilizantes"
+}
+```
+
+## Próximos pasos sugeridos
+- Índice único en `products.canonical_sku` (si aún no se agregó) garantizando consistencia.
+- Endpoint de introspección `/admin/sku/sequences` para monitoreo (opcional).
+- Script de backfill para productos legacy sin valor canónico (si existieran).
+
+## Criterios de aceptación (para cambios futuros relacionados)
+1. Toda nueva ruta que cree productos debe respetar/generar SKU canónico.
+2. Las pruebas no deben depender de secuencias absolutas globales.
+3. Documentación (`CANONICAL_SKU.md`, `README.md`) actualizada ante cualquier ajuste de formato/flags.
+4. Auditoría (`audit_schema.py`) extendida si se agregan nuevos constraints o índices.
+
+## Refactorización a SKU Canónico Único (2025-12-03)
+
+**Objetivo**: Usar exclusivamente el formato canónico `XXX_####_YYY` para todos los SKUs internos, excepto el SKU de proveedor (`supplier_sku` en `SupplierProduct.supplier_product_id`).
+
+### Cambios Realizados
+
+1. **`services/ingest/upsert.py`**:
+   - Refactorizado `_generate_sku` para generar SKUs canónicos cuando hay categoría disponible
+   - Nueva función `_generate_sku_async` que prioriza generación canónica
+   - Los SKUs no canónicos (EAN-xxx, SUP-xxx) están deprecados y requieren categoría para migración
+
+2. **Búsquedas actualizadas para priorizar `canonical_sku`**:
+   - `services/chat/price_lookup.py`: Búsquedas por SKU ahora priorizan `canonical_sku`
+   - `services/routers/catalog.py`: Endpoint `variants/lookup` busca primero por `canonical_sku`
+   - `services/routers/sales.py`: Búsqueda de catálogo incluye `canonical_sku` en la consulta
+   - `workers/drive_sync.py`: Ya priorizaba `canonical_sku` (sin cambios)
+
+3. **Creación de productos**:
+   - `services/routers/catalog.py`: `create_product_minimal` ahora establece `canonical_sku` cuando el SKU es canónico
+   - Respuestas de API incluyen `canonical_sku` cuando está disponible
+
+4. **Migración de datos (2025-12-03)**:
+   - Migración `c308b8798a79_migrate_to_canonical_sku_only` ejecutada
+   - Migró productos existentes con `sku_root` canónico a `canonical_sku`
+   - Generó SKUs canónicos para productos con categoría que no tenían `canonical_sku`
+   - Resultado: 91 productos migrados/generados, 1 producto sin categoría pendiente
+
+### Excepciones Permitidas
+
+- **SKU de proveedor**: `SupplierProduct.supplier_product_id` puede tener cualquier formato (es el SKU del proveedor, no interno)
+- **SKUs legacy**: Se mantienen fallbacks temporales a `sku_root` para compatibilidad durante la migración
+
+### Estado Actual
+
+- ✅ Código refactorizado para usar `canonical_sku` como formato principal
+- ✅ Migración de datos ejecutada (91 productos con SKU canónico)
+- ⚠️ 1 producto sin `canonical_sku` (requiere categoría para generarlo)
+- ⚠️ `canonical_sku` sigue siendo nullable (se puede hacer NOT NULL después de completar migración)
+
+### Próximos Pasos
+
+1. ✅ ~~Migrar productos existentes sin `canonical_sku` al formato canónico~~ (Completado)
+2. Asignar categorías a productos sin `canonical_sku` y regenerar SKUs
+3. Hacer `canonical_sku` obligatorio (NOT NULL) una vez completada la migración
+4. Deprecar completamente `sku_root` una vez completada la migración
+5. Actualizar endpoint `create_product` (no minimal) para generar SKUs canónicos
+
+---
+Actualizado: 2025-09-27 (refactorización 2025-12-03)

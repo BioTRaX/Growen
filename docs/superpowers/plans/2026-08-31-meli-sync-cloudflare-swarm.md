@@ -71,7 +71,7 @@
 
 ### Tarea 6: Stack Swarm completo
 
-**Archivos:** `docker-stack.yml`, `scripts/deploy-swarm.ps1`, `docs/DOCKER_SWARM.md`, pruebas de manifiesto.
+**Archivos:** `docker-stack.yml`, `scripts/deploy-swarm.ps1`, `docs/operations/DOCKER_SWARM.md`, pruebas de manifiesto.
 
 - [ ] Traducir servicios productivos de Growen a stack con imágenes etiquetadas, configs/secrets externos y redes overlay.
 - [ ] Definir réplicas, placement, rolling update, rollback, restart policies y probes.
@@ -81,7 +81,7 @@
 
 ### Tarea 7: Documentación y verificación
 
-**Archivos:** `docs/MELI_INTEGRATION.md`, `docs/SECURITY.md`, `docs/MIGRATIONS_NOTES.md`, `docs/DEVELOPMENT_WORKFLOW.md`, `README.md`, `Roadmap.md`, `CHANGELOG.md`, `AGENTS.md` si cambia inventario.
+**Archivos:** `docs/features/MELI_INTEGRATION.md`, `docs/operations/SECURITY.md`, `docs/features/MIGRATIONS_NOTES.md`, `docs/development/DEVELOPMENT_WORKFLOW.md`, `README.md`, `Roadmap.md`, `CHANGELOG.md`, `AGENTS.md` si cambia inventario.
 
 - [ ] Documentar setup, secretos, OAuth, tópicos, stock, túnel, rotación, rollback, logs y smoke.
 - [ ] Actualizar inventarios y eliminar afirmaciones desactualizadas encontradas dentro del alcance.

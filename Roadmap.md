@@ -18,10 +18,32 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 
 ## Plataforma y calidad
 
+- [ ] Reducir la deuda Ruff histórica del árbol completo (798 incidencias en la
+  línea base del 2026-09-10) antes de convertir el lint global en compuerta; el
+  conjunto modificado y el gate oficial acotado ya terminan en cero.
+- [x] Configurar `192.168.100.100/24` como dirección manual del servidor;
+  verificada en estado `Preferred` con gateway `192.168.100.1` activo el
+  2026-09-10.
+- [ ] Confirmar en el router que `.100` esté fuera del pool DHCP, aplicar
+  firewall LAN, importar la CA vigente en Windows/Docker Desktop y distribuirla
+  a los dispositivos autorizados.
+- [ ] Completar login, push y pull contra el registro autenticado y TLS ya
+  saludable; publicar sólo imágenes aprobadas por Trivy y conservar SBOM y
+  manifiesto de digests por commit.
+- [ ] Ejecutar las fases `Bootstrap` y `Application` con topología `SingleNode`
+  después de aprobar independientemente migración y despliegue.
+- [ ] Ejecutar el smoke autenticado desde otro dispositivo de la LAN contra
+  `https://192.168.100.100` después de provisionar un certificado con IP SAN.
+- [ ] Aplicar en una ventana controlada la migración `20260909_user_active` y la
+  copia verificada de media privada; conservar originales hasta validar rollback.
+- [ ] Ejecutar carga y failover del rate limit Redis y del proxy TLS en el Swarm
+  productivo antes de declarar operativa la primera puesta en producción.
 - [ ] Completar smokes autenticados de API, WebSocket, Telegram y MCP para los roles soportados.
 - [ ] Resolver el drift histórico de Alembic en una revisión separada y verificable.
 - [ ] Consolidar la observabilidad de costes, latencia y errores de proveedores IA.
 - [ ] Medir periódicamente activaciones y consumo de tokens de skills Growen/Superpowers para ajustar descripciones sin debilitar los gates locales.
+- [ ] Extender `scripts/audit_agentic_environment.py` para reportar locks de `scripts/agent_lock.py` vencidos y olvidados en `.agents/state/locks/`.
+- [ ] Evaluar `git worktree add` por sesión de agente como aislamiento físico real, alternativo al lock lógico cooperativo descrito en `docs/architecture/AGENT_ORCHESTRATION.md`; requiere decisión explícita antes de implementarse.
 
 ## Frontend Vue
 
