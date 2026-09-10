@@ -15,10 +15,12 @@ import pytest
 import yaml
 from starlette.requests import Request
 
-from agent_core.config import settings
+from agent_core.config import Settings, settings
+from agent_core.secrets import SecretConfigurationError, read_secret
 from agent_core.tool_security import contains_sensitive_material, sanitize_tool_result
 from mcp_servers import security as mcp_security
 from mcp_servers.security import MCPTokenInvalid, revoke_jti, verify_mcp_token
+from services import auth as auth_service
 from services.auth import SessionData, create_mcp_token, hash_session_id, require_roles
 
 
@@ -35,6 +37,34 @@ def test_local_infrastructure_keeps_loopback_access_outside_internal_network():
         assert "backend" in service["networks"]
         assert "host_access" in service["networks"]
         assert expected_port in service["ports"]
+
+
+def test_production_stack_is_fail_closed_for_lan_and_private_media():
+    root = Path(__file__).resolve().parents[1]
+    stack = yaml.safe_load((root / "docker-stack.yml").read_text(encoding="utf-8"))
+    api = stack["services"]["api"]
+    frontend = stack["services"]["frontend"]
+
+    assert api["environment"]["ENV"] == "production"
+    assert api["environment"]["AUTH_ENABLED"] == "true"
+    assert api["environment"]["COOKIE_SECURE"] == "true"
+    assert api["environment"]["ALLOWED_ORIGINS"] == "https://192.168.100.100"
+    assert api["environment"]["TRUSTED_HOSTS"] == "192.168.100.100"
+    assert api["environment"]["LOGIN_RATE_LIMIT_BACKEND"] == "redis"
+    assert "telegram_bot_token" not in api["secrets"]
+    assert set(api["volumes"]) >= {
+        "growen_public_media:/data/media/public",
+        "growen_private_media:/data/media/private",
+    }
+    assert {port["published"] for port in frontend["ports"]} == {80, 443}
+    assert set(frontend["secrets"]) == {"lan_tls_cert", "lan_tls_key"}
+    assert stack["networks"]["frontend_api"]["internal"] is True
+
+    nginx = (root / "infra/nginx/production.conf.template").read_text(encoding="utf-8")
+    headers = (root / "infra/nginx/security-headers.conf").read_text(encoding="utf-8")
+    assert "ssl_certificate /run/secrets/lan_tls_cert" in nginx
+    assert "proxy_set_header X-Forwarded-For $remote_addr" in nginx
+    assert "Content-Security-Policy" in headers
 
 
 @pytest.mark.asyncio
@@ -102,6 +132,151 @@ def test_session_identifier_is_not_stored_verbatim():
     raw = "session-cookie-value"
     assert hash_session_id(raw) != raw
     assert len(hash_session_id(raw)) == 64
+
+
+def test_forwarded_ip_is_accepted_only_from_trusted_proxy(monkeypatch):
+    monkeypatch.setenv("TRUSTED_PROXY_NETWORKS", "10.78.0.0/24")
+    trusted = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/auth/login",
+            "headers": [(b"x-forwarded-for", b"192.168.100.44")],
+            "client": ("10.78.0.9", 1234),
+        }
+    )
+    untrusted = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/auth/login",
+            "headers": [(b"x-forwarded-for", b"192.168.100.99")],
+            "client": ("10.79.0.9", 1234),
+        }
+    )
+
+    assert auth_service.client_ip_from_request(trusted) == "192.168.100.44"
+    assert auth_service.client_ip_from_request(untrusted) == "10.79.0.9"
+
+
+@pytest.mark.asyncio
+async def test_login_rate_limit_redis_hashes_ip_and_identifier(monkeypatch):
+    values: dict[str, int] = {}
+
+    class FakePipeline:
+        def __init__(self):
+            self.operations: list[tuple[str, str, int | None]] = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def incr(self, key):
+            self.operations.append(("incr", key, None))
+
+        def expire(self, key, ttl):
+            self.operations.append(("expire", key, ttl))
+
+        async def execute(self):
+            for operation, key, _ttl in self.operations:
+                if operation == "incr":
+                    values[key] = values.get(key, 0) + 1
+
+    class FakeRedis:
+        async def mget(self, *keys):
+            return [values.get(key, 0) for key in keys]
+
+        def pipeline(self, transaction=True):
+            assert transaction is True
+            return FakePipeline()
+
+        async def delete(self, key):
+            values.pop(key, None)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("LOGIN_RATE_LIMIT_BACKEND", "redis")
+    monkeypatch.setattr(auth_service.redis, "from_url", lambda *_args, **_kwargs: FakeRedis())
+
+    await auth_service.record_failed_login("192.168.100.44", "Admin@Growen")
+    await auth_service.check_login_rate_limit("192.168.100.44", "admin@growen")
+
+    assert len(values) == 2
+    assert all("192.168.100.44" not in key for key in values)
+    assert all("admin@growen" not in key for key in values)
+
+
+def test_production_settings_fail_closed_without_auth(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALLOWED_ORIGINS", "https://192.168.100.100")
+    monkeypatch.setenv("TRUSTED_HOSTS", "192.168.100.100")
+    monkeypatch.setenv("TRUSTED_PROXY_NETWORKS", "10.0.0.0/8")
+    monkeypatch.setenv("LOGIN_RATE_LIMIT_BACKEND", "redis")
+    monkeypatch.setenv("DB_URL", "")
+
+    with pytest.raises(RuntimeError, match="AUTH_ENABLED"):
+        Settings(
+            env="production",
+            db_url="postgresql+psycopg://growen@db/growen",
+            secret_key="production-secret",
+            admin_pass="production-admin",
+            auth_enabled=False,
+            cookie_secure=True,
+            tls_terminated_upstream=True,
+            public_media_root=str((tmp_path / "public").resolve()),
+            private_media_root=str((tmp_path / "private").resolve()),
+            mcp_products_secret_key="products-secret",
+            mcp_web_search_secret_key="web-secret",
+        )
+
+
+def test_production_settings_accept_complete_exact_configuration(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALLOWED_ORIGINS", "https://192.168.100.100")
+    monkeypatch.setenv("TRUSTED_HOSTS", "192.168.100.100")
+    monkeypatch.setenv("TRUSTED_PROXY_NETWORKS", "10.78.0.0/24")
+    monkeypatch.setenv("LOGIN_RATE_LIMIT_BACKEND", "redis")
+    monkeypatch.setenv("DB_URL", "")
+
+    configured = Settings(
+        env="production",
+        runtime_role="api",
+        db_url="postgresql+psycopg://growen@db/growen",
+        secret_key="production-secret",
+        admin_pass="production-admin",
+        auth_enabled=True,
+        cookie_secure=True,
+        tls_terminated_upstream=True,
+        public_media_root=str((tmp_path / "public").resolve()),
+        private_media_root=str((tmp_path / "private").resolve()),
+        mcp_products_secret_key="products-secret",
+        mcp_web_search_secret_key="web-secret",
+    )
+
+    assert configured.env == "production"
+    assert configured.allowed_origins == ["https://192.168.100.100"]
+
+
+def test_production_rejects_direct_secret_values(monkeypatch):
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("SECURITY_TEST_SECRET", "no-debe-usarse-directo")
+    monkeypatch.delenv("SECURITY_TEST_SECRET_FILE", raising=False)
+
+    with pytest.raises(SecretConfigurationError, match="file_required"):
+        read_secret("SECURITY_TEST_SECRET")
+
+
+def test_http_security_headers_are_applied(admin_client, monkeypatch):
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setattr(settings, "trusted_hosts", ["testserver"])
+    response = admin_client.get("/health")
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+    assert response.headers["strict-transport-security"].startswith("max-age=31536000")
 
 
 @pytest.mark.asyncio

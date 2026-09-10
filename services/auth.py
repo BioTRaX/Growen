@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import secrets
 import hashlib
+import hmac
+import ipaddress
 import os
 import time
 from dataclasses import dataclass
@@ -19,17 +21,30 @@ import jwt as pyjwt
 import logging
 from fastapi.responses import Response
 from passlib.hash import argon2
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent_core.config import settings
 from db.models import Session as DBSess, User
 from db.session import get_session
 
+try:
+    import redis.asyncio as redis
+except Exception:  # pragma: no cover - dependencia obligatoria en producción
+    redis = None  # type: ignore
+
 
 def hash_session_id(session_id: str) -> str:
     """Representación irreversible almacenada en DB para reducir impacto de una fuga."""
     return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+
+
+def pseudonymous_client_id(host: str, user_agent: str, *, secret: str | None = None) -> str:
+    """Deriva una identidad web estable sin persistir IP ni navegador en claro."""
+
+    key = (secret if secret is not None else settings.secret_key).encode("utf-8")
+    payload = f"{len(host)}:{host}{len(user_agent)}:{user_agent}".encode("utf-8")
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()[:32]
 
 
 def resolve_internal_service(request: Request) -> tuple[str, str] | None:
@@ -181,8 +196,16 @@ async def current_session(
     user: User | None = None
     if sess.user_id:
         user = await db.get(User, sess.user_id)
+    if user is not None and not user.is_active:
+        return SessionData(None, None, "guest")
     # User.role es la autoridad actual; un cambio o revocación aplica de inmediato.
     return SessionData(sess, user, user.role if user else sess.role)
+
+
+async def invalidate_user_sessions(db: AsyncSession, user_id: int) -> None:
+    """Revoca en una sola transacción todas las sesiones de un usuario."""
+
+    await db.execute(delete(DBSess).where(DBSess.user_id == user_id))
 
 
 async def current_websocket_session(websocket: WebSocket, db: AsyncSession) -> SessionData:
@@ -292,23 +315,102 @@ _MAX_ATTEMPTS = 10
 _login_attempts: dict[str, list[float]] = {}
 
 
-def check_login_rate_limit(ip: str) -> None:
-    """Aplica rate limit por IP para el login."""
+def client_ip_from_request(request: Request) -> str:
+    """Acepta X-Forwarded-For sólo desde redes proxy configuradas."""
 
-    attempts = _login_attempts.get(ip, [])
+    direct = request.client.host if request.client else "unknown"
+    configured = [
+        item.strip()
+        for item in os.getenv("TRUSTED_PROXY_NETWORKS", "").split(",")
+        if item.strip()
+    ]
+    if configured and request.headers.get("x-forwarded-for"):
+        try:
+            direct_ip = ipaddress.ip_address(direct)
+            trusted = any(direct_ip in ipaddress.ip_network(item, strict=False) for item in configured)
+            forwarded = request.headers["x-forwarded-for"].split(",")[0].strip()
+            if trusted:
+                return str(ipaddress.ip_address(forwarded))
+        except ValueError:
+            pass
+    return direct
+
+
+def _login_key(kind: str, value: str) -> str:
+    digest = hashlib.sha256(value.strip().lower().encode("utf-8")).hexdigest()
+    return f"growen:auth:login:{kind}:{digest}"
+
+
+def _login_backend() -> str:
+    runtime_env = (os.getenv("ENV") or settings.env).lower()
+    return os.getenv(
+        "LOGIN_RATE_LIMIT_BACKEND",
+        "memory" if runtime_env in {"dev", "test", "testing"} else "redis",
+    ).lower()
+
+
+async def _redis_counts(ip: str, identifier: str) -> tuple[int, int]:
+    if redis is None:
+        raise HTTPException(status_code=503, detail="Rate limit no disponible")
+    client = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
+    try:
+        values = await client.mget(_login_key("ip", ip), _login_key("identifier", identifier))
+        return int(values[0] or 0), int(values[1] or 0)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Rate limit no disponible") from exc
+    finally:
+        await client.aclose()
+
+
+async def check_login_rate_limit(ip: str, identifier: str) -> None:
+    """Aplica rate limit distribuido por IP e identificador normalizado."""
+
+    if _login_backend() == "redis":
+        by_ip, by_identifier = await _redis_counts(ip, identifier)
+        if max(by_ip, by_identifier) >= _MAX_ATTEMPTS:
+            raise HTTPException(status_code=429, detail="Too Many Requests")
+        return
+
+    key = f"{ip}\0{identifier.strip().lower()}"
+    attempts = _login_attempts.get(key, [])
     now = time.time()
     attempts = [t for t in attempts if now - t < _LOGIN_WINDOW]
     if len(attempts) >= _MAX_ATTEMPTS:
         raise HTTPException(status_code=429, detail="Too Many Requests")
-    _login_attempts[ip] = attempts
+    _login_attempts[key] = attempts
 
 
-def record_failed_login(ip: str) -> None:
-    _login_attempts.setdefault(ip, []).append(time.time())
+async def record_failed_login(ip: str, identifier: str) -> None:
+    if _login_backend() == "redis":
+        if redis is None:
+            raise HTTPException(status_code=503, detail="Rate limit no disponible")
+        client = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
+        try:
+            async with client.pipeline(transaction=True) as pipeline:
+                for key in (_login_key("ip", ip), _login_key("identifier", identifier)):
+                    pipeline.incr(key)
+                    pipeline.expire(key, _LOGIN_WINDOW)
+                await pipeline.execute()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Rate limit no disponible") from exc
+        finally:
+            await client.aclose()
+        return
+    key = f"{ip}\0{identifier.strip().lower()}"
+    _login_attempts.setdefault(key, []).append(time.time())
 
 
-def reset_login_attempts(ip: str) -> None:
-    _login_attempts.pop(ip, None)
+async def reset_login_attempts(ip: str, identifier: str) -> None:
+    if _login_backend() == "redis":
+        if redis is None:
+            raise HTTPException(status_code=503, detail="Rate limit no disponible")
+        client = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
+        try:
+            await client.delete(_login_key("identifier", identifier))
+        finally:
+            await client.aclose()
+        return
+    _login_attempts.pop(f"{ip}\0{identifier.strip().lower()}", None)
 
 
 def create_mcp_token(

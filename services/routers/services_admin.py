@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 # NG-HEADER: Nombre de archivo: services_admin.py
 # NG-HEADER: Ubicación: services/routers/services_admin.py
 # NG-HEADER: Descripción: Endpoints de administración de servicios (start/stop/status/logs/deps) y health de herramientas.
@@ -10,15 +8,20 @@ from __future__ import annotations
 Security: admin/colaborador only for mutating actions.
 """
 
+from __future__ import annotations
+
 import os
 import asyncio
+import json
+from pathlib import Path
 import socket
+import sys
 import time
 import uuid
 import math
 from collections import Counter
 from typing import Any, Dict, List, Optional
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -32,7 +35,6 @@ from services.orchestrator import start_service as _start, stop_service as _stop
 from agent_core.config import settings
 import shutil
 import subprocess
-from services.integrations.notion_client import NotionWrapper, load_notion_settings  # type: ignore
 from services.logging.log_cleanup import build_cleanup_plan, execute_cleanup_plan
 
 
@@ -669,18 +671,22 @@ async def deps_check(name: str) -> Dict[str, Any]:
         ]) or _find_tool("gswin32c", []) or _find_tool("gs", [])
         
         if not tesseract:
-            ok = False; missing.append("tesseract")
+            ok = False
+            missing.append("tesseract")
         if not qpdf:
-            ok = False; missing.append("qpdf")
+            ok = False
+            missing.append("qpdf")
         if not gs:
-            ok = False; missing.append("ghostscript")
+            ok = False
+            missing.append("ghostscript")
         if not ok:
             hints.append("Instala Tesseract/QPDF/Ghostscript en el host/imagen")
     elif name == "image_processing":
         try:
             __import__("PIL")
         except Exception:
-            ok = False; missing.append("Pillow")
+            ok = False
+            missing.append("Pillow")
         # Optional helpers
         try:
             __import__("rembg")
@@ -699,7 +705,7 @@ async def deps_check(name: str) -> Dict[str, Any]:
             hints.append("Configurar TELEGRAM_ENABLED=1 en .env para habilitar")
         # Verificar dependencias Python
         try:
-            import httpx
+            import httpx as _httpx  # noqa: F401
         except ImportError:
             ok = False
             missing.append("httpx")
@@ -717,7 +723,7 @@ async def deps_check(name: str) -> Dict[str, Any]:
             hints.append(f"Verificar REDIS_URL en .env: {e}")
         # Verificar que dramatiq esté instalado
         try:
-            import dramatiq
+            import dramatiq as _dramatiq  # noqa: F401
         except ImportError:
             ok = False
             missing.append("dramatiq")
@@ -848,12 +854,11 @@ async def tools_health() -> Dict[str, Any]:
     pw_version: Optional[str] = None
     try:
         import importlib
-        import json as _json
         importlib.import_module("playwright")
         pw_installed = True
         # Detectar navegadores instalados: usar 'python -m playwright install --dry-run' o 'playwright --version'
         try:
-            ver_proc = subprocess.run(["python", "-m", "playwright", "--version"], capture_output=True, text=True, timeout=8)
+            ver_proc = subprocess.run([sys.executable, "-m", "playwright", "--version"], capture_output=True, text=True, timeout=8)
             vout = (ver_proc.stdout or ver_proc.stderr or "").strip()
             pw_version = vout.splitlines()[0][:120] if vout else None
         except Exception:
@@ -868,7 +873,7 @@ async def tools_health() -> Dict[str, Any]:
                 "    b = p.chromium\n"
                 "    print('OK')\n"
             )
-            probe = subprocess.run(["python", "-c", code], capture_output=True, text=True, timeout=12)
+            probe = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=12)
             chromium_installed = (probe.returncode == 0) and ("OK" in (probe.stdout or ""))
         except Exception:
             chromium_installed = False
@@ -883,33 +888,7 @@ async def tools_health() -> Dict[str, Any]:
         "playwright": {"ok": pw_installed and chromium_installed, "package": pw_installed, "chromium": chromium_installed, "version": pw_version},
     }
     
-@router.get("/notion/health", dependencies=[Depends(require_roles("admin", "colaborador"))])
-async def notion_health() -> Dict[str, Any]:
-    """Health básico de Notion: flags y latencia de una consulta dummy.
-
-    Devuelve: enabled, has_sdk, has_key, has_errors_db, dry_run, latency_ms
-    """
-    nw = NotionWrapper()
-    cfg = load_notion_settings()
-    h = nw.health()
-    latency_ms = None
-    if cfg.enabled and cfg.errors_db:
-        import time as _t
-        t0 = _t.perf_counter()
-        try:
-            # Fingerprint dummy que no debería existir
-            _ = nw.query_by_fingerprint(cfg.errors_db, "__healthcheck__fingerprint__")
-            latency_ms = int((_t.perf_counter() - t0) * 1000)
-        except Exception:
-            latency_ms = None
-    return {**h, "latency_ms": latency_ms}
-
-
 # --- Métricas: Bug Reports ---
-from pathlib import Path
-import json
-
-
 def _date_key(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d")
 

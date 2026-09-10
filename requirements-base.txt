@@ -51,6 +51,3 @@ mcp>=1.27,<2
 pgvector>=0.3.8
 langchain-text-splitters>=0.3.0
 tiktoken>=0.8.0
-
-# Notion integration
-notion-client>=2.2.1

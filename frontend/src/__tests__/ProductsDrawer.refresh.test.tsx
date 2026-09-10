@@ -44,6 +44,15 @@ vi.mock('../services/categories', async () => {
   }
 })
 
+vi.mock('../services/productsEx', async () => {
+  const actual = await vi.importActual<any>('../services/productsEx')
+  return {
+    ...actual,
+    getProductsTablePrefs: vi.fn().mockResolvedValue({}),
+    putProductsTablePrefs: vi.fn().mockResolvedValue({}),
+  }
+})
+
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ state: { role: 'admin' } })
 }))
@@ -80,6 +89,8 @@ vi.mock('../components/supplier/SupplierAutocomplete', () => ({
 }))
 
 import ProductsDrawer from '../components/ProductsDrawer'
+import { ToastProvider } from '../components/ToastProvider'
+import { MassCanonicalProvider } from '../contexts/MassCanonicalContext'
 import * as productsSvc from '../services/products'
 
 function advanceTimers(ms: number) {
@@ -98,7 +109,13 @@ describe('ProductsDrawer refresh after canonical creation', () => {
     const sp = productsSvc as unknown as { searchProducts: any }
     sp.searchProducts.mockResolvedValueOnce({ items: [mockProduct], total: 1 })
 
-    render(<ProductsDrawer open={true} onClose={() => {}} mode="embedded" />)
+    render(
+      <ToastProvider>
+        <MassCanonicalProvider>
+          <ProductsDrawer open={true} onClose={() => {}} mode="embedded" />
+        </MassCanonicalProvider>
+      </ToastProvider>,
+    )
 
     // Esperar llamada inicial (debounce 300ms)
     advanceTimers(300)

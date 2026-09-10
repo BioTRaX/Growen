@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, Iterable
 
 import jwt
 import redis.asyncio as redis
+from agent_core.secrets import read_secret
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
 
@@ -80,7 +81,7 @@ def _redis_key(kind: str, value: str) -> str:
 
 
 def _secret() -> str:
-    value = os.getenv("MCP_SECRET_KEY", "")
+    value = read_secret("MCP_SECRET_KEY") or ""
     if value:
         return value
     raise MCPTokenInvalid("MCP_SECRET_KEY no configurado")
@@ -88,7 +89,7 @@ def _secret() -> str:
 
 def _candidate_secrets(token: str) -> list[str]:
     current = _secret()
-    previous = os.getenv("MCP_SECRET_KEY_PREVIOUS", "")
+    previous = read_secret("MCP_SECRET_KEY_PREVIOUS") or ""
     expected_kid = os.getenv("MCP_JWT_KEY_ID", "")
     previous_kid = os.getenv("MCP_JWT_PREVIOUS_KEY_ID", "")
     try:

@@ -74,7 +74,7 @@ if ($SkillsOnly) {
     exit 0
 }
 
-$requiredDocs = @('README.md', 'Roadmap.md', 'docs\MCP.md', 'docs\DEVELOPMENT_WORKFLOW.md')
+$requiredDocs = @('README.md', 'Roadmap.md', 'docs\architecture\MCP.md', 'docs\development\DEVELOPMENT_WORKFLOW.md')
 foreach ($relativePath in $requiredDocs) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $relativePath))) {
         throw "Falta documentación obligatoria: $relativePath"
@@ -124,7 +124,7 @@ $secretPatterns = @(
     'sk-(?:proj-)?[A-Za-z0-9_-]{20,}',
     'gh[pousr]_[A-Za-z0-9]{30,}'
 )
-$scanRoots = @('.env', '.env.example', 'agent_core', 'ai', 'mcp_servers', 'services', 'scripts', 'docs', 'tests')
+$scanRoots = @('.env', '.env.dev', '.env.prod.example', 'agent_core', 'ai', 'mcp_servers', 'services', 'scripts', 'docs', 'tests')
 $secretFiles = foreach ($scanRoot in $scanRoots) {
     $candidate = Join-Path $root $scanRoot
     if (Test-Path -LiteralPath $candidate -PathType Leaf) { Get-Item -LiteralPath $candidate }

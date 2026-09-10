@@ -1,9 +1,9 @@
-from __future__ import annotations
-
 # NG-HEADER: Nombre de archivo: backups.py
 # NG-HEADER: Ubicación: services/backups.py
 # NG-HEADER: Descripción: Utilidades para generar y listar backups de la base de datos PostgreSQL.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
+
+from __future__ import annotations
 
 import os
 import shutil
@@ -134,16 +134,20 @@ def _run_docker_pg_dump(container: str, db: DBConn, out_file: Path) -> subproces
     # Crear en /tmp del contenedor y luego copiar al host
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     tmp_path = f"/tmp/{out_file.stem}-{ts}.dump"
-    # Usar env inline para PGPASSWORD
-    inline = [
+    command = [
         "docker",
         "exec",
         container,
-        "bash",
-        "-lc",
-        f"PGPASSWORD='{db.password}' pg_dump -U {db.user} -d {db.dbname} -Fc -f {tmp_path}",
+        "pg_dump",
+        "-U",
+        db.user,
+        "-d",
+        db.dbname,
+        "-Fc",
+        "-f",
+        tmp_path,
     ]
-    proc_dump = subprocess.run(inline, capture_output=True, text=True)
+    proc_dump = subprocess.run(command, capture_output=True, text=True)
     if proc_dump.returncode != 0:
         return proc_dump
     # Copiar al host

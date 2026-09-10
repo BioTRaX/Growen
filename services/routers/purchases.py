@@ -58,6 +58,7 @@ from agent_core.config import settings
 from ai.router import AIRouter
 from ai.types import Task
 from services.notifications.telegram import send_message as tg_send
+from services.media import get_private_media_root
 
 # PDF text extraction (opcional)
 try:  # pragma: no cover - import opcional
@@ -66,6 +67,12 @@ except Exception:  # pragma: no cover
     pdfplumber = None  # type: ignore
 
 router = APIRouter(prefix="/purchases", tags=["purchases"]) 
+
+
+def _purchase_storage_root(purchase_id: int | str | None = None) -> Path:
+    """Raíz privada canónica para archivos operativos de compras."""
+    root = get_private_media_root() / "purchases"
+    return root / str(purchase_id) if purchase_id is not None else root
 
 # Helper centralizado para logging estructurado de eventos de compra
 def _purchase_event_log(logger_name: str, event: str, **fields):
@@ -1186,7 +1193,7 @@ async def iaval_vision(
         raise HTTPException(status_code=400, detail="No se encontró PDF adjunto legible")
     
     # === AUDITABILIDAD: Crear directorio de logs ===
-    audit_dir = Path("data") / "purchases" / str(p.id) / "iaval_vision"
+    audit_dir = _purchase_storage_root(p.id) / "iaval_vision"
     audit_dir.mkdir(parents=True, exist_ok=True)
     ts = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
     
@@ -1549,7 +1556,7 @@ async def iaval_apply(
         try:
             from datetime import datetime as _dt
             ts = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
-            root = Path("data") / "purchases" / str(p.id) / "logs"
+            root = _purchase_storage_root(p.id) / "logs"
             root.mkdir(parents=True, exist_ok=True)
             fname_json = f"iaval_changes_{ts}.json"
             fpath_json = root / fname_json
@@ -2334,7 +2341,7 @@ async def import_santaplanta_pdf(
         correlation_id = uuid.uuid4().hex
         debug_flag = bool(debug) or (os.getenv("IMPORT_RETURN_DEBUG", "0") in ("1", "true", "True"))
         # Guardar a disco primero y usar el pipeline robusto
-        tmp_root = Path("data") / "purchases" / "_tmp"
+        tmp_root = _purchase_storage_root() / "_tmp"
         tmp_root.mkdir(parents=True, exist_ok=True)
         tmp_pdf = tmp_root / (uuid.uuid4().hex + ".pdf")
         if is_pdf:
@@ -2454,7 +2461,7 @@ async def import_santaplanta_pdf(
                 p = Purchase(supplier_id=supplier_id, remito_number=remito_number, remito_date=remito_dt, import_profile="santa-planta", currency="ARS")
                 db.add(p)
                 await db.flush()
-                root = Path("data") / "purchases" / str(p.id)
+                root = _purchase_storage_root(p.id)
                 root.mkdir(parents=True, exist_ok=True)
                 safe_name = Path(file.filename or "remito").name
                 pdf_path = root / safe_name
@@ -2592,7 +2599,7 @@ async def import_santaplanta_pdf(
         await db.flush()
 
         # Guardar el adjunto
-        root = Path("data") / "purchases" / str(p.id)
+        root = _purchase_storage_root(p.id)
         root.mkdir(parents=True, exist_ok=True)
         safe_name = Path(file.filename or "remito").name
         pdf_path = root / safe_name
@@ -2996,7 +3003,7 @@ async def delete_purchase(purchase_id: int, db: AsyncSession = Depends(get_sessi
     """Elimina una compra si está en estado seguro (BORRADOR o ANULADA).
 
     Nota: elimina también líneas y adjuntos (cascade) y borra los archivos del
-    disco si existen bajo data/purchases/{id}.
+    disco si existen bajo PRIVATE_MEDIA_ROOT/purchases/{id}.
     """
     # Eager-load children to support explicit delete across DBs sin cascade
     res = await db.execute(
@@ -3036,7 +3043,7 @@ async def delete_purchase(purchase_id: int, db: AsyncSession = Depends(get_sessi
 
     # Best-effort: borrar carpeta de adjuntos en disco
     try:
-        root = Path("data") / "purchases" / str(p.id)
+        root = _purchase_storage_root(p.id)
         if root.exists():
             import shutil
             shutil.rmtree(root, ignore_errors=True)
@@ -3103,33 +3110,49 @@ async def purchase_logs(purchase_id: int, db: AsyncSession = Depends(get_session
     return {"items": items}
 
 
-@router.get("/{purchase_id}/logs/files/{filename}")
-async def download_purchase_log_file(purchase_id: int, filename: str):
-    """Descarga un archivo de logs de una compra (JSON/CSV) de la carpeta data/purchases/{id}/logs.
+@router.get(
+    "/{purchase_id}/logs/files/{filename}",
+    dependencies=[Depends(require_roles("admin", "colaborador"))],
+)
+async def download_purchase_log_file(
+    purchase_id: int,
+    filename: str,
+    db: AsyncSession = Depends(get_session),
+):
+    """Descarga un log de PRIVATE_MEDIA_ROOT/purchases/{id}/logs.
 
     Seguridad: restringe el nombre a prefijo 'iaval_changes_' y extensión .json o .csv. Evita path traversal.
     Devuelve Content-Disposition attachment.
     """
-    # Validación de nombre
+    if await db.get(Purchase, purchase_id) is None:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    # Validación de nombre. La respuesta no distingue nombres inválidos de
+    # recursos inexistentes para evitar enumerar archivos.
     if not (filename.startswith("iaval_changes_") and (filename.endswith(".json") or filename.endswith(".csv"))):
-        raise HTTPException(status_code=400, detail="Nombre de archivo inválido")
-    root = Path("data") / "purchases" / str(purchase_id) / "logs"
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    root = _purchase_storage_root(purchase_id) / "logs"
     fpath = root / filename
     try:
         # Resolver y asegurar que está dentro del directorio esperado
         fpath_resolved = fpath.resolve(strict=True)
         if root.resolve() not in fpath_resolved.parents:
-            raise HTTPException(status_code=403, detail="Acceso denegado")
+            raise HTTPException(status_code=404, detail="Archivo no encontrado")
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    except HTTPException:
+        raise
     except Exception:
-        raise HTTPException(status_code=400, detail="Ruta inválida")
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
     media = "application/json" if filename.endswith(".json") else "text/csv"
     headers = {"Content-Disposition": f"attachment; filename=\"{filename}\""}
     return FileResponse(str(fpath), media_type=media, headers=headers)
 
 
-@router.get("/{purchase_id}/attachments/{attachment_id}/file")
+@router.get(
+    "/{purchase_id}/attachments/{attachment_id}/file",
+    dependencies=[Depends(require_roles("admin", "colaborador"))],
+)
 async def download_attachment(purchase_id: int, attachment_id: int, db: AsyncSession = Depends(get_session)):
     """Descarga inline un adjunto de la compra.
 
@@ -3138,7 +3161,21 @@ async def download_attachment(purchase_id: int, attachment_id: int, db: AsyncSes
     att = await db.get(PurchaseAttachment, attachment_id)
     if not att or att.purchase_id != purchase_id:
         raise HTTPException(status_code=404, detail="Adjunto no encontrado")
-    pth = Path(att.path)
+    private_root = get_private_media_root().resolve()
+    stored = Path(att.path)
+    if stored.is_absolute():
+        resolved = stored.resolve()
+        if resolved == private_root or private_root in resolved.parents:
+            pth = resolved
+        else:
+            # Compatibilidad de lectura después de copiar adjuntos legacy: la
+            # base puede conservar la ruta histórica, pero producción sólo
+            # sirve la copia ubicada dentro de PRIVATE_MEDIA_ROOT.
+            pth = (private_root / "purchases" / str(purchase_id) / stored.name).resolve()
+    else:
+        pth = (private_root / stored).resolve()
+    if private_root not in pth.parents:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
     if not pth.exists():
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
     headers = {"Content-Disposition": f"inline; filename=\"{att.filename}\""}
@@ -3259,7 +3296,7 @@ async def import_pop_email(
     # Guardar eml como adjunto opcional (si vino)
     try:
         if upload_filename:
-            root = Path("data") / "purchases" / str(p.id)
+            root = _purchase_storage_root(p.id)
             root.mkdir(parents=True, exist_ok=True)
             eml_path = root / (upload_filename or f"pop_{p.id}.eml")
             with open(eml_path, "wb") as fh:

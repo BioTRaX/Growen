@@ -45,7 +45,7 @@ from db.models import (
 )
 from db.session import SessionLocal
 from services.knowledge.service import apply_ai_adjustment, deterministic_trust
-from services.media import get_media_root
+from services.media import get_private_media_root
 
 
 logger = logging.getLogger(__name__)
@@ -157,7 +157,7 @@ def _local_extract(path: Path, mime: str | None) -> tuple[str, dict, str]:
                 timeout=_integer("KNOWLEDGE_VIDEO_PROCESS_TIMEOUT_SECONDS", 120),
                 check=True,
             )
-            metadata["frames"] = [str(item.relative_to(get_media_root())).replace("\\", "/") for item in sorted(frames_dir.glob("*.jpg"))]
+            metadata["frames"] = [str(item.relative_to(get_private_media_root())).replace("\\", "/") for item in sorted(frames_dir.glob("*.jpg"))]
         except Exception as exc:
             metadata["frames_error"] = type(exc).__name__
         metadata["transcription_status"] = "pending"
@@ -346,8 +346,8 @@ async def process_knowledge_async(job_id: str) -> None:
                 if location.status == "archived":
                     continue
                 if location.storage_path:
-                    path = (get_media_root() / location.storage_path).resolve()
-                    root = get_media_root().resolve()
+                    path = (get_private_media_root() / location.storage_path).resolve()
+                    root = get_private_media_root().resolve()
                     if root not in path.parents or not path.exists():
                         raise RuntimeError("Archivo de conocimiento inexistente o fuera de MEDIA_ROOT")
                     text, metadata, digest = await asyncio.to_thread(_local_extract, path, location.mime_type)

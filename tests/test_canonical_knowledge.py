@@ -138,3 +138,27 @@ async def test_invalid_ai_schema_does_not_fail_knowledge_ingestion(monkeypatch):
     assert claims == []
     assert adjustment is None
     assert reason is None
+
+
+@pytest.mark.asyncio
+async def test_uploaded_knowledge_is_downloaded_only_through_authenticated_route(
+    client_collab, db_session, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("PRIVATE_MEDIA_ROOT", str(tmp_path / "private"))
+    canonical = CanonicalProduct(name="Manual privado", ng_sku="NG-990003")
+    db_session.add(canonical)
+    await db_session.commit()
+
+    uploaded = await client_collab.post(
+        f"/canonical-products/{canonical.id}/knowledge/upload",
+        params={"title": "Manual", "labels": "manual", "capabilities": "manuals"},
+        files={"file": ("manual.pdf", b"%PDF-contenido", "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    asset_id = uploaded.json()["id"]
+
+    downloaded = await client_collab.get(
+        f"/canonical-products/{canonical.id}/knowledge/{asset_id}/file"
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"%PDF-contenido"

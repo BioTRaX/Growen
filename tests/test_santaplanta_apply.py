@@ -14,7 +14,7 @@ from services.ingest import upsert
 
 
 def _sku(spid: str) -> str:
-    return "SP-" + hashlib.sha1(spid.encode()).hexdigest()[:8].upper()
+    return "SP-" + hashlib.sha1(spid.encode(), usedforsecurity=False).hexdigest()[:8].upper()
 
 
 @pytest.mark.asyncio

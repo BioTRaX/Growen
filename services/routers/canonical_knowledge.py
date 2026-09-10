@@ -14,6 +14,7 @@ from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,7 +41,7 @@ from services.knowledge.service import (
     serialize_asset,
     update_asset,
 )
-from services.media import get_media_root, sha256_of_file
+from services.media import get_private_media_root, resolve_private_media_path, sha256_of_file
 
 
 router = APIRouter(prefix="/canonical-products", tags=["canonical-knowledge"])
@@ -186,6 +187,31 @@ async def get_knowledge_asset(canonical_id: int, asset_id: int, db: AsyncSession
     return serialize_asset(asset)
 
 
+@router.get("/{canonical_id}/knowledge/{asset_id:int}/file", dependencies=[staff])
+async def download_knowledge_asset(
+    canonical_id: int,
+    asset_id: int,
+    db: AsyncSession = Depends(get_session),
+):
+    asset = await get_asset(db, asset_id)
+    if asset.canonical_product_id != canonical_id:
+        raise HTTPException(status_code=404, detail="Activo no encontrado")
+    location = next((item for item in asset.locations if item.storage_path), None)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    try:
+        path = resolve_private_media_path(location.storage_path)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    return FileResponse(
+        str(path),
+        media_type=location.mime_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
+    )
+
+
 @router.patch(
     "/{canonical_id}/knowledge/{asset_id:int}",
     dependencies=[Depends(require_csrf), staff],
@@ -327,7 +353,8 @@ async def upload_knowledge(
             status_code=409,
             detail={"message": "El archivo ya pertenece a la base de conocimiento", "asset_id": duplicate.id},
         )
-    root = get_media_root() / "canonical-knowledge" / str(canonical_id) / digest[:2]
+    private_root = get_private_media_root()
+    root = private_root / "canonical-knowledge" / str(canonical_id) / digest[:2]
     root.mkdir(parents=True, exist_ok=True)
     suffix = Path(file.filename or "").suffix.lower()
     target = root / f"{digest}{suffix}"
@@ -347,7 +374,7 @@ async def upload_knowledge(
         user_id=session_data.user.id if session_data.user else None,
     )
     asset.locations.append(CanonicalKnowledgeLocation(
-        storage_path=str(target.relative_to(get_media_root())).replace("\\", "/"),
+        storage_path=str(target.relative_to(private_root)).replace("\\", "/"),
         mime_type=mime,
         content_hash=digest,
         status="pending",

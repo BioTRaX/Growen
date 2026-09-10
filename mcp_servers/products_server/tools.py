@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Tuple, List
 import os
+from agent_core.secrets import read_secret
 import time
 import httpx
 import logging
@@ -66,7 +67,7 @@ def _get_internal_auth_headers() -> Dict[str, str]:
     Returns:
         Dict con headers HTTP incluyendo token de autenticación.
     """
-    token = os.getenv("INTERNAL_SERVICE_TOKEN", "")
+    token = read_secret("INTERNAL_SERVICE_TOKEN") or ""
     if not token:
         logger.warning("INTERNAL_SERVICE_TOKEN no configurado. Las peticiones pueden fallar con 403.")
         return {}

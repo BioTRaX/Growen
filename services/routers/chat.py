@@ -24,32 +24,28 @@ para mantener compatibilidad con tests legacy.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field, ValidationError, constr
+from pydantic import BaseModel, Field, constr
 
 from agent_core.config import settings as core_settings
 from agent_core.chat_policy import public_product_result
 from ai.router import AIRouter
 from ai.types import Task
 from db.session import get_session
-from services.auth import SessionData, current_session, require_csrf
+from services.auth import SessionData, current_session, pseudonymous_client_id, require_csrf
 from db.models import ChatFeedbackEvent
 from services.chat.memory import (
-    MemoryState,
     build_memory_key,
     clear_memory,
     ensure_memory,
     get_memory,
     mark_prompted,
-    mark_resolved,
 )
 # DEPRECATED: La lógica de price_lookup se reemplaza gradualmente por tool-calling vía OpenAI + MCP.
 # Mantengo import mínimo solo para tipos y parsing mientras se completa migración.
 from services.chat.price_lookup import (
-    ProductQuery,
     extract_product_query,
     resolve_price,
     resolve_product_info,
@@ -57,7 +53,6 @@ from services.chat.price_lookup import (
     render_product_response_for_role,
 )
 from services.chat.shared import (
-    ALLOWED_PRODUCT_INTENT_ROLES,
     ALLOWED_PRODUCT_METRIC_ROLES,
     CLARIFY_CONFIRM_WORDS,
     clarify_prompt_text,
@@ -68,7 +63,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai.intent_classifier import classify_intent, UserIntent
 from ai.persona import get_persona_prompt
-from services.chat.sales_handler.tools import manejar_conversacion_venta, consultar_producto
+from services.chat.sales_handler.tools import manejar_conversacion_venta
 from services.chat.history import save_message, get_recent_history
 
 logger = logging.getLogger(__name__)
@@ -246,11 +241,10 @@ async def _chat_endpoint_impl(
         base_session_id = None
     
     if not base_session_id:
-        # Fallback: generar ID basado en IP + user agent (menos robusto pero funcional para MVP)
+        # Fallback seudónimo estable: no persistir IP ni user-agent en claro.
         host = request.client.host if request.client else "unknown"
         user_agent = request.headers.get("user-agent", "unknown")
-        import hashlib
-        base_session_id = hashlib.md5(f"{host}_{user_agent}".encode()).hexdigest()[:16]
+        base_session_id = pseudonymous_client_id(host, user_agent)
     
     # Agregar prefijo "web:" para identificar sesiones web
     chat_session_id = f"web:{base_session_id}"
@@ -283,7 +277,7 @@ async def _chat_endpoint_impl(
         ]
         user_text_lower = user_text.lower()
         if any(kw in user_text_lower for kw in diagnostic_keywords):
-            logger.info(f"Fallback local: detectada intención DIAGNOSTICO por keywords")
+            logger.info("Fallback local: detectada intención DIAGNOSTICO por keywords")
             intent = UserIntent.DIAGNOSTICO
 
     # 2. Obtener o inicializar la memoria de la conversación (robusto ante sesión ausente)
@@ -381,7 +375,7 @@ async def _chat_endpoint_impl(
                         stock_str = " ✓" if prod.get('stock', 0) > 0 else ""
                         response_parts.append(f"• {prod.get('title', 'N/A')}{price_str}{stock_str}")
                 else:
-                    response_parts.append(f"\n\n¿Querés que busque productos para ayudarte con esto?")
+                    response_parts.append("\n\n¿Querés que busque productos para ayudarte con esto?")
             
             answer = "\n".join(response_parts)
             
@@ -697,7 +691,6 @@ async def chat_endpoint(
     db: AsyncSession = Depends(get_session),
 ) -> ChatOut:
     """Adapta HTTP al contexto y trazabilidad multicanal común."""
-    import hashlib
     from services.chat.orchestrator import ChatRequestContext, chat_orchestrator
 
     session = getattr(session_data, "session", None)
@@ -705,7 +698,7 @@ async def chat_endpoint(
     if not base_session_id:
         host = request.client.host if request.client else "unknown"
         user_agent = request.headers.get("user-agent", "unknown")
-        base_session_id = hashlib.md5(f"{host}_{user_agent}".encode()).hexdigest()[:16]
+        base_session_id = pseudonymous_client_id(host, user_agent)
     conversation_id = f"web:{base_session_id}"
     correlation_id = getattr(request.state, "correlation_id", None) or request.headers.get("x-correlation-id") or request.headers.get("x-request-id")
     context = ChatRequestContext.build(

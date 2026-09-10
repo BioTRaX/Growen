@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import os
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from PIL import Image as PILImage
@@ -53,17 +55,83 @@ def _suspicious(url: str) -> bool:
         if not p.netloc:
             return True
         host = p.hostname or ""
-        # Simple denylist of suspicious patterns
-        bad = ["@", "..", "\\", "%00"]
+        # Rechazar credenciales embebidas y secuencias ambiguas.
+        if p.username is not None or p.password is not None:
+            return True
+        bad = ["\\", "%00"]
         if any(b in url for b in bad):
             return True
-        # Disallow local addresses
-        local_hosts = {"localhost", "127.0.0.1", "0.0.0.0"}
+        local_hosts = {"localhost", "0.0.0.0"}
         if host in local_hosts:
             return True
         return False
     except Exception:
         return True
+
+
+def _allowed_host(host: str) -> bool:
+    configured = {
+        item.strip().lower().rstrip(".")
+        for item in os.getenv("IMAGE_DOWNLOAD_ALLOWED_HOSTS", "").split(",")
+        if item.strip()
+    }
+    normalized = host.lower().rstrip(".")
+    return not configured or any(
+        normalized == allowed or normalized.endswith(f".{allowed}")
+        for allowed in configured
+    )
+
+
+def _is_public_unicast(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return bool(
+        address.is_global
+        and not address.is_multicast
+        and not address.is_reserved
+        and not address.is_unspecified
+        and not address.is_loopback
+        and not address.is_link_local
+        and not address.is_private
+    )
+
+
+async def _validate_public_destination(url: str) -> set[str]:
+    """Valida esquema, allowlist y todas las direcciones DNS antes de conectar."""
+
+    if _suspicious(url):
+        raise DownloadError("URL sospechosa o no permitida")
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").rstrip(".")
+    if not _allowed_host(host):
+        raise DownloadError("Dominio no permitido")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            host,
+            port,
+            type=socket.SOCK_STREAM,
+        )
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise DownloadError("No se pudo resolver el destino") from exc
+    addresses = {str(ipaddress.ip_address(info[4][0])) for info in infos}
+    if not addresses or any(not _is_public_unicast(ipaddress.ip_address(item)) for item in addresses):
+        raise DownloadError("El destino resuelve a una red no pública")
+    return addresses
+
+
+def _validate_connected_peer(response: object, expected_ips: set[str]) -> None:
+    """Comprueba el peer real para cerrar la ventana de DNS rebinding."""
+
+    extensions = getattr(response, "extensions", {}) or {}
+    network_stream = extensions.get("network_stream")
+    peer = network_stream.get_extra_info("server_addr") if network_stream else None
+    if not peer:
+        raise DownloadError("No se pudo verificar la IP conectada")
+    try:
+        connected = str(ipaddress.ip_address(peer[0]))
+    except (ValueError, TypeError, IndexError) as exc:
+        raise DownloadError("Peer remoto inválido") from exc
+    if not _is_public_unicast(ipaddress.ip_address(connected)) or connected not in expected_ips:
+        raise DownloadError("El peer remoto no coincide con el DNS público validado")
 
 
 def _clamav_enabled() -> bool:
@@ -108,31 +176,54 @@ async def download_product_image(
     url: str,
     timeout: float = 30.0,
 ) -> DownloadResult:
-    if _suspicious(url):
-        raise DownloadError("URL sospechosa o no permitida")
-
     headers = {"User-Agent": DEFAULT_UA, "Accept": "image/*,*/*;q=0.8"}
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+    limits = httpx.Limits(max_connections=5, max_keepalive_connections=2)
+    max_bytes = int(os.getenv("IMAGE_DOWNLOAD_MAX_BYTES", str(10 * 1024 * 1024)))
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout, connect=min(timeout, 10.0)),
+        follow_redirects=False,
+        trust_env=False,
+        headers=headers,
+        limits=limits,
+    ) as client:
         # Rate-limit global
         await get_limiter().acquire()
-        r = await client.get(url)
-        r.raise_for_status()
-        ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
-        if ctype not in {"image/jpeg", "image/png", "image/webp"}:
-            # Some providers return octet-stream incorrectly; allow if bytes look like image
-            if not ctype or ctype == "application/octet-stream":
-                pass
-            else:
-                raise DownloadError(f"Tipo de contenido no permitido: {ctype}")
-        content = r.content
-        if len(content) > 10 * 1024 * 1024:
-            raise DownloadError("Archivo demasiado grande (>10MB)")
+        current_url = url
+        content = b""
+        ctype = ""
+        for redirect_count in range(4):
+            expected_ips = await _validate_public_destination(current_url)
+            async with client.stream("GET", current_url) as response:
+                _validate_connected_peer(response, expected_ips)
+                if response.is_redirect:
+                    if redirect_count >= 3:
+                        raise DownloadError("Demasiadas redirecciones")
+                    location = response.headers.get("location")
+                    if not location:
+                        raise DownloadError("Redirección sin destino")
+                    current_url = urljoin(current_url, location)
+                    continue
+                response.raise_for_status()
+                ctype = response.headers.get("content-type", "").split(";")[0].strip().lower()
+                if ctype not in {"image/jpeg", "image/png", "image/webp"}:
+                    raise DownloadError(f"Tipo de contenido no permitido: {ctype or 'ausente'}")
+                chunks: list[bytes] = []
+                downloaded = 0
+                async for chunk in response.aiter_bytes():
+                    downloaded += len(chunk)
+                    if downloaded > max_bytes:
+                        raise DownloadError("Archivo demasiado grande")
+                    chunks.append(chunk)
+                content = b"".join(chunks)
+                break
+        else:  # pragma: no cover - protegido por el límite explícito
+            raise DownloadError("No se pudo completar la descarga")
 
     # Write under Productos/<product_id>/raw
     root = get_media_root()
     raw_dir = root / "Productos" / str(product_id) / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    name = urlparse(url).path.split("/")[-1] or "image"
+    name = urlparse(current_url).path.split("/")[-1] or "image"
     # Sanitize
     name = name.replace("\\", "/").split("/")[-1]
     target = raw_dir / name
@@ -170,6 +261,6 @@ async def download_product_image(
         sha256=_sha256(target),
         mime=ctype if ctype else None,
         size=target.stat().st_size,
-        source_url=url,
+        source_url=current_url,
     )
 
