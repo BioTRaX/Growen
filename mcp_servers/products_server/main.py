@@ -18,8 +18,6 @@ import logging
 from dotenv import load_dotenv
 
 load_dotenv()
-os.environ["MCP_SECRET_KEY"] = os.getenv("MCP_PRODUCTS_SECRET_KEY", os.getenv("MCP_SECRET_KEY", ""))
-os.environ["MCP_SECRET_KEY_PREVIOUS"] = os.getenv("MCP_PRODUCTS_SECRET_KEY_PREVIOUS", "")
 os.environ["MCP_JWT_AUDIENCE"] = os.getenv("MCP_PRODUCTS_JWT_AUDIENCE", "growen-mcp-products")
 os.environ["MCP_JWT_KEY_ID"] = os.getenv("MCP_PRODUCTS_KEY_ID", "products-v1")
 os.environ["MCP_JWT_PREVIOUS_KEY_ID"] = os.getenv("MCP_PRODUCTS_PREVIOUS_KEY_ID", "")

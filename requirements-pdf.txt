@@ -20,5 +20,5 @@ pytesseract
 
 # Web scraping y PDF rendering
 playwright>=1.42.0
-weasyprint>=61.0
+weasyprint>=70.0,<71
 beautifulsoup4>=4.12.3

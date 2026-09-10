@@ -1,0 +1,28 @@
+# NG-HEADER: Nombre de archivo: docker-compose.registry.yml
+# NG-HEADER: Ubicación: infra/registry/docker-compose.registry.yml
+# NG-HEADER: Descripción: Registro OCI privado de Growen con TLS y autenticación bcrypt.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+services:
+  registry:
+    image: registry:3.1.1@sha256:1be55279f18a2fe1a74edf2664cac61c1bea305b7b4642dab412e7affdcb3e33
+    restart: unless-stopped
+    ports:
+      - "192.168.100.100:5000:5000"
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "false"
+      REGISTRY_HTTP_ADDR: "0.0.0.0:5000"
+      REGISTRY_HTTP_TLS_CERTIFICATE: /certs/registry-lan.crt
+      REGISTRY_HTTP_TLS_KEY: /certs/registry-lan.key
+      REGISTRY_AUTH: htpasswd
+      REGISTRY_AUTH_HTPASSWD_REALM: Growen Registry
+      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+    volumes:
+      - "${GROWEN_REGISTRY_DATA:?GROWEN_REGISTRY_DATA es obligatorio}:/var/lib/registry"
+      - "${GROWEN_REGISTRY_CERT_DIR:?GROWEN_REGISTRY_CERT_DIR es obligatorio}:/certs:ro"
+      - "${GROWEN_REGISTRY_AUTH_DIR:?GROWEN_REGISTRY_AUTH_DIR es obligatorio}:/auth:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --no-check-certificate https://127.0.0.1:5000/v2/ 2>&1 | grep -q '401 Unauthorized'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

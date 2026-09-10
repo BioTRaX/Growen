@@ -29,6 +29,8 @@ COPY --from=vue-builder /app/dist/assets/ /usr/share/nginx/html/vue-assets/asset
 COPY --from=vue-builder /app/generated/build-metadata.json /usr/share/nginx/html/vue/build-metadata.json
 COPY --from=vue-builder /app/generated/nginx-spa-routes.conf /etc/nginx/generated-spa-routes.conf
 COPY infra/nginx/default.conf.template /etc/nginx/templates/default.conf.template
-EXPOSE 80
+COPY infra/nginx/production.conf.template /etc/nginx/templates-production/default.conf.template
+COPY infra/nginx/security-headers.conf /etc/nginx/security-headers.conf
+EXPOSE 80 443
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD wget -qO- http://127.0.0.1/health >/dev/null || exit 1
 CMD ["nginx", "-g", "daemon off;"]

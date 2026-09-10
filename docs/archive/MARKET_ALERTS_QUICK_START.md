@@ -247,7 +247,7 @@ ORDER BY date DESC, alert_type;
 | `services/market/alerts.py` | Lógica de detección |
 | `services/routers/alerts.py` | API endpoints |
 | `workers/market_scraping.py` | Integración post-scraping |
-| `docs/MARKET_ALERTS.md` | Documentación completa |
+| `docs/features/MARKET_ALERTS.md` | Documentación completa |
 | `.env.alerts.example` | Configuración ejemplo |
 
 ## Próximos Pasos
@@ -261,7 +261,7 @@ ORDER BY date DESC, alert_type;
 
 ## Documentación Completa
 
-Ver `docs/MARKET_ALERTS.md` para:
+Ver `docs/features/MARKET_ALERTS.md` para:
 - Arquitectura detallada
 - Diagramas de flujo
 - Ejemplos completos

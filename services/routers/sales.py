@@ -10,6 +10,7 @@ import logging
 import os
 import time
 from decimal import Decimal
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request, Header
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +20,11 @@ from db.session import get_session
 from db.models import Customer, Sale, SaleLine, SalePayment, SaleAttachment, Product, AuditLog, Return, ReturnLine
 from db.models import StockLedger, SalesChannel, StockReservation, SupplierProduct
 from services.auth import require_roles, require_csrf, current_session, SessionData
-from services.media import save_upload, get_media_root
+from services.media import (
+    get_private_media_root,
+    resolve_private_media_path,
+    save_private_upload,
+)
 from services.sales.domain import (
     account_balance,
     add_account_entry,
@@ -30,8 +35,7 @@ from services.sales.domain import (
     reservation_expiry,
 )
 from services.sales.schemas import SaleQuoteRequest
-from fastapi.responses import HTMLResponse
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from sqlalchemy import desc
 
 router = APIRouter(prefix="/sales", tags=["sales"])
@@ -969,7 +973,13 @@ async def get_sale_detail(sale_id: int, db: AsyncSession = Depends(get_session))
         ],
         "payments": [{"id": p.id, "method": p.method, "amount": float(p.amount), "reference": p.reference, "paid_at": (p.paid_at.isoformat() if p.paid_at else None)} for p in pays],
         "attachments": [
-            {"id": item.id, "filename": item.filename, "mime": item.mime, "size": item.size, "path": item.path}
+            {
+                "id": item.id,
+                "filename": item.filename,
+                "mime": item.mime,
+                "size": item.size,
+                "download_url": f"/sales/{s.id}/attachments/{item.id}/file",
+            }
             for item in attachments
         ],
         "returns": [
@@ -1784,7 +1794,7 @@ async def upload_sale_attachment(sale_id: int, file: UploadFile = File(...), db:
     count = await db.scalar(select(func.count(SaleAttachment.id)).where(SaleAttachment.sale_id == sale_id)) or 0
     if count >= 5:
         raise HTTPException(status_code=409, detail="La venta ya tiene el máximo de cinco adjuntos")
-    path, sha256 = await save_upload("sales", file.filename, file)
+    path, sha256 = await save_private_upload("sales", file.filename, file)
     signature = path.read_bytes()[:16]
     detected_mime = (
         "application/pdf" if signature.startswith(b"%PDF-") else
@@ -1798,7 +1808,7 @@ async def upload_sale_attachment(sale_id: int, file: UploadFile = File(...), db:
     if path.stat().st_size > max_bytes:
         path.unlink(missing_ok=True)
         raise HTTPException(status_code=413, detail="El adjunto supera el tamaño máximo")
-    rel = str(path.relative_to(get_media_root()))
+    rel = str(path.relative_to(get_private_media_root()))
     att = SaleAttachment(
         sale_id=sale_id,
         filename=file.filename,
@@ -1809,7 +1819,10 @@ async def upload_sale_attachment(sale_id: int, file: UploadFile = File(...), db:
     db.add(att)
     await db.commit()
     await db.refresh(att)
-    return {"attachment_id": att.id, "path": att.path}
+    return {
+        "attachment_id": att.id,
+        "download_url": f"/sales/{sale_id}/attachments/{att.id}/file",
+    }
 
 
 @router.get("/{sale_id}/attachments", dependencies=[Depends(require_roles("colaborador", "admin"))])
@@ -1823,10 +1836,41 @@ async def list_sale_attachments(sale_id: int, db: AsyncSession = Depends(get_ses
     ).scalars().all()
     return {
         "items": [
-            {"id": row.id, "filename": row.filename, "mime": row.mime, "size": row.size, "path": row.path}
+            {
+                "id": row.id,
+                "filename": row.filename,
+                "mime": row.mime,
+                "size": row.size,
+                "download_url": f"/sales/{sale_id}/attachments/{row.id}/file",
+            }
             for row in rows
         ]
     }
+
+
+@router.get(
+    "/{sale_id}/attachments/{attachment_id}/file",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+)
+async def download_sale_attachment(
+    sale_id: int,
+    attachment_id: int,
+    db: AsyncSession = Depends(get_session),
+):
+    attachment = await db.get(SaleAttachment, attachment_id)
+    if not attachment or attachment.sale_id != sale_id:
+        raise HTTPException(status_code=404, detail="Adjunto no encontrado")
+    try:
+        path = resolve_private_media_path(attachment.path)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Adjunto no encontrado")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Adjunto no encontrado")
+    return FileResponse(
+        str(path),
+        media_type=attachment.mime or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{Path(attachment.filename).name}"'},
+    )
 
 
 @router.delete("/{sale_id}/attachments/{attachment_id}", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
@@ -1834,8 +1878,11 @@ async def delete_sale_attachment(sale_id: int, attachment_id: int, db: AsyncSess
     attachment = await db.get(SaleAttachment, attachment_id)
     if not attachment or attachment.sale_id != sale_id:
         raise HTTPException(status_code=404, detail="Adjunto no encontrado")
-    path = get_media_root() / attachment.path
-    if path.is_file():
+    try:
+        path = resolve_private_media_path(attachment.path)
+    except (OSError, ValueError):
+        path = None
+    if path and path.is_file():
         path.unlink(missing_ok=True)
     await db.delete(attachment)
     await db.commit()
@@ -2422,26 +2469,6 @@ async def get_receipt(sale_id: int, db: AsyncSession = Depends(get_session)):
         html.append("</ul>")
     html.append("</body></html>")
     return "".join(html)
-
-
-@router.post("/{sale_id}/attachments", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
-async def upload_sale_attachment(sale_id: int, file: UploadFile = File(...), db: AsyncSession = Depends(get_session)):
-    sale = await db.get(Sale, sale_id)
-    if not sale:
-        raise HTTPException(status_code=404, detail="Venta no encontrada")
-    path, sha256 = await save_upload("sales", file.filename, file)
-    rel = str(path.relative_to(get_media_root()))
-    att = SaleAttachment(
-        sale_id=sale_id,
-        filename=file.filename,
-        mime=file.content_type or None,
-        size=path.stat().st_size,
-        path=rel,
-    )
-    db.add(att)
-    await db.commit()
-    await db.refresh(att)
-    return {"attachment_id": att.id, "path": att.path}
 
 
 # --- Export CSV ventas ---

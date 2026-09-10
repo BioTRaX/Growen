@@ -19,6 +19,8 @@ Si aparece un trigger válido y existe trabajo pendiente ambiguo, solicitar conf
 
 Leer historial disponible, outputs, diff y documentos afectados. Delimitar la sesión, separar cambios propios y preexistentes, y clasificar tareas como completadas, parciales, bloqueadas o no verificadas. Documentar dificultades, errores, causa confirmada o hipótesis, implementación, solución, evidencia y riesgo residual sin copiar secretos.
 
+Inventariar también el estado operativo persistente creado o modificado durante la sesión —contenedores, volúmenes, certificados, secretos versionados y servicios externos— y diferenciarlo explícitamente del estado confirmado en Git.
+
 ### 2. Evolución agéntica
 
 Proponer una evolución del entorno agéntico basada en trabajo observado. Evitar duplicar Superpowers: ampliar una skill canónica sólo para reglas o contexto propios de Growen; usar scripts para controles mecánicos. Materializar al menos una mejora prioritaria segura y validarla. Si no existe, registrar el motivo.

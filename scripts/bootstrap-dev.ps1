@@ -15,7 +15,7 @@ $python = Join-Path $venv 'Scripts\python.exe'
 $requirements = Join-Path $root 'requirements.txt'
 $requirementsLock = Join-Path $root 'requirements-lock.txt'
 $envFile = Join-Path $root '.env'
-$envExample = Join-Path $root '.env.example'
+$envExample = Join-Path $root '.env.dev'
 
 function New-HexSecret {
     $bytes = [byte[]]::new(32)

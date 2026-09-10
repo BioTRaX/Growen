@@ -29,7 +29,7 @@ dependencies = [
     "rapidfuzz>=3.9.0",
     "aiosqlite>=0.20.0",
     # PDF generation (optional, fallback handled at runtime)
-    "weasyprint>=62.0; platform_system != 'Windows'",  # Windows requiere dependencias GTK; opcional
+    "weasyprint>=70.0,<71; platform_system != 'Windows'",  # Windows requiere dependencias GTK; opcional
     "reportlab>=4.2.0",
 ]
 

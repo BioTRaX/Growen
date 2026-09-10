@@ -1,0 +1,69 @@
+# NG-HEADER: Nombre de archivo: docker-stack.bootstrap.yml
+# NG-HEADER: Ubicación: docker-stack.bootstrap.yml
+# NG-HEADER: Descripción: Fase inicial de PostgreSQL, Redis y migración Alembic para Swarm.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+version: "3.9"
+
+services:
+  db:
+    image: ${GROWEN_POSTGRES_IMAGE:?GROWEN_POSTGRES_IMAGE es obligatorio}
+    environment:
+      POSTGRES_DB: growen
+      POSTGRES_USER: growen
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U growen -d growen"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.growen_stateful == true]
+      restart_policy: {condition: on-failure}
+
+  redis:
+    image: ${GROWEN_REDIS_IMAGE:?GROWEN_REDIS_IMAGE es obligatorio}
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis_data:/data]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.growen_stateful == true]
+
+  migrate:
+    image: ${GROWEN_API_IMAGE:?GROWEN_API_IMAGE es obligatorio}
+    command: ["/opt/venv/bin/python", "/app/scripts/run-alembic-from-secrets.py"]
+    environment:
+      ENV: production
+      GROWEN_RUNTIME_ROLE: migration
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: growen
+      DB_NAME: growen
+      DB_PASS_FILE: /run/secrets/postgres_password
+      DB_WAIT_TIMEOUT_SECONDS: "120"
+    secrets: [postgres_password]
+    networks: [backend]
+    deploy:
+      replicas: 1
+      restart_policy: {condition: none}
+
+secrets:
+  postgres_password: {external: true}
+
+volumes:
+  pgdata: {external: true, name: growen_pgdata}
+  redis_data: {external: true, name: growen_redis_data}
+
+networks:
+  backend: {driver: overlay, internal: true, attachable: false}

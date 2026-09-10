@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 from agent_core.secrets import read_secret
 
@@ -39,18 +41,19 @@ class Settings:
     """Parámetros de configuración leídos de variables de entorno."""
 
     env: str = os.getenv("ENV", "dev")
+    runtime_role: str = os.getenv("GROWEN_RUNTIME_ROLE", "api")
     db_url: str = os.getenv("DB_URL", "")
     # Soporte para componer la URL si no se pasa DB_URL directamente
     db_host: str = os.getenv("DB_HOST", "localhost")
     db_port: str = os.getenv("DB_PORT", "5432")
     db_name: str = os.getenv("DB_NAME", "growen")
     db_user: str = os.getenv("DB_USER", "growen")
-    db_pass: str = os.getenv("DB_PASS", "")
+    db_pass: str = read_secret("DB_PASS") or ""
     ai_mode: str = os.getenv("AI_MODE", "auto")
     ai_allow_external: bool = os.getenv("AI_ALLOW_EXTERNAL", "true").lower() == "true"
-    secret_key: str = os.getenv("SECRET_KEY", SECRET_KEY_PLACEHOLDER)
+    secret_key: str = read_secret("SECRET_KEY") or SECRET_KEY_PLACEHOLDER
     admin_user: str = os.getenv("ADMIN_USER", "admin")
-    admin_pass: str = os.getenv("ADMIN_PASS", ADMIN_PASS_PLACEHOLDER)
+    admin_pass: str = read_secret("ADMIN_PASS") or ADMIN_PASS_PLACEHOLDER
     session_expire_minutes: int = int(
         os.getenv("SESSION_EXPIRE_MINUTES", "1440")
     )  # duración de la sesión en minutos (1 día por defecto)
@@ -58,16 +61,21 @@ class Settings:
     cookie_secure: bool = os.getenv("COOKIE_SECURE", "false").lower() == "true"
     cookie_domain: str | None = os.getenv("COOKIE_DOMAIN") or None
     allowed_origins: list[str] = field(default_factory=list)
+    trusted_hosts: list[str] = field(default_factory=list)
+    trusted_proxy_networks: list[str] = field(default_factory=list)
+    tls_terminated_upstream: bool = os.getenv("TLS_TERMINATED_UPSTREAM", "false").lower() == "true"
+    public_media_root: str = os.getenv("PUBLIC_MEDIA_ROOT", "")
+    private_media_root: str = os.getenv("PRIVATE_MEDIA_ROOT", "")
     # Modo desarrollo: permite asumir rol admin sin sesión (solo dev, nunca prod)
     dev_assume_admin: bool = os.getenv("DEV_ASSUME_ADMIN", "false").lower() == "true"
     # Token secreto para autenticación entre servicios internos (MCP servers, workers)
-    internal_service_token: str = os.getenv("INTERNAL_SERVICE_TOKEN", "")
+    internal_service_token: str = read_secret("INTERNAL_SERVICE_TOKEN") or ""
     internal_service_name: str = os.getenv("INTERNAL_SERVICE_NAME", "mcp-products")
     internal_service_role: str = os.getenv("INTERNAL_SERVICE_ROLE", "colaborador")
     # Clave secreta para firmar JWT tokens MCP (debe ser diferente de SECRET_KEY)
-    mcp_secret_key: str = os.getenv("MCP_SECRET_KEY", "")
-    mcp_products_secret_key: str = os.getenv("MCP_PRODUCTS_SECRET_KEY", "")
-    mcp_web_search_secret_key: str = os.getenv("MCP_WEB_SEARCH_SECRET_KEY", "")
+    mcp_secret_key: str = read_secret("MCP_SECRET_KEY") or ""
+    mcp_products_secret_key: str = read_secret("MCP_PRODUCTS_SECRET_KEY") or ""
+    mcp_web_search_secret_key: str = read_secret("MCP_WEB_SEARCH_SECRET_KEY") or ""
     mcp_products_key_id: str = os.getenv("MCP_PRODUCTS_KEY_ID", "products-v1")
     mcp_web_search_key_id: str = os.getenv("MCP_WEB_SEARCH_KEY_ID", "web-search-v1")
     # Rate limit para MCP: peticiones por minuto por usuario
@@ -143,18 +151,22 @@ class Settings:
                 # En desarrollo se usa una clave predecible para simplificar pruebas
                 # y evitar fallos al ejecutar la suite sin variables de entorno.
                 self.secret_key = "dev-secret-key"
-            else:
+            elif self.runtime_role == "api":
                 raise RuntimeError(
                     "SECRET_KEY debe sobrescribirse; reemplace el placeholder 'REEMPLAZAR_SECRET_KEY'"
                 )
+            else:
+                self.secret_key = ""
         if self.admin_pass == ADMIN_PASS_PLACEHOLDER:
             if self.env == "dev":
                 # Fallback de desarrollo (NO usar en producción). Coherente con seed/migración.
                 self.admin_pass = "admin1234"
-            else:
+            elif self.runtime_role == "api":
                 raise RuntimeError(
                     "ADMIN_PASS debe sobrescribirse; reemplace el placeholder 'REEMPLAZAR_ADMIN_PASS'"
                 )
+            else:
+                self.admin_pass = ""
 
         raw = os.getenv("ALLOWED_ORIGINS", "").split(",")
         origins = [o.strip() for o in raw if o.strip()]
@@ -162,11 +174,22 @@ class Settings:
             if not origins:
                 origins = ["http://localhost:5173"]
             origins = _expand_local(origins)
-        elif not origins:
+        elif not origins and self.runtime_role == "api":
             raise RuntimeError(
                 "En producción, ALLOWED_ORIGINS debe definir al menos un origen"
             )
         self.allowed_origins = origins
+
+        self.trusted_hosts = [
+            item.strip().lower()
+            for item in os.getenv("TRUSTED_HOSTS", "").split(",")
+            if item.strip()
+        ]
+        self.trusted_proxy_networks = [
+            item.strip()
+            for item in os.getenv("TRUSTED_PROXY_NETWORKS", "").split(",")
+            if item.strip()
+        ]
 
         # Fail-safe: forzar dev_assume_admin=False fuera de entorno dev
         if self.env != "dev" and self.dev_assume_admin:
@@ -178,7 +201,49 @@ class Settings:
             self.dev_assume_admin = False
 
         if self.env not in {"dev", "test", "testing"}:
-            if not self.mcp_products_secret_key or not self.mcp_web_search_secret_key:
+            if self.env != "production":
+                raise RuntimeError("ENV debe ser production fuera de desarrollo y tests")
+            if self.runtime_role == "api" and not self.auth_enabled:
+                raise RuntimeError("AUTH_ENABLED=true es obligatorio en producción")
+            if self.runtime_role == "api" and not self.cookie_secure:
+                raise RuntimeError("COOKIE_SECURE=true es obligatorio en producción")
+            if self.runtime_role == "api" and not self.tls_terminated_upstream:
+                raise RuntimeError("TLS_TERMINATED_UPSTREAM=true es obligatorio en producción")
+            if self.runtime_role == "api" and (
+                not self.trusted_hosts or any(host == "*" for host in self.trusted_hosts)
+            ):
+                raise RuntimeError("TRUSTED_HOSTS exactos son obligatorios en producción")
+            if self.runtime_role == "api" and not self.trusted_proxy_networks:
+                raise RuntimeError("TRUSTED_PROXY_NETWORKS es obligatorio en producción")
+            import ipaddress
+            try:
+                for network in self.trusted_proxy_networks:
+                    ipaddress.ip_network(network, strict=False)
+            except ValueError as exc:
+                raise RuntimeError("TRUSTED_PROXY_NETWORKS contiene una red inválida") from exc
+            if self.runtime_role == "api" and any(
+                origin == "*" or urlparse(origin).scheme != "https"
+                for origin in self.allowed_origins
+            ):
+                raise RuntimeError("ALLOWED_ORIGINS debe contener únicamente orígenes HTTPS exactos")
+            if self.runtime_role == "api" and os.getenv("LOGIN_RATE_LIMIT_BACKEND", "redis").lower() != "redis":
+                raise RuntimeError("LOGIN_RATE_LIMIT_BACKEND=redis es obligatorio en producción")
+            if self.runtime_role == "api" and (not self.public_media_root or not self.private_media_root):
+                raise RuntimeError("PUBLIC_MEDIA_ROOT y PRIVATE_MEDIA_ROOT son obligatorios en producción")
+            if self.runtime_role == "api":
+                public_root = Path(self.public_media_root)
+                private_root = Path(self.private_media_root)
+                if not public_root.is_absolute() or not private_root.is_absolute():
+                    raise RuntimeError("Las raíces de media deben ser rutas absolutas en producción")
+                if public_root.resolve() == private_root.resolve():
+                    raise RuntimeError("Las raíces de media pública y privada deben ser distintas")
+            raw_db_url = os.getenv("DB_URL", "")
+            parsed_db = urlparse(raw_db_url.replace("postgresql+psycopg", "postgresql", 1))
+            if raw_db_url and parsed_db.password:
+                raise RuntimeError("DB_URL no puede contener contraseña en producción; use DB_PASS_FILE")
+            if self.runtime_role == "api" and (
+                not self.mcp_products_secret_key or not self.mcp_web_search_secret_key
+            ):
                 raise RuntimeError("Las claves MCP específicas deben definirse fuera de desarrollo y tests")
         if self.chat_auto_delete_enabled:
             raise RuntimeError("CHAT_AUTO_DELETE_ENABLED no está habilitado por la política de retención vigente")

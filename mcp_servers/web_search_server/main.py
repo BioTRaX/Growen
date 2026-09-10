@@ -13,8 +13,6 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
 load_dotenv()
-os.environ["MCP_SECRET_KEY"] = os.getenv("MCP_WEB_SEARCH_SECRET_KEY", os.getenv("MCP_SECRET_KEY", ""))
-os.environ["MCP_SECRET_KEY_PREVIOUS"] = os.getenv("MCP_WEB_SEARCH_SECRET_KEY_PREVIOUS", "")
 os.environ["MCP_JWT_AUDIENCE"] = os.getenv("MCP_WEB_SEARCH_JWT_AUDIENCE", "growen-mcp-web-search")
 os.environ["MCP_JWT_KEY_ID"] = os.getenv("MCP_WEB_SEARCH_KEY_ID", "web-search-v1")
 os.environ["MCP_JWT_PREVIOUS_KEY_ID"] = os.getenv("MCP_WEB_SEARCH_PREVIOUS_KEY_ID", "")

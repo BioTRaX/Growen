@@ -16,8 +16,8 @@ docs/knowledge_base/
 │   ├── README.md
 │   └── ...
 ├── apis/                   # Documentación de APIs
-│   ├── API_MARKET.md
-│   ├── API_PRODUCTS.md
+│   ├── ../features/API_MARKET.md
+│   ├── ../features/API_PRODUCTS.md
 │   └── ...
 ├── guias/                  # Guías de uso y tutoriales
 │   └── ...
@@ -63,7 +63,7 @@ El sistema calcula un hash SHA256 del contenido de cada documento:
 ## Recursos estimados
 
 El proveedor canónico es local y no tiene costo por token. La capacidad depende
-de RAM, disco y latencia del host Ollama; consultar `docs/ollama.md` y ejecutar
+de RAM, disco y latencia del host Ollama; consultar `docs/features/ollama.md` y ejecutar
 los healthchecks separados de generación y embeddings antes de indexar.
 
 ## Logs
@@ -88,7 +88,7 @@ Ver estructura completa en `db/models.py`.
 ```powershell
 # 1. Agregar documentos a esta carpeta
 Copy-Item "README.md" "docs/knowledge_base/documentacion/"
-Copy-Item "docs/API_MARKET.md" "docs/knowledge_base/apis/"
+Copy-Item "docs/features/API_MARKET.md" "docs/knowledge_base/apis/"
 
 # 2. Indexar
 python scripts/index_docs.py
@@ -121,4 +121,4 @@ python scripts/index_docs.py
 - Credencial del proveedor de embeddings inyectada desde el gestor de secretos sólo durante indexación externa; el entorno puede permanecer sin API keys mientras esa función esté deshabilitada
 - Paquetes Python: `pgvector`, `langchain-text-splitters`, `tiktoken`
 
-Ver `requirements.txt` y `docs/DEVELOPMENT_WORKFLOW.md` para más detalles.
+Ver `requirements.txt` y `docs/development/DEVELOPMENT_WORKFLOW.md` para más detalles.

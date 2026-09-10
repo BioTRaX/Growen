@@ -656,7 +656,7 @@ docker exec -it growen-db-1 psql ...
 docker exec -it growen-postgres psql -U growen -d growen
 ```
 
-#### **2. docs/API_MARKET.md**
+#### **2. docs/features/API_MARKET.md**
 - [ ] Agregar sección "Cálculo Automático de Rango"
 - [ ] Documentar que `market_price_min` y `market_price_max` se calculan desde `market_sources.last_price`
 - [ ] Agregar ejemplos de respuesta con rangos calculados
@@ -692,7 +692,7 @@ services:
 
 ### **Fase 2: Documentación (Esta semana)** 📝
 - [ ] Corregir nombres de contenedores en README.md
-- [ ] Actualizar docs/API_MARKET.md con cálculo de rango
+- [ ] Actualizar docs/features/API_MARKET.md con cálculo de rango
 - [ ] Crear docs/WORKER_TROUBLESHOOTING.md
 - [ ] Agregar sección "Workers" a Roadmap.md
 

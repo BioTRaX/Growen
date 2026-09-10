@@ -13,6 +13,9 @@ __pycache__/
 .Python
 *.egg
 *.egg-info/
+
+# Estado runtime de coordinación entre agentes (locks efímeros, no versionar)
+.agents/state/
 dist/
 build/
 .eggs/
@@ -21,7 +24,8 @@ pip-wheel-metadata/
 # Archivos de configuración local
 .env
 .env.*
-!.env.example
+!.env.dev
+!.env.prod.example
 .envrc
 .direnv/
 *.local.env

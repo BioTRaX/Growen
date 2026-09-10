@@ -1,22 +1,22 @@
 # Growen
 
-Cierre MeLi del 2026-09-05: túnel y OAuth real operativos, primera cuenta vinculada con tokens cifrados. Las pruebas reales de notificaciones, stock y renovación siguen pendientes. Ver [retrospectiva de la activación](docs/RETROSPECTIVE_MELI_CLOUDFLARE_20260905.md) y [retrospectiva consolidada de sesión](docs/RETROSPECTIVE_SESSION_20260905.md).
+Cierre MeLi del 2026-09-05: túnel y OAuth real operativos, primera cuenta vinculada con tokens cifrados. Las pruebas reales de notificaciones, stock y renovación siguen pendientes. Ver [retrospectiva de la activación](docs/retrospectives/RETROSPECTIVE_MELI_CLOUDFLARE_20260905.md) y [retrospectiva consolidada de sesión](docs/retrospectives/RETROSPECTIVE_SESSION_20260905.md).
 
 Antes de vincular una cuenta MeLi, aplicar la migración `20260905_meli_scopes_text`, que permite guardar listas extensas de permisos funcionales sin truncarlas.
 
 La vinculación MeLi requiere Acceso Offline habilitado en DevCenter y aprobado por el vendedor. Growen solicita `read write offline_access`; si falta el token de renovación, informa el permiso faltante en lugar de atribuirlo al vencimiento del enlace.
 
-Para activar MeLi, el CNAME del túnel debe estar en modo **Proxied**; un conector Healthy no valida el acceso HTTPS ni OAuth. Ver la sección de activación inicial en [la guía MeLi](docs/MELI_INTEGRATION.md).
+Para activar MeLi, el CNAME del túnel debe estar en modo **Proxied**; un conector Healthy no valida el acceso HTTPS ni OAuth. Ver la sección de activación inicial en [la guía MeLi](docs/features/MELI_INTEGRATION.md).
 
 ## Mercado Libre transaccional
 
-Growen incorpora un dominio MeLi aislado del análisis de Mercado: gateway FastAPI mínimo, worker Dramatiq exclusivo `meli_sync`, OAuth con PKCE, tokens cifrados, webhooks idempotentes y stock Growen → MeLi para inventario clásico. Cloudflare Tunnel publica sólo callback/webhook y no comparte red con API, PostgreSQL ni Redis. Compose usa el perfil `meli`; producción dispone de un stack Swarm con réplicas y secretos externos. Configuración y operación: [docs/MELI_INTEGRATION.md](docs/MELI_INTEGRATION.md) y [docs/DOCKER_SWARM.md](docs/DOCKER_SWARM.md).
+Growen incorpora un dominio MeLi aislado del análisis de Mercado: gateway FastAPI mínimo, worker Dramatiq exclusivo `meli_sync`, OAuth con PKCE, tokens cifrados, webhooks idempotentes y stock Growen → MeLi para inventario clásico. Cloudflare Tunnel publica sólo callback/webhook y no comparte red con API, PostgreSQL ni Redis. Compose usa el perfil `meli`; producción dispone de un stack Swarm con réplicas y secretos externos. Configuración y operación: [docs/features/MELI_INTEGRATION.md](docs/features/MELI_INTEGRATION.md) y [docs/operations/DOCKER_SWARM.md](docs/operations/DOCKER_SWARM.md).
 
 ## Estado de Chat 😎 (2026-08-17)
 
 Chat está `preflight/active` en desarrollo y `/chat` conserva React. El perfil Ollama local aprobó con RTX 5070, contexto 4096, pagefile de 18 GB, `llama3.1:8b` al 100 % en GPU y embeddings `qwen3-embedding:4b` de 1536 dimensiones. Token, canary y claves están fuera del repositorio; PostgreSQL, Redis y el worker polling están operativos. El corpus RAG v1 fue cargado y su evaluación por rol/canal aprobó sin fugas. Durante esta fase Telegram sólo responde al canary y Vue se prueba directamente en desarrollo.
 
-Operación y gates: [docs/CHAT_DEPLOYMENT.md](docs/CHAT_DEPLOYMENT.md). Corpus: `docs/rag/corpus-manifest.v1.json` y `scripts/rag_corpus.py`.
+Operación y gates: [docs/operations/CHAT_DEPLOYMENT.md](docs/operations/CHAT_DEPLOYMENT.md). Corpus: `docs/rag/corpus-manifest.v1.json` y `scripts/rag_corpus.py`.
 
 Los secretos Telegram se limitan al runtime del bot. Los workers `dramatiq`,
 Mercado, Enrich y Conocimiento deshabilitan explícitamente los flags Telegram y
@@ -28,12 +28,31 @@ común.
 
 La auditoría del 2026-07-30 confirmó que un token operativo de Telegram fue
 publicado históricamente en el repositorio y validado por GitHub como fuga
-pública. La credencial está revocada; `main`, `dev` y las ramas administrables
-fueron saneadas el 2026-07-30. La purga de referencias internas `refs/pull/*`
-que conservan objetos antiguos está pendiente de GitHub Support. No reutilizar
-tokens históricos ni colocar secretos reales en ejemplos. Ver
-[informe forense y acciones de erradicación](./docs/SECURITY_INCIDENT_TELEGRAM_20260730.md)
-y [retrospectiva técnica y controles agénticos](./docs/RETROSPECTIVE_TELEGRAM_SECRET_FORENSICS_20260815.md).
+pública. La credencial está revocada y el incidente está cerrado: `main`, `dev`,
+las ramas administrables y las referencias internas afectadas fueron saneadas;
+no quedan acciones pendientes de erradicación de ese incidente. Esta actualización
+registra la confirmación operativa recibida y no sustituye un nuevo escaneo remoto.
+No reutilizar tokens históricos ni colocar secretos reales en ejemplos. Ver
+[informe forense y acciones de erradicación](./docs/retrospectives/SECURITY_INCIDENT_TELEGRAM_20260730.md)
+y [retrospectiva técnica y controles agénticos](./docs/retrospectives/RETROSPECTIVE_TELEGRAM_SECRET_FORENSICS_20260815.md).
+
+## Primera puesta en producción segura
+
+El perfil productivo usa `ENV=production`, autenticación obligatoria, cookies
+`Secure`, Redis para el rate limit de login y HTTPS en `192.168.100.100`. CORS
+acepta sólo el origen exacto del frontend. `/media/*` sirve exclusivamente
+`PUBLIC_MEDIA_ROOT`; adjuntos de ventas, compras y conocimiento viven en
+`PRIVATE_MEDIA_ROOT` y se descargan mediante endpoints autenticados. Los
+secretos se montan con `*_FILE` y los valores directos se rechazan en producción.
+La preparación y el rollback están documentados en
+[Docker Swarm](docs/operations/DOCKER_SWARM.md) y [Media](docs/features/MEDIA.md).
+La primera topología será `SingleNode`, sin promesa de alta disponibilidad. El
+registro privado LAN, la CA interna, el bootstrap de PostgreSQL/Redis/Alembic y
+las imágenes fijadas por digest se preparan con los scripts operativos de esa
+guía. La PKI vigente usa IP SAN y AKI, y debe importarse en el almacén de raíces
+del equipo local antes de reiniciar Docker Desktop y publicar imágenes. Los
+reportes de bugs permanecen en logs locales; el seguimiento curado y
+la documentación privada se mantienen exclusivamente en SiYuan.
 
 ## Base de Conocimiento Canónica (2026-07-26)
 
@@ -41,7 +60,7 @@ La revisión `20260726_canonical_knowledge_v1` reemplaza las fuentes propias de 
 
 Enrich consulta primero conocimiento persistido y sólo usa MCP Web Search cuando falta cobertura. Mercado es la única autoridad de precios y consume activos confirmados con etiqueta `market`, capacidad `price` y perfil técnico válido.
 
-Arquitectura: [docs/CANONICAL_KNOWLEDGE.md](./docs/CANONICAL_KNOWLEDGE.md). Despliegue y smoke real: [docs/CANONICAL_KNOWLEDGE_DEPLOYMENT_SMOKE_20260726.md](./docs/CANONICAL_KNOWLEDGE_DEPLOYMENT_SMOKE_20260726.md).
+Arquitectura: [docs/features/CANONICAL_KNOWLEDGE.md](./docs/features/CANONICAL_KNOWLEDGE.md). Despliegue y smoke real: [docs/features/CANONICAL_KNOWLEDGE_DEPLOYMENT_SMOKE_20260726.md](./docs/features/CANONICAL_KNOWLEDGE_DEPLOYMENT_SMOKE_20260726.md).
 
 ## Enrich v2 y detalle canónico
 
@@ -55,7 +74,7 @@ levantó MCP Web Search, Redis, worker, API y Vue, y activó
 campos porque en esa ejecución no había proveedor generativo disponible. Los
 secretos de proveedores se cargan mediante variables o archivos montados y
 requieren recrear el contenedor consumidor cuando cambia su entorno. Ver
-`docs/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
+`docs/features/ENRICH_V2_DEPLOYMENT_SMOKE_20260725.md`.
 
 ## Chat 😎 y Telegram seguro
 
@@ -65,7 +84,7 @@ Estado vigente: PostgreSQL local alcanzó `20260816_chat_rollout_v1` y el single
 
 La identidad cifrada requiere `cryptography>=49,<50`, declarada en `requirements-base.txt` y ya fijada en los locks del proyecto.
 
-El módulo Vue está implementado como `ready/legacy`: typecheck, 91 pruebas Vue y build aprobaron, pero la regla Nginx productiva para `/chat` no se genera mientras el runtime sea `legacy`. Ya incluye UI de vínculos/doble aprobación, HTTP/WebSocket, streaming, citas y cards compatibles con el contrato real `data.results`. La sanitización de SKU, proveedor y stock exacto se aplica también en backend. Un smoke guest real aprobó carga, conexión, respuesta general y ausencia de citas irrelevantes; React sigue siendo el runtime efectivo hasta completar el smoke autenticado de los cinco roles. La operación detallada está en `docs/CHAT.md`, `docs/SECURITY.md` y `docs/FRONTEND_MIGRATION_VUE.md`.
+El módulo Vue está implementado como `ready/legacy`: typecheck, 91 pruebas Vue y build aprobaron, pero la regla Nginx productiva para `/chat` no se genera mientras el runtime sea `legacy`. Ya incluye UI de vínculos/doble aprobación, HTTP/WebSocket, streaming, citas y cards compatibles con el contrato real `data.results`. La sanitización de SKU, proveedor y stock exacto se aplica también en backend. Un smoke guest real aprobó carga, conexión, respuesta general y ausencia de citas irrelevantes; React sigue siendo el runtime efectivo hasta completar el smoke autenticado de los cinco roles. La operación detallada está en `docs/architecture/CHAT.md`, `docs/operations/SECURITY.md` y `docs/development/FRONTEND_MIGRATION_VUE.md`.
 
 ## Compras Vue e ingesta de remitos
 
@@ -75,7 +94,7 @@ Compras selecciona el proveedor mediante un desplegable con búsqueda; los admin
 
 La validación Vue distingue errores bloqueantes de advertencias de alta automática y explica por qué una compra aún no puede confirmarse. El historial generado por la confirmación admite registros sin `supplier_file`; requiere Alembic head `c923732e1cab` o posterior.
 
-Configuración principal: `PURCHASE_ATTACHMENT_MAX_BYTES`, `PURCHASE_ATTACHMENT_ALLOWED_MIME`, `PURCHASE_STORAGE_ROOT`, `PURCHASE_TOTAL_MISMATCH_TOLERANCE_PCT` y `PURCHASE_CONFIRM_REQUIRE_ALL_LINES`. El perfil documental vive en `config/suppliers/santa-planta.yml`.
+Configuración principal: `PURCHASE_ATTACHMENT_MAX_BYTES`, `PURCHASE_ATTACHMENT_ALLOWED_MIME`, `PRIVATE_MEDIA_ROOT`, `PURCHASE_TOTAL_MISMATCH_TOLERANCE_PCT` y `PURCHASE_CONFIRM_REQUIRE_ALL_LINES`. El perfil documental vive en `config/suppliers/santa-planta.yml`.
 
 Endpoints nuevos: `GET /purchases/{id}/impact` y `GET /products/{id}/purchase-history`.
 
@@ -95,13 +114,13 @@ Los lotes son idempotentes. Un reintento de un lote que falló antes de procesar
 
 El manifiesto activo dirige `/stock`, `/stock/shortages` y `/mercado` a Vue. Stock conserva filtros en la URL, edición decimal de existencias y precios, control optimista mediante `expected_stock`, exportaciones y trazabilidad de faltantes. Mercado ofrece filtros, actualización individual o masiva, polling hasta estado terminal, fuentes auditables, observaciones manuales, descubrimiento e histórico ARS. Desde el detalle, cada URL abre en una pestaña segura y una fuente web puede ejecutar detección focal o registrar validación manual auditada de ARS y entrega argentina.
 
-React conserva copias temporales para rollback, pero ya no es el runtime principal de estas rutas. Su eliminación requiere smoke autenticado y la ventana de estabilidad definida. Los contratos vigentes están en `docs/STOCK.md` y `docs/API_MARKET.md`; el estado de migración se mantiene en `docs/FRONTEND_MIGRATION_VUE.md`.
+React conserva copias temporales para rollback, pero ya no es el runtime principal de estas rutas. Su eliminación requiere smoke autenticado y la ventana de estabilidad definida. Los contratos vigentes están en `docs/features/STOCK.md` y `docs/features/API_MARKET.md`; el estado de migración se mantiene en `docs/development/FRONTEND_MIGRATION_VUE.md`.
 
 ## Documentación
 
-Mercado ejecuta un pipeline persistente `descubrir → validar → extraer` para una selección de hasta 100 productos y conserva hasta tres competidores confirmados por producto. Requiere Redis, `market_worker` con heartbeat y MCP Web Search autenticado; las candidatas incompletas quedan en cuarentena y las fuentes archivadas se pueden restaurar. Ver [API de Mercado](./docs/API_MARKET.md).
+Mercado ejecuta un pipeline persistente `descubrir → validar → extraer` para una selección de hasta 100 productos y conserva hasta tres competidores confirmados por producto. Requiere Redis, `market_worker` con heartbeat y MCP Web Search autenticado; las candidatas incompletas quedan en cuarentena y las fuentes archivadas se pueden restaurar. Ver [API de Mercado](./docs/features/API_MARKET.md).
 
-El notebook local `Nice Grow` expone documentación mediante MCP SiYuan. Git conserva la autoridad sobre `/Growen`; `/Negocio` y `/Operación` son espacios privados administrables por `admin` y agentes STDIO locales. Los colaboradores sólo pueden buscar y leer `/Growen`. Las actualizaciones privadas requieren revisión SHA-256 e historial; los agentes autorizados también pueden crear una base estructurada de tareas mediante una tool acotada. La réplica técnica se sincroniza desde Git con control de conflictos. Ver [docs/MCP.md](./docs/MCP.md), [MCP SiYuan](./mcp_servers/siyuan_server/README.md) y la [retrospectiva técnica](./docs/RETROSPECTIVE_SIYUAN_MCP_20260828.md).
+El notebook local `Nice Grow` expone documentación mediante MCP SiYuan. Git conserva la autoridad sobre `/Growen`; `/Negocio` y `/Operación` son espacios privados administrables por `admin` y agentes STDIO locales. Los colaboradores sólo pueden buscar y leer `/Growen`. Las actualizaciones privadas requieren revisión SHA-256 e historial; los agentes autorizados también pueden crear una base estructurada de tareas mediante una tool acotada. La réplica técnica se sincroniza desde Git con control de conflictos. Ver [docs/architecture/MCP.md](./docs/architecture/MCP.md), [MCP SiYuan](./mcp_servers/siyuan_server/README.md) y la [retrospectiva técnica](./docs/retrospectives/RETROSPECTIVE_SIYUAN_MCP_20260828.md).
 
 El widget local [Crono](./siyuan-widgets/crono/README.md) convierte filas
 pendientes de una Attribute View en tarjetas temporizadas y persiste el total en
@@ -110,30 +129,30 @@ las columnas numéricas `Minutos` y `Segundos`, junto con el ciclo
 categoría se muestra centrada con su color de SiYuan y permanece de sólo lectura.
 
 - Hoja de ruta: [Roadmap.md](./Roadmap.md)
-- Stock y Faltantes: [docs/STOCK.md](./docs/STOCK.md)
-- Mercado: [docs/API_MARKET.md](./docs/API_MARKET.md)
-- Retrospectiva técnica de Productos Vue: [docs/RETROSPECTIVE_PRODUCTS_20260718.md](./docs/RETROSPECTIVE_PRODUCTS_20260718.md)
-- Retrospectiva del widget Crono y su aprendizaje agéntico: [docs/RETROSPECTIVE_SIYUAN_WIDGET_CRONO_20260829.md](./docs/RETROSPECTIVE_SIYUAN_WIDGET_CRONO_20260829.md)
-- Retrospectiva de taxonomía plana, tags y QA: [docs/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md](./docs/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md)
-- Retrospectiva operativa de Redis, Dramatiq y batch canónico: [docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md](./docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md)
+- Stock y Faltantes: [docs/features/STOCK.md](./docs/features/STOCK.md)
+- Mercado: [docs/features/API_MARKET.md](./docs/features/API_MARKET.md)
+- Retrospectiva técnica de Productos Vue: [docs/retrospectives/RETROSPECTIVE_PRODUCTS_20260718.md](./docs/retrospectives/RETROSPECTIVE_PRODUCTS_20260718.md)
+- Retrospectiva del widget Crono y su aprendizaje agéntico: [docs/retrospectives/RETROSPECTIVE_SIYUAN_WIDGET_CRONO_20260829.md](./docs/retrospectives/RETROSPECTIVE_SIYUAN_WIDGET_CRONO_20260829.md)
+- Retrospectiva de taxonomía plana, tags y QA: [docs/retrospectives/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md](./docs/retrospectives/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md)
+- Retrospectiva operativa de Redis, Dramatiq y batch canónico: [docs/retrospectives/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md](./docs/retrospectives/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md)
 - Skill de migración React → Vue: [.agents/skills/vue-module-migration/SKILL.md](./.agents/skills/vue-module-migration/SKILL.md)
-- Skills agénticas, Superpowers y compatibilidad Codex/Gemini/Copilot/Antigravity: [docs/AGENT_SKILLS.md](./docs/AGENT_SKILLS.md)
-- Retrospectiva de adaptación de Superpowers a Growen (2026-08-27): [docs/RETROSPECTIVE_SUPERPOWERS_ADAPTATION_20260827.md](./docs/RETROSPECTIVE_SUPERPOWERS_ADAPTATION_20260827.md)
-- Retrospectiva Chat, Telegram, RAG y Vue (2026-08-17): [docs/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md](./docs/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md)
+- Skills agénticas, Superpowers y compatibilidad Codex/Gemini/Copilot/Antigravity: [docs/development/AGENT_SKILLS.md](./docs/development/AGENT_SKILLS.md)
+- Retrospectiva de adaptación de Superpowers a Growen (2026-08-27): [docs/retrospectives/RETROSPECTIVE_SUPERPOWERS_ADAPTATION_20260827.md](./docs/retrospectives/RETROSPECTIVE_SUPERPOWERS_ADAPTATION_20260827.md)
+- Retrospectiva Chat, Telegram, RAG y Vue (2026-08-17): [docs/retrospectives/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md](./docs/retrospectives/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md)
 - Skill de retrospectiva técnica de sesión — sólo ante `Cerrar sesión` o `Cerremos sesión`: [.agents/skills/retrospectiva-tecnica-sesion/SKILL.md](./.agents/skills/retrospectiva-tecnica-sesion/SKILL.md)
-- Relevamiento funcional del portal React y mapa de migración Vue: [docs/relevamiento_admin.md](./docs/relevamiento_admin.md)
-- **Workflow de Desarrollo (Local vs Docker)**: [docs/DEVELOPMENT_WORKFLOW.md](./docs/DEVELOPMENT_WORKFLOW.md) ⚡
-- Capa MCP (servers/tools): [docs/MCP.md](./docs/MCP.md)
-- Arquitectura chatbot admin: [docs/CHATBOT_ARCHITECTURE.md](./docs/CHATBOT_ARCHITECTURE.md)
-- Roles y autorización del chatbot: [docs/SECURITY.md](./docs/SECURITY.md)
-- Compras (incluye iAVaL - Validador de IA del remito): [docs/PURCHASES.md](./docs/PURCHASES.md)
-- Persona y operación de chat: [docs/CHAT.md](./docs/CHAT.md)
-- SKU Canónico (formato, generación, secuencias): [docs/CANONICAL_SKU.md](./docs/CANONICAL_SKU.md)
-- **Logging y diagnóstico de enriquecimiento IA**: [docs/ENRICHMENT_LOGS.md](./docs/ENRICHMENT_LOGS.md)
+- Relevamiento funcional del portal React y mapa de migración Vue: [docs/features/relevamiento_admin.md](./docs/features/relevamiento_admin.md)
+- **Workflow de Desarrollo (Local vs Docker)**: [docs/development/DEVELOPMENT_WORKFLOW.md](./docs/development/DEVELOPMENT_WORKFLOW.md) ⚡
+- Capa MCP (servers/tools): [docs/architecture/MCP.md](./docs/architecture/MCP.md)
+- Arquitectura chatbot admin: [docs/architecture/CHATBOT_ARCHITECTURE.md](./docs/architecture/CHATBOT_ARCHITECTURE.md)
+- Roles y autorización del chatbot: [docs/operations/SECURITY.md](./docs/operations/SECURITY.md)
+- Compras (incluye iAVaL - Validador de IA del remito): [docs/features/PURCHASES.md](./docs/features/PURCHASES.md)
+- Persona y operación de chat: [docs/architecture/CHAT.md](./docs/architecture/CHAT.md)
+- SKU Canónico (formato, generación, secuencias): [docs/features/CANONICAL_SKU.md](./docs/features/CANONICAL_SKU.md)
+- **Logging y diagnóstico de enriquecimiento IA**: [docs/features/ENRICHMENT_LOGS.md](./docs/features/ENRICHMENT_LOGS.md)
 
 ### Flujo Git para agentes
 
-Cada sesión técnica crea una rama efímera desde el estado actual de `dev`; los commits directos a `dev` están prohibidos. Los comandos `Cerrar sesión` y `Cerremos sesión` activan retrospectiva, evolución agéntica, documentación, sincronización con `origin/dev`, resolución verificable de conflictos, merge final y push. La composición con Superpowers evita copiar metodología general dentro de las skills locales; ver [skills agénticas](./docs/AGENT_SKILLS.md) y [workflow de desarrollo](./docs/DEVELOPMENT_WORKFLOW.md).
+Cada sesión técnica crea una rama efímera desde el estado actual de `dev`; los commits directos a `dev` están prohibidos. Los comandos `Cerrar sesión` y `Cerremos sesión` activan retrospectiva, evolución agéntica, documentación, sincronización con `origin/dev`, resolución verificable de conflictos, merge final y push. La composición con Superpowers evita copiar metodología general dentro de las skills locales; ver [skills agénticas](./docs/development/AGENT_SKILLS.md) y [workflow de desarrollo](./docs/development/DEVELOPMENT_WORKFLOW.md).
 
 ## Primer Arranque en Desarrollo (Windows)
 
@@ -150,9 +169,9 @@ Secuencia recomendada para primer inicio local:
 El bootstrap instala todas las dependencias dentro de `.venv`; no se requiere ejecutar `pip` con el Python del sistema.
 
 Documentación complementaria:
-- Flujo completo local vs Docker: [docs/DEVELOPMENT_WORKFLOW.md](./docs/DEVELOPMENT_WORKFLOW.md)
-- Capa MCP y troubleshooting: [docs/MCP.md](./docs/MCP.md)
-- Entorno Python y errores comunes de `.venv`: [docs/PYTHON_ENVIRONMENT_SETUP.md](./docs/PYTHON_ENVIRONMENT_SETUP.md)
+- Flujo completo local vs Docker: [docs/development/DEVELOPMENT_WORKFLOW.md](./docs/development/DEVELOPMENT_WORKFLOW.md)
+- Capa MCP y troubleshooting: [docs/architecture/MCP.md](./docs/architecture/MCP.md)
+- Entorno Python y errores comunes de `.venv`: [docs/development/PYTHON_ENVIRONMENT_SETUP.md](./docs/development/PYTHON_ENVIRONMENT_SETUP.md)
 
 ## Chatbot Growen
 
@@ -208,7 +227,7 @@ Documentación complementaria:
   - `GET /admin/backups`: listar backups
   - `POST /admin/backups/run`: crear backup inmediato
   - `GET /admin/backups/download/{filename}`: descargar
-  - Ver guía completa: [docs/BACKUPS.md](./docs/BACKUPS.md)
+  - Ver guía completa: [docs/operations/BACKUPS.md](./docs/operations/BACKUPS.md)
 
 - WebSocket
   - `WS /ws`: canal de chat; pings cada 30s; timeout lectura 60s
@@ -224,7 +243,7 @@ Documentación complementaria:
   - `GET /sales/metrics/summary` métricas rápidas (cache 30s)
   - `GET /sales/export` CSV histórico
   - `GET /sales/catalog/search` autocomplete productos
-  - Documentación completa: [docs/SALES.md](./docs/SALES.md)
+  - Documentación completa: [docs/features/SALES.md](./docs/features/SALES.md)
 
 Notas:
 - Rutas de Admin en frontend: `/admin/servicios`, `/admin/usuarios`, `/admin/imagenes-productos`.
@@ -257,7 +276,7 @@ Agente para gestión de catálogo y stock de Nice Grow con interfaz de chat web 
 - **IA**: ruteo automático entre Ollama (local) y OpenAI.
 - **Frontend productivo canónico**: Vue 3 + Vuetify 3 + Pinia + Vue Router en `frontend-vue/`.
 - **Frontend React**: código legado conservado sólo para rollback; no es el frontend productivo.
-- **Plan de evolución frontend**: arquitectura objetivo en `frontend/brainstorming_Growen.md` y estado operativo en `docs/FRONTEND_MIGRATION_VUE.md`.
+- **Plan de evolución frontend**: arquitectura objetivo en `frontend/brainstorming_Growen.md` y estado operativo en `docs/development/FRONTEND_MIGRATION_VUE.md`.
 - **Adapters**: exportación a TiendaNegocio via XLS.
 - **MCP real**: Products y Web Search exponen Streamable HTTP en `/mcp`; Growen descubre tools dinámicamente y las filtra por rol.
   - Products Docker: `http://mcp_products:8100/mcp`.
@@ -316,7 +335,7 @@ El bootstrap instala `requirements-lock.txt` con `--require-hashes`. Las imágen
 
 El quality gate incluye Ruff, Bandit, `pip-audit`, pruebas MCP/seguridad, Vue, detección de secretos y un SBOM CycloneDX reproducible en `security/sbom.cdx.json`.
 
-Antes de publicar una rama, revisar el alcance por rutas explícitas, auditar secretos con salida redactada y confirmar la URL del remoto. Un patrón de token dentro de un campo npm `integrity` debe clasificarse por contexto antes de tratarlo como credencial. Si el destino externo no puede verificarse como confiable o privado, el push requiere aprobación explícita informada. El flujo completo está en `docs/DEVELOPMENT_WORKFLOW.md` y `docs/SECURITY.md`.
+Antes de publicar una rama, revisar el alcance por rutas explícitas, auditar secretos con salida redactada y confirmar la URL del remoto. Un patrón de token dentro de un campo npm `integrity` debe clasificarse por contexto antes de tratarlo como credencial. Si el destino externo no puede verificarse como confiable o privado, el push requiere aprobación explícita informada. El flujo completo está en `docs/development/DEVELOPMENT_WORKFLOW.md` y `docs/operations/SECURITY.md`.
 
 ### Inicio único de desarrollo en Windows
 
@@ -442,8 +461,8 @@ curl http://localhost:8000/health/summary
 ```
 
 Para más detalles sobre:
-- Scraping de mercado: ver [docs/API_MARKET.md](./docs/API_MARKET.md)
-- Sincronización Drive: ver [docs/GOOGLE_DRIVE_SYNC.md](./docs/GOOGLE_DRIVE_SYNC.md) y [docs/DRIVE_SYNC_DRAMATIQ.md](./docs/DRIVE_SYNC_DRAMATIQ.md)
+- Scraping de mercado: ver [docs/features/API_MARKET.md](./docs/features/API_MARKET.md)
+- Sincronización Drive: ver [docs/features/GOOGLE_DRIVE_SYNC.md](./docs/features/GOOGLE_DRIVE_SYNC.md) y [docs/features/DRIVE_SYNC_DRAMATIQ.md](./docs/features/DRIVE_SYNC_DRAMATIQ.md)
 
 ## Instalación local
 
@@ -577,7 +596,7 @@ se debe registrar un webhook ni exponer la API mediante túneles para probar el
 bot. La API ya no monta `POST /telegram/webhook/{token}` y la validación de
 configuración rechaza cualquier `TELEGRAM_TRANSPORT` distinto de `polling`.
 
-Para una prueba controlada, primero completar los gates de `docs/CHAT.md`, dejar
+Para una prueba controlada, primero completar los gates de `docs/architecture/CHAT.md`, dejar
 `TELEGRAM_TRANSPORT=polling`, configurar secretos fuera del repositorio e iniciar
 el proceso sólo con `scripts/start_worker_telegram_polling.cmd`. El worker falla
 si Telegram informa un webhook activo y nunca elimina automáticamente webhook ni
@@ -710,7 +729,7 @@ Acciones del script:
 
 Recomendado antes de reproducir un escenario (confirmar compra, probar WebSocket de chat, etc.) para aislar el nuevo output.
 
-Los alcances de Workers, Imágenes, archivos físicos y aliases legacy están detallados en [docs/LOG_CLEANUP.md](docs/LOG_CLEANUP.md).
+Los alcances de Workers, Imágenes, archivos físicos y aliases legacy están detallados en [docs/operations/LOG_CLEANUP.md](docs/operations/LOG_CLEANUP.md).
 
 ### Migraciones
 
@@ -739,7 +758,7 @@ En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8
 - La UI incluye un botón flotante global (abajo a la derecha) para enviar reportes manuales de errores o problemas.
 - Opcionalmente adjunta una captura de pantalla del estado actual (guardada como archivo en `logs/bugreport_screenshots/`).
 - Los reportes se registran en `logs/BugReport.log` del backend mediante `POST /bug-report`.
-- Más info en `docs/BUG_REPORTS.md`.
+- Más info en `docs/development/BUG_REPORTS.md`.
 
 ### Producción: SPA fallback
 
@@ -887,18 +906,18 @@ Nota sobre fallback en desarrollo: si `ADMIN_PASS` está en placeholder y el ent
 | colaborador | Subir Excel y aplicar importaciones de cualquier proveedor |
 | admin       | Todos los permisos, incluyendo registrar usuarios |
 
-La lista completa de rutas y roles se encuentra en [docs/roles-endpoints.md](docs/roles-endpoints.md).
+La lista completa de rutas y roles se encuentra en [docs/features/roles-endpoints.md](docs/features/roles-endpoints.md).
 
 ### Variables de entorno relevantes
 
 ```env
-SECRET_KEY=REEMPLAZAR_SECRET_KEY
-# ADMIN_USER y ADMIN_PASS se definen en .env (ver .env.example);
-# en producción cambie los placeholders
+# Desarrollo local: puede usar placeholders sólo con ENV=dev.
+# Producción: SECRET_KEY_FILE y ADMIN_PASS_FILE deben apuntar a secretos externos.
+SECRET_KEY_FILE=/run/secrets/secret_key
+ADMIN_PASS_FILE=/run/secrets/admin_pass
 SESSION_EXPIRE_MINUTES=1440 # duración de la sesión en minutos (1 día recomendado)
 AUTH_ENABLED=true
-# se ignora en producción; allí siempre es true
-COOKIE_SECURE=false
+COOKIE_SECURE=true
 COOKIE_DOMAIN=
 ```
 
@@ -908,7 +927,7 @@ COOKIE_DOMAIN=
 
 ```env
 # Token del bot obtenido de @BotFather en Telegram
-TELEGRAM_BOT_TOKEN=<valor_emitido_por_BotFather>
+TELEGRAM_BOT_TOKEN_FILE=/run/secrets/telegram_bot_token
 
 # Transporte aprobado
 TELEGRAM_TRANSPORT=polling
@@ -1593,11 +1612,11 @@ El sistema incluye un pipeline robusto para importar remitos en formato PDF del 
 
 ## Documentación adicional
 
-- [Importación de PDF](docs/IMPORT_PDF.md)
-- [Crawler de imágenes](docs/IMAGES.md)
-- [Seguridad](docs/SECURITY.md)
-- [Gestión de proveedores](docs/SUPPLIERS.md)
-- [Flujo de Compras y Reenvío de Stock](docs/PURCHASES.md)
+- [Importación de PDF](docs/features/IMPORT_PDF.md)
+- [Crawler de imágenes](docs/features/IMAGES.md)
+- [Seguridad](docs/operations/SECURITY.md)
+- [Gestión de proveedores](docs/features/SUPPLIERS.md)
+- [Flujo de Compras y Reenvío de Stock](docs/features/PURCHASES.md)
 
 ## Lineamientos de agentes
 
@@ -1609,7 +1628,7 @@ Clientes y Ventas cuentan con implementación Vue 3/Vuetify y contratos backend 
 
 El corte ya no usa `FRONTEND_VUE_ROUTES`: la fuente única es `frontend-vue/config/modules.json`, que genera router, sidebar y reglas Nginx. El rollback cambia el runtime del módulo a `legacy` y vuelve a desplegar el frontend, sin cambios de datos. Antes de activar en un ambiente con datos, aplicar Alembic hasta `20260717_sales_customers_v4`.
 
-La configuración, activación, smoke y rollback están documentados en [Operación de la migración React/Vue](docs/FRONTEND_MIGRATION_OPERATIONS.md).
+La configuración, activación, smoke y rollback están documentados en [Operación de la migración React/Vue](docs/development/FRONTEND_MIGRATION_OPERATIONS.md).
 
 ## Servicios administrativos Vue
 
@@ -1617,6 +1636,6 @@ Las rutas `/admin/servicios`, `/admin/servicios/workers` y `/admin/servicios/mcp
 
 Usuarios (`/admin/usuarios`) y Backups (`/admin/backups`) también se sirven desde Vue y son exclusivos de `admin`. El resto de `/admin/*` mantiene fallback React hasta completar su paridad.
 
-El cierre técnico, los incidentes conocidos y el handoff para continuar los módulos pendientes están en [Retrospectiva de migración Vue y panel administrativo](docs/RETROSPECTIVE_FRONTEND_ADMIN_20260718.md).
+El cierre técnico, los incidentes conocidos y el handoff para continuar los módulos pendientes están en [Retrospectiva de migración Vue y panel administrativo](docs/retrospectives/RETROSPECTIVE_FRONTEND_ADMIN_20260718.md).
 
-Drive Sync, Scheduler, Conocimiento, Operación/Revisión de Imágenes, Diagnóstico de catálogos, Dashboard técnico y Chat Inbox también cuentan con rutas Vue activas. Requieren Alembic head `20260718_admin_jsonb_v2` o posterior. Los roles, flujos persistentes, descargas, streaming y rollback están documentados en [Operación del panel administrativo Vue](docs/ADMIN_VUE_OPERATIONS.md).
+Drive Sync, Scheduler, Conocimiento, Operación/Revisión de Imágenes, Diagnóstico de catálogos, Dashboard técnico y Chat Inbox también cuentan con rutas Vue activas. Requieren Alembic head `20260718_admin_jsonb_v2` o posterior. Los roles, flujos persistentes, descargas, streaming y rollback están documentados en [Operación del panel administrativo Vue](docs/features/ADMIN_VUE_OPERATIONS.md).

@@ -23,7 +23,6 @@ import asyncio
 import os
 import uuid
 import logging
-import hashlib
 from typing import Any, Optional
 
 from fastapi import APIRouter, WebSocket
@@ -32,7 +31,7 @@ from sqlalchemy.orm import selectinload
 
 from db.models import Session as DBSess
 from db.session import SessionLocal
-from services.auth import hash_session_id
+from services.auth import hash_session_id, pseudonymous_client_id
 from services.chat.history import save_message, get_recent_history
 from services.chat.orchestrator import ChatRequestContext, chat_orchestrator
 from starlette.websockets import WebSocketDisconnect, WebSocketState
@@ -50,10 +49,8 @@ from services.chat.price_lookup import (
 from services.chat.memory import (
     build_memory_key,
     clear_memory,
-    ensure_memory,
     get_memory,
     mark_prompted,
-    mark_resolved,
 )
 from services.chat.shared import (
     ALLOWED_PRODUCT_METRIC_ROLES,
@@ -257,9 +254,8 @@ async def ws_chat(socket: WebSocket) -> None:
         # Agregar prefijo "web:" para identificar sesiones web
         chat_session_id = f"web:{hash_session_id(sid)}"
     else:
-        # Fallback: generar ID basado en IP + user agent
-        raw = f"{host}_{user_agent}"
-        hash_id = hashlib.md5(raw.encode()).hexdigest()[:16]
+        # Fallback seudónimo estable: no persistir IP ni user-agent en claro.
+        hash_id = pseudonymous_client_id(host, user_agent)
         chat_session_id = f"web:{hash_id}"
     
     # Extraer user_identifier para guardar en sesión

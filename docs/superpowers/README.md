@@ -46,7 +46,7 @@ Las 14 skills de Superpowers permanecen en la instalación global compartida del
 Toda documentación incluida bajo `docs/superpowers/` debe mantenerse sincronizada con:
 
 - `AGENTS.md`
-- `docs/AGENT_SKILLS.md`
+- `docs/development/AGENT_SKILLS.md`
 - `Roadmap.md`
 - `README.md`
 

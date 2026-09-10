@@ -36,7 +36,7 @@ function Add-LockMetadata {
 # NG-HEADER: Descripción: $Description
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 "@
-    $content = $header + $content
+    $content = $header + [Environment]::NewLine + $content
     # pip-tools resuelve en Windows y puede perder el marcador transitivo de MCP.
     # Reponerlo evita que las imágenes Linux intenten instalar pywin32.
     $content = $content -replace '(?m)^pywin32==([0-9.]+) \\$', 'pywin32==$1 ; sys_platform == "win32" \'
