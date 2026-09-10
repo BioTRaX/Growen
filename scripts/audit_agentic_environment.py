@@ -11,7 +11,12 @@ import unicodedata
 from pathlib import Path
 
 
-REQUIRED_FILES = ("AGENTS.md", "README.md", "Roadmap.md", "docs/AGENT_SKILLS.md")
+REQUIRED_FILES = (
+    "AGENTS.md",
+    "README.md",
+    "Roadmap.md",
+    "docs/development/AGENT_SKILLS.md",
+)
 SKILL_RE = re.compile(
     r"\A---\r?\nname: ([a-z0-9-]+)\r?\ndescription: ([^\r\n]+)\r?\n---(?:\r?\n|\Z)"
 )
@@ -41,6 +46,9 @@ SKILL_REQUIRED_LINES = {
         ),
         "high_risk_gate": (
             "Implementar las mejoras de riesgo bajo o medio. Ante riesgo muy alto, informar únicamente el estado y la propuesta, preguntar si se avanza y detener el flujo hasta recibir respuesta explícita.",
+        ),
+        "operational_state": (
+            "Inventariar también el estado operativo persistente creado o modificado durante la sesión —contenedores, volúmenes, certificados, secretos versionados y servicios externos— y diferenciarlo explícitamente del estado confirmado en Git.",
         ),
         "auto_merge": (
             "2. Ejecutar `git fetch` y `git merge origin/dev`.",

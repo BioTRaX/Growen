@@ -27,8 +27,8 @@ def test_agentic_audit_accepts_canonical_skill_and_governance(tmp_path: Path) ->
     (tmp_path / "AGENTS.md").write_text("# AGENTS\n", encoding="utf-8")
     (tmp_path / "README.md").write_text("# README\n", encoding="utf-8")
     (tmp_path / "Roadmap.md").write_text("# Roadmap\n", encoding="utf-8")
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "AGENT_SKILLS.md").write_text("# Skills\n", encoding="utf-8")
+    (tmp_path / "docs" / "development").mkdir(parents=True)
+    (tmp_path / "docs" / "development" / "AGENT_SKILLS.md").write_text("# Skills\n", encoding="utf-8")
 
     assert audit_agentic_environment(tmp_path) == []
 
@@ -44,8 +44,8 @@ def test_agentic_audit_defaults_to_current_working_directory(
     (tmp_path / "AGENTS.md").write_text("# AGENTS\n", encoding="utf-8")
     (tmp_path / "README.md").write_text("# README\n", encoding="utf-8")
     (tmp_path / "Roadmap.md").write_text("# Roadmap\n", encoding="utf-8")
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "AGENT_SKILLS.md").write_text("# Skills\n", encoding="utf-8")
+    (tmp_path / "docs" / "development").mkdir(parents=True)
+    (tmp_path / "docs" / "development" / "AGENT_SKILLS.md").write_text("# Skills\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
     assert audit_agentic_environment() == []
@@ -74,8 +74,8 @@ def test_agentic_audit_rejects_frontmatter_without_immediate_closing_delimiter(
     )
     for relative in ("AGENTS.md", "README.md", "Roadmap.md"):
         (tmp_path / relative).write_text(f"# {relative}\n", encoding="utf-8")
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "AGENT_SKILLS.md").write_text("# Skills\n", encoding="utf-8")
+    (tmp_path / "docs" / "development").mkdir(parents=True)
+    (tmp_path / "docs" / "development" / "AGENT_SKILLS.md").write_text("# Skills\n", encoding="utf-8")
 
     findings = audit_agentic_environment(tmp_path)
 
@@ -88,8 +88,8 @@ def test_agentic_audit_requires_ephemeral_git_and_closing_contracts(
 ) -> None:
     for relative in ("AGENTS.md", "README.md", "Roadmap.md"):
         (tmp_path / relative).write_text(f"# {relative}\n", encoding="utf-8")
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "AGENT_SKILLS.md").write_text(
+    (tmp_path / "docs" / "development").mkdir(parents=True)
+    (tmp_path / "docs" / "development" / "AGENT_SKILLS.md").write_text(
         "# Skills\n", encoding="utf-8"
     )
     for name in ("git-commit-push", "retrospectiva-tecnica-sesion"):
@@ -104,6 +104,7 @@ def test_agentic_audit_requires_ephemeral_git_and_closing_contracts(
 
     assert "missing_contract:git-commit-push:ephemeral_branch" in findings
     assert "missing_contract:retrospectiva-tecnica-sesion:closing_triggers" in findings
+    assert "missing_contract:retrospectiva-tecnica-sesion:operational_state" in findings
 
 
 def test_agentic_audit_accepts_explicit_superpowers_references_without_legacy_copy(
@@ -117,8 +118,8 @@ def test_agentic_audit_accepts_explicit_superpowers_references_without_legacy_co
     )
     for relative in ("AGENTS.md", "README.md", "Roadmap.md"):
         (tmp_path / relative).write_text(f"# {relative}\n", encoding="utf-8")
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "AGENT_SKILLS.md").write_text(
+    (tmp_path / "docs" / "development").mkdir(parents=True)
+    (tmp_path / "docs" / "development" / "AGENT_SKILLS.md").write_text(
         "# Skills\n", encoding="utf-8"
     )
 
@@ -167,8 +168,8 @@ def test_direct_trigger_extraction_rejects_an_added_third_trigger() -> None:
 def test_agentic_audit_rejects_a_negated_direct_commit_rule(tmp_path: Path) -> None:
     for relative in ("AGENTS.md", "README.md", "Roadmap.md"):
         (tmp_path / relative).write_text(f"# {relative}\n", encoding="utf-8")
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "AGENT_SKILLS.md").write_text(
+    (tmp_path / "docs" / "development").mkdir(parents=True)
+    (tmp_path / "docs" / "development" / "AGENT_SKILLS.md").write_text(
         "# Skills\n", encoding="utf-8"
     )
     skill_dir = tmp_path / ".agents" / "skills" / "git-commit-push"
@@ -191,8 +192,8 @@ def test_agentic_audit_rejects_negated_ambiguity_and_risk_rules(
 ) -> None:
     for relative in ("AGENTS.md", "README.md", "Roadmap.md"):
         (tmp_path / relative).write_text(f"# {relative}\n", encoding="utf-8")
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "AGENT_SKILLS.md").write_text(
+    (tmp_path / "docs" / "development").mkdir(parents=True)
+    (tmp_path / "docs" / "development" / "AGENT_SKILLS.md").write_text(
         "# Skills\n", encoding="utf-8"
     )
     skill_dir = tmp_path / ".agents" / "skills" / "retrospectiva-tecnica-sesion"
@@ -216,8 +217,8 @@ def test_agentic_audit_rejects_negated_ambiguity_and_risk_rules(
 def test_agentic_audit_rejects_unconditional_git_add_all(tmp_path: Path) -> None:
     for relative in ("AGENTS.md", "README.md", "Roadmap.md"):
         (tmp_path / relative).write_text(f"# {relative}\n", encoding="utf-8")
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "AGENT_SKILLS.md").write_text(
+    (tmp_path / "docs" / "development").mkdir(parents=True)
+    (tmp_path / "docs" / "development" / "AGENT_SKILLS.md").write_text(
         "# Skills\n", encoding="utf-8"
     )
     skill_dir = tmp_path / ".agents" / "skills" / "git-commit-push"
