@@ -133,6 +133,7 @@ categoría se muestra centrada con su color de SiYuan y permanece de sólo lectu
 - Mercado: [docs/features/API_MARKET.md](./docs/features/API_MARKET.md)
 - Retrospectiva técnica de Productos Vue: [docs/retrospectives/RETROSPECTIVE_PRODUCTS_20260718.md](./docs/retrospectives/RETROSPECTIVE_PRODUCTS_20260718.md)
 - Retrospectiva del widget Crono y su aprendizaje agéntico: [docs/retrospectives/RETROSPECTIVE_SIYUAN_WIDGET_CRONO_20260829.md](./docs/retrospectives/RETROSPECTIVE_SIYUAN_WIDGET_CRONO_20260829.md)
+- Retrospectiva de reconstrucción documental SiYuan y coordinación del worktree: [docs/retrospectives/RETROSPECTIVE_SIYUAN_DOCUMENTATION_REBUILD_20260910.md](./docs/retrospectives/RETROSPECTIVE_SIYUAN_DOCUMENTATION_REBUILD_20260910.md)
 - Retrospectiva de taxonomía plana, tags y QA: [docs/retrospectives/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md](./docs/retrospectives/RETROSPECTIVE_PRODUCTS_TAXONOMY_TAGS_20260720.md)
 - Retrospectiva operativa de Redis, Dramatiq y batch canónico: [docs/retrospectives/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md](./docs/retrospectives/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md)
 - Skill de migración React → Vue: [.agents/skills/vue-module-migration/SKILL.md](./.agents/skills/vue-module-migration/SKILL.md)

@@ -13,6 +13,7 @@ from scripts.agent_lock import (
     LockConflictError,
     acquire,
     release,
+    renew,
     status,
 )
 
@@ -67,6 +68,30 @@ def test_release_refuses_when_owned_by_other_agent(tmp_path: Path) -> None:
 
 def test_release_missing_lock_returns_false(tmp_path: Path) -> None:
     assert release(tmp_path, "db/models.py", "codex") is False
+
+
+def test_renew_extends_active_lock_owned_by_agent(tmp_path: Path) -> None:
+    original = acquire(tmp_path, "git-worktree", "codex", ttl_minutes=1)
+
+    renewed = renew(tmp_path, "git-worktree", "codex", ttl_minutes=60)
+
+    assert renewed.acquired_at == original.acquired_at
+    assert renewed.expires_at > original.expires_at
+    assert status(tmp_path, "git-worktree")[0].expires_at == renewed.expires_at
+
+
+def test_renew_rejects_lock_owned_by_another_agent(tmp_path: Path) -> None:
+    acquire(tmp_path, "git-worktree", "codex", ttl_minutes=30)
+
+    with pytest.raises(LockConflictError):
+        renew(tmp_path, "git-worktree", "gemini-cli", ttl_minutes=30)
+
+
+def test_renew_rejects_expired_lock(tmp_path: Path) -> None:
+    acquire(tmp_path, "git-worktree", "codex", ttl_minutes=-1)
+
+    with pytest.raises(LockConflictError):
+        renew(tmp_path, "git-worktree", "codex", ttl_minutes=30)
 
 
 def test_status_lists_active_and_expired(tmp_path: Path) -> None:

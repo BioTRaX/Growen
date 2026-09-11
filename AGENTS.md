@@ -49,6 +49,8 @@ Este documento orienta a herramientas de asistencia de código (Copilot, Codex, 
 
 - El repositorio opera sobre un único worktree físico compartido por todos los agentes. Antes de tocar una skill compartida, un documento de gobernanza, un área de esquema (`db/models.py`, migraciones) o un refactor de alcance amplio, adquirir un lock lógico con `scripts/agent_lock.py acquire <scope> --agent <nombre> --reason <texto>` y liberarlo con `release` al terminar o durante el cierre de sesión.
 - Consultar `scripts/agent_lock.py status <scope>` antes de iniciar ese tipo de cambio si hay señales de que otro agente puede estar activo. El lock es cooperativo: no reemplaza el gate de `git-commit-push` ni bloquea el sistema de archivos, es una señal previa para evitar condiciones de carrera.
+- Antes de crear o cambiar una rama en el checkout compartido, consultar y adquirir el ámbito global `git-worktree`; conservarlo durante toda la tarea y liberarlo al finalizar. Si otro agente lo mantiene vigente, no ejecutar `git switch`, `git stash` ni modificar archivos: limitarse a diagnósticos de sólo lectura que no interfieran.
+- Renovar con `scripts/agent_lock.py renew <scope> --agent <nombre> --ttl-minutes <n>` los locks de tareas que superen la mitad de su TTL. Un lock vencido no se renueva: debe readquirirse después de verificar el estado real del ámbito.
 - La arquitectura completa, los hallazgos de la auditoría y el detalle de ámbitos recomendados están en `docs/architecture/AGENT_ORCHESTRATION.md`.
 
 ### Compatibilidad con Superpowers
@@ -366,7 +368,7 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 - `meli_worker_health.py`: healthcheck interno del consumidor `meli_sync` mediante heartbeat Redis; no consulta ni imprime secretos.
 
 ### SiYuan / Documentación
-- `publish_docs_to_siyuan.py`: sincroniza Markdown gobernado por Git hacia `/Growen`, mantiene estado externo por hash, detecta conflictos y no elimina huérfanos. Usar `--apply --force-conflicts` sólo después de revisar el manifiesto.
+- `publish_docs_to_siyuan.py`: sincroniza los Markdown versionados de raíz y `docs/` hacia `/Growen/Documentación técnica`, mantiene estado externo por hash y reanuda publicaciones parciales. La reconstrucción destructiva está limitada a esa raíz y exige `--apply --rebuild --confirm-rebuild "/Growen/Documentación técnica"`; el flujo normal no elimina huérfanos.
 - `smoke_siyuan_mcp.py`: valida lectura, creación privada, actualización con revisión y rechazo de una revisión obsoleta; ejecutarlo únicamente sobre un workspace SiYuan desechable.
 - `invoke_siyuan_task_database.py`: invoca por MCP STDIO la creación acotada de una base de tareas en un documento privado autorizado.
 - `sync-siyuan-widget.ps1`: compara hashes entre `siyuan-widgets/<nombre>` y el workspace operativo. Sin `-Apply` es sólo lectura; `-Apply` requiere autorización y copia únicamente archivos runtime `.html`, `.css`, `.js` y `.json`, sin borrar extras.

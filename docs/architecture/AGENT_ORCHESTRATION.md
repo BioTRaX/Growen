@@ -141,7 +141,7 @@ diario de una sola sesión trabajando en su propia rama efímera.
 ### 4.3 Implementación: `scripts/agent_lock.py`
 
 Se implementó un coordinador determinista y con pruebas
-(`tests/test_agent_lock.py`, 8 casos) que materializa el mecanismo:
+(`tests/test_agent_lock.py`, 11 casos) que materializa el mecanismo:
 
 ```powershell
 # Antes de tocar una skill compartida o un área sensible
@@ -150,6 +150,10 @@ Se implementó un coordinador determinista y con pruebas
 
 # Otro agente puede consultar antes de empezar
 .\.venv\Scripts\python.exe scripts\agent_lock.py status ".agents/skills/create-service"
+
+# Una tarea larga renueva su lease antes de alcanzar la mitad del TTL
+.\.venv\Scripts\python.exe scripts\agent_lock.py renew ".agents/skills/create-service" `
+  --agent codex --ttl-minutes 45
 
 # Al terminar (o durante el cierre de sesión)
 .\.venv\Scripts\python.exe scripts\agent_lock.py release ".agents/skills/create-service" --agent codex
@@ -169,6 +173,8 @@ Características clave:
 - **Expiración automática**: un lock vencido se puede tomar sin `--force`;
   liberar el lock de otro agente vigente exige `--force` explícito, dejando
   evidencia de que fue una decisión consciente, no un descarte accidental.
+- **Lease renovable**: `renew` extiende únicamente un lock activo del mismo
+  agente, conserva su instante de adquisición y rechaza locks vencidos o ajenos.
 - **Estado fuera de Git**: persiste en `.agents/state/locks/*.json`, agregado a
   `.gitignore`. Nunca se versiona ni participa de un merge.
 
@@ -177,8 +183,12 @@ Características clave:
 - **Al iniciar** un cambio de alcance amplio o sobre gobernanza/skills, adquirir
   el lock del `scope` antes de crear la rama efímera o editar archivos.
 - **Antes de un cambio de rama** (`git switch -c` o `git switch dev`), un
-  agente debe considerar el estado de locks activos como señal adicional junto
-  a `git status --short` para detectar trabajo concurrente no confirmado.
+  agente adquiere el ámbito global `git-worktree` y lo conserva durante toda la
+  tarea. Si otro agente lo mantiene vigente, no cambia la rama, no crea un stash
+  ni escribe sobre el checkout compartido.
+- **Durante tareas largas**, renovar cada lease antes de consumir la mitad del
+  TTL. Si ya venció, verificar el ámbito y adquirir uno nuevo; `renew` no revive
+  locks expirados.
 - **Al cerrar sesión** (`retrospectiva-tecnica-sesion`), liberar los locks
   propios como parte del cierre, igual que hoy se valida el resto del gate.
 - El mecanismo es aditivo: no se modificó el contrato obligatorio de
@@ -207,13 +217,14 @@ exclusivamente runtime.
 | 3 | Ignorar `.agents/state/` en `.gitignore` | Bajo | Implementado en esta sesión |
 | 4 | Documentar la arquitectura (este documento) y referenciarla desde `AGENTS.md` y `docs/development/AGENT_SKILLS.md` | Bajo | Implementado en esta sesión |
 | 5 | Adoptar el lock en `skill-scaffolder` para el escenario que ya causó fricción real (scaffolding concurrente de skills) | Bajo | Implementado en esta sesión |
-| 6 | Extender `scripts/audit_agentic_environment.py` para reportar locks vencidos olvidados (limpieza, no bloqueo) | Medio (requiere criterio sobre cuándo alertar sin generar ruido) | Propuesto, no implementado |
-| 7 | Evaluar `git worktree add` por sesión para agentes que sí necesiten paralelismo físico real (no sólo lógico) | Medio-alto (cambia el flujo de trabajo diario, exige documentación y validación con el equipo) | Propuesto, requiere decisión explícita del equipo antes de implementar |
-| 8 | Métrica de uso: contar activaciones/duración de locks para ajustar TTL por defecto | Bajo | Propuesto para una iteración futura |
+| 6 | Incorporar leases renovables y serializar cambios de rama mediante el ámbito global `git-worktree` | Medio (cambia coordinación local, reversible y cubierto por pruebas) | Implementado el 2026-09-10 |
+| 7 | Extender `scripts/audit_agentic_environment.py` para reportar locks vencidos olvidados (limpieza, no bloqueo) | Medio (requiere criterio sobre cuándo alertar sin generar ruido) | Propuesto, no implementado |
+| 8 | Evaluar `git worktree add` por sesión para agentes que sí necesiten paralelismo físico real (no sólo lógico) | Medio-alto (cambia el flujo de trabajo diario, exige documentación y validación con el equipo) | Propuesto, requiere decisión explícita del equipo antes de implementar |
+| 9 | Métrica de uso: contar activaciones/duración de locks para ajustar TTL por defecto | Bajo | Propuesto para una iteración futura |
 
-Los ítems 1 a 5 son de riesgo bajo, reversibles y ya fueron implementados como
+Los ítems 1 a 6 son de riesgo bajo o medio, reversibles y ya fueron implementados como
 parte de esta auditoría, conforme al criterio de evolución agéntica de riesgo
-bajo/medio de `retrospectiva-tecnica-sesion`. El ítem 7 se deja explícitamente
+bajo/medio de `retrospectiva-tecnica-sesion`. El ítem 8 se deja explícitamente
 como propuesta abierta porque cambia el flujo operativo diario (un worktree por
 agente exige rutas de trabajo, scripts de arranque y documentación adicionales)
 y no debe adoptarse sin validación explícita.

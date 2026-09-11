@@ -17,6 +17,9 @@
   `--apply` sin repetir el borrado. Los timeouts destructivos se reconcilian por
   lectura y cada creación espera hasta que el documento sea legible antes de
   confirmar su checkpoint.
+- Los locks cooperativos incorporan renovación de leases y el ámbito global
+  `git-worktree`, que serializa cambios de rama sobre el checkout físico
+  compartido; once pruebas cubren adquisición, renovación, conflicto y liberación.
 
 ## 2026-09-10 — auditor de calidad de Enrich v2, orquestación y monitoreo técnico
 

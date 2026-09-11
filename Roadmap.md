@@ -43,7 +43,7 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 - [ ] Consolidar la observabilidad de costes, latencia y errores de proveedores IA.
 - [ ] Medir periódicamente activaciones y consumo de tokens de skills Growen/Superpowers para ajustar descripciones sin debilitar los gates locales.
 - [ ] Extender `scripts/audit_agentic_environment.py` para reportar locks de `scripts/agent_lock.py` vencidos y olvidados en `.agents/state/locks/`.
-- [ ] Evaluar `git worktree add` por sesión de agente como aislamiento físico real, alternativo al lock lógico cooperativo descrito en `docs/architecture/AGENT_ORCHESTRATION.md`; requiere decisión explícita antes de implementarse.
+- [ ] Evaluar `git worktree add` por sesión de agente como aislamiento físico real, después de la serialización actual mediante el ámbito global `git-worktree`; requiere definir rutas, puertos y autoridad del checkout central antes de implementarse.
 
 ## Frontend Vue
 
