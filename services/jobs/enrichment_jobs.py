@@ -48,12 +48,12 @@ from db.models import (
     CanonicalEnrichmentJob,
     CanonicalEnrichmentSource,
     CanonicalKnowledgeAsset,
-    CanonicalKnowledgeVersion,
     CanonicalProduct,
 )
 from db.session import SessionLocal
+from services.enrichment.auditor import audit_enrichment_proposal
 from services.knowledge.service import register_discovered_asset
-from services.routers.enrichment import CONTENT_FIELDS, canonical_snapshot
+from services.routers.enrichment import canonical_snapshot
 
 
 logger = logging.getLogger(__name__)
@@ -644,10 +644,18 @@ def _build_result(
             field_sources[field] = [source_url]
             if auto_enabled and field_confidence >= technical_minimum:
                 auto_fields.append(field)
+    audit = audit_enrichment_proposal(
+        product_name=product.name,
+        brand=product.brand,
+        proposal=proposal,
+    )
+    if not audit.passed:
+        auto_fields = []
     return {
         "proposal": proposal,
         "confidence": confidence,
         "field_sources": field_sources,
+        "quality_audit": audit.to_dict(),
     }, auto_fields
 
 

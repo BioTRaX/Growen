@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -91,6 +91,7 @@ def serialize_job(job: CanonicalEnrichmentJob) -> dict:
         "proposal": result.get("proposal"),
         "confidence": result.get("confidence"),
         "evidence_by_field": result.get("field_sources"),
+        "quality_audit": result.get("quality_audit"),
         "provider_diagnostics": result.get("provider_diagnostics") or [],
         "sources": [
             {
@@ -464,3 +465,145 @@ async def start_enrichment_batch(
             "error": dispatch_error,
         })
     return {"batch_id": batch_id, "jobs": jobs, "skipped": skipped}
+
+
+@router.get("/enrichment-summary")
+async def get_enrichment_summary(
+    session: AsyncSession = Depends(get_session),
+    _user: SessionData = Depends(require_roles("admin", "colaborador")),
+) -> dict:
+    """Métricas operativas del worker, profundidad de colas y resumen de jobs de enriquecimiento."""
+    broker_ok = False
+    ready = 0
+    delayed = 0
+    try:
+        import redis
+        client = redis.from_url(os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"))
+        broker_ok = bool(client.ping())
+        ready = int(client.llen("dramatiq:enrichment"))
+        delayed = int(client.zcard("dramatiq:enrichment.DQ"))
+    except Exception:
+        pass
+
+    from services.orchestrator import status_service
+    worker_status = status_service("enrichment_worker")
+
+    status_counts_query = await session.execute(
+        select(CanonicalEnrichmentJob.status, func.count(CanonicalEnrichmentJob.id))
+        .group_by(CanonicalEnrichmentJob.status)
+    )
+    by_status: dict[str, int] = {str(row[0]): int(row[1]) for row in status_counts_query.all()}
+    total_jobs = sum(by_status.values())
+
+    recent_jobs_stmt = (
+        select(CanonicalEnrichmentJob)
+        .options(selectinload(CanonicalEnrichmentJob.canonical_product))
+        .order_by(CanonicalEnrichmentJob.created_at.desc())
+        .limit(10)
+    )
+    recent_jobs_result = await session.execute(recent_jobs_stmt)
+    recent_jobs: list[dict] = []
+    for job in recent_jobs_result.scalars():
+        res = job.result_json or {}
+        audit = res.get("quality_audit") or {}
+        recent_jobs.append({
+            "job_id": job.id,
+            "canonical_product_id": job.canonical_product_id,
+            "product_name": job.canonical_product.name if job.canonical_product else f"Producto #{job.canonical_product_id}",
+            "brand": job.canonical_product.brand if job.canonical_product else None,
+            "status": job.status,
+            "scope": job.scope,
+            "provider": job.provider,
+            "model": job.model,
+            "quality_score": audit.get("score"),
+            "quality_passed": audit.get("passed"),
+            "warnings_count": len(audit.get("warnings") or []),
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        })
+
+    total_canonical = await session.scalar(select(func.count(CanonicalProduct.id))) or 0
+    enriched_canonical = await session.scalar(
+        select(func.count(CanonicalProduct.id)).where(
+            CanonicalProduct.content_revision > 0
+        )
+    ) or 0
+
+    return {
+        "worker": {
+            "name": "enrichment_worker",
+            "status": worker_status.status,
+            "ok": worker_status.ok,
+            "pid": worker_status.pid,
+            "detail": worker_status.detail,
+            "broker_ok": broker_ok,
+            "ready": ready,
+            "delayed": delayed,
+        },
+        "jobs": {
+            "total": total_jobs,
+            "by_status": by_status,
+            "recent": recent_jobs,
+        },
+        "catalog_coverage": {
+            "total_canonical": total_canonical,
+            "enriched": enriched_canonical,
+            "pending": max(0, total_canonical - enriched_canonical),
+        },
+    }
+
+
+@router.get("/catalog-audit-report")
+async def get_catalog_audit_report(
+    limit: int = 100,
+    session: AsyncSession = Depends(get_session),
+    _user: SessionData = Depends(require_roles("admin", "colaborador")),
+) -> dict:
+    """Ejecuta una auditoría determinista sobre los productos canónicos existentes en la BD."""
+    from services.enrichment.auditor import audit_enrichment_proposal
+
+    stmt = select(CanonicalProduct).order_by(CanonicalProduct.id.desc()).limit(limit)
+    result = await session.execute(stmt)
+    products = result.scalars().all()
+
+    clean_count = 0
+    issues: list[dict] = []
+
+    for product in products:
+        proposal = {
+            "weight_kg": product.weight_kg,
+            "height_cm": product.height_cm,
+            "width_cm": product.width_cm,
+            "depth_cm": product.depth_cm,
+            "description_html": product.description_html,
+        }
+        if not any(v is not None for v in proposal.values()):
+            continue
+
+        audit = audit_enrichment_proposal(
+            product_name=product.name,
+            brand=product.brand,
+            proposal=proposal,
+        )
+
+        if audit.passed and not audit.warnings:
+            clean_count += 1
+        else:
+            issues.append({
+                "canonical_product_id": product.id,
+                "name": product.name,
+                "brand": product.brand,
+                "score": audit.score,
+                "passed": audit.passed,
+                "flags": audit.flags,
+                "warnings": audit.warnings,
+                "field_issues": audit.field_issues,
+            })
+
+    return {
+        "total_audited": clean_count + len(issues),
+        "clean_count": clean_count,
+        "issues_count": len(issues),
+        "issues": issues,
+    }
+
