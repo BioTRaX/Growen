@@ -9,7 +9,7 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 
 ## Documentación y SiYuan
 
-- [ ] Integrar la sincronización Git → SiYuan al gate manual de publicación después de su ventana de estabilidad local.
+- [ ] Integrar al gate manual la sincronización Git → SiYuan y su modo de reconstrucción explícita después de completar la ventana de estabilidad local.
 - [ ] Automatizar el smoke de Attribute Views MCP sobre un workspace SiYuan desechable y versionado.
 - [ ] Incorporar el widget Crono al smoke desechable de Attribute Views para validar minutos, segundos, estados, categorías de sólo lectura y checkbox.
 - [ ] Integrar el diagnóstico `sync-siyuan-widget.ps1` al gate manual cuando exista un workspace desechable de widgets.
@@ -43,7 +43,7 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 - [ ] Consolidar la observabilidad de costes, latencia y errores de proveedores IA.
 - [ ] Medir periódicamente activaciones y consumo de tokens de skills Growen/Superpowers para ajustar descripciones sin debilitar los gates locales.
 - [ ] Extender `scripts/audit_agentic_environment.py` para reportar locks de `scripts/agent_lock.py` vencidos y olvidados en `.agents/state/locks/`.
-- [ ] Evaluar `git worktree add` por sesión de agente como aislamiento físico real, alternativo al lock lógico cooperativo descrito en `docs/architecture/AGENT_ORCHESTRATION.md`; requiere decisión explícita antes de implementarse.
+- [ ] Evaluar `git worktree add` por sesión de agente como aislamiento físico real, después de la serialización actual mediante el ámbito global `git-worktree`; requiere definir rutas, puertos y autoridad del checkout central antes de implementarse.
 
 ## Frontend Vue
 

@@ -16,6 +16,7 @@ de tocar el mismo ámbito.
 
 Uso:
     python scripts/agent_lock.py acquire <scope> --agent <nombre> --reason <texto> [--ttl-minutes 30]
+    python scripts/agent_lock.py renew <scope> --agent <nombre> [--ttl-minutes 30]
     python scripts/agent_lock.py release <scope> --agent <nombre> [--force]
     python scripts/agent_lock.py status [<scope>]
     python scripts/agent_lock.py list
@@ -77,6 +78,13 @@ def _read_lock(path: Path) -> LockRecord | None:
     return LockRecord(**data)
 
 
+def _write_lock(path: Path, record: LockRecord) -> None:
+    payload = json.dumps(asdict(record), ensure_ascii=False, indent=2)
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(payload, encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
 def acquire(
     root: Path,
     scope: str,
@@ -109,13 +117,29 @@ def acquire(
         acquired_at=now,
         expires_at=now + ttl_minutes * 60,
     )
-    payload = json.dumps(asdict(record), ensure_ascii=False, indent=2)
-
-    # Escritura atómica: archivo temporal + rename dentro del mismo directorio.
-    tmp_path = path.with_suffix(".json.tmp")
-    tmp_path.write_text(payload, encoding="utf-8")
-    os.replace(tmp_path, path)
+    _write_lock(path, record)
     return record
+
+
+def renew(
+    root: Path,
+    scope: str,
+    agent: str,
+    *,
+    ttl_minutes: int = DEFAULT_TTL_MINUTES,
+) -> LockRecord:
+    """Extiende un lock activo sin cambiar su propietario ni inicio."""
+    path = _lock_path(root, scope)
+    existing = _read_lock(path)
+    if existing is None or existing.is_expired():
+        raise LockConflictError(f"scope '{scope}' no tiene un lock activo renovable")
+    if existing.agent != agent:
+        raise LockConflictError(f"scope '{scope}' pertenece a '{existing.agent}'")
+    existing.expires_at = time.time() + ttl_minutes * 60
+    existing.pid = os.getpid()
+    existing.host = socket.gethostname()
+    _write_lock(path, existing)
+    return existing
 
 
 def release(root: Path, scope: str, agent: str, *, force: bool = False) -> bool:
@@ -165,6 +189,11 @@ def main(argv: list[str] | None = None) -> int:
     acquire_parser.add_argument("--reason", default="")
     acquire_parser.add_argument("--ttl-minutes", type=int, default=DEFAULT_TTL_MINUTES)
 
+    renew_parser = subparsers.add_parser("renew", help="Renovar un lock activo propio")
+    renew_parser.add_argument("scope")
+    renew_parser.add_argument("--agent", required=True)
+    renew_parser.add_argument("--ttl-minutes", type=int, default=DEFAULT_TTL_MINUTES)
+
     release_parser = subparsers.add_parser("release", help="Liberar un lock por ámbito")
     release_parser.add_argument("scope")
     release_parser.add_argument("--agent", required=True)
@@ -201,6 +230,20 @@ def main(argv: list[str] | None = None) -> int:
             print(f"CONFLICTO: {exc}", file=sys.stderr)
             return 1
         print("liberado" if released else "no existía lock para ese scope")
+        return 0
+
+    if args.command == "renew":
+        try:
+            record = renew(
+                root,
+                args.scope,
+                args.agent,
+                ttl_minutes=args.ttl_minutes,
+            )
+        except LockConflictError as exc:
+            print(f"CONFLICTO: {exc}", file=sys.stderr)
+            return 1
+        _print_record(record)
         return 0
 
     if args.command in ("status", "list"):

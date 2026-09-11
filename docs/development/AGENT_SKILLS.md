@@ -121,10 +121,14 @@ script automatiza la sincronización repetible que no merece una skill propia.
 
 Los agentes comparten un único worktree físico; no hay aislamiento de sistema
 de archivos entre sesiones concurrentes. `scripts/agent_lock.py` provee locks
-cooperativos por ámbito (`acquire`, `release`, `status`, `list`) con expiración
-por TTL, persistidos fuera de Git en `.agents/state/locks/` (ignorado). Usarlo
+cooperativos por ámbito (`acquire`, `renew`, `release`, `status`, `list`) con
+leases renovables y expiración por TTL, persistidos fuera de Git en
+`.agents/state/locks/` (ignorado). Usarlo
 antes de editar una skill compartida, un documento de gobernanza o un área de
-esquema cuando pueda haber otro agente activo. El detalle de la auditoría que
+esquema cuando pueda haber otro agente activo. Todo cambio de rama en el checkout
+compartido requiere además el ámbito global `git-worktree`, mantenido durante la
+tarea; los trabajos largos renuevan el lease antes de consumir la mitad del TTL.
+El detalle de la auditoría que
 originó este mecanismo, incluyendo el incidente real de scaffolding
 concurrente de 2026-08-15, está en
 [docs/architecture/AGENT_ORCHESTRATION.md](../architecture/AGENT_ORCHESTRATION.md).

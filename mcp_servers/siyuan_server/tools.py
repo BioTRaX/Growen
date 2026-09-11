@@ -333,6 +333,40 @@ class SiYuanService:
     async def create_git_document(self, path: str, markdown: str) -> dict[str, Any]:
         return await self._create_at_path(self._validate_git_path(path), markdown)
 
+    async def remove_git_document_tree(
+        self,
+        path: str,
+        expected_document_id: str,
+    ) -> dict[str, Any]:
+        publication_root = f"{self.git_path_prefix}/Documentación técnica"
+        path = self._validate_git_path(path)
+        if path != publication_root:
+            raise DocumentForbiddenError("document_forbidden")
+        if not DOCUMENT_ID_RE.fullmatch(str(expected_document_id)):
+            raise ValueError("document_id_invalid")
+
+        document_id = await self.find_document_by_path(path)
+        if document_id is None:
+            raise DocumentNotFoundError("document_not_found")
+        if document_id != expected_document_id:
+            raise DocumentConflictError("document_conflict")
+
+        await self.client.post("/api/history/createDocHistory", {"id": document_id})
+        reconciled = False
+        try:
+            await self.client.post("/api/filetree/removeDocByID", {"id": document_id})
+        except SiYuanError as exc:
+            if await self.find_document_by_path(path) is not None:
+                raise DocumentWriteStatusUnknownError("document_write_status_unknown") from exc
+            reconciled = True
+        else:
+            if await self.find_document_by_path(path) is not None:
+                raise DocumentWriteStatusUnknownError("document_write_status_unknown")
+        result = {"deleted": True, "document_id": document_id, "hpath": path}
+        if reconciled:
+            result["reconciled"] = True
+        return result
+
     @staticmethod
     def _inserted_block_id(response: Any) -> str:
         if not isinstance(response, list):
