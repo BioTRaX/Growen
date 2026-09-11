@@ -795,6 +795,92 @@ async def test_create_git_document_uses_internal_git_policy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_remove_git_document_tree_only_accepts_publication_root() -> None:
+    service = _admin_service(FakeClient({}))
+
+    with pytest.raises(tools_module.DocumentForbiddenError, match="document_forbidden"):
+        await service.remove_git_document_tree(
+            "/Growen/Pruebas MCP",
+            "20260827123456-abcdefg",
+        )
+
+
+@pytest.mark.asyncio
+async def test_remove_git_document_tree_rejects_changed_document_id() -> None:
+    client = FakeClient(
+        {
+            "/api/notebook/lsNotebooks": {
+                "notebooks": [{"id": "box-1", "name": "Nice Grow", "closed": False}]
+            },
+            "/api/filetree/getIDsByHPath": ["20260827123456-changed"],
+        }
+    )
+
+    with pytest.raises(tools_module.DocumentConflictError, match="document_conflict"):
+        await _admin_service(client).remove_git_document_tree(
+            "/Growen/Documentación técnica",
+            "20260827123456-abcdefg",
+        )
+
+
+@pytest.mark.asyncio
+async def test_remove_git_document_tree_verifies_id_and_disappearance() -> None:
+    document_id = "20260827123456-abcdefg"
+    client = FakeClient(
+        {
+            "/api/notebook/lsNotebooks": {
+                "notebooks": [{"id": "box-1", "name": "Nice Grow", "closed": False}]
+            },
+            "/api/filetree/getIDsByHPath": ([document_id], []),
+            "/api/history/createDocHistory": None,
+            "/api/filetree/removeDocByID": None,
+        }
+    )
+
+    result = await _admin_service(client).remove_git_document_tree(
+        "/Growen/Documentación técnica",
+        document_id,
+    )
+
+    assert result == {
+        "deleted": True,
+        "document_id": document_id,
+        "hpath": "/Growen/Documentación técnica",
+    }
+    assert [call[0] for call in client.calls] == [
+        "/api/notebook/lsNotebooks",
+        "/api/filetree/getIDsByHPath",
+        "/api/history/createDocHistory",
+        "/api/filetree/removeDocByID",
+        "/api/filetree/getIDsByHPath",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_remove_git_document_tree_reports_uncertain_if_root_remains() -> None:
+    document_id = "20260827123456-abcdefg"
+    client = FakeClient(
+        {
+            "/api/notebook/lsNotebooks": {
+                "notebooks": [{"id": "box-1", "name": "Nice Grow", "closed": False}]
+            },
+            "/api/filetree/getIDsByHPath": ([document_id], [document_id]),
+            "/api/history/createDocHistory": None,
+            "/api/filetree/removeDocByID": None,
+        }
+    )
+
+    with pytest.raises(
+        tools_module.DocumentWriteStatusUnknownError,
+        match="document_write_status_unknown",
+    ):
+        await _admin_service(client).remove_git_document_tree(
+            "/Growen/Documentación técnica",
+            document_id,
+        )
+
+
+@pytest.mark.asyncio
 async def test_update_git_document_uses_same_history_and_revision_guard() -> None:
     client = _update_client(hpath="/Growen/Documentación técnica/README")
     previous = hashlib.sha256("versión anterior".encode()).hexdigest()

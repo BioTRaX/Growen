@@ -9,7 +9,7 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 
 ## Documentación y SiYuan
 
-- [ ] Integrar la sincronización Git → SiYuan al gate manual de publicación después de su ventana de estabilidad local.
+- [ ] Integrar al gate manual la sincronización Git → SiYuan y su modo de reconstrucción explícita después de completar la ventana de estabilidad local.
 - [ ] Automatizar el smoke de Attribute Views MCP sobre un workspace SiYuan desechable y versionado.
 - [ ] Incorporar el widget Crono al smoke desechable de Attribute Views para validar minutos, segundos, estados, categorías de sólo lectura y checkbox.
 - [ ] Integrar el diagnóstico `sync-siyuan-widget.ps1` al gate manual cuando exista un workspace desechable de widgets.

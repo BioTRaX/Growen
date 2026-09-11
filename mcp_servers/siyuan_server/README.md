@@ -39,9 +39,20 @@ SiYuan no ofrece CAS sobre `updateBlock`: las revalidaciones reducen la ventana 
 
 # Git prevalece sobre conflictos revisados explícitamente
 .\.venv\Scripts\python.exe scripts\publish_docs_to_siyuan.py --apply --force-conflicts
+
+# Planifica la reconstrucción completa sin escribir
+.\.venv\Scripts\python.exe scripts\publish_docs_to_siyuan.py --rebuild
+
+# Reconstruye sólo la réplica técnica con confirmación literal
+.\.venv\Scripts\python.exe scripts\publish_docs_to_siyuan.py --apply --rebuild `
+  --confirm-rebuild "/Growen/Documentación técnica"
 ```
 
-El estado vive por defecto fuera del repositorio en `../growen-siyuan/publish-state.json`. El ciclo carga–sincronización–persistencia mantiene un bloqueo exclusivo y crea checkpoints atómicos después de cada escritura confirmada. Manifiesto y estado contienen rutas, IDs, hashes y estados, nunca Markdown. Los documentos retirados de Git se reportan como `orphaned` y no se eliminan.
+Se publican `README.md`, `Roadmap.md`, `CHANGELOG.md`, `AGENTS.md` y todos los Markdown versionados bajo `docs/`; los archivos sin seguimiento no se incorporan. Cualquier cambio documental sin confirmar o forma conocida de secreto aborta el preflight.
+
+El estado vive por defecto fuera del repositorio en `../growen-siyuan/publish-state.json`. El ciclo carga–sincronización–persistencia mantiene un bloqueo exclusivo y crea checkpoints atómicos después de cada escritura confirmada. Manifiesto y estado contienen rutas, IDs, hashes, SHA Git y fases, nunca Markdown. Los documentos retirados de Git se reportan como `orphaned` y no se eliminan durante una publicación incremental.
+
+`--rebuild` es destructivo sólo con `--apply` y la confirmación literal. Crea historial, elimina por ID exclusivamente `/Growen/Documentación técnica`, verifica el resultado y luego republica. No afecta `/Growen/Pruebas MCP`, `/Negocio` ni `/Operación`, y no existe una tool MCP de borrado. Si el proceso queda en fase `recreating`, corregir la causa y reanudar con `--apply`, sin volver a usar `--rebuild`.
 
 ## Inicio
 

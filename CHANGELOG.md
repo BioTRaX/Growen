@@ -4,6 +4,18 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-09-10 — reconstrucción segura de documentación SiYuan
+
+- El publicador Git → SiYuan descubre los Markdown versionados de la raíz y de
+  `docs/`, exige un árbol documental limpio y rechaza formas conocidas de
+  secretos antes de escribir.
+- Se agregó `--rebuild` con confirmación literal para eliminar y recrear sólo
+  `/Growen/Documentación técnica`, preservando las raíces privadas y
+  `/Growen/Pruebas MCP`.
+- La reconstrucción registra SHA Git, fase e ID eliminado fuera del repositorio,
+  persiste checkpoints por documento y permite reanudar un fallo parcial con
+  `--apply` sin repetir el borrado.
+
 ## 2026-09-10 — auditor de calidad de Enrich v2, orquestación y monitoreo técnico
 
 - Se implementó el motor de auditoría y coherencia física (`services.enrichment.auditor`)

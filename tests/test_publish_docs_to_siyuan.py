@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -26,6 +27,7 @@ class FakeService:
             }
         self.created: list[tuple[str, str]] = []
         self.updated: list[tuple[str, str, str]] = []
+        self.deleted: list[tuple[str, str]] = []
 
     async def find_document_by_path(self, path: str):
         document = self.documents.get(path)
@@ -46,7 +48,7 @@ class FakeService:
 
     async def create_git_document(self, path: str, markdown: str):
         self.created.append((path, markdown))
-        document_id = "20260827123456-abcdefg"
+        document_id = f"2026082712345{5 + len(self.created)}-abcdefg"
         self.documents[path] = {
             "document_id": document_id,
             "markdown": markdown,
@@ -77,6 +79,43 @@ class FakeService:
             "revision_sha256": revision,
         }
 
+    async def remove_git_document_tree(self, path: str, expected_document_id: str):
+        assert self.documents[path]["document_id"] == expected_document_id
+        self.deleted.append((path, expected_document_id))
+        for existing_path in list(self.documents):
+            if existing_path == path or existing_path.startswith(f"{path}/"):
+                del self.documents[existing_path]
+        return {"deleted": True, "document_id": expected_document_id, "hpath": path}
+
+
+class FailingCreateService(FakeService):
+    def __init__(self, failing_path: str, documents: dict[str, str] | None = None) -> None:
+        super().__init__(documents)
+        self.failing_path = failing_path
+        self.failed = False
+
+    async def create_git_document(self, path: str, markdown: str):
+        if path == self.failing_path and not self.failed:
+            self.failed = True
+            raise RuntimeError("fallo externo")
+        return await super().create_git_document(path, markdown)
+
+
+def _git(root: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(root), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _commit_all(root: Path) -> None:
+    _git(root, "config", "user.email", "tests@example.invalid")
+    _git(root, "config", "user.name", "Growen Tests")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "test fixture")
+
 
 def test_siyuan_path_preserves_repository_structure() -> None:
     root = Path("C:/repo")
@@ -85,18 +124,170 @@ def test_siyuan_path_preserves_repository_structure() -> None:
     assert publisher.siyuan_path(root / "docs" / "MCP.md", root) == "/Growen/Documentación técnica/docs/MCP"
 
 
-def test_discover_documents_excludes_archive_and_generated_plans(tmp_path) -> None:
+def test_discover_documents_includes_all_tracked_markdown_under_docs(tmp_path) -> None:
+    _git(tmp_path, "init", "-q")
     (tmp_path / "README.md").write_text("root", encoding="utf-8")
+    (tmp_path / "OTHER.md").write_text("outside", encoding="utf-8")
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "MCP.md").write_text("mcp", encoding="utf-8")
     (tmp_path / "docs" / "archive").mkdir()
     (tmp_path / "docs" / "archive" / "OLD.md").write_text("old", encoding="utf-8")
     (tmp_path / "docs" / "superpowers").mkdir()
     (tmp_path / "docs" / "superpowers" / "PLAN.md").write_text("plan", encoding="utf-8")
+    (tmp_path / "docs" / "DRAFT.md").write_text("untracked", encoding="utf-8")
+    _git(tmp_path, "add", "README.md", "OTHER.md", "docs/MCP.md", "docs/archive/OLD.md", "docs/superpowers/PLAN.md")
 
     documents = publisher.discover_documents(tmp_path)
 
-    assert [path.relative_to(tmp_path).as_posix() for path in documents] == ["README.md", "docs/MCP.md"]
+    assert [path.relative_to(tmp_path).as_posix() for path in documents] == [
+        "README.md",
+        "docs/MCP.md",
+        "docs/archive/OLD.md",
+        "docs/superpowers/PLAN.md",
+    ]
+
+
+def test_assert_governed_documents_clean_rejects_modified_markdown(tmp_path) -> None:
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "README.md").write_text("estable", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    document = tmp_path / "docs" / "MCP.md"
+    document.write_text("estable", encoding="utf-8")
+    _commit_all(tmp_path)
+    document.write_text("sin confirmar", encoding="utf-8")
+
+    with pytest.raises(publisher.GitDocumentsDirtyError, match="git_documents_dirty"):
+        publisher.assert_governed_documents_clean(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_rebuild_dry_run_plans_delete_and_recreate_without_writing(tmp_path) -> None:
+    document = tmp_path / "README.md"
+    document.write_text("# Nueva", encoding="utf-8")
+    root_path = "/Growen/Documentación técnica"
+    service = FakeService({root_path: "# Anterior"})
+    state = {"version": 1, "documents": {"docs/OLD.md": {"path": f"{root_path}/docs/OLD"}}}
+
+    manifest, new_state = await publisher.rebuild_documents(
+        [document],
+        tmp_path,
+        service,
+        apply=False,
+        confirmation=None,
+        git_commit="a" * 40,
+        state=state,
+    )
+
+    assert [entry["status"] for entry in manifest] == ["planned_delete", "planned_create"]
+    assert service.deleted == []
+    assert service.created == []
+    assert new_state == state
+
+
+@pytest.mark.asyncio
+async def test_rebuild_apply_deletes_exact_root_and_checkpoints_complete_state(tmp_path) -> None:
+    document = tmp_path / "README.md"
+    document.write_text("# Nueva", encoding="utf-8")
+    root_path = "/Growen/Documentación técnica"
+    service = FakeService({root_path: "# Anterior", f"{root_path}/docs/OLD": "viejo"})
+    root_id = service.documents[root_path]["document_id"]
+    checkpoints: list[dict] = []
+
+    manifest, state = await publisher.rebuild_documents(
+        [document],
+        tmp_path,
+        service,
+        apply=True,
+        confirmation=root_path,
+        git_commit="b" * 40,
+        state={"version": 1, "documents": {"docs/OLD.md": {"path": f"{root_path}/docs/OLD"}}},
+        checkpoint=lambda value: checkpoints.append(json.loads(json.dumps(value))),
+    )
+
+    assert service.deleted == [(root_path, root_id)]
+    assert [entry["status"] for entry in manifest] == ["deleted", "created"]
+    assert state["last_publish_commit"] == "b" * 40
+    assert state["rebuild"]["phase"] == "complete"
+    assert state["rebuild"]["deleted_document_id"] == root_id
+    assert list(state["documents"]) == ["README.md"]
+    assert any(checkpoint.get("rebuild", {}).get("phase") == "recreating" for checkpoint in checkpoints)
+
+
+@pytest.mark.asyncio
+async def test_rebuild_apply_rejects_wrong_confirmation_without_deleting(tmp_path) -> None:
+    document = tmp_path / "README.md"
+    document.write_text("# Nueva", encoding="utf-8")
+    root_path = "/Growen/Documentación técnica"
+    service = FakeService({root_path: "# Anterior"})
+
+    with pytest.raises(ValueError, match="rebuild_confirmation_invalid"):
+        await publisher.rebuild_documents(
+            [document],
+            tmp_path,
+            service,
+            apply=True,
+            confirmation="/Growen",
+            git_commit="c" * 40,
+            state={"version": 1, "documents": {}},
+        )
+
+    assert service.deleted == []
+
+
+def test_document_secret_gate_rejects_known_token_shape_without_exposing_value(tmp_path) -> None:
+    document = tmp_path / "README.md"
+    document.write_text("sk-" + "proj-" + "a" * 24, encoding="utf-8")
+
+    with pytest.raises(publisher.DocumentationSecretError, match="documentation_secret_detected") as error:
+        publisher.assert_no_document_secrets([document])
+
+    assert "sk-" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_partial_rebuild_can_resume_without_deleting_again(tmp_path) -> None:
+    first = tmp_path / "README.md"
+    first.write_text("# Uno", encoding="utf-8")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    second = docs / "MCP.md"
+    second.write_text("# Dos", encoding="utf-8")
+    root_path = "/Growen/Documentación técnica"
+    failing_path = f"{root_path}/docs/MCP"
+    service = FailingCreateService(failing_path, {root_path: "# Anterior"})
+
+    first_manifest, partial_state = await publisher.rebuild_documents(
+        [first, second],
+        tmp_path,
+        service,
+        apply=True,
+        confirmation=root_path,
+        git_commit="d" * 40,
+        state={"version": 1, "documents": {}},
+    )
+
+    assert any(entry["status"] == "error" for entry in first_manifest)
+    assert partial_state["rebuild"]["phase"] == "recreating"
+    assert len(service.deleted) == 1
+
+    resumed_manifest, resumed_state = await publisher.publish_documents(
+        [first, second],
+        tmp_path,
+        service,
+        apply=True,
+        state=partial_state,
+    )
+    resumed_state = publisher.finalize_rebuild_after_resume(
+        resumed_state,
+        resumed_manifest,
+        [first, second],
+        tmp_path,
+        git_commit="d" * 40,
+    )
+
+    assert {entry["status"] for entry in resumed_manifest} == {"unchanged", "created"}
+    assert resumed_state["rebuild"]["phase"] == "complete"
+    assert len(service.deleted) == 1
 
 
 @pytest.mark.asyncio
@@ -334,3 +525,27 @@ def test_state_file_lock_rejects_a_concurrent_publisher(tmp_path) -> None:
 
     with publisher.state_file_lock(state_path):
         pass
+
+
+def test_parse_arguments_requires_exact_confirmation_for_applied_rebuild() -> None:
+    with pytest.raises(SystemExit):
+        publisher.parse_arguments(["--apply", "--rebuild"])
+
+    args = publisher.parse_arguments(
+        [
+            "--apply",
+            "--rebuild",
+            "--confirm-rebuild",
+            "/Growen/Documentación técnica",
+        ]
+    )
+
+    assert args.apply is True
+    assert args.rebuild is True
+
+
+def test_parse_arguments_allows_rebuild_dry_run_without_confirmation() -> None:
+    args = publisher.parse_arguments(["--rebuild"])
+
+    assert args.apply is False
+    assert args.confirm_rebuild is None

@@ -58,7 +58,9 @@ El notebook `Nice Grow` separa `/Growen`, cuya autoridad es Git, de `/Negocio` y
 
 `create_siyuan_task_database(document_id)` es una mutación estructurada y acotada para áreas privadas: agrega el encabezado `Tareas`, una base table, una fila `Nueva tarea` y los campos `Fecha`, `Estado` y `Última modificación`. La segunda invocación reconcilia la columna `Select` vacía generada por SiYuan 3.8.1 sin duplicar bloques.
 
-La réplica `/Growen/Documentación técnica` se actualiza con `scripts/publish_docs_to_siyuan.py`. El publicador mantiene estado fuera del repo, bloquea ejecuciones concurrentes, persiste checkpoints atómicos después de cada operación confirmada, detecta divergencias y sólo permite que Git prevalezca con `--apply --force-conflicts`. No elimina ni mueve documentos huérfanos.
+La réplica `/Growen/Documentación técnica` se actualiza con `scripts/publish_docs_to_siyuan.py`. El catálogo comprende `README.md`, `Roadmap.md`, `CHANGELOG.md`, `AGENTS.md` y todo `docs/**/*.md` versionado. Antes de publicar, el script exige que ese conjunto esté limpio y lo inspecciona con los patrones de secretos del gate local. Mantiene estado fuera del repo, bloquea ejecuciones concurrentes, registra el SHA Git y persiste checkpoints atómicos después de cada operación confirmada.
+
+El flujo incremental detecta divergencias y sólo permite que Git prevalezca con `--apply --force-conflicts`; continúa reportando huérfanos sin eliminarlos. El flujo excepcional `--rebuild` borra y recrea únicamente la raíz técnica, requiere `--apply --confirm-rebuild "/Growen/Documentación técnica"`, crea historial y verifica la desaparición antes de republicar. El borrado es una capacidad interna del publicador y no se expone en `tools/list`. Si una creación falla después del borrado, el estado queda en `recreating` y se reanuda con `--apply` normal.
 
 ## Descubrimiento e invocación
 

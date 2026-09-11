@@ -15,6 +15,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import subprocess
 import sys
 from typing import Any, Iterable
 
@@ -27,11 +29,19 @@ from mcp_servers.siyuan_server.settings import SiYuanSettings, load_api_token  #
 from mcp_servers.siyuan_server.tools import SiYuanService  # noqa: E402
 
 
-EXCLUDED_PARTS = {"archive", "superpowers", "Promps", "__pycache__"}
-EXCLUDED_PREFIXES = ("RETROSPECTIVE_", "TEST_RESULTS_")
+PUBLICATION_ROOT = "/Growen/Documentación técnica"
+ROOT_DOCUMENTS = ("README.md", "Roadmap.md", "CHANGELOG.md", "AGENTS.md")
 
 
 class PublisherLockedError(RuntimeError):
+    pass
+
+
+class GitDocumentsDirtyError(RuntimeError):
+    pass
+
+
+class DocumentationSecretError(RuntimeError):
     pass
 
 
@@ -78,18 +88,18 @@ def siyuan_path(document: Path, root: Path) -> str:
 
 
 def discover_documents(root: Path) -> list[Path]:
-    candidates = [root / "README.md", root / "Roadmap.md", root / "CHANGELOG.md", root / "AGENTS.md"]
-    docs_root = root / "docs"
-    if docs_root.exists():
-        candidates.extend(docs_root.rglob("*.md"))
-    result = []
-    for path in candidates:
-        relative_parts = set(path.relative_to(root).parts)
-        if not path.is_file() or relative_parts & EXCLUDED_PARTS:
-            continue
-        if path.name.startswith(EXCLUDED_PREFIXES):
-            continue
-        result.append(path)
+    completed = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--", *ROOT_DOCUMENTS, "docs"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    result = [
+        root / relative
+        for relative in completed.stdout.splitlines()
+        if relative.casefold().endswith(".md") and (root / relative).is_file()
+    ]
     return sorted(
         set(result),
         key=lambda item: (
@@ -97,6 +107,150 @@ def discover_documents(root: Path) -> list[Path]:
             item.relative_to(root).as_posix().lower(),
         ),
     )
+
+
+def git_revision(root: Path) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    return completed.stdout.strip()
+
+
+def assert_governed_documents_clean(root: Path) -> None:
+    dirty: set[str] = set()
+    pathspec = [*ROOT_DOCUMENTS, "docs"]
+    for arguments in (
+        ("diff", "--name-only", "--", *pathspec),
+        ("diff", "--cached", "--name-only", "--", *pathspec),
+        ("ls-files", "--others", "--exclude-standard", "--", *pathspec),
+    ):
+        completed = subprocess.run(
+            ["git", "-C", str(root), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        dirty.update(
+            path for path in completed.stdout.splitlines() if path.casefold().endswith(".md")
+        )
+    if dirty:
+        raise GitDocumentsDirtyError("git_documents_dirty")
+
+
+def assert_no_document_secrets(documents: Iterable[Path]) -> None:
+    patterns = (
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+        re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}"),
+        re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}"),
+    )
+    for document in documents:
+        content = document.read_text(encoding="utf-8")
+        if any(pattern.search(content) for pattern in patterns):
+            raise DocumentationSecretError("documentation_secret_detected")
+
+
+def finalize_rebuild_after_resume(
+    state: dict[str, Any],
+    manifest: Iterable[dict[str, Any]],
+    documents: Iterable[Path],
+    root: Path,
+    *,
+    git_commit: str,
+) -> dict[str, Any]:
+    next_state = deepcopy(state)
+    rebuild = next_state.get("rebuild")
+    if not isinstance(rebuild, dict) or rebuild.get("phase") != "recreating":
+        return next_state
+    entries = list(manifest)
+    active_sources = {document.relative_to(root).as_posix() for document in documents}
+    if (
+        any(entry.get("status") in {"error", "conflict", "orphaned"} for entry in entries)
+        or set(next_state.get("documents", {})) != active_sources
+    ):
+        return next_state
+    rebuild["phase"] = "complete"
+    next_state["last_publish_commit"] = git_commit
+    return next_state
+
+
+async def rebuild_documents(
+    documents: Iterable[Path],
+    root: Path,
+    service: SiYuanService,
+    *,
+    apply: bool,
+    confirmation: str | None,
+    git_commit: str,
+    state: dict[str, Any],
+    checkpoint: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    documents = list(documents)
+    root_document_id = await service.find_document_by_path(PUBLICATION_ROOT)
+    if not root_document_id:
+        raise ValueError("siyuan_publication_root_missing")
+
+    control_entry: dict[str, Any] = {
+        "source": "@rebuild",
+        "path": PUBLICATION_ROOT,
+        "document_id": root_document_id,
+        "status": "planned_delete",
+    }
+    if not apply:
+        planned = [control_entry]
+        for document in documents:
+            content = document.read_text(encoding="utf-8")
+            planned.append(
+                {
+                    "source": document.relative_to(root).as_posix(),
+                    "path": siyuan_path(document, root),
+                    "source_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    "status": "planned_create",
+                }
+            )
+        return planned, state
+
+    if confirmation != PUBLICATION_ROOT:
+        raise ValueError("rebuild_confirmation_invalid")
+
+    next_state: dict[str, Any] = {
+        "version": 1,
+        "documents": {},
+        "last_publish_commit": git_commit,
+        "rebuild": {
+            "path": PUBLICATION_ROOT,
+            "phase": "deleting",
+            "source_count": len(documents),
+        },
+    }
+    if checkpoint is not None:
+        checkpoint(next_state)
+    await service.remove_git_document_tree(PUBLICATION_ROOT, root_document_id)
+    next_state["rebuild"].update(
+        phase="recreating",
+        deleted_document_id=root_document_id,
+    )
+    if checkpoint is not None:
+        checkpoint(next_state)
+
+    published, next_state = await publish_documents(
+        documents,
+        root,
+        service,
+        apply=True,
+        state=next_state,
+        checkpoint=checkpoint,
+    )
+    control_entry["status"] = "deleted"
+    if not any(entry["status"] in {"error", "conflict"} for entry in published):
+        next_state["rebuild"]["phase"] = "complete"
+        if checkpoint is not None:
+            checkpoint(next_state)
+    return [control_entry, *published], next_state
 
 
 async def publish_documents(
@@ -252,6 +406,10 @@ def write_state_atomic(path: Path, state: dict[str, Any]) -> None:
 
 async def _run(args: argparse.Namespace) -> int:
     root = Path(__file__).resolve().parents[1]
+    documents = discover_documents(root)
+    assert_governed_documents_clean(root)
+    assert_no_document_secrets(documents)
+    current_commit = git_revision(root)
     settings = SiYuanSettings.from_env()
     client = SiYuanClient(
         base_url=settings.base_url,
@@ -271,19 +429,46 @@ async def _run(args: argparse.Namespace) -> int:
         if not state_path.is_absolute():
             state_path = root / state_path
         with state_file_lock(state_path):
-            manifest, state = await publish_documents(
-                discover_documents(root),
-                root,
-                service,
-                apply=args.apply,
-                force_conflicts=args.force_conflicts,
-                state=load_state(state_path),
-                checkpoint=(
-                    (lambda current: write_state_atomic(state_path, current))
-                    if args.apply
-                    else None
-                ),
+            previous_state = load_state(state_path)
+            checkpoint = (
+                (lambda current: write_state_atomic(state_path, current))
+                if args.apply
+                else None
             )
+            if args.rebuild:
+                manifest, state = await rebuild_documents(
+                    documents,
+                    root,
+                    service,
+                    apply=args.apply,
+                    confirmation=args.confirm_rebuild,
+                    git_commit=current_commit,
+                    state=previous_state,
+                    checkpoint=checkpoint,
+                )
+            else:
+                manifest, state = await publish_documents(
+                    documents,
+                    root,
+                    service,
+                    apply=args.apply,
+                    force_conflicts=args.force_conflicts,
+                    state=previous_state,
+                    checkpoint=checkpoint,
+                )
+                if args.apply:
+                    state = finalize_rebuild_after_resume(
+                        state,
+                        manifest,
+                        documents,
+                        root,
+                        git_commit=current_commit,
+                    )
+                    if not any(
+                        entry["status"] in {"error", "conflict", "orphaned"}
+                        for entry in manifest
+                    ):
+                        state["last_publish_commit"] = current_commit
             if args.apply:
                 write_state_atomic(state_path, state)
     output = Path(args.manifest)
@@ -296,9 +481,18 @@ async def _run(args: argparse.Namespace) -> int:
     return 1 if counts.get("error", 0) or counts.get("conflict", 0) else 0
 
 
-def main() -> int:
+def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sincroniza documentación Git hacia SiYuan con control de conflictos.")
     parser.add_argument("--apply", action="store_true", help="Aplica operaciones seguras; sin esta opción sólo planifica.")
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Planifica o reconstruye la raíz técnica completa desde Git.",
+    )
+    parser.add_argument(
+        "--confirm-rebuild",
+        help=f"Confirmación exacta requerida al aplicar rebuild: {PUBLICATION_ROOT}",
+    )
     parser.add_argument(
         "--force-conflicts",
         action="store_true",
@@ -309,7 +503,18 @@ def main() -> int:
         "--state",
         default=os.getenv("SIYUAN_PUBLISH_STATE_FILE", "../growen-siyuan/publish-state.json"),
     )
-    return asyncio.run(_run(parser.parse_args()))
+    args = parser.parse_args(argv)
+    if args.rebuild and args.force_conflicts:
+        parser.error("--force-conflicts no se combina con --rebuild")
+    if args.apply and args.rebuild and args.confirm_rebuild != PUBLICATION_ROOT:
+        parser.error(f"--confirm-rebuild debe ser exactamente {PUBLICATION_ROOT}")
+    if args.confirm_rebuild is not None and not (args.apply and args.rebuild):
+        parser.error("--confirm-rebuild sólo se usa con --apply --rebuild")
+    return args
+
+
+def main() -> int:
+    return asyncio.run(_run(parse_arguments()))
 
 
 if __name__ == "__main__":
@@ -318,9 +523,13 @@ if __name__ == "__main__":
 
 __all__ = [
     "discover_documents",
+    "finalize_rebuild_after_resume",
+    "git_revision",
     "load_state",
+    "parse_arguments",
     "PublisherLockedError",
     "publish_documents",
+    "rebuild_documents",
     "siyuan_path",
     "state_file_lock",
     "write_state_atomic",

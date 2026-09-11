@@ -31,7 +31,7 @@ La suite cubre deduplicación por competidor, tope de cobertura, omisión de MCP
 docker compose --profile siyuan config --quiet
 ```
 
-La cobertura verifica raíces por rol, autorización previa a exportar, revisión SHA-256, historial obligatorio, ausencia de reintentos de escritura, conflictos, resultado incierto, sincronización Git → SiYuan y manifiestos sin contenido. El smoke de mutación debe ejecutarse sobre un workspace desechable porque no existe borrado automático.
+La cobertura verifica raíces por rol, autorización previa a exportar, revisión SHA-256, historial obligatorio, ausencia de reintentos de escritura, conflictos, resultado incierto, sincronización Git → SiYuan y manifiestos sin contenido. El publicador también cubre catálogo Git completo, árbol documental limpio, patrones de secretos, confirmación destructiva, borrado verificado y reanudación por checkpoints. El smoke de borrado recursivo debe ejecutarse únicamente sobre un workspace desechable y comprobar que una raíz hermana conserva su ID.
 
 ## Suite focal del widget Crono de SiYuan
 
