@@ -3,14 +3,14 @@
 # NG-HEADER: Descripción: Orquesta servicios locales y Docker con dependencias verificables.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 
-from __future__ import annotations
-
 """Lightweight orchestrator for service containers (dev) with lazy fallback.
 
 In dev, tries to control services via `docker compose` using the project's
 docker-compose.yml. If Docker is unavailable, falls back to a simple in-process
 "lazy" registry so the API can simulate start/stop/status for UI flows.
 """
+
+from __future__ import annotations
 
 import os
 import socket
@@ -41,6 +41,7 @@ _DRIVE_SYNC_WORKER_PROC: Optional[subprocess.Popen] = None  # Track drive_sync_w
 _DRIVE_SYNC_WORKER_MODE: Optional[str] = None  # Track mode: 'docker' or 'local'
 _TELEGRAM_POLLING_WORKER_PROC: Optional[subprocess.Popen] = None  # Track telegram_polling_worker process
 _CATALOG_WORKER_PROC: Optional[subprocess.Popen] = None  # Track catalog_worker process
+_ENRICHMENT_WORKER_PROC: Optional[subprocess.Popen] = None  # Track enrichment_worker process
 
 
 def _has_docker() -> bool:
@@ -76,7 +77,6 @@ def _has_docker() -> bool:
 
 
 def _compose(args: list[str]) -> subprocess.CompletedProcess:
-    env = os.environ.copy()
     cmd = ["docker", "compose", "-f", str(COMPOSE_FILE), *args]
     return subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace")
 
@@ -135,7 +135,7 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
         correlation_id: ID de correlación para logging
         mode: Modo de ejecución ('docker' o 'local'), solo aplica a drive_sync_worker
     """
-    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC
+    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC, _ENRICHMENT_WORKER_PROC
     
     # Manejo especial para drive_sync_worker (puede ser Docker o Local)
     if name == "drive_sync_worker":
@@ -259,6 +259,34 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
             )
         except Exception as e:
             return ServiceStatus(name=name, status="failed", ok=False, detail=str(e))
+
+    # Manejo especial para enrichment_worker (proceso local, no Docker)
+    if name == "enrichment_worker":
+        current = status_service(name)
+        if current.status == "running":
+            return ServiceStatus(name=name, status="running", ok=True, detail="noop: already running")
+
+        redis_ok, redis_detail = _ensure_local_redis()
+        if not redis_ok:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=redis_detail)
+
+        script_path = ROOT / "scripts" / "start_worker_enrichment.cmd"
+        if not script_path.exists():
+            return ServiceStatus(name=name, status="failed", ok=False, detail="Script not found")
+
+        try:
+            _ENRICHMENT_WORKER_PROC, log_path = _start_process_with_log(
+                [str(script_path)],
+                "worker_enrichment.log",
+            )
+            return ServiceStatus(
+                name=name,
+                status="running",
+                ok=True,
+                detail=f"{redis_detail}; worker iniciado con PID {_ENRICHMENT_WORKER_PROC.pid}; log: {log_path}",
+            )
+        except Exception as e:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=str(e))
     
     # Lógica original para servicios Docker
     if _has_docker():
@@ -279,7 +307,7 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
 
 
 def stop_service(name: str, correlation_id: str) -> ServiceStatus:
-    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC
+    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC, _ENRICHMENT_WORKER_PROC
     
     # Manejo especial para drive_sync_worker
     if name == "drive_sync_worker":
@@ -425,6 +453,32 @@ def stop_service(name: str, correlation_id: str) -> ServiceStatus:
         except Exception as e:
             _CATALOG_WORKER_PROC = None
             return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Force terminated: {e}")
+
+    if name == "enrichment_worker":
+        if _ENRICHMENT_WORKER_PROC is None or _ENRICHMENT_WORKER_PROC.poll() is not None:
+            try:
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    try:
+                        cmdline = proc.info.get('cmdline', [])
+                        if cmdline and 'dramatiq' in ' '.join(cmdline).lower() and 'enrichment' in ' '.join(cmdline).lower():
+                            proc.terminate()
+                            proc.wait(timeout=5)
+                            return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Terminated PID {proc.info['pid']}")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                return ServiceStatus(name=name, status="stopped", ok=True, detail="Process not found (already stopped)")
+            except Exception as e:
+                return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Error finding process: {e}")
+
+        try:
+            _ENRICHMENT_WORKER_PROC.terminate()
+            _ENRICHMENT_WORKER_PROC.wait(timeout=5)
+            pid = _ENRICHMENT_WORKER_PROC.pid
+            _ENRICHMENT_WORKER_PROC = None
+            return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Terminated PID {pid}")
+        except Exception as e:
+            _ENRICHMENT_WORKER_PROC = None
+            return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Force terminated: {e}")
     
     # Lógica original para servicios Docker
     if _has_docker():
@@ -437,7 +491,7 @@ def stop_service(name: str, correlation_id: str) -> ServiceStatus:
 
 
 def status_service(name: str) -> ServiceStatus:
-    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC
+    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC, _ENRICHMENT_WORKER_PROC
     
     # Manejo especial para drive_sync_worker
     if name == "drive_sync_worker":
@@ -569,6 +623,36 @@ def status_service(name: str) -> ServiceStatus:
         except Exception:
             pass
         
+        return ServiceStatus(name=name, status="stopped", ok=True, detail="Not running")
+
+    # Manejo especial para enrichment_worker
+    if name == "enrichment_worker":
+        if _ENRICHMENT_WORKER_PROC is not None and _ENRICHMENT_WORKER_PROC.poll() is None:
+            return ServiceStatus(
+                name=name,
+                status="running",
+                ok=True,
+                pid=_ENRICHMENT_WORKER_PROC.pid,
+                detail=f"Running PID {_ENRICHMENT_WORKER_PROC.pid}",
+            )
+
+        try:
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+                try:
+                    cmdline = proc.info.get('cmdline', [])
+                    if cmdline and 'dramatiq' in ' '.join(cmdline).lower() and 'enrichment' in ' '.join(cmdline).lower():
+                        return ServiceStatus(
+                            name=name,
+                            status="running",
+                            ok=True,
+                            pid=proc.info['pid'],
+                            detail=f"Running PID {proc.info['pid']}",
+                        )
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception:
+            pass
+
         return ServiceStatus(name=name, status="stopped", ok=True, detail="Not running")
     
     # Lógica original para servicios Docker

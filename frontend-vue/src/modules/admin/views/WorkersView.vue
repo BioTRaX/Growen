@@ -19,6 +19,7 @@ const labels: Record<string, string> = {
   pdf_import: 'Importador PDF (OCR)', playwright: 'Playwright / Chromium', image_processing: 'Procesamiento de imágenes',
   dramatiq: 'Dramatiq / Redis', scheduler: 'Scheduler', notifier: 'Notificaciones', market_worker: 'Worker Mercado',
   drive_sync_worker: 'Worker Drive Sync', telegram_polling_worker: 'Worker Telegram', catalog_worker: 'Worker Catálogo',
+  enrichment_worker: 'Worker Enrich v2',
 }
 const auth = useAuthStore()
 const toasts = useToastStore()

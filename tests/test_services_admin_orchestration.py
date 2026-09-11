@@ -185,3 +185,39 @@ async def test_list_reconciles_market_worker_started_outside_panel(monkeypatch) 
     assert response["items"][0]["status"] == "running"
     assert market.last_error is None
     assert market.started_at is not None
+
+
+def test_enrichment_worker_start_and_stop_orchestration(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(orchestrator, "ROOT", tmp_path)
+    monkeypatch.setattr(orchestrator, "_ensure_local_redis", lambda: (True, "Redis OK"))
+
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    script = scripts_dir / "start_worker_enrichment.cmd"
+    script.write_text("@echo off\n", encoding="utf-8")
+
+    class FakeProc:
+        pid = 7788
+        def poll(self):
+            return None
+        def terminate(self):
+            pass
+        def wait(self, timeout=None):
+            pass
+
+    fake_proc = FakeProc()
+    monkeypatch.setattr(orchestrator, "_start_process_with_log", lambda cmd, log: (fake_proc, tmp_path / "logs" / log))
+
+    status_start = orchestrator.start_service("enrichment_worker", correlation_id="test-cid")
+    assert status_start.ok is True
+    assert status_start.status == "running"
+    assert "7788" in status_start.detail
+
+    status_curr = orchestrator.status_service("enrichment_worker")
+    assert status_curr.status == "running"
+    assert status_curr.pid == 7788
+
+    status_stop = orchestrator.stop_service("enrichment_worker", correlation_id="test-cid")
+    assert status_stop.ok is True
+    assert status_stop.status == "stopped"
+
