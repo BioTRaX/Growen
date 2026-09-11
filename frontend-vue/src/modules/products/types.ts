@@ -158,11 +158,20 @@ export interface EnrichmentJob {
   provider_diagnostics: EnrichmentProviderDiagnostic[]
   sources: EnrichmentSource[]
   applied_fields: string[]
+  quality_audit?: EnrichmentQualityAudit | null
   error: { code: string | null; message: string | null } | null
   attempts: number
   created_at: string | null
   started_at: string | null
   completed_at: string | null
+}
+
+export interface EnrichmentQualityAudit {
+  score: number
+  passed: boolean
+  flags: string[]
+  warnings: string[]
+  field_issues: Record<string, string[]>
 }
 
 export interface EnrichmentProviderDiagnostic {

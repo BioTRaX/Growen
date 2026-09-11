@@ -9,6 +9,7 @@ import {
   getCatalogSummaries,
   getChatStats,
   getChatMetrics,
+  getEnrichmentSummary,
   getImageJobStatus,
   getKnowledgeStatus,
   getSchedulerStatus,
@@ -18,6 +19,7 @@ import {
   listSchedulerRuns,
   type ChatStats,
   type ChatMetrics,
+  type EnrichmentSummary,
   type HealthSummary,
 } from '../../../services/adminOperations'
 import { getHttpErrorMessage } from '../../../services/http'
@@ -25,6 +27,7 @@ import { getHttpErrorMessage } from '../../../services/http'
 const health = ref<HealthSummary>()
 const chat = ref<ChatStats>()
 const chatMetrics = ref<ChatMetrics>()
+const enrichment = ref<EnrichmentSummary>()
 const operations = ref<Array<{ name: string; status: string; detail: string; to: string }>>([])
 const loading = ref(false)
 const error = ref('')
@@ -38,15 +41,17 @@ async function refresh(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const [healthResult, chatResult, metricsResult, drive, scheduler, schedulerRuns, catalogs, knowledge, knowledgeTasks, images] = await Promise.all([
+    const [healthResult, chatResult, metricsResult, drive, scheduler, schedulerRuns, catalogs, knowledge, knowledgeTasks, images, enrichSummary] = await Promise.all([
       getTechnicalHealth(), getChatStats(), getChatMetrics(), listDriveRuns(1), getSchedulerStatus(), listSchedulerRuns(),
-      getCatalogSummaries(), getKnowledgeStatus(), listKnowledgeTasks(), getImageJobStatus(),
+      getCatalogSummaries(), getKnowledgeStatus(), listKnowledgeTasks(), getImageJobStatus(), getEnrichmentSummary(),
     ])
     health.value = healthResult
     chat.value = chatResult
     chatMetrics.value = metricsResult
+    enrichment.value = enrichSummary
     const imageState = String(images.status ?? images.state ?? (images.running ? 'running' : 'idle'))
     operations.value = [
+      { name: 'Enrich v2', status: enrichSummary.worker.status ?? (enrichSummary.worker.ok ? 'running' : 'stopped'), detail: `${enrichSummary.worker.ready} en cola · ${enrichSummary.jobs.by_status.review_required ?? 0} pendientes de revisión · ${enrichSummary.catalog_coverage.enriched}/${enrichSummary.catalog_coverage.total_canonical} enriquecidos`, to: '/admin/servicios/workers' },
       { name: 'Drive Sync', status: drive.items[0]?.status ?? 'sin ejecuciones', detail: drive.items[0]?.created_at ?? 'Sin historial', to: '/admin/drive-sync' },
       { name: 'Scheduler', status: scheduler.working ? 'running' : scheduler.enabled ? 'enabled' : 'disabled', detail: schedulerRuns.items[0]?.status ?? scheduler.next_run_time ?? 'Sin ejecuciones', to: '/admin/scheduler' },
       { name: 'Catálogos', status: catalogs[0]?.status ?? 'sin ejecuciones', detail: catalogs[0]?.generated_at ?? 'Sin historial', to: '/admin/catalogos-diagnostico' },
@@ -68,7 +73,83 @@ onMounted(refresh)
     <v-row>
       <v-col v-for="([name, value]) in cards" :key="name" cols="12" sm="6" lg="4"><v-card class="h-100"><v-card-item :title="name"><template #prepend><v-icon :color="isHealthy(value) ? 'success' : 'warning'">{{ isHealthy(value) ? 'mdi-check-circle' : 'mdi-alert-circle' }}</v-icon></template></v-card-item><v-card-text><pre class="text-caption text-wrap">{{ JSON.stringify(value, null, 2) }}</pre></v-card-text></v-card></v-col>
       <v-col cols="12"><v-card><v-card-title>Chat</v-card-title><v-card-text class="d-flex flex-wrap ga-6"><span>Sesiones: {{ chat?.total_sessions ?? 0 }}</span><span>Mensajes: {{ chat?.total_messages ?? 0 }}</span><span>Últimos 7 días: {{ chat?.sessions_last_7_days ?? 0 }}</span><span>Promedio: {{ chat?.avg_messages_per_session ?? 0 }}</span></v-card-text><v-card-actions><v-btn to="/admin/chats" variant="text">Abrir Chat Inbox</v-btn><v-btn to="/admin/servicios" variant="text">Abrir Servicios</v-btn></v-card-actions></v-card></v-col>
-      <v-col cols="12"><v-card><v-card-title>Chat · IA, RAG y Telegram</v-card-title><v-card-text class="d-flex flex-wrap ga-6"><span>Ejecuciones: {{ chatMetrics?.runs ?? 0 }}</span><span>Errores: {{ chatMetrics?.failed ?? 0 }}</span><span>Latencia p95: {{ chatMetrics?.latency_ms.p95 ?? 0 }} ms</span><span>Tokens: {{ (chatMetrics?.tokens.input ?? 0) + (chatMetrics?.tokens.output ?? 0) }}</span><span>RAG con citas: {{ chatMetrics?.rag.with_citations ?? 0 }}</span><span>Cache hits: {{ chatMetrics?.rag.cache_hits ?? 0 }}</span><span>Updates Telegram: {{ Object.values(chatMetrics?.telegram_updates ?? {}).reduce((total, value) => total + value, 0) }}</span><span>Worker: {{ chatMetrics?.telegram_worker.status ?? 'not_running' }}</span><span>Backlog: {{ chatMetrics?.telegram_worker.backlog ?? 0 }}</span><span>Errores consecutivos: {{ chatMetrics?.telegram_worker.consecutive_errors ?? 0 }}</span><span>Último éxito: {{ chatMetrics?.telegram_worker.last_success_at ?? 'sin actividad' }}</span></v-card-text></v-card></v-col>
+      <v-col cols="12">
+        <v-card>
+          <v-card-item title="Enriquecimiento Canónico · Enrich v2">
+            <template #prepend>
+              <v-icon :color="enrichment?.worker.ok ? 'success' : 'warning'">mdi-auto-fix</v-icon>
+            </template>
+            <template #append>
+              <v-chip
+                :color="enrichment?.worker.ok ? 'success' : 'grey'"
+                size="small"
+                variant="flat"
+              >
+                Worker: {{ enrichment?.worker.status ?? 'stopped' }}
+              </v-chip>
+            </template>
+          </v-card-item>
+          <v-card-text>
+            <div class="d-flex flex-wrap ga-6 mb-4">
+              <span><strong>Cola Redis:</strong> {{ enrichment?.worker.ready ?? 0 }} pendientes (ready)</span>
+              <span><strong>Programados:</strong> {{ enrichment?.worker.delayed ?? 0 }}</span>
+              <span><strong>Total jobs:</strong> {{ enrichment?.jobs.total ?? 0 }}</span>
+              <span><strong>Por revisar:</strong> {{ enrichment?.jobs.by_status?.review_required ?? 0 }}</span>
+              <span><strong>Aplicados:</strong> {{ enrichment?.jobs.by_status?.applied ?? 0 }}</span>
+              <span><strong>Fallidos:</strong> {{ enrichment?.jobs.by_status?.failed ?? 0 }}</span>
+              <span>
+                <strong>Cobertura de catálogo:</strong>
+                {{ enrichment?.catalog_coverage.enriched ?? 0 }} / {{ enrichment?.catalog_coverage.total_canonical ?? 0 }}
+                ({{ Math.round(((enrichment?.catalog_coverage.enriched ?? 0) / Math.max(1, enrichment?.catalog_coverage.total_canonical ?? 1)) * 100) }}%)
+              </span>
+            </div>
+
+            <div v-if="enrichment?.jobs.recent && enrichment.jobs.recent.length > 0">
+              <div class="text-subtitle-2 mb-2 text-medium-emphasis">Últimos jobs procesados:</div>
+              <v-table density="compact">
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th>Estado</th>
+                    <th>Calidad</th>
+                    <th>Advertencias</th>
+                    <th>Fecha</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="job in enrichment.jobs.recent" :key="job.job_id">
+                    <td class="font-weight-medium">{{ job.product_name }}</td>
+                    <td><v-chip size="x-small">{{ job.status }}</v-chip></td>
+                    <td>
+                      <v-chip
+                        v-if="job.quality_score !== null && job.quality_score !== undefined"
+                        size="x-small"
+                        :color="job.quality_score >= 80 ? 'success' : job.quality_score >= 50 ? 'warning' : 'error'"
+                      >
+                        {{ job.quality_score }}/100
+                      </v-chip>
+                      <span v-else class="text-caption text-medium-emphasis">—</span>
+                    </td>
+                    <td>
+                      <span v-if="job.warnings_count > 0" class="text-warning text-caption">
+                        {{ job.warnings_count }} advertencia(s)
+                      </span>
+                      <span v-else class="text-success text-caption">Sin alertas</span>
+                    </td>
+                    <td class="text-caption text-medium-emphasis">
+                      {{ job.created_at ? new Date(job.created_at).toLocaleString('es-AR') : '—' }}
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </div>
+          </v-card-text>
+          <v-card-actions>
+            <v-btn to="/admin/servicios/workers" variant="text">Ver Worker en Servicios</v-btn>
+            <v-btn to="/productos/canonicos" variant="text">Ir a Productos Canónicos</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-col>
       <v-col cols="12"><v-card><v-card-title>Operaciones recientes</v-card-title><v-list><v-list-item v-for="operation in operations" :key="operation.name" :subtitle="operation.detail" :title="operation.name"><template #prepend><v-icon :color="['failed','error','disabled'].includes(operation.status) ? 'warning' : 'success'">mdi-chart-timeline-variant</v-icon></template><template #append><div class="d-flex align-center ga-2"><v-chip size="small">{{ operation.status }}</v-chip><v-btn :to="operation.to" icon="mdi-open-in-new" size="small" variant="text" /></div></template></v-list-item></v-list></v-card></v-col>
     </v-row>
   </v-container>

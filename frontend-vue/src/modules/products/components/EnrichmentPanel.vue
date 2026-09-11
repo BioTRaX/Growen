@@ -38,6 +38,19 @@ function label(field: string): string {
 function diagnosticTitle(provider: string, code: string | null): string {
   return `${provider === 'openai' ? 'OpenAI' : provider === 'ollama' ? 'Ollama' : provider} · ${code || 'correcto'}`
 }
+
+const qualityAudit = computed(() => props.job?.quality_audit ?? null)
+const auditColor = computed(() => {
+  const score = qualityAudit.value?.score ?? 0
+  if (score >= 85) return 'success'
+  if (score >= 70) return 'warning'
+  return 'error'
+})
+
+function fieldIssue(field: string): string | null {
+  const issues = qualityAudit.value?.field_issues?.[field]
+  return issues && issues.length ? issues.join(' · ') : null
+}
 </script>
 
 <template>
@@ -60,11 +73,34 @@ function diagnosticTitle(provider: string, code: string | null): string {
     <v-progress-linear v-if="loading || isActive" indeterminate color="primary" />
     <v-card-text>
       <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-      <p v-if="job" class="mb-3">
-        Estado: <strong>{{ job.status }}</strong>
-        <span v-if="job.stage"> · Etapa: {{ job.stage }}</span>
-        <span v-if="job.provider"> · {{ job.provider }} / {{ job.model }}</span>
-      </p>
+      <div v-if="job" class="mb-3 d-flex flex-wrap align-center ga-2">
+        <span>Estado: <strong>{{ job.status }}</strong></span>
+        <span v-if="job.stage">· Etapa: {{ job.stage }}</span>
+        <span v-if="job.provider">· {{ job.provider }} / {{ job.model }}</span>
+        <v-chip
+          v-if="qualityAudit"
+          :color="auditColor"
+          size="small"
+          variant="tonal"
+          class="font-weight-medium"
+        >
+          Calidad: {{ qualityAudit.score }}/100 {{ qualityAudit.passed ? '✓' : '⚠️' }}
+        </v-chip>
+      </div>
+      <v-alert
+        v-if="qualityAudit?.warnings?.length"
+        :type="qualityAudit.passed ? 'info' : 'warning'"
+        variant="tonal"
+        class="my-3"
+        density="compact"
+      >
+        <div class="text-subtitle-2 mb-1">
+          {{ qualityAudit.passed ? 'Observaciones de auditoría' : 'Inconsistencias detectadas por el auditor' }}
+        </div>
+        <ul class="ml-4 text-caption">
+          <li v-for="(warning, idx) in qualityAudit.warnings" :key="idx">{{ warning }}</li>
+        </ul>
+      </v-alert>
       <v-alert v-if="job?.error" type="error" variant="tonal">{{ job.error.message }}</v-alert>
       <v-expansion-panels v-if="job?.provider_diagnostics.length" class="mt-4" variant="accordion">
         <v-expansion-panel>
@@ -96,9 +132,10 @@ function diagnosticTitle(provider: string, code: string | null): string {
           :key="field"
           v-model="selected"
           :label="`${label(field)} · confianza ${Math.round((job?.confidence?.[field] ?? 0) * 100)}%`"
+          :messages="fieldIssue(field) ? [fieldIssue(field)!] : undefined"
+          :error="Boolean(fieldIssue(field))"
           :value="field"
           density="compact"
-          hide-details
         />
         <div class="d-flex ga-2 mt-4">
           <v-btn :disabled="!selected.length || loading" color="primary" @click="emit('apply', selected)">Aplicar seleccionados</v-btn>

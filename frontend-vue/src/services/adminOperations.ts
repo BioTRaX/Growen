@@ -46,6 +46,59 @@ export interface ProductImages { product_id: number; product_name: string; canon
 export interface ChatQualityMetrics { feedback: Record<string, number>; intents: Record<string, number>; sentiments: Record<string, number>; total_feedback: number }
 export interface PromptVersion { id: number; prompt_key: string; version: number; status: string; content: string; reason?: string | null; metrics?: Record<string, unknown> | null; created_at?: string | null }
 export interface StaffUser { id: number; name: string; role: string }
+export interface EnrichmentRecentJob {
+  job_id: string
+  canonical_product_id: number
+  product_name: string
+  brand?: string | null
+  status: string
+  scope: string
+  provider?: string | null
+  model?: string | null
+  quality_score?: number | null
+  quality_passed?: boolean | null
+  warnings_count: number
+  created_at?: string | null
+  completed_at?: string | null
+}
+export interface EnrichmentSummary {
+  worker: {
+    name: string
+    status: string
+    ok: boolean
+    pid?: number | null
+    detail?: string | null
+    broker_ok: boolean
+    ready: number
+    delayed: number
+  }
+  jobs: {
+    total: number
+    by_status: Record<string, number>
+    recent: EnrichmentRecentJob[]
+  }
+  catalog_coverage: {
+    total_canonical: number
+    enriched: number
+    pending: number
+  }
+}
+export interface CatalogAuditIssue {
+  canonical_product_id: number
+  name: string
+  brand?: string | null
+  score: number
+  passed: boolean
+  flags: string[]
+  warnings: string[]
+  field_issues: Record<string, string[]>
+}
+export interface CatalogAuditReport {
+  total_audited: number
+  clean_count: number
+  issues_count: number
+  issues: CatalogAuditIssue[]
+}
 
 export const getDriveStatus = async () => (await http.get<{ status: string; sync_id?: string | null }>('/admin/drive-sync/status')).data
 export const listDriveRuns = async (page = 1) => (await http.get<Page<DriveRun>>('/admin/drive-sync/runs', { params: { page } })).data
@@ -121,3 +174,6 @@ export const createPromptCandidate = async (payload: { prompt_key: string; conte
 export const evaluatePrompt = async (id: number, payload: { dataset_version: string; sample_count: number; composite_score: number; safety_passed: boolean; details: Record<string, unknown> }) => (await http.post(`/admin/chat-quality/prompts/${id}/evaluate`, payload)).data
 export const approvePrompt = async (id: number) => (await http.post(`/admin/chat-quality/prompts/${id}/approve`)).data
 export const activatePrompt = async (id: number) => (await http.post(`/admin/chat-quality/prompts/${id}/activate`)).data
+
+export const getEnrichmentSummary = async () => (await http.get<EnrichmentSummary>('/canonical-products/enrichment-summary')).data
+export const getCatalogAuditReport = async (limit = 100) => (await http.get<CatalogAuditReport>('/canonical-products/catalog-audit-report', { params: { limit } })).data

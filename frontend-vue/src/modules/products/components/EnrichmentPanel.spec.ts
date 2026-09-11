@@ -57,4 +57,45 @@ describe('EnrichmentPanel', () => {
     expect(wrapper.text()).toContain('req_test_123')
     expect(wrapper.text()).toContain('remaining_requests=0')
   })
+
+  it('muestra el chip de calidad y la lista de advertencias ante inconsistencias', () => {
+    const job: EnrichmentJob = {
+      job_id: 'job-audit-1',
+      canonical_product_id: 10,
+      requested_product_id: null,
+      status: 'review_required',
+      stage: 'validate',
+      scope: 'full',
+      provider: 'ollama',
+      model: 'llama3.1:8b',
+      proposal: { weight_kg: 0.2, height_cm: 20 },
+      confidence: { weight_kg: 0.95, height_cm: 0.95 },
+      evidence_by_field: null,
+      sources: [],
+      applied_fields: [],
+      error: null,
+      attempts: 1,
+      created_at: null,
+      started_at: null,
+      completed_at: null,
+      provider_diagnostics: [],
+      quality_audit: {
+        score: 65,
+        passed: false,
+        flags: ['FLAG_PHYSICAL_DISCREPANCY'],
+        warnings: ['Peso propuesto (0.2 kg) es inverosímil para un sustrato de 80 L.'],
+        field_issues: { weight_kg: ['Peso inverosímil para sustrato'] },
+      },
+    }
+    const wrapper = mount(EnrichmentPanel, {
+      props: { job, loading: false, error: '' },
+      global: { plugins: [vuetify] },
+    })
+
+    expect(wrapper.text()).toContain('Calidad: 65/100 ⚠️')
+    expect(wrapper.text()).toContain('Inconsistencias detectadas por el auditor')
+    expect(wrapper.text()).toContain('Peso propuesto (0.2 kg) es inverosímil para un sustrato de 80 L.')
+    expect(wrapper.text()).toContain('Peso inverosímil para sustrato')
+  })
 })
+
