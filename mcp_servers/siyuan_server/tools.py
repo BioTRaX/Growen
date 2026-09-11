@@ -352,10 +352,20 @@ class SiYuanService:
             raise DocumentConflictError("document_conflict")
 
         await self.client.post("/api/history/createDocHistory", {"id": document_id})
-        await self.client.post("/api/filetree/removeDocByID", {"id": document_id})
-        if await self.find_document_by_path(path) is not None:
-            raise DocumentWriteStatusUnknownError("document_write_status_unknown")
-        return {"deleted": True, "document_id": document_id, "hpath": path}
+        reconciled = False
+        try:
+            await self.client.post("/api/filetree/removeDocByID", {"id": document_id})
+        except SiYuanError as exc:
+            if await self.find_document_by_path(path) is not None:
+                raise DocumentWriteStatusUnknownError("document_write_status_unknown") from exc
+            reconciled = True
+        else:
+            if await self.find_document_by_path(path) is not None:
+                raise DocumentWriteStatusUnknownError("document_write_status_unknown")
+        result = {"deleted": True, "document_id": document_id, "hpath": path}
+        if reconciled:
+            result["reconciled"] = True
+        return result
 
     @staticmethod
     def _inserted_block_id(response: Any) -> str:

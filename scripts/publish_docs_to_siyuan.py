@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +27,10 @@ if str(ROOT) not in sys.path:
 
 from mcp_servers.siyuan_server.client import SiYuanClient  # noqa: E402
 from mcp_servers.siyuan_server.settings import SiYuanSettings, load_api_token  # noqa: E402
-from mcp_servers.siyuan_server.tools import SiYuanService  # noqa: E402
+from mcp_servers.siyuan_server.tools import (  # noqa: E402
+    DocumentNotFoundError,
+    SiYuanService,
+)
 
 
 PUBLICATION_ROOT = "/Growen/Documentación técnica"
@@ -253,6 +257,41 @@ async def rebuild_documents(
     return [control_entry, *published], next_state
 
 
+async def reconcile_interrupted_rebuild(
+    state: dict[str, Any],
+    service: SiYuanService,
+    *,
+    checkpoint: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    next_state = deepcopy(state)
+    rebuild = next_state.get("rebuild")
+    if not isinstance(rebuild, dict) or rebuild.get("phase") != "deleting":
+        return next_state
+    if await service.find_document_by_path(PUBLICATION_ROOT) is not None:
+        raise RuntimeError("siyuan_rebuild_delete_unconfirmed")
+    rebuild["phase"] = "recreating"
+    if checkpoint is not None:
+        checkpoint(next_state)
+    return next_state
+
+
+async def read_created_document_when_ready(
+    service: SiYuanService,
+    document_id: str,
+    *,
+    timeout_seconds: float = 30.0,
+    poll_interval_seconds: float = 0.25,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            return await service.read_document(document_id)
+        except DocumentNotFoundError:
+            if time.monotonic() >= deadline:
+                raise
+            await asyncio.sleep(poll_interval_seconds)
+
+
 async def publish_documents(
     documents: Iterable[Path],
     root: Path,
@@ -294,7 +333,7 @@ async def publish_documents(
                 if apply:
                     created = await service.create_git_document(destination, content)
                     document_id = str(created["document_id"])
-                    current = await service.read_document(document_id)
+                    current = await read_created_document_when_ready(service, document_id)
                     entry.update(status="created", document_id=document_id)
                     record_baseline(source, {
                         "path": destination,
@@ -447,6 +486,12 @@ async def _run(args: argparse.Namespace) -> int:
                     checkpoint=checkpoint,
                 )
             else:
+                if args.apply:
+                    previous_state = await reconcile_interrupted_rebuild(
+                        previous_state,
+                        service,
+                        checkpoint=checkpoint,
+                    )
                 manifest, state = await publish_documents(
                     documents,
                     root,
@@ -529,6 +574,8 @@ __all__ = [
     "parse_arguments",
     "PublisherLockedError",
     "publish_documents",
+    "reconcile_interrupted_rebuild",
+    "read_created_document_when_ready",
     "rebuild_documents",
     "siyuan_path",
     "state_file_lock",

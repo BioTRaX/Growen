@@ -881,6 +881,29 @@ async def test_remove_git_document_tree_reports_uncertain_if_root_remains() -> N
 
 
 @pytest.mark.asyncio
+async def test_remove_git_document_tree_reconciles_timeout_when_root_disappeared() -> None:
+    document_id = "20260827123456-abcdefg"
+    client = FakeClient(
+        {
+            "/api/notebook/lsNotebooks": {
+                "notebooks": [{"id": "box-1", "name": "Nice Grow", "closed": False}]
+            },
+            "/api/filetree/getIDsByHPath": ([document_id], []),
+            "/api/history/createDocHistory": None,
+            "/api/filetree/removeDocByID": client_module.SiYuanTimeoutError("siyuan_timeout"),
+        }
+    )
+
+    result = await _admin_service(client).remove_git_document_tree(
+        "/Growen/Documentación técnica",
+        document_id,
+    )
+
+    assert result["deleted"] is True
+    assert result["reconciled"] is True
+
+
+@pytest.mark.asyncio
 async def test_update_git_document_uses_same_history_and_revision_guard() -> None:
     client = _update_client(hpath="/Growen/Documentación técnica/README")
     previous = hashlib.sha256("versión anterior".encode()).hexdigest()

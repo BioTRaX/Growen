@@ -14,7 +14,9 @@
   `/Growen/Pruebas MCP`.
 - La reconstrucción registra SHA Git, fase e ID eliminado fuera del repositorio,
   persiste checkpoints por documento y permite reanudar un fallo parcial con
-  `--apply` sin repetir el borrado.
+  `--apply` sin repetir el borrado. Los timeouts destructivos se reconcilian por
+  lectura y cada creación espera hasta que el documento sea legible antes de
+  confirmar su checkpoint.
 
 ## 2026-09-10 — auditor de calidad de Enrich v2, orquestación y monitoreo técnico
 

@@ -101,6 +101,18 @@ class FailingCreateService(FakeService):
         return await super().create_git_document(path, markdown)
 
 
+class DelayedReadService(FakeService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.read_attempts = 0
+
+    async def read_document(self, document_id: str):
+        self.read_attempts += 1
+        if self.read_attempts == 1:
+            raise publisher.DocumentNotFoundError("document_not_found")
+        return await super().read_document(document_id)
+
+
 def _git(root: Path, *args: str) -> None:
     subprocess.run(
         ["git", "-C", str(root), *args],
@@ -291,6 +303,29 @@ async def test_partial_rebuild_can_resume_without_deleting_again(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_interrupted_delete_advances_to_recreating_when_root_is_absent() -> None:
+    state = {
+        "version": 1,
+        "documents": {},
+        "rebuild": {
+            "path": "/Growen/Documentación técnica",
+            "phase": "deleting",
+            "source_count": 129,
+        },
+    }
+    checkpoints: list[dict] = []
+
+    reconciled = await publisher.reconcile_interrupted_rebuild(
+        state,
+        FakeService(),
+        checkpoint=lambda value: checkpoints.append(json.loads(json.dumps(value))),
+    )
+
+    assert reconciled["rebuild"]["phase"] == "recreating"
+    assert checkpoints[-1]["rebuild"]["phase"] == "recreating"
+
+
+@pytest.mark.asyncio
 async def test_publish_manifest_contains_hash_but_not_content(tmp_path) -> None:
     document = tmp_path / "README.md"
     document.write_text("contenido secreto de documentación", encoding="utf-8")
@@ -350,6 +385,29 @@ async def test_apply_creates_document_and_records_post_write_revision(tmp_path) 
     assert saved["document_id"] == "20260827123456-abcdefg"
     assert saved["source_sha256"] == hashlib.sha256(b"# Nueva").hexdigest()
     assert saved["siyuan_revision_sha256"] == hashlib.sha256(b"# Nueva").hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_apply_waits_until_created_document_is_readable(tmp_path, monkeypatch) -> None:
+    document = tmp_path / "README.md"
+    document.write_text("# Nueva", encoding="utf-8")
+    service = DelayedReadService()
+
+    async def no_wait(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(publisher.asyncio, "sleep", no_wait)
+    manifest, state = await publisher.publish_documents(
+        [document],
+        tmp_path,
+        service,
+        apply=True,
+        state={"version": 1, "documents": {}},
+    )
+
+    assert manifest[0]["status"] == "created"
+    assert service.read_attempts == 2
+    assert state["documents"]["README.md"]["document_id"]
 
 
 @pytest.mark.asyncio
