@@ -53,11 +53,27 @@ cuánto puede consumir. Si OpenAI devuelve `credit_balance_exhausted` con Usage 
 cero, revisar la facturación de la organización/proyecto dueño de la API key y
 que el método de pago o saldo API estén activos.
 
+### Auditoría y Consistencia Física (2026-09-10)
+
+El pipeline ejecuta `services.enrichment.auditor.audit_enrichment_proposal` en la etapa
+`validate`. Evalúa heurísticas deterministas antes de autorizar cualquier mutación:
+
+- **Densidad / Coherencia Física:** Compara volumen extraído del título (ml, L) contra el peso propuesto (`weight_kg`). Líquidos y fertilizantes esperan densidad entre 0.85 y 1.45 kg/L; sustratos esperan densidad aparente entre 0.18 y 0.50 kg/L.
+- **Sanidad Dimensional:** Bloquea dimensiones $\le 0$ o absurdas ($> 350$ cm salvo carpas/indoor), y verifica que la caja envolvente ($Alto \times Ancho \times Profundidad$) no sea geométricamente menor que el volumen del contenido declarado.
+- **Fidelidad y Metadiscurso:** Penaliza metadiscurso de investigación ("según la fuente...", "como modelo de lenguaje"), HTML mal balanceado o confusión de marcas competidoras.
+- **Compuerta de Auto-aplicación:** Si la auditoría no pasa (`passed = False`), `auto_fields` se anula inmediatamente, forzando estado `review_required` en la UI de Vue.
+- **Exposición:** `result_json["quality_audit"]` persiste el scorecard (score 0-100, flags, warnings y field_issues) y la API lo expone vía `GET /canonical-products/{id}/enrichment-jobs/{job_id}` para renderizar un chip de calidad y alertas en Vue.
+- **Monitoreo y Dashboard Técnico:**
+  - `GET /canonical-products/enrichment-summary`: métricas en vivo del worker (estado, PID, broker Redis), profundidad de colas Dramatiq (`ready` y `delayed`), conteo de jobs por status y los últimos jobs con score de calidad. Integrado en `TechnicalDashboardView.vue`.
+  - `GET /canonical-products/catalog-audit-report`: auditoría determinista masiva sobre los productos canónicos existentes en la base de datos sin consumo de tokens de LLM.
+  - Orquestación desde el Panel de Administración: `enrichment_worker` integrado en `services/orchestrator.py` y `WorkersView.vue` para arranque, parada y lectura de logs en `/admin/servicios/workers`.
+
 El flujo operativo nuevo es asíncrono y canónico. Diagnosticar en este orden:
 
 1. `GET /health/enrichment-worker`: broker, heartbeat y profundidad de `enrichment`.
-2. `GET /canonical-products/{id}/enrichment-jobs/{job_id}`: estado, etapa, proveedor/modelo, campos aplicados, error acotado y `provider_diagnostics`.
-3. Logs estructurados del proceso `enrichment_worker`, que incluyen IDs/estados pero nunca prompts, secretos ni documentos.
+2. `GET /canonical-products/enrichment-summary`: resumen consolidado de jobs, worker y colas.
+3. `GET /canonical-products/{id}/enrichment-jobs/{job_id}`: estado, etapa, proveedor/modelo, campos aplicados, error acotado y `provider_diagnostics`.
+4. Logs estructurados del proceso `enrichment_worker`, que incluyen IDs/estados pero nunca prompts, secretos ni documentos.
 
 Los retries reutilizan fuentes ya persistidas y mantienen un máximo de cinco URLs
 por job. Un `IntegrityError` se registra con mensaje genérico: nunca se guardan

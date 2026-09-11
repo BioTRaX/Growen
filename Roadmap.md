@@ -63,6 +63,7 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 - [x] Unificar descubrimiento, validación, alta y extracción de Mercado en jobs persistentes individuales y masivos, con cuarentena y archivo recuperable.
 - [x] Incorporar detección focal de precio y validación manual auditada de ARS/entrega desde el detalle Vue.
 - [ ] Medir precisión de evidencia de entrega argentina y ampliar aliases de competidores a partir de resultados reales auditados.
+- [x] Incorporar motor de auditoría y coherencia física para Enrich v2 con bloqueo de auto-apply ante inconsistencias y visualización en Vue (2026-09-10).
 - [ ] Reejecutar Enrich sobre productos antiguos y validar calidad, deduplicación y estados terminales.
 - [ ] Completar evaluaciones RAG por rol, canal e intención con datos clasificados.
 - [ ] Evolucionar alertas de Mercado con score de confianza, circuit breaker y recomendaciones explicables con aprobación humana.

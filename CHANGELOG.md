@@ -4,6 +4,23 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-09-10 — auditor de calidad de Enrich v2, orquestación y monitoreo técnico
+
+- Se implementó el motor de auditoría y coherencia física (`services.enrichment.auditor`)
+  para evaluar propuestas de Enrich v2: consistencia de densidad (fertilizantes/líquidos
+  y sustratos), sanidad dimensional, detección de metadiscurso de investigación,
+  HTML desbalanceado y confusión de marcas competidoras.
+- Se incorporó la compuerta de auto-aplicación en `enrichment_jobs`: si la auditoría
+  no pasa, se anula `auto_fields` y se fuerza el estado `review_required`.
+- Se integró `enrichment_worker` al orquestador backend local (`services/orchestrator.py`)
+  y al panel administrativo de workers (`WorkersView.vue`) con gestión de ciclo de vida
+  y logs persistentes.
+- Se agregaron los endpoints `GET /canonical-products/enrichment-summary` y
+  `GET /canonical-products/catalog-audit-report` para diagnóstico en tiempo real de colas
+  Dramatiq/Redis y auditoría retrospectiva determinista del catálogo sin costo de tokens.
+- Se integró la tarjeta de monitoreo en el Dashboard Técnico (`TechnicalDashboardView.vue`)
+  y la visualización de scorecards de calidad y alertas por campo en `EnrichmentPanel.vue`.
+
 ## 2026-09-10 — compuertas operativas para el rollout LAN
 
 - Se incorporaron PKI LAN, registro privado TLS con autenticación, construcción
