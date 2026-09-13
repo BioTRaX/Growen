@@ -27,15 +27,17 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 - [ ] Confirmar en el router que `.100` esté fuera del pool DHCP, aplicar
   firewall LAN, importar la CA vigente en Windows/Docker Desktop y distribuirla
   a los dispositivos autorizados.
-- [ ] Completar login, push y pull contra el registro autenticado y TLS ya
+- [x] Completar login, push y pull contra el registro autenticado y TLS ya
   saludable; publicar sólo imágenes aprobadas por Trivy y conservar SBOM y
-  manifiesto de digests por commit.
-- [ ] Ejecutar las fases `Bootstrap` y `Application` con topología `SingleNode`
-  después de aprobar independientemente migración y despliegue.
+  manifiesto de digests por commit (2026-09-13, revisión `bb48d80`).
+- [x] Ejecutar las fases `Bootstrap` y `Application` con topología `SingleNode`
+  después de aprobar independientemente migración y despliegue; los 17 servicios
+  estabilizados en estado 1/1 saludable (2026-09-13).
 - [ ] Ejecutar el smoke autenticado desde otro dispositivo de la LAN contra
   `https://192.168.100.100` después de provisionar un certificado con IP SAN.
-- [ ] Aplicar en una ventana controlada la migración `20260909_user_active` y la
-  copia verificada de media privada; conservar originales hasta validar rollback.
+- [x] Aplicar en una ventana controlada la migración `20260909_user_active` y la
+  copia verificada de media privada; conservar originales hasta validar rollback
+  (2026-09-13).
 - [ ] Ejecutar carga y failover del rate limit Redis y del proxy TLS en el Swarm
   productivo antes de declarar operativa la primera puesta en producción.
 - [ ] Completar smokes autenticados de API, WebSocket, Telegram y MCP para los roles soportados.
@@ -47,10 +49,15 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 
 ## Frontend Vue
 
+- [x] Unificar el frontend productivo sobre Vue 3 como SPA principal (rutas raíz y `/login` integradas a `LoginView.vue`), eliminando la dependencia de fallback de React y resolviendo el error de Mixed Content (2026-09-13).
 - [ ] Completar la paridad funcional pendiente y los smokes visuales autenticados.
-- [ ] Retirar gradualmente el fallback React después de dos releases estables y siete días sin incidentes críticos.
+- [ ] Retirar gradualmente el código React residual después de dos releases estables y siete días sin incidentes críticos.
 - [ ] Migrar los consumidores React restantes a contratos canónicos antes de eliminar código legado.
 - [ ] Retirar los adaptadores públicos de Enrich después del ciclo estable de compatibilidad.
+
+## Ventas y Clientes
+
+- [x] Habilitar ventas para colaboradores a precio de costo: cliente tipo `colaborador`, resolución autoritativa de costo vía `SupplierProduct.current_purchase_price`, exposición en `/sales/catalog/search`, cotización autoritativa y experiencia POS Vue con distintivo visual (2026-09-11).
 
 ## IA, Mercado y operaciones
 
