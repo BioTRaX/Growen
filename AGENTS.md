@@ -261,6 +261,7 @@ Antes de realizar cualquier cambio, el agente DEBE consultar la documentación r
 | **Nuevo worker Dramatiq** | `docs/features/IMAGES.md` (referencia workers), `workers/market_scraping.py` (plantilla), verificar config Redis |
 | **Cambio en modelos** | `db/models.py`, luego `.\.venv\Scripts\python.exe -m alembic revision --autogenerate -m "descripción"`; las revisiones viven en `db/migrations/versions/` |
 | **Cambio en sesión, cookies o CSRF** | Agregar al menos una prueba con `@pytest.mark.no_auth_override` que cubra login, `GET /auth/me` y una mutación real con `X-CSRF-Token`; los tests con overrides globales no validan el ciclo de sesión. |
+| **Enlaces y descargas en Vue (`:href`)** | Usar siempre `apiUrl(path)` de `src/services/transports` para endpoints de backend (adjuntos, PDFs, recibos). Evitar URLs directas sin prefijo `/api/` que causan captura errónea por el router SPA y redirección a `/login`. |
 | **Nuevo servicio Docker** | Revisar sección "Convenciones Docker" en este archivo, usar multi-stage builds |
 | **Problema de conexión DB** | Verificar patrón: `DB_URL = os.getenv("DB_URL") or settings.db_url` (ver corrección 2025-11-15) |
 
