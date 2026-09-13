@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import ipaddress
 from pathlib import Path
+import shutil
 import subprocess
 
 from cryptography import x509
@@ -150,9 +151,13 @@ def test_pki_script_generates_distinct_certificates_with_ip_san(tmp_path) -> Non
     password_file = tmp_path / "root-password"
     password_file.write_text("frase-local-de-prueba-123456", encoding="utf-8")
 
+    import pytest
+    pwsh = shutil.which("pwsh.exe") or shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell 7 (pwsh) no está disponible en este entorno")
     completed = subprocess.run(
         [
-            "pwsh.exe",
+            pwsh,
             "-NoProfile",
             "-File",
             str(ROOT / "scripts" / "provision-lan-pki.ps1"),

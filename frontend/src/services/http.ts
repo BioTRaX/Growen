@@ -7,17 +7,19 @@ import { diagAdd } from "../lib/corrStore";
 
 // Compute a single API base bound to the current page hostname to avoid
 // cookie/CSRF mismatches between 127.0.0.1 and localhost.
+const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
 const host = typeof window !== "undefined" ? window.location.hostname : "127.0.0.1";
-const fallback = `http://${host}:8000`;
+const fallback = isHttps ? "/api" : `http://${host}:8000`;
 
 function normalizeBase(url: string | undefined): string {
   try {
     if (!url) return fallback;
+    if (url.startsWith("/")) return url.replace(/\/$/, "");
     const u = new URL(url);
     // Force same hostname as the page so cookies are shared
     u.hostname = host;
     // Ensure protocol if missing in env var (defensive)
-    if (!u.protocol) u.protocol = "http:";
+    if (!u.protocol) u.protocol = isHttps ? "https:" : "http:";
     return u.toString().replace(/\/$/, "");
   } catch {
     return fallback;

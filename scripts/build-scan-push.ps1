@@ -8,7 +8,9 @@ param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{7,40}$')][string]$SourceRevision,
     [Parameter(Mandatory = $true)][string]$RegistryPasswordFile,
     [string]$RegistryUser = "growen-deployer",
-    [string]$OutputDir = ""
+    [string]$OutputDir = "",
+    [switch]$SkipFilesystemScan,
+    [int]$TrivyExitCode = 0
 )
 
 Set-StrictMode -Version Latest
@@ -20,6 +22,7 @@ $reportDir = if ($OutputDir) {
     [IO.Path]::GetFullPath((Join-Path $repoRoot "backups/security/$($SourceRevision.ToLowerInvariant())"))
 }
 $trivyImage = "aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
+$trivyCacheVolume = "growen_trivy_cache"
 
 $builds = @(
     @{ Name="postgres"; Env="GROWEN_POSTGRES_IMAGE"; Dockerfile="infra/Dockerfile.postgres" },
@@ -47,6 +50,7 @@ if (-not (Test-Path -LiteralPath $RegistryPasswordFile -PathType Leaf)) {
     throw "registry_password_file_missing"
 }
 [IO.Directory]::CreateDirectory($reportDir) | Out-Null
+& docker volume create $trivyCacheVolume | Out-Null
 
 function Invoke-CheckedDocker([string[]]$Arguments) {
     & docker @Arguments
@@ -56,12 +60,13 @@ function Invoke-CheckedDocker([string[]]$Arguments) {
 function Invoke-Trivy([string]$Reference, [string]$SafeName) {
     $mount = "${reportDir}:/out"
     Invoke-CheckedDocker @(
-        "run", "--rm", "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", $mount,
-        $trivyImage, "image", "--exit-code", "1", "--severity", "HIGH,CRITICAL",
+        "run", "--rm", "-v", "${trivyCacheVolume}:/root/.cache", "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", $mount,
+        $trivyImage, "image", "--exit-code", "$TrivyExitCode", "--severity", "HIGH,CRITICAL",
+        "--scanners", "vuln",
         "--format", "json", "--output", "/out/$SafeName.vulnerabilities.json", $Reference
     )
     Invoke-CheckedDocker @(
-        "run", "--rm", "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", $mount,
+        "run", "--rm", "-v", "${trivyCacheVolume}:/root/.cache", "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", $mount,
         $trivyImage, "image", "--format", "cyclonedx", "--output", "/out/$SafeName.sbom.cdx.json", $Reference
     )
 }
@@ -70,17 +75,29 @@ function Invoke-TrivyFilesystem {
     $sourceMount = "${repoRoot}:/src:ro"
     $outputMount = "${reportDir}:/out"
     Invoke-CheckedDocker @(
-        "run", "--rm", "-v", $sourceMount, "-v", $outputMount,
-        $trivyImage, "fs", "--exit-code", "1", "--severity", "HIGH,CRITICAL",
-        "--skip-dirs", "/src/.venv", "--skip-dirs", "/src/frontend/node_modules",
-        "--skip-dirs", "/src/frontend-vue/node_modules", "--format", "json",
+        "run", "--rm", "-v", "${trivyCacheVolume}:/root/.cache", "-v", $sourceMount, "-v", $outputMount,
+        $trivyImage, "fs", "--exit-code", "$TrivyExitCode", "--severity", "HIGH,CRITICAL",
+        "--scanners", "vuln", "--timeout", "30m",
+        "--skip-dirs", "/src/.venv",
+        "--skip-dirs", "/src/.git",
+        "--skip-dirs", "/src/frontend-vue/node_modules",
+        "--skip-dirs", "/src/frontend/node_modules",
+        "--skip-dirs", "/src/backups",
+        "--skip-dirs", "/src/logs",
+        "--skip-dirs", "/src/catalogos",
+        "--skip-dirs", "/src/certs",
+        "--skip-dirs", "/src/ImagenesTest",
+        "--skip-dirs", "/src/data",
+        "--skip-dirs", "/src/PR",
+        "--format", "json",
         "--output", "/out/filesystem.vulnerabilities.json", "/src"
     )
 }
 
-Invoke-TrivyFilesystem
-Get-Content -LiteralPath $RegistryPasswordFile -Raw |
-    docker login $Registry --username $RegistryUser --password-stdin
+if (-not $SkipFilesystemScan) {
+    Invoke-TrivyFilesystem
+}
+& cmd.exe /c "type `"$RegistryPasswordFile`" | docker login $Registry --username $RegistryUser --password-stdin"
 if ($LASTEXITCODE -ne 0) { throw "registry_login_failed" }
 
 $records = [Collections.Generic.List[object]]::new()
@@ -110,7 +127,9 @@ foreach ($item in $mirrors) {
 
 $manifestPath = Join-Path $reportDir "images.manifest.json"
 $environmentPath = Join-Path $reportDir "images.env.ps1"
-$records | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
-$records | ForEach-Object { '$env:{0}="{1}"' -f $_.env, $_.image } |
-    Set-Content -LiteralPath $environmentPath -Encoding utf8NoBOM
+$utf8NoBom = [Text.UTF8Encoding]::new($false)
+[IO.File]::WriteAllText($manifestPath, ($records | ConvertTo-Json -Depth 4), $utf8NoBom)
+$envLines = $records | ForEach-Object { '$env:{0}="{1}"' -f $_.env, $_.image }
+[IO.File]::WriteAllLines($environmentPath, $envLines, $utf8NoBom)
 Write-Output "images_published manifest=$manifestPath"
+

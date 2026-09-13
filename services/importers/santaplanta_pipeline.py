@@ -85,38 +85,43 @@ def _parse_header_text(text: str, events: List[Dict[str, Any]]):  # devuelve (re
                 nonlocal long_seq_removed
                 val = m.group(0)
                 # No remover si ya tiene guión y parece remito válido
-                if re.fullmatch(r"0001-\d{6,8}", val):
+                if re.fullmatch(r"\d{4}-\d{6,8}", val):
                     return val
                 events.append({"level": "DEBUG", "stage": "header_extract", "event": "header_long_sequence_removed", "details": {"value": val}})
                 long_seq_removed += 1
                 return " " * len(val)
             return re.sub(r"\b\d{10,}\b", repl, s)
         sanitized = _remove_long_sequences(text)
-        # 1. Patrón contextual estricto: 'REMITO' seguido de Nº y luego 0001 - 6..8 dígitos
-        ctx = re.search(r"REMITO[\s\r\n]+N[ºoO:]?\s*0{0,2}(0001)\s*[-–]\s*(\d{6,8})", sanitized, flags=re.I)
+        # 1. Patrón contextual estricto: 'REMITO' seguido de Nº y luego punto de venta (4 dígitos) - 6..8 dígitos
+        ctx = re.search(r"REMITO[\s\S]{0,100}?N[ºoO°:\s]*0{0,2}(\d{4})\s*[-–]\s*(\d{6,8})", sanitized, flags=re.I)
         if ctx:
-            remito = f"0001-{ctx.group(2).zfill(8)}"
+            remito = f"{ctx.group(1).zfill(4)}-{ctx.group(2).zfill(8)}"
             source = "context_remito_no"
         else:
-            # 2. Patrón preferente clásico exacto 0001-XXXXXXXX (8 dígitos)
-            m = re.search(r"\b(0001)[-\s]?(\d{8})\b", sanitized)
-            if m:
-                remito = f"{m.group(1)}-{m.group(2)}"
-                source = "pattern_4_8"
+            # 1.b Número tras Nº directo
+            m_no = re.search(r"\bN[ºoO°:]?\s*(\d{4})\s*[-–]\s*(\d{6,8})\b", sanitized, flags=re.I)
+            if m_no:
+                remito = f"{m_no.group(1).zfill(4)}-{m_no.group(2).zfill(8)}"
+                source = "pattern_n_pv_seq"
             else:
-                # 3. Patrón relajado 4+8 (filtrar prefijo distinto de 0001)
-                m2 = re.search(r"\b(\d{4})[^\d]{0,3}(\d{6,8})\b", sanitized)
-                if m2:
-                    if m2.group(1) == "0001":
+                # 2. Patrón clásico preferente 4 dígitos - 8 dígitos
+                m = re.search(r"\b(\d{4})[-\s](\d{8})\b", sanitized)
+                if m and not (2010 <= int(m.group(1)) <= 2030):
+                    remito = f"{m.group(1)}-{m.group(2)}"
+                    source = "pattern_4_8"
+                else:
+                    # 3. Patrón relajado 4+6..8 (filtrar años)
+                    m2 = re.search(r"\b(\d{4})[^\d]{0,3}(\d{6,8})\b", sanitized)
+                    if m2 and not (2010 <= int(m2.group(1)) <= 2030):
                         seq = m2.group(2)
-                        remito = f"0001-{seq.zfill(8)}"
+                        remito = f"{m2.group(1)}-{seq.zfill(8)}"
                         source = "pattern_relaxed_varlen"
-                    else:
+                    elif m2:
                         events.append({"level": "DEBUG", "stage": "header_extract", "event": "header_pattern_ignored", "details": {"prefix": m2.group(1)}})
-        # 4. Filtrado de números largos (>10) que pudieran contaminar
+        # 4. Filtrado de números largos (>12) que pudieran contaminar
         if remito:
             digits = remito.replace('-', '')
-            if len(digits) > 10:
+            if len(digits) > 12:
                 events.append({"level": "DEBUG", "stage": "header_extract", "event": "header_large_number_ignored", "details": {"value": remito}})
                 remito = None
                 source = None
@@ -127,13 +132,22 @@ def _parse_header_text(text: str, events: List[Dict[str, Any]]):  # devuelve (re
                 events.append({"level": "INFO", "stage": "header_extract", "event": "discarded_cuit_like", "details": {"value": remito}})
                 remito = None
                 source = None
-        # 6. Fecha dd/mm/yyyy
-        mf = re.search(r"\b(\d{2}/\d{2}/\d{4})\b", sanitized)
-        if mf:
+        # 6. Fecha de emisión
+        m_emision = re.search(r"Fecha\s+de\s+emisi[óo\?n\s]+[:\s]*(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})", sanitized, flags=re.I)
+        if m_emision:
             try:
-                fecha = datetime.strptime(mf.group(1), "%d/%m/%Y")
+                fecha = datetime(int(m_emision.group(3)), int(m_emision.group(2)), int(m_emision.group(1)))
             except Exception:
                 fecha = None
+        if not fecha:
+            # Excluir 'Inicio de Actividades' para evitar falso positivo con fecha fundacional
+            sanitized_no_inicio = re.sub(r"Inicio\s+de\s+Actividades[:\s]*\d{1,2}[/\-]\d{1,2}[/\-]\d{4}", "", sanitized, flags=re.I)
+            mf = re.search(r"\b(\d{1,2}/\d{1,2}/\d{4})\b", sanitized_no_inicio)
+            if mf:
+                try:
+                    fecha = datetime.strptime(mf.group(1), "%d/%m/%Y")
+                except Exception:
+                    fecha = None
         # 7. Muestra diagnóstica si aún vacío
         if not remito:
             sample = text[:180].replace('\n', ' ') if text else ''
@@ -157,8 +171,8 @@ def _parse_header_text(text: str, events: List[Dict[str, Any]]):  # devuelve (re
     # 6. Eventos finales y validaciones adicionales
     if long_seq_removed:
         events.append({"level": "DEBUG", "stage": "header_extract", "event": "header_long_sequence_removed_count", "details": {"count": long_seq_removed}})
-    # Validación final: si remito quedó con patrón inválido (no comienza con 0001- o no tiene 13 chars con guión)
-    if remito and not re.fullmatch(r"0001-\d{8}", remito):
+    # Validación final: si remito no cumple con el patrón 4 dígitos - 8 dígitos
+    if remito and not re.fullmatch(r"\d{4}-\d{8}", remito):
         # reset y evento
         events.append({"level": "INFO", "stage": "header", "event": "header_invalid_reset", "details": {"value": remito}})
         remito = None
@@ -300,18 +314,28 @@ def _extract_lines_from_table(table: list[list[str]], dbg: Dict[str, Any]) -> Li
         for c in cells:
             m = SKU_PATTERN.match(c.strip())
             if m and not sku:
-                # Validar que no sea un año (2017-2025) o número muy corto
+                # Validar que no sea un año (2010-2030) o número muy corto
                 num = int(m.group(1))
                 if num > 0 and not (2010 <= num <= 2030):
                     sku = c.strip()
                     break
-        
+
+        # Caso especial: celda combinada SKU \n Título (cuando no hay borde vertical)
+        if not sku and cells:
+            m_comb = re.match(r"^0*(\d{4,10})\s*\n\s*(.+)$", cells[0].strip())
+            if m_comb:
+                num = int(m_comb.group(1))
+                if not (2010 <= num <= 2030):
+                    sku = m_comb.group(1)
+                    title = m_comb.group(2).strip()
+
         # Título: la celda más larga que no sea el SKU
-        for c in cells:
-            if c and c != sku and (not title or len(c) > len(title)):
-                title = c
-        
-        # Buscar cantidad (número entero pequeño, usualmente 1-1000)
+        if not title:
+            for c in cells:
+                if c and c != sku and (not title or len(c) > len(title)):
+                    title = c
+
+        # Buscar cantidad (número entero o decimal pequeño)
         for c in cells:
             if c != sku and re.fullmatch(r"\d{1,4}([,\.]\d{1,2})?", c.strip().replace(',', '.')):
                 try:
@@ -319,16 +343,25 @@ def _extract_lines_from_table(table: list[list[str]], dbg: Dict[str, Any]) -> Li
                     if 0 < val <= 10000:
                         qty = val
                         break
-                except:
+                except Exception:
                     pass
-        
-        # Buscar precio (número con formato monetario)
-        for c in reversed(cells):
-            if c and re.search(r"\d+[,\.]\d{2}", c):
+
+        # Buscar precio distinguiendo Unitario y Total cuando hay múltiples columnas monetarias
+        money_candidates = []
+        for c in cells:
+            if c and c != sku and re.search(r"\d+[,\.]\d{2}", c):
                 parsed = _parse_money(c)
                 if parsed > 0:
-                    unit_cost = parsed
-                    break
+                    money_candidates.append(parsed)
+
+        line_total = None
+        if len(money_candidates) >= 2:
+            # En remitos con Unitario y Total: el último es el Total, el penúltimo es el Unitario
+            line_total = money_candidates[-1]
+            unit_cost = money_candidates[-2]
+        elif len(money_candidates) == 1:
+            unit_cost = money_candidates[0]
+            line_total = unit_cost * (qty if qty > 0 else Decimal(1))
         
         # === FILTRO 3: Validar que parece un producto real ===
         has_sku = bool(sku)
@@ -435,40 +468,70 @@ def _parse_money(token: str) -> Decimal:
 
 
 def _parse_santa_planta_text_rows(text: str, events: List[Dict[str, Any]]) -> List[ParsedLine]:
-    """Parsea el layout textual estable emitido por Crystal Reports."""
+    """Parsea el layout textual emitido por Crystal Reports o el nuevo formato 2026."""
     money = r"\d{1,3}(?:\.\d{3})*,\d{2}"
-    row_re = re.compile(
+    # Formato clásico Crystal Reports (10 columnas, título con prefijo *)
+    row_re_crystal = re.compile(
         rf"^(?P<sku>\d{{1,10}})\s+\*(?P<title>.+?)\s+(?P<qty>\d+)\s+"
         rf"(?P<gross>{money})\s+(?P<discount>{money})\s+(?P<net>{money})\s+"
         rf"(?P<subtotal>{money})\s+(?P<vat>{money})\s+(?P<with_vat>{money})\s+(?P<total>{money})$"
+    )
+    # Formato 2026 (6 columnas: Código, Producto/Servicio, Cantidad, % Bonif., P.Unitario C/IVA, Total)
+    row_re_2026 = re.compile(
+        rf"^(?P<sku>\d{{4,10}})\s+(?P<title>.+?)\s+(?P<qty>\d+(?:[,\.]\d{{1,2}})?)\s+"
+        rf"(?P<bonif>\d+(?:[,\.]\d{{1,2}})?)\s+(?P<unit_cost>{money}|\d+,\d{{2}})\s+"
+        rf"(?P<total>{money}|\d+,\d{{2}})$"
     )
     parsed: List[ParsedLine] = []
     in_products = False
     for raw_line in text.splitlines():
         line = re.sub(r"\s+", " ", raw_line).strip()
-        if "Código Producto/Servicio" in line:
+        if not line:
+            continue
+        if re.search(r"C[oó\?]digo\s+Producto/Servicio", line, flags=re.I):
             in_products = True
             continue
         if not in_products:
             continue
-        if line.startswith("Cantidad De Items"):
+        if re.match(r"^(?:Cantidad\s+de\s+items|Importe\s+Total|ZONA\s+TRANSPORTE|Resumen\s+de\s+Carga|Transferencias\s+A)", line, flags=re.I):
             break
-        match = row_re.match(line)
-        if match:
+        # 1. Intentar formato clásico Crystal
+        match_crystal = row_re_crystal.match(line)
+        if match_crystal:
             parsed.append(ParsedLine(
-                supplier_sku=match.group("sku"),
-                title=match.group("title").strip(),
-                qty=Decimal(match.group("qty")),
-                unit_cost_bonif=_parse_money(match.group("net")),
-                pct_bonif=_parse_money(match.group("discount")),
-                subtotal=_parse_money(match.group("subtotal")),
-                iva=_parse_money(match.group("vat")),
-                total=_parse_money(match.group("total")),
+                supplier_sku=match_crystal.group("sku"),
+                title=match_crystal.group("title").strip(),
+                qty=Decimal(match_crystal.group("qty")),
+                unit_cost_bonif=_parse_money(match_crystal.group("net")),
+                pct_bonif=_parse_money(match_crystal.group("discount")),
+                subtotal=_parse_money(match_crystal.group("subtotal")),
+                iva=_parse_money(match_crystal.group("vat")),
+                total=_parse_money(match_crystal.group("total")),
             ))
-        elif parsed and line and not re.match(r"^\d+\s+\*", line):
+            continue
+        # 2. Intentar nuevo formato 2026
+        match_2026 = row_re_2026.match(line)
+        if match_2026:
+            qty_val = _parse_money(match_2026.group("qty"))
+            unit_cost = _parse_money(match_2026.group("unit_cost"))
+            bonif = _parse_money(match_2026.group("bonif"))
+            total_val = _parse_money(match_2026.group("total"))
+            parsed.append(ParsedLine(
+                supplier_sku=match_2026.group("sku"),
+                title=match_2026.group("title").strip(),
+                qty=qty_val,
+                unit_cost_bonif=unit_cost,
+                pct_bonif=bonif,
+                subtotal=total_val,
+                iva=Decimal("0.00"),
+                total=total_val,
+            ))
+            continue
+        # 3. Continuación de título si no empieza con SKU numérico o asterisco
+        if parsed and not re.match(r"^\d{4,10}\s+", line) and not re.match(r"^\d+\s+\*", line):
             parsed[-1].title = f"{parsed[-1].title} {line}".strip()
     if parsed:
-        events.append({"level": "INFO", "stage": "pdfplumber", "event": "crystal_text_rows", "details": {"count": len(parsed)}})
+        events.append({"level": "INFO", "stage": "pdfplumber", "event": "santa_planta_text_rows", "details": {"count": len(parsed)}})
     return parsed
 
 
@@ -505,12 +568,13 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
     # 3. Header + footer expected
     result.remito_number, result.remito_date = _parse_header_text(text_all, ev)
     # Rewrite: si número detectado no contiene la secuencia esperada y el filename sí, forzar filename
-    # Reescritura agresiva: si número ausente o no respeta formato 0001-XXXXXXXX, usar filename
-    fname_match = re.search(r"Remito[_\-]?0*(\d{6,8})", pdf_path.name, flags=re.I)
+    # Reescritura: si número ausente o no respeta formato \d{4}-\d{8}, usar filename
+    fname_match = re.search(r"(?:Remito|FACTURA[\s\w]*)[_\-\s]?(?:(\d{4})[_\-\s])?0*(\d{6,8})", pdf_path.name, flags=re.I)
     if fname_match:
-        seq = fname_match.group(1).zfill(8)
-        candidate = f"0001-{seq}"
-        if (not result.remito_number) or not re.fullmatch(r"0001-\d{8}", result.remito_number):
+        pv = fname_match.group(1) or "0001"
+        seq = fname_match.group(2).zfill(8)
+        candidate = f"{pv.zfill(4)}-{seq}"
+        if (not result.remito_number) or not re.fullmatch(r"\d{4}-\d{8}", result.remito_number):
             ev.append({"level": "INFO", "stage": "header", "event": "remito_number_rewritten_from_filename", "details": {"old": result.remito_number, "new": candidate}})
             result.remito_number = candidate
     exp_footer = _extract_expected_counts_and_totals(text_all)
@@ -543,10 +607,11 @@ def parse_remito(pdf_path: Path, *, correlation_id: str, use_ocr_auto: bool = Tr
 
     # 4.b Reescritura adicional del remito si aún carece de guión (formato inconsistente)
     if result.remito_number and '-' not in result.remito_number:
-        fname_force = re.search(r"Remito[_\-]?0*(\d{6,8})", pdf_path.name, flags=re.I)
+        fname_force = re.search(r"(?:Remito|FACTURA[\s\w]*)[_\-\s]?(?:(\d{4})[_\-\s])?0*(\d{6,8})", pdf_path.name, flags=re.I)
         if fname_force:
-            seq = fname_force.group(1).zfill(8)
-            new_val = f"0001-{seq}"
+            pv = fname_force.group(1) or "0001"
+            seq = fname_force.group(2).zfill(8)
+            new_val = f"{pv.zfill(4)}-{seq}"
             if new_val != result.remito_number:
                 ev.append({"level": "INFO", "stage": "header", "event": "remito_number_rewritten_from_filename_forced", "details": {"old": result.remito_number, "new": new_val}})
                 result.remito_number = new_val
@@ -925,6 +990,9 @@ def _normalize_embedded_skus(lines: List[ParsedLine], events: List[Dict[str, Any
 
     # Paso 1: mapping directo si coincide patrón y aún no hay SKU válido corto.
     for l in lines:
+        sku_str = str(l.supplier_sku or "").strip()
+        if re.fullmatch(r"\d{7,12}", sku_str):
+            continue
         if l.supplier_sku and re.fullmatch(r"\d{3,6}", str(l.supplier_sku)) and l.supplier_sku in expected_set:
             continue
         title_u = (l.title or "").upper()
@@ -939,12 +1007,14 @@ def _normalize_embedded_skus(lines: List[ParsedLine], events: List[Dict[str, Any
                         pass
                 break
 
-    # Paso 2: extracción de subcadenas sólo para líneas sin SKU corto.
+    # Paso 2: extracción de subcadenas sólo para líneas sin SKU corto ni canónico.
     pattern_numeric = re.compile(r"\d{3,12}")
     for l in lines:
-        if l.supplier_sku and re.fullmatch(r"\d{3,6}", str(l.supplier_sku).strip()):
+        sku_str = str(l.supplier_sku or "").strip()
+        if re.fullmatch(r"\d{7,12}", sku_str):
+            continue
+        if l.supplier_sku and re.fullmatch(r"\d{3,6}", sku_str):
             # Si ya tiene SKU pero no es esperado, intentar trimming directo de 1-2 dígitos prefijo/sufijo
-            sku_str = str(l.supplier_sku).strip()
             if l.supplier_sku not in expected_set:
                 # Caso longitud 5: quitar primero o último para ver si produce esperado de 4
                 if re.fullmatch(r"\d{5}", sku_str):

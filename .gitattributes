@@ -1,0 +1,6 @@
+# NG-HEADER: Nombre de archivo: .gitattributes
+# NG-HEADER: Ubicación: .gitattributes
+# NG-HEADER: Descripción: Enforce LF endings on shell scripts
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+*.sh text eol=lf
+*.bash text eol=lf

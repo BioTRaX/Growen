@@ -393,7 +393,7 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
                 (desired_sku[:40] + "-" + ''.join(_r.choices(_s.ascii_uppercase + _s.digits, k=5)))[:50]
             )
             try:
-                var = Variant(product_id=prod.id, sku=attempt_variant_sku)
+                var = Variant(product_id=prod.id, sku=attempt_variant_sku, price=payload.sale_price)
                 session.add(var)
                 await session.flush()
                 if attempt_variant_sku != desired_sku:

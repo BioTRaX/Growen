@@ -43,7 +43,7 @@ IMPORTANT: list[str] = [
     "python_multipart",
     "pandas",
     "openpyxl",
-    "pillow",  # Pillow
+    "PIL",  # Pillow
 ]
 
 OPTIONAL: list[str] = [

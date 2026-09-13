@@ -1,3 +1,8 @@
+#!/usr/bin/env python
+# NG-HEADER: Nombre de archivo: crawler.py
+# NG-HEADER: Ubicación: services/images/crawler.py
+# NG-HEADER: Descripción: Crawler híbrido para búsqueda de imágenes de productos.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
 """Hybrid image crawler for Santa Planta.
@@ -18,7 +23,10 @@ import re
 import asyncio
 
 import httpx
-from bs4 import BeautifulSoup  # type: ignore
+try:
+    from bs4 import BeautifulSoup  # type: ignore
+except ImportError:
+    BeautifulSoup = None  # type: ignore
 try:
     from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type  # type: ignore
 except Exception:  # pragma: no cover - optional
@@ -156,6 +164,8 @@ async def search_pages_santaplanta(title: str, max_results: int = 5, correlation
 
 
 def parse_images_from_html(html: str) -> List[str]:
+    if BeautifulSoup is None:
+        return []
     soup = BeautifulSoup(html, "html.parser")
     imgs: List[str] = []
     # meta og:image
