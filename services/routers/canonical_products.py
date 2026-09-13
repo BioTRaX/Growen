@@ -24,6 +24,7 @@ from db.models import (
     ProductEquivalence,
     Supplier,
     SupplierProduct,
+    Product,
 )
 from db.sku_generator import generate_canonical_sku
 from db.sku_utils import CANONICAL_SKU_REGEX, build_canonical_sku as compose_canonical_sku, normalize_code
@@ -54,7 +55,6 @@ class CanonicalUpdate(BaseModel):
 
 
 class CanonicalBatchItem(BaseModel):
-    """Item para creación batch de producto canónico."""
     name: str
     brand: str | None = None
     category_id: int | None = None
@@ -448,6 +448,14 @@ async def update_canonical_product(
     if not cp:
         raise HTTPException(status_code=404, detail="Canonical product not found")
     data = req.model_dump(exclude_unset=True)
+    if "name" in data:
+        name_clean = (data["name"] or "").strip()
+        if not name_clean:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid_name", "message": "El nombre canónico no puede estar vacío"},
+            )
+        data["name"] = name_clean
     if "sku_custom" in data:
         normalized_sku = normalize_sku(data["sku_custom"] or "")
         if not normalized_sku or not CANONICAL_SKU_REGEX.fullmatch(normalized_sku):
@@ -473,6 +481,30 @@ async def update_canonical_product(
         data["sku_custom"] = normalized_sku
     for k, v in data.items():
         setattr(cp, k, v)
+    if "name" in data:
+        linked_prods = list(
+            (
+                await session.scalars(
+                    select(Product)
+                    .join(SupplierProduct, SupplierProduct.internal_product_id == Product.id)
+                    .join(ProductEquivalence, ProductEquivalence.supplier_product_id == SupplierProduct.id)
+                    .where(ProductEquivalence.canonical_product_id == cp.id)
+                )
+            ).all()
+        )
+        for p in linked_prods:
+            p.title = data["name"]
+        if cp.sku_custom or cp.ng_sku:
+            sku_list = [s for s in (cp.sku_custom, cp.ng_sku) if s]
+            prods_by_sku = list(
+                (
+                    await session.scalars(
+                        select(Product).where(Product.canonical_sku.in_(sku_list))
+                    )
+                ).all()
+            )
+            for p in prods_by_sku:
+                p.title = data["name"]
     try:
         await session.commit()
     except IntegrityError as exc:
