@@ -94,15 +94,30 @@ Desde otro dispositivo con la CA instalada, proporcionar `ADMIN_USER_FILE`, `ADM
 
 ### 5. Coexistencia con Dev y ciclo de actualización continua
 
-#### A. Transición desde Docker Compose (Resolución de colisiones de red)
-- Si el stack de desarrollo (`docker-compose.yml`) estuvo en ejecución, Docker Engine conservará redes tipo `bridge` locales con el prefijo del proyecto (`growen_backend`, `growen_egress`, etc.).
-- Docker Swarm fallará con `network with name growen_backend already exists` al intentar crear sus redes `overlay` homónimas si las redes bridge siguen activas.
-- **Regla obligatoria**: Antes de desplegar el stack Swarm, ejecutar `docker compose down` (estrictamente **sin** el parámetro `-v`) para liberar los nombres de red conservando intactos los volúmenes de datos (`growen_pgdata`, medios, etc.).
+#### A. Aislamiento estricto de volúmenes y redes (Dev vs Swarm)
+- El entorno de desarrollo (`docker-compose.yml`) utiliza explícitamente el volumen persistente `growen_dev_pgdata` y redes dedicadas (`growen_dev_backend`, `growen_dev_host_access`, etc.).
+- Docker Swarm utiliza de forma independiente `growen_pgdata` y redes overlay con el prefijo del stack (`growen_backend`, etc.).
+- Este desacoplamiento previene dos riesgos mayores:
+  1. **Corrupción de PostgreSQL**: dos instancias de PostgreSQL nunca deben montar concurrentemente el mismo volumen de datos físico.
+  2. **Colisión de nombres de red**: Compose no interfiere con las redes overlay creadas por el despliegue de Swarm.
 
-#### B. Reutilización de Base de Datos y sincronización de contraseñas
-- El servicio `db` de Swarm reutiliza el volumen persistente `growen_pgdata` creado en desarrollo.
-- Si se crea el secreto Swarm `postgres_password` con una credencial distinta a la que tenía PostgreSQL en desarrollo (`.env`), el motor no modificará la contraseña de usuario (`initdb` sólo se ejecuta en directorios de datos vírgenes).
-- Para evitar fallos de autenticación de la API (`password authentication failed for user "growen"`), sincronizar la clave de la base con el secreto montado en Swarm:
+#### B. Clonación y sincronización inicial de Base de Datos
+- Para inicializar o actualizar la base de desarrollo desde Swarm sin afectar producción:
+  ```powershell
+  # 1. Exportar dump lógico desde el contenedor Swarm
+  $swarmDb = (docker ps -q -f name=growen_db | Select-Object -First 1)
+  docker exec $swarmDb pg_dump -U growen -d growen -F c -f /tmp/growen_swarm.dump
+  docker cp ${swarmDb}:/tmp/growen_swarm.dump tmp/growen_swarm.dump
+  docker exec $swarmDb rm /tmp/growen_swarm.dump
+
+  # 2. Restaurar en el contenedor dev local
+  $devDb = (docker ps -q -f name=growen-postgres | Select-Object -First 1)
+  docker cp tmp/growen_swarm.dump ${devDb}:/tmp/growen_swarm.dump
+  docker exec $devDb pg_restore -U growen -d growen --no-owner --no-privileges /tmp/growen_swarm.dump
+  docker exec $devDb rm /tmp/growen_swarm.dump
+  Remove-Item tmp/growen_swarm.dump -Force
+  ```
+- Si se crea el secreto Swarm `postgres_password` con una credencial distinta a la que tenía PostgreSQL en desarrollo (`.env`), el motor no modificará la contraseña de usuario (`initdb` sólo se ejecuta en directorios de datos vírgenes). Para sincronizar la clave de la base con el secreto montado en Swarm:
   ```powershell
   $db = (docker ps -q -f name=growen_db | Select-Object -First 1)
   docker exec $db sh -c 'psql -U growen -d growen -c "ALTER USER growen WITH PASSWORD '\''$(cat /run/secrets/postgres_password)'\'';"'

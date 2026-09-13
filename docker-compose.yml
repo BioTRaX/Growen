@@ -718,17 +718,24 @@ services:
       - cloudflare_egress
 volumes:
   pgdata:
+    name: ${COMPOSE_PGDATA_VOLUME:-growen_dev_pgdata}
   redis_data:
+    name: ${COMPOSE_REDIS_DATA_VOLUME:-growen_dev_redis_data}
 networks:
   backend:
+    name: ${COMPOSE_BACKEND_NETWORK:-growen_dev_backend}
     internal: true
   # Puente exclusivo para bindings loopback de infraestructura local.
   # Los puertos de cada servicio continúan limitados a 127.0.0.1.
   host_access:
+    name: ${COMPOSE_HOST_ACCESS_NETWORK:-growen_dev_host_access}
     driver: bridge
   egress:
+    name: ${COMPOSE_EGRESS_NETWORK:-growen_dev_egress}
     driver: bridge
   meli_ingress:
+    name: ${COMPOSE_MELI_INGRESS_NETWORK:-growen_dev_meli_ingress}
     internal: true
   cloudflare_egress:
+    name: ${COMPOSE_CLOUDFLARE_EGRESS_NETWORK:-growen_dev_cloudflare_egress}
     driver: bridge

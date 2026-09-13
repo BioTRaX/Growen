@@ -44,7 +44,7 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 - [ ] Resolver el drift histórico de Alembic en una revisión separada y verificable.
 - [ ] Consolidar la observabilidad de costes, latencia y errores de proveedores IA.
 - [ ] Medir periódicamente activaciones y consumo de tokens de skills Growen/Superpowers para ajustar descripciones sin debilitar los gates locales.
-- [ ] Extender `scripts/audit_agentic_environment.py` para reportar locks de `scripts/agent_lock.py` vencidos y olvidados en `.agents/state/locks/`.
+- [x] Desacoplar y aislar volúmenes y redes entre Docker Compose (Dev) y Docker Swarm (Prod): volumen dedicado `growen_dev_pgdata` y prefijos `growen_dev_*` para prevenir colisiones de nombres y corrupción concurrente de PostgreSQL (2026-09-13).
 - [ ] Evaluar `git worktree add` por sesión de agente como aislamiento físico real, después de la serialización actual mediante el ámbito global `git-worktree`; requiere definir rutas, puertos y autoridad del checkout central antes de implementarse.
 
 ## Frontend Vue
