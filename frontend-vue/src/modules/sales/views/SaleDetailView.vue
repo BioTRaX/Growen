@@ -10,6 +10,7 @@ import {
   getTimeline, releaseReservation, reserveSale, updateSaleLines, uploadAttachment, type Sale,
 } from '../../../services/sales'
 import { getHttpErrorMessage } from '../../../services/http'
+import { apiUrl } from '../../../services/transports'
 
 const route = useRoute(); const id = Number(route.params.id)
 const sale = ref<Sale | null>(null); const timeline = ref<any[]>([]); const error = ref(''); const notice = ref('')
@@ -35,7 +36,7 @@ onMounted(load)
 </script>
 
 <template><v-container fluid class="py-8">
-  <div class="d-flex justify-space-between"><v-btn to="/ventas" variant="text" prepend-icon="mdi-arrow-left">Ventas</v-btn><v-btn :href="`/sales/${id}/receipt`" target="_blank" prepend-icon="mdi-printer">Recibo</v-btn></div>
+  <div class="d-flex justify-space-between"><v-btn to="/ventas" variant="text" prepend-icon="mdi-arrow-left">Ventas</v-btn><v-btn :href="apiUrl(`/sales/${id}/receipt`)" target="_blank" prepend-icon="mdi-printer">Recibo</v-btn></div>
   <v-alert v-if="error" type="error" class="my-4">{{ error }}</v-alert><v-alert v-if="notice" type="info" closable class="my-4" @click:close="notice=''">{{ notice }}</v-alert>
   <v-card v-if="sale"><v-card-title class="d-flex justify-space-between"><span>Venta #{{ sale.id }} · {{ sale.customer_name || 'Consumidor Final' }}</span><v-chip>{{ sale.status }}</v-chip></v-card-title><v-card-subtitle>{{ sale.channel_name || 'Sin canal' }} · {{ sale.payment_status }}</v-card-subtitle>
   <v-card-text><v-data-table :items="sale.lines" :headers="[{title:'Producto',key:'product_name'},{title:'SKU',key:'sku'},{title:'Cantidad',key:'qty'},{title:'Precio',key:'unit_price'},{title:'Total',key:'total'},{title:'',key:'actions'}]">

@@ -10,7 +10,9 @@ import { useAuthStore } from '../../../auth/store'
 import { getProductSources } from '../../market/api/market'
 import type { ProductSources } from '../../market/types'
 import { getHttpErrorMessage } from '../../../services/http'
+import { apiUrl } from '../../../services/transports'
 import { getProduct, getProductHistory } from '../api/products'
+import CanonicalNameEditor from '../components/CanonicalNameEditor.vue'
 import CanonicalSkuEditor from '../components/CanonicalSkuEditor.vue'
 import EnrichmentPanel from '../components/EnrichmentPanel.vue'
 import StructuredProductData from '../components/StructuredProductData.vue'
@@ -105,6 +107,14 @@ function skuSaved(sku: string): void {
   if (product.value) product.value.canonical_sku = sku
 }
 
+function nameSaved(name: string): void {
+  if (product.value) {
+    product.value.preferred_title = name
+    product.value.canonical_name = name
+    product.value.title = name
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -120,7 +130,13 @@ onMounted(load)
     <template v-if="product">
       <header class="d-flex flex-wrap align-center justify-space-between ga-3 my-5">
         <div>
-          <h1 class="text-h4">{{ product.preferred_title || product.title }}</h1>
+          <CanonicalNameEditor
+            :canonical-product-id="product.canonical_product_id"
+            :product-id="product.id"
+            :editable="canEditCanonicalSku"
+            :name="product.preferred_title || product.title"
+            @saved="nameSaved"
+          />
           <CanonicalSkuEditor
             :canonical-product-id="product.canonical_product_id"
             :editable="canEditCanonicalSku"
@@ -236,7 +252,7 @@ onMounted(load)
         <v-card-title>Historial operativo del registro solicitado</v-card-title>
         <v-data-table :headers="historyHeaders" :items="history.items">
           <template #item.net_unit_cost="{ value }">{{ money(value) }}</template>
-          <template #item.attachment_url="{ value }"><v-btn v-if="value" :href="value" size="small" target="_blank" variant="text">Documento</v-btn></template>
+          <template #item.attachment_url="{ value }"><v-btn v-if="value" :href="apiUrl(value)" size="small" target="_blank" variant="text">Documento</v-btn></template>
           <template #no-data><div class="pa-6 text-center text-medium-emphasis">No hay compras confirmadas.</div></template>
         </v-data-table>
       </v-card>

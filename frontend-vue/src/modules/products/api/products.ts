@@ -92,6 +92,24 @@ export async function updateCanonicalSku(
   })).data
 }
 
+export async function updateCanonicalName(
+  canonicalId: number,
+  name: string,
+): Promise<{ id: number; name: string }> {
+  return (await http.patch<{ id: number; name: string }>(`/canonical-products/${canonicalId}`, {
+    name: name.trim(),
+  })).data
+}
+
+export async function updateProductTitle(
+  productId: number,
+  title: string,
+): Promise<void> {
+  await http.patch(`/products/${productId}`, {
+    title: title.trim(),
+  })
+}
+
 export async function getProductHistory(id: number): Promise<ProductPurchaseHistory> {
   return (await http.get<ProductPurchaseHistory>(`/products/${id}/purchase-history`)).data
 }

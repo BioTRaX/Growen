@@ -7,6 +7,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { confirmPurchase, getPurchase, getPurchaseImpact, updatePurchase, validatePurchase, type Purchase } from '../../../services/purchases'
 import { getHttpErrorMessage } from '../../../services/http'
+import { apiUrl } from '../../../services/transports'
 import { purchaseLineTotal } from '../purchaseLineTotal'
 import { validationFeedback } from '../purchaseValidation'
 
@@ -100,7 +101,7 @@ onMounted(refresh)
       <div class="d-flex ga-2"><v-btn to="/compras" variant="text">Volver</v-btn><v-btn v-if="editable" @click="save">Guardar</v-btn><v-btn v-if="editable" :loading="validationBusy" color="secondary" @click="validate">Validar</v-btn><v-btn v-if="editable" :disabled="validationBusy" :loading="busy" color="primary" @click="confirm">Confirmar</v-btn></div>
     </div>
     <v-alert v-if="message" class="mb-4" type="success">{{ message }}</v-alert><v-alert v-if="error" class="mb-4" type="error">{{ error }}</v-alert>
-    <v-card class="mb-4"><v-card-text class="d-flex ga-6"><span>Total documento: <strong>{{ purchase.documented_total ?? '-' }}</strong></span><span>Total calculado: <strong>{{ purchase.totals?.total ?? '-' }}</strong></span><a v-if="purchase.attachments?.[0]" :href="purchase.attachments[0].url" target="_blank">Ver original</a></v-card-text></v-card>
+    <v-card class="mb-4"><v-card-text class="d-flex ga-6"><span>Total documento: <strong>{{ purchase.documented_total ?? '-' }}</strong></span><span>Total calculado: <strong>{{ purchase.totals?.total ?? '-' }}</strong></span><a v-if="purchase.attachments?.[0]" :href="apiUrl(purchase.attachments[0].url)" target="_blank">Ver original</a></v-card-text></v-card>
     <v-data-table class="purchase-lines-table" :headers="lineHeaders" :items="purchase.lines">
       <template #item.supplier_sku="{ item }"><v-text-field v-model="item.supplier_sku" :disabled="!editable" density="compact" hide-details /></template>
       <template #item.title="{ item }"><v-text-field v-model="item.title" :disabled="!editable" density="compact" hide-details /></template>
