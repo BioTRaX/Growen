@@ -11,10 +11,29 @@ export interface Sale {
   additional_cost_total?: number; tax?: number; total: number; paid_total: number; balance?: number
   lines?: SaleLine[]; payments?: any[]; attachments?: any[]; returns?: any[]; reservations?: any[]; allowed_actions?: Record<string, boolean>
 }
+export interface CatalogProduct {
+  product_id: number;
+  canonical?: boolean;
+  title: string;
+  sku?: string;
+  price?: number | null;
+  cost_price?: number | null;
+  stock?: number | null;
+  score?: number;
+}
+
 export interface SaleDraft {
-  customer?: { id?: number; name?: string }; items: SaleLine[]; sale_kind?: string; channel_id?: number
-  note?: string; sale_date?: string; additional_costs?: Array<{ concept: string; amount: number }>
-  discount_percent?: number; discount_amount?: number
+  customer?: { id?: number; name?: string };
+  customer_id?: number;
+  is_collaborator?: boolean;
+  items: SaleLine[];
+  sale_kind?: string;
+  channel_id?: number;
+  note?: string;
+  sale_date?: string;
+  additional_costs?: Array<{ concept: string; amount: number }>;
+  discount_percent?: number;
+  discount_amount?: number;
 }
 
 export async function listSales(params: Record<string, unknown> = {}) { return (await http.get('/sales', { params })).data }
@@ -31,7 +50,7 @@ export async function createReturn(id: number, payload: Record<string, unknown>)
 export async function reserveSale(id: number) { return (await http.post(`/sales/${id}/reserve`)).data }
 export async function releaseReservation(id: number) { return (await http.post(`/sales/${id}/release-reservation`)).data }
 export async function listChannels() { return (await http.get('/sales/channels')).data.items }
-export async function searchProducts(q: string) { return (await http.get('/sales/catalog/search', { params: { q } })).data.items }
+export async function searchProducts(q: string) { return (await http.get<{ items: CatalogProduct[] }>('/sales/catalog/search', { params: { q } })).data.items }
 export async function uploadAttachment(id: number, file: File) { const data = new FormData(); data.append('file', file); return (await http.post(`/sales/${id}/attachments`, data)).data }
 export async function deleteAttachment(id: number, attachmentId: number) { return (await http.delete(`/sales/${id}/attachments/${attachmentId}`)).data }
 export async function getTimeline(id: number) { return (await http.get(`/sales/${id}/timeline`)).data.events }

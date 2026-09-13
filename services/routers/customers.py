@@ -22,7 +22,7 @@ from services.sales.schemas import AccountAdjustmentInput
 router = APIRouter(prefix="/customers", tags=["customers"])
 
 
-_ALLOWED_KINDS = {None, "cf", "ri", "minorista", "mayorista"}
+_ALLOWED_KINDS = {None, "cf", "ri", "minorista", "mayorista", "colaborador"}
 
 
 def _audit(

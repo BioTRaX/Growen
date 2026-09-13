@@ -1534,7 +1534,7 @@ class Customer(Base):
     province: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    kind: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # cf/ri/minorista/mayorista
+    kind: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # cf/ri/minorista/mayorista/colaborador
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     credit_limit: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)

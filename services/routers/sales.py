@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, cast, Float
+from sqlalchemy.orm import selectinload
 
 from db.session import get_session
 from db.models import Customer, Sale, SaleLine, SalePayment, SaleAttachment, Product, AuditLog, Return, ReturnLine
@@ -29,6 +30,7 @@ from services.sales.domain import (
     account_balance,
     add_account_entry,
     expire_reservations,
+    get_product_cost_price,
     money,
     quantity,
     recalculate_sale_totals,
@@ -235,14 +237,27 @@ async def quote_sale(payload: SaleQuoteRequest, db: AsyncSession = Depends(get_s
         total_amount=Decimal("0"),
         paid_total=Decimal("0"),
     )
+    is_collab = bool(payload.is_collaborator)
+    if not is_collab and payload.customer_id:
+        cust = await db.get(Customer, payload.customer_id)
+        if cust and cust.kind == "colaborador":
+            is_collab = True
     lines: list[SaleLine] = []
     for item in payload.items:
-        product = await db.get(Product, item.product_id)
+        product = await db.scalar(
+            select(Product).options(selectinload(Product.variants)).where(Product.id == item.product_id)
+        )
         if not product:
             raise HTTPException(status_code=404, detail=f"Producto {item.product_id} no encontrado")
         unit_price = item.unit_price
-        if unit_price is None:
-            unit_price = Decimal(str(product.variants[0].price if product.variants else 0))
+        if unit_price is None and is_collab:
+            cost_price, _ = await get_product_cost_price(db, item.product_id)
+            if cost_price is None or cost_price <= 0:
+                raise HTTPException(status_code=422, detail=f"Producto {item.product_id} no tiene precio de costo registrado")
+            unit_price = cost_price
+        elif unit_price is None:
+            v_price = (product.variants[0].price or product.variants[0].promo_price) if product.variants else None
+            unit_price = Decimal(str(v_price)) if v_price is not None else Decimal("0")
         if unit_price <= 0:
             raise HTTPException(status_code=422, detail=f"Producto {item.product_id} no tiene precio de venta")
         lines.append(
@@ -403,13 +418,25 @@ async def create_sale(
     items = payload.get("items") or []
     payments = payload.get("payments") or []
     created_lines: list[SaleLine] = []
+    is_collab = bool(customer_obj and customer_obj.kind == "colaborador") or bool(payload.get("is_collaborator"))
     for it in items:
         pid = int(it.get("product_id"))
         qty = quantity(it.get("qty"))
-        prod = await db.get(Product, pid)
+        prod = await db.scalar(
+            select(Product).options(selectinload(Product.variants)).where(Product.id == pid)
+        )
         if not prod:
             raise HTTPException(status_code=400, detail=f"Producto {pid} no encontrado")
-        unit_price = Decimal(str(it.get("unit_price") or 0)) or Decimal(str(prod.variants[0].price if prod.variants else 0))
+        raw_price = it.get("unit_price")
+        unit_price = Decimal(str(raw_price)) if raw_price is not None and str(raw_price).strip() != "" and Decimal(str(raw_price)) > 0 else Decimal("0")
+        cost_price, cost_sp_id = await get_product_cost_price(db, pid)
+        if is_collab and unit_price <= 0:
+            if cost_price is None or cost_price <= 0:
+                raise HTTPException(status_code=422, detail=f"Producto {pid} no tiene precio de costo registrado")
+            unit_price = cost_price
+        elif unit_price <= 0:
+            v_price = (prod.variants[0].price or prod.variants[0].promo_price) if prod.variants else None
+            unit_price = Decimal(str(v_price)) if v_price is not None else Decimal("0")
         if unit_price <= 0:
             raise HTTPException(status_code=400, detail="unit_price debe ser > 0")
         line_discount = Decimal(str(it.get("line_discount") or 0))
@@ -421,6 +448,8 @@ async def create_sale(
             qty=qty,
             unit_price=unit_price,
             line_discount=line_discount,
+            unit_cost_snapshot=cost_price,
+            cost_supplier_product_id=cost_sp_id,
         )
         db.add(sl)
         created_lines.append(sl)
@@ -542,6 +571,8 @@ async def sale_lines_ops(sale_id: int, payload: dict, db: AsyncSession = Depends
     if not ops:
         raise HTTPException(status_code=400, detail="ops requerido")
     audit_ops: list[dict] = []
+    sale_cust = await db.get(Customer, sale.customer_id) if sale.customer_id else None
+    is_collab = bool(sale_cust and sale_cust.kind == "colaborador")
     from decimal import Decimal as _D
     for op in ops:
         kind = (op.get("op") or "").lower()
@@ -551,10 +582,21 @@ async def sale_lines_ops(sale_id: int, payload: dict, db: AsyncSession = Depends
             if pid is None or qty is None:
                 raise HTTPException(status_code=400, detail="product_id y qty requeridos")
             qty_d = quantity(qty)
-            prod = await db.get(Product, int(pid))
+            prod = await db.scalar(
+                select(Product).options(selectinload(Product.variants)).where(Product.id == int(pid))
+            )
             if not prod:
                 raise HTTPException(status_code=400, detail="Producto no encontrado")
-            unit_price = _D(str(op.get("unit_price") or 0)) or _D(str(prod.variants[0].price if prod.variants else 0))
+            raw_price = op.get("unit_price")
+            unit_price = _D(str(raw_price)) if raw_price is not None and str(raw_price).strip() != "" and _D(str(raw_price)) > 0 else _D("0")
+            cost_price, cost_sp_id = await get_product_cost_price(db, prod.id)
+            if is_collab and unit_price <= 0:
+                if cost_price is None or cost_price <= 0:
+                    raise HTTPException(status_code=422, detail=f"Producto {prod.id} no tiene precio de costo registrado")
+                unit_price = cost_price
+            elif unit_price <= 0:
+                v_price = (prod.variants[0].price or prod.variants[0].promo_price) if prod.variants else None
+                unit_price = _D(str(v_price)) if v_price is not None else _D("0")
             if unit_price <= 0:
                 raise HTTPException(status_code=400, detail="unit_price debe ser > 0")
             line_discount = _D(str(op.get("line_discount") or 0))
@@ -566,6 +608,8 @@ async def sale_lines_ops(sale_id: int, payload: dict, db: AsyncSession = Depends
                 qty=qty_d,
                 unit_price=unit_price,
                 line_discount=line_discount,
+                unit_cost_snapshot=cost_price,
+                cost_supplier_product_id=cost_sp_id,
             )
             db.add(sl)
             await db.flush()
@@ -2520,7 +2564,7 @@ async def catalog_search(q: str = Query(..., min_length=1), limit: int = Query(1
     like = f"%{term}%"
     # Estrategia: priorizar productos con stock > 0 y término en título o canonical_sku (fallback a sku_root).
     # Buscar primero por canonical_sku, luego por sku_root como fallback temporal
-    stmt = select(Product).where(
+    stmt = select(Product).options(selectinload(Product.variants)).where(
         or_(
             Product.title.ilike(like),
             Product.canonical_sku.ilike(like),
@@ -2548,12 +2592,14 @@ async def catalog_search(q: str = Query(..., min_length=1), limit: int = Query(1
         if p.variants:
             v = p.variants[0]
             price = float(v.promo_price or v.price or 0)
+        cost_price, _ = await get_product_cost_price(db, p.id)
         items.append({
             "product_id": p.id,
             "canonical": True,  # Placeholder (futuro: distinguir canónico)
             "title": p.title,
             "sku": p.canonical_sku or p.sku_root,  # Priorizar canonical_sku
             "price": price,
+            "cost_price": float(cost_price) if cost_price is not None else None,
             "stock": p.stock,
             "score": s,
         })
