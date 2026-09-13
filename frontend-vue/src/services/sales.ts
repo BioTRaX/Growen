@@ -56,3 +56,74 @@ export async function deleteAttachment(id: number, attachmentId: number) { retur
 export async function getTimeline(id: number) { return (await http.get(`/sales/${id}/timeline`)).data.events }
 export async function getMarginReport() { return (await http.get('/sales/reports/margin')).data }
 export async function getChannelsReport() { return (await http.get('/sales/reports/channels')).data }
+
+export interface BuyerRankingItem {
+  customer_id?: number | null
+  name: string
+  kind?: string | null
+  sales_count: number
+  total_amount: number
+  units_count: number
+}
+
+export interface ProductRankingItem {
+  product_id: number
+  title: string
+  qty: number
+  total_amount: number
+}
+
+export interface RecentSaleItem {
+  id: number
+  sale_date: string
+  customer_id?: number | null
+  customer_name?: string | null
+  customer_kind?: string | null
+  status: string
+  payment_status?: string | null
+  total: number
+  paid_total: number
+}
+
+export interface SegmentSummary {
+  sales_count: number
+  total_amount: number
+  units_count: number
+  avg_ticket: number
+  unique_buyers: number
+}
+
+export interface PurchasesSummaryReport {
+  period: {
+    dt_from?: string | null
+    dt_to?: string | null
+    status?: string | null
+  }
+  summary: {
+    collaborators: SegmentSummary
+    customers: SegmentSummary
+    totals: {
+      sales_count: number
+      total_amount: number
+      units_count: number
+    }
+    share: {
+      collaborators_amount_pct: number
+      collaborators_units_pct: number
+    }
+  }
+  collaborators: {
+    top_buyers: BuyerRankingItem[]
+    top_products: ProductRankingItem[]
+    recent_sales: RecentSaleItem[]
+  }
+  customers: {
+    top_buyers: BuyerRankingItem[]
+    top_products: ProductRankingItem[]
+    recent_sales: RecentSaleItem[]
+  }
+}
+
+export async function getPurchasesSummary(params: { dt_from?: string; dt_to?: string; status?: string } = {}) {
+  return (await http.get<PurchasesSummaryReport>('/sales/dashboard/purchases-summary', { params })).data
+}

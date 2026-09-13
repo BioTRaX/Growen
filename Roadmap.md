@@ -58,6 +58,7 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 ## Ventas y Clientes
 
 - [x] Habilitar ventas para colaboradores a precio de costo: cliente tipo `colaborador`, resolución autoritativa de costo vía `SupplierProduct.current_purchase_price`, exposición en `/sales/catalog/search`, cotización autoritativa y experiencia POS Vue con distintivo visual (2026-09-11).
+- [x] Dashboard de compras de colaboradores y clientes en el panel de administración (`/admin/compras-dashboard`): agregación analítica comparativa de monto, unidades y órdenes, ratios de participación (share), rankings de compradores y productos, listado de últimas compras y filtros avanzados por colaborador en `GET /sales` (2026-09-13).
 
 ## IA, Mercado y operaciones
 

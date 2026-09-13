@@ -113,6 +113,28 @@ Permite registrar ventas para colaboradores o empleados del negocio aplicando au
    - Al seleccionar un cliente con `kind === "colaborador"`, la pantalla muestra el distintivo `Colaborador · Precio de costo`.
    - La adición de productos o el cambio de cliente ajusta los precios unitarios al costo automáticamente.
 
+## Dashboard de Compras: Colaboradores vs Clientes (Admin)
+
+En el panel de administración (`/admin/compras-dashboard`, alias `/admin/dashboard-compras`), se expone un tablero analítico para auditar y comparar las adquisiciones del personal a costo frente a las ventas comerciales regulares a clientes.
+
+### Endpoints
+- `GET /sales/dashboard/purchases-summary`:
+  - Parámetros: `dt_from` (ISO), `dt_to` (ISO), `status` (`CONFIRMADA`, `ENTREGADA`, etc.).
+  - Devuelve:
+    - Resumen segmentado (`collaborators` vs `customers`) con monto total, órdenes, unidades físicas, ticket promedio y compradores únicos.
+    - Totales combinados y ratios de participación (`share.collaborators_amount_pct` y `share.collaborators_units_pct`).
+    - Rankings de los 10 principales compradores por segmento.
+    - Rankings de los 10 productos más adquiridos por cada segmento.
+    - Listado de las 15 ventas más recientes por segmento.
+- `GET /sales`:
+  - Nuevos filtros: `is_collaborator` (booleano) y `customer_kind` (string).
+  - Cada ítem del listado ahora expone `customer_kind` e `is_collaborator: bool`.
+
+### Módulo Vue
+- Vista: `frontend-vue/src/modules/admin/views/PurchasesDashboardView.vue`
+- Módulo en `modules.json`: `admin-purchases-dashboard` (grupo: `Administración`, roles: `["admin", "colaborador"]`).
+- Funcionalidades: Filtros rápidos ("Hoy", "7 días", "30 días", "Mes actual", "Todo"), selector de rango de fechas, tarjetas de KPIs comparativos con Vuetify 3 y pestañas de detalle.
+
 ## Canales de Venta (nuevo 2025-11-30)
 Permite clasificar ventas por origen (Instagram, WhatsApp, Local, MercadoLibre, etc.).
 
