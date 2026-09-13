@@ -92,6 +92,40 @@ Estado operativo del 2026-09-10:
 
 Desde otro dispositivo con la CA instalada, proporcionar `ADMIN_USER_FILE`, `ADMIN_PASS_FILE`, `SMOKE_CA_BUNDLE` y ejecutar `scripts/test_login_flow.py`. Validar además navegador sin advertencias, CORS exacto, CSRF válido/inválido, cookie `Secure`, descarga privada autorizada y `404` no enumerable para accesos anónimos.
 
+### 5. Coexistencia con Dev y ciclo de actualización continua
+
+#### A. Transición desde Docker Compose (Resolución de colisiones de red)
+- Si el stack de desarrollo (`docker-compose.yml`) estuvo en ejecución, Docker Engine conservará redes tipo `bridge` locales con el prefijo del proyecto (`growen_backend`, `growen_egress`, etc.).
+- Docker Swarm fallará con `network with name growen_backend already exists` al intentar crear sus redes `overlay` homónimas si las redes bridge siguen activas.
+- **Regla obligatoria**: Antes de desplegar el stack Swarm, ejecutar `docker compose down` (estrictamente **sin** el parámetro `-v`) para liberar los nombres de red conservando intactos los volúmenes de datos (`growen_pgdata`, medios, etc.).
+
+#### B. Reutilización de Base de Datos y sincronización de contraseñas
+- El servicio `db` de Swarm reutiliza el volumen persistente `growen_pgdata` creado en desarrollo.
+- Si se crea el secreto Swarm `postgres_password` con una credencial distinta a la que tenía PostgreSQL en desarrollo (`.env`), el motor no modificará la contraseña de usuario (`initdb` sólo se ejecuta en directorios de datos vírgenes).
+- Para evitar fallos de autenticación de la API (`password authentication failed for user "growen"`), sincronizar la clave de la base con el secreto montado en Swarm:
+  ```powershell
+  $db = (docker ps -q -f name=growen_db | Select-Object -First 1)
+  docker exec $db sh -c 'psql -U growen -d growen -c "ALTER USER growen WITH PASSWORD '\''$(cat /run/secrets/postgres_password)'\'';"'
+  ```
+
+#### C. Replicación de cambios desde Dev hacia Swarm en Producción
+- **Código (Backend / Frontend / Workers / MCP)**:
+  1. Recompilar la imagen del servicio modificado (ej. `docker build -f infra/Dockerfile.api -t growen/api:production .`).
+  2. Actualizar el servicio en caliente con rolling update:
+     ```powershell
+     docker service update --image growen/api:production growen_api
+     ```
+     *(Gracias a `update_config: {order: start-first}`, Swarm levanta la réplica nueva, valida el healthcheck y recién entonces retira el contenedor anterior, garantizando zero-downtime)*.
+- **Esquema de Base de Datos (Migraciones Alembic)**:
+  1. Recompilar la imagen que contiene las nuevas migraciones en `db/migrations/versions/`.
+  2. Ejecutar la migración directamente en el contenedor API o mediante tarea administrativa antes de actualizar el resto de los consumidores:
+     ```powershell
+     $api = (docker ps -q -f name=growen_api | Select-Object -First 1)
+     docker exec $api alembic upgrade head
+     ```
+- **Datos puntuales**: Para sincronizar catálogos o registros sin pisar transacciones de producción, exportar con `docker exec growen-postgres pg_dump -U growen -d growen --data-only -t <tabla>` e importar con `docker exec -i <growen_db> psql -U growen -d growen`.
+- **Secretos**: Los secretos en Swarm son inmutables. Para rotar credenciales, crear un secreto versionado (ej. `secret_key_v2`) y actualizar el servicio (`docker service update --secret-rm ... --secret-add ...`).
+
 ## Criterios de aceptación
 
 - La cadena Alembic limpia alcanza `20260909_user_active` antes de arrancar la API.

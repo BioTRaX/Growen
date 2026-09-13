@@ -49,7 +49,7 @@ def test_production_stack_is_fail_closed_for_lan_and_private_media():
     assert api["environment"]["AUTH_ENABLED"] == "true"
     assert api["environment"]["COOKIE_SECURE"] == "true"
     assert api["environment"]["ALLOWED_ORIGINS"] == "https://192.168.100.100"
-    assert api["environment"]["TRUSTED_HOSTS"] == "192.168.100.100"
+    assert api["environment"]["TRUSTED_HOSTS"] == "192.168.100.100,127.0.0.1,localhost,api"
     assert api["environment"]["LOGIN_RATE_LIMIT_BACKEND"] == "redis"
     assert "telegram_bot_token" not in api["secrets"]
     assert set(api["volumes"]) >= {
