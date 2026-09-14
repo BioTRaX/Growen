@@ -57,6 +57,15 @@ function Invoke-CheckedDocker([string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) { throw "docker_command_failed:$($Arguments[0])" }
 }
 
+function Resolve-PublishedDigest([string]$Reference, [string]$ImageName) {
+    $repository = "$Registry/growen/$ImageName"
+    $repoDigests = @(docker image inspect $Reference --format '{{range .RepoDigests}}{{println .}}{{end}}')
+    if ($LASTEXITCODE -ne 0) { throw "image_digest_missing:$ImageName" }
+    $published = @($repoDigests | Where-Object { $_ -match "^$([regex]::Escape($repository))@sha256:[0-9a-f]{64}$" })
+    if ($published.Count -ne 1) { throw "registry_image_digest_ambiguous:$ImageName" }
+    return $published[0].Trim()
+}
+
 function Invoke-Trivy([string]$Reference, [string]$SafeName) {
     $mount = "${reportDir}:/out"
     Invoke-CheckedDocker @(
@@ -109,9 +118,8 @@ foreach ($item in $builds) {
     )
     Invoke-Trivy $reference $item.Name
     Invoke-CheckedDocker @("push", $reference)
-    $repoDigest = docker image inspect $reference --format '{{index .RepoDigests 0}}'
-    if ($LASTEXITCODE -ne 0 -or -not $repoDigest) { throw "image_digest_missing:$($item.Name)" }
-    $records.Add([pscustomobject]@{ env=$item.Env; source=$reference; image=$repoDigest.Trim() })
+    $repoDigest = Resolve-PublishedDigest $reference $item.Name
+    $records.Add([pscustomobject]@{ env=$item.Env; source=$reference; image=$repoDigest })
 }
 
 foreach ($item in $mirrors) {
@@ -120,9 +128,8 @@ foreach ($item in $mirrors) {
     Invoke-Trivy $item.Source $item.Name
     Invoke-CheckedDocker @("tag", $item.Source, $reference)
     Invoke-CheckedDocker @("push", $reference)
-    $repoDigest = docker image inspect $reference --format '{{index .RepoDigests 0}}'
-    if ($LASTEXITCODE -ne 0 -or -not $repoDigest) { throw "image_digest_missing:$($item.Name)" }
-    $records.Add([pscustomobject]@{ env=$item.Env; source=$item.Source; image=$repoDigest.Trim() })
+    $repoDigest = Resolve-PublishedDigest $reference $item.Name
+    $records.Add([pscustomobject]@{ env=$item.Env; source=$item.Source; image=$repoDigest })
 }
 
 $manifestPath = Join-Path $reportDir "images.manifest.json"
