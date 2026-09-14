@@ -80,10 +80,15 @@ y heartbeats quedaron saludables, las colas vacías y una evaluación sintética
 del cliente estricto produjo JSON válido con `llama3.1:8b` cargado al 100 % en
 GPU. No se inició el run de los 29 canónicos: debe ejecutarse desde la UI. El
 manifiesto Swarm declara el worker aislado con concurrencia uno y el secreto
-externo `openai_api_key` para Enrich. La operación productiva debe ejecutar
-backup restaurable, fase `Migration`, verificación del head y recién después la
-fase `Application`; este documento no declara esos pasos ejecutados hasta
-registrar la evidencia operativa.
+externo `openai_api_key` para Enrich.
+
+El despliegue productivo del 2026-09-14 validó la restauración del backup
+`pre-catalog-audit-20260914-133328.dump` en una PostgreSQL aislada, aplicó la
+fase `Migration` hasta `20260913_catalog_audit_v1` y luego la fase
+`Application`. Los 18 servicios convergieron 1/1, el endpoint de health del
+worker informó broker y heartbeat saludables, y una generación desde el
+contenedor confirmó `llama3.1:8b` con contexto 4096 al 100 % GPU. El run de los
+29 canónicos no se inició: continúa siendo una acción explícita desde la UI.
 Compose fija el volumen `growen_dev_pgdata` y las redes `growen_dev_*`; el
 volumen externo `growen_pgdata` y las redes overlay `growen_*` son exclusivos de
 Swarm y no deben reutilizarse para esta operación local.

@@ -89,6 +89,16 @@ Estado operativo del 2026-09-10:
 7. Auditar `users.is_active`, las tablas `catalog_audit_*` y las columnas de auditoría de `canonical_products`; recién entonces ejecutar `Application`.
 8. Confirmar que API, PostgreSQL y Redis no publican puertos, que no hay tareas `Rejected/Failed`, que `catalog_audit_worker` converge 1/1 y que los cuatro volúmenes externos son los esperados.
 
+Estado verificado el 2026-09-14: backup lógico restaurado en PostgreSQL aislado,
+head productivo `20260913_catalog_audit_v1`, 18 servicios en 1/1 y ninguna tarea
+actual con error. Las imágenes en ejecución coinciden con los digests del
+manifiesto, `/health`, `/api/health` y el health del auditor responden 200, y el
+worker alcanzó `llama3.1:8b` con contexto 4096 al 100 % GPU. El smoke
+autenticado automatizado no se declaró aprobado: el secreto de bootstrap
+`admin_pass` no coincide con las credenciales de los dos administradores activos
+y debe alinearse o ejecutarse con credenciales operativas sin rotarlas durante
+este rollout.
+
 ### 4. Smoke LAN
 
 Desde otro dispositivo con la CA instalada, proporcionar `ADMIN_USER_FILE`, `ADMIN_PASS_FILE`, `SMOKE_CA_BUNDLE` y ejecutar `scripts/test_login_flow.py`. Validar además navegador sin advertencias, CORS exacto, CSRF válido/inválido, cookie `Secure`, descarga privada autorizada y `404` no enumerable para accesos anónimos.

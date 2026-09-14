@@ -14,9 +14,14 @@ Validación del 2026-09-14: la cadena PostgreSQL limpia aprobó y la revisión s
 aplicó a la base local de desarrollo. `alembic current` quedó en
 `20260913_catalog_audit_v1 (head)`; se verificaron las tres tablas, las columnas
 de auditoría de `canonical_products` y el índice parcial
-`uq_catalog_audit_runs_active`. Swarm/producción no fue migrado en este corte.
-El clon local se identificó por `growen_dev_pgdata`; `growen_pgdata` continúa
-reservado para el servicio PostgreSQL del stack Swarm.
+`uq_catalog_audit_runs_active`.
+
+El 2026-09-14 se restauró satisfactoriamente el backup productivo previo en una
+PostgreSQL desechable y se aplicó la misma revisión a Swarm antes de actualizar
+la aplicación. La verificación posterior confirmó el head, las tres tablas, el
+índice parcial y 29 canónicos preservados. El clon local usa
+`growen_dev_pgdata`; producción conserva de forma independiente
+`growen_pgdata`.
 
 ## Revisión `20260909_user_active`
 

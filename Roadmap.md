@@ -79,8 +79,10 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
   (2026-09-14).
 - [ ] Iniciar desde la UI el primer run controlado y luego la auditoría de los
   29 canónicos.
-- [ ] Aplicar en producción la migración, imágenes y servicios Swarm preparados
-  para el auditor; registrar backup restaurable, head Alembic y smoke operativo.
+- [x] Aplicar en producción la migración, imágenes y servicios Swarm preparados
+  para el auditor; backup restaurado en PostgreSQL aislado, head
+  `20260913_catalog_audit_v1`, 18 servicios en 1/1 y smoke operativo con Ollama
+  al 100 % GPU (2026-09-14).
 - [ ] Resolver huérfanos, cuarentenas y feedback surgidos del primer run completo.
 - [ ] Completar evaluaciones RAG por rol, canal e intención con datos clasificados.
 - [ ] Evolucionar alertas de Mercado con score de confianza, circuit breaker y recomendaciones explicables con aprobación humana.
