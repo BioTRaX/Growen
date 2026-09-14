@@ -60,16 +60,19 @@ async function confirm(): Promise<void> {
   error.value = ''
   try {
     const newName = normalizedValue.value
+    let committedName = newName
     if (props.canonicalProductId) {
       const res = await updateCanonicalName(props.canonicalProductId, newName)
-      savedName.value = res.name
+      committedName = res.name
     } else if (props.productId) {
       await updateProductTitle(props.productId, newName)
-      savedName.value = newName
+    } else {
+      throw new Error('No hay un producto disponible para actualizar')
     }
-    emit('saved', savedName.value)
+    savedName.value = committedName
+    emit('saved', committedName)
     editing.value = false
-    value.value = savedName.value
+    value.value = committedName
   } catch (cause) {
     error.value = getHttpErrorMessage(cause, 'No se pudo actualizar el nombre del producto')
   } finally {

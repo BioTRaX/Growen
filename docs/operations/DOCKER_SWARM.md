@@ -18,6 +18,7 @@ La primera producción de Growen operará en un Swarm de un nodo, accesible sól
 - El registro privado se define en `infra/registry/docker-compose.registry.yml`, escucha sólo en `192.168.100.100:5000` y exige TLS más `htpasswd` bcrypt.
 - La documentación privada y operativa se conserva en SiYuan; no hay publicación automática de reportes de errores a servicios externos.
 - La generación de PKI requiere PowerShell 7 o posterior por las APIs criptográficas utilizadas. Las hojas incluyen Authority Key Identifier (AKI), además del IP SAN, para que los clientes estrictos puedan construir la cadena.
+- `catalog_audit_worker` consume exclusivamente la cola `catalog_audit` con un proceso y un thread. Ollama permanece en el host y se alcanza mediante `host.docker.internal`; el worker de Enrich monta `openai_api_key` y conserva la prioridad OpenAI → Ollama.
 
 ## Errores y/u outputs bloqueantes
 
@@ -77,16 +78,16 @@ Estado operativo del 2026-09-10:
 
 2. Crear backup lógico y comprobar su restauración antes de tocar producción.
 3. Ejecutar `scripts/migrate_private_media.py --dry-run`; aplicar la copia sólo con autorización separada y conservar originales.
-4. Cargar el entorno generado con las imágenes por digest y definir `LAN_TLS_CERT_SECRET`, `LAN_TLS_KEY_SECRET` y los secretos externos restantes.
+4. Cargar el entorno generado con las imágenes por digest y definir `LAN_TLS_CERT_SECRET`, `LAN_TLS_KEY_SECRET` y los secretos externos restantes, incluido `openai_api_key`.
 5. Validar sin mutar:
 
    ```powershell
    .\scripts\deploy-swarm.ps1 -Phase Preflight -Topology SingleNode
    ```
 
-6. Con autorización de despliegue, ejecutar `Bootstrap`; esperar PostgreSQL saludable y Alembic terminado en `20260909_user_active`.
-7. Auditar `users.is_active` y recién entonces ejecutar `Application`.
-8. Confirmar que API, PostgreSQL y Redis no publican puertos, que no hay tareas `Rejected/Failed` y que los cuatro volúmenes externos son los esperados.
+6. En la primera instalación, ejecutar `Bootstrap`. Si la aplicación ya está activa, ejecutar `Migration`; esta fase rechaza migraciones concurrentes, recrea sólo una tarea Alembic terminal y espera el head `20260913_catalog_audit_v1`.
+7. Auditar `users.is_active`, las tablas `catalog_audit_*` y las columnas de auditoría de `canonical_products`; recién entonces ejecutar `Application`.
+8. Confirmar que API, PostgreSQL y Redis no publican puertos, que no hay tareas `Rejected/Failed`, que `catalog_audit_worker` converge 1/1 y que los cuatro volúmenes externos son los esperados.
 
 ### 4. Smoke LAN
 
@@ -143,7 +144,7 @@ Desde otro dispositivo con la CA instalada, proporcionar `ADMIN_USER_FILE`, `ADM
 
 ## Criterios de aceptación
 
-- La cadena Alembic limpia alcanza `20260909_user_active` antes de arrancar la API.
+- La cadena Alembic limpia alcanza `20260913_catalog_audit_v1` antes de actualizar la API y los workers.
 - Todas las imágenes desplegadas están fijadas por digest, aprobadas por Trivy y acompañadas por SBOM.
 - `.100` queda estable, el certificado tiene IP SAN y los clientes confían en la CA.
 - La topología de un nodo no deja réplicas pendientes ni declara alta disponibilidad.

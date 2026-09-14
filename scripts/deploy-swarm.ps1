@@ -8,7 +8,7 @@ param(
     [string]$StackFile = "docker-stack.yml",
     [string]$BootstrapFile = "docker-stack.bootstrap.yml",
     [string]$SingleNodeFile = "docker-stack.single-node.yml",
-    [ValidateSet("Preflight", "Bootstrap", "Application")][string]$Phase = "Preflight",
+    [ValidateSet("Preflight", "Bootstrap", "Migration", "Application")][string]$Phase = "Preflight",
     [ValidateSet("SingleNode", "HA")][string]$Topology = "SingleNode"
 )
 
@@ -61,7 +61,7 @@ $requiredSecrets = @(
     "telegram_identity_encryption_key", "telegram_identity_hmac_key", "telegram_canary_user_id",
     "siyuan_api_token", "mcp_siyuan_secret_key", "mcp_products_secret_key",
     "mcp_web_search_secret_key", "meli_app_id", "meli_client_secret",
-    "meli_token_encryption_key", "cloudflare_meli_tunnel_token",
+    "meli_token_encryption_key", "cloudflare_meli_tunnel_token", "openai_api_key",
     $env:LAN_TLS_CERT_SECRET, $env:LAN_TLS_KEY_SECRET
 )
 $availableSecrets = @(docker secret ls --format '{{.Name}}')
@@ -86,26 +86,65 @@ if ($Phase -eq "Preflight") {
     return
 }
 
+function Wait-MigrationTask {
+    $migrationService = "${StackName}_migrate"
+    for ($attempt = 0; $attempt -lt 180; $attempt++) {
+        $states = @(docker service ps $migrationService --no-trunc --format '{{.CurrentState}}|{{.Error}}' 2>$null)
+        if ($states | Where-Object { $_ -match '^Complete' }) { return }
+        if ($states | Where-Object { $_ -match '^(Failed|Rejected)' -or $_ -match '\|.+' }) {
+            throw "alembic_migration_task_failed"
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "alembic_migration_task_timeout"
+}
+
+function Reset-TerminalMigrationService {
+    $migrationService = "${StackName}_migrate"
+    $serviceId = (docker service ls --filter "name=$migrationService" --format '{{.ID}}' | Select-Object -First 1)
+    if (-not $serviceId) { return }
+
+    $states = @(docker service ps $migrationService --no-trunc --format '{{.CurrentState}}' 2>$null)
+    if ($states | Where-Object { $_ -match '^(New|Pending|Assigned|Accepted|Preparing|Starting|Running)' }) {
+        throw "alembic_migration_already_active"
+    }
+
+    docker service rm $migrationService | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "alembic_migration_service_remove_failed" }
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        $remaining = (docker service ls --filter "name=$migrationService" --format '{{.ID}}' | Select-Object -First 1)
+        if (-not $remaining) { return }
+        Start-Sleep -Seconds 1
+    }
+    throw "alembic_migration_service_remove_timeout"
+}
+
 if ($Phase -eq "Bootstrap") {
     $applicationServices = @(docker service ls --format '{{.Name}}' | Where-Object {
         $_ -in @("${StackName}_api", "${StackName}_frontend")
     })
     if ($applicationServices.Count -gt 0) { throw "bootstrap_refuses_active_application" }
     if ($PSCmdlet.ShouldProcess($StackName, "Desplegar infraestructura y migración Alembic")) {
+        Reset-TerminalMigrationService
         docker stack deploy --with-registry-auth -c $resolvedBootstrap $StackName
         if ($LASTEXITCODE -ne 0) { throw "docker_stack_bootstrap_failed" }
-        $migrationService = "${StackName}_migrate"
-        $completed = $false
-        for ($attempt = 0; $attempt -lt 180; $attempt++) {
-            $states = @(docker service ps $migrationService --no-trunc --format '{{.CurrentState}}|{{.Error}}' 2>$null)
-            if ($states | Where-Object { $_ -match '^Complete' }) { $completed = $true; break }
-            if ($states | Where-Object { $_ -match '^(Failed|Rejected)' -or $_ -match '\|.+' }) {
-                throw "alembic_migration_task_failed"
-            }
-            Start-Sleep -Seconds 1
-        }
-        if (-not $completed) { throw "alembic_migration_task_timeout" }
+        Wait-MigrationTask
         Write-Output "swarm_bootstrap_ok"
+    }
+    return
+}
+
+if ($Phase -eq "Migration") {
+    $applicationServices = @(docker service ls --format '{{.Name}}' | Where-Object {
+        $_ -in @("${StackName}_api", "${StackName}_frontend")
+    })
+    if ($applicationServices.Count -eq 0) { throw "migration_requires_active_application" }
+    if ($PSCmdlet.ShouldProcess($StackName, "Ejecutar migración Alembic sobre el stack activo")) {
+        Reset-TerminalMigrationService
+        docker stack deploy --with-registry-auth -c $resolvedBootstrap $StackName
+        if ($LASTEXITCODE -ne 0) { throw "docker_stack_migration_deploy_failed" }
+        Wait-MigrationTask
+        Write-Output "swarm_migration_ok"
     }
     return
 }

@@ -24,7 +24,9 @@
   por sistema e impiden instalar `pywin32` en imágenes Linux.
 - Compose fija `growen_dev_pgdata` y redes `growen_dev_*`, evitando colisiones
   con el volumen y las overlays homónimas reservadas por Swarm.
-- Swarm/producción no fue modificado; su alineación queda para el cierre.
+- El manifiesto Swarm incorpora `catalog_audit_worker`, acceso local a Ollama y
+  el secreto externo de OpenAI para Enrich. El despliegue separa una fase
+  `Migration` repetible de la actualización de la aplicación.
 
 ## 2026-09-13 — estabilización productiva Docker Swarm, unificación Vue 3 y ventas a colaboradores
 

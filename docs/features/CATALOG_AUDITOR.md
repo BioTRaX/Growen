@@ -79,7 +79,11 @@ desarrollo y se reconstruyeron/recrearon ambos workers Compose. Sus healthchecks
 y heartbeats quedaron saludables, las colas vacías y una evaluación sintética
 del cliente estricto produjo JSON válido con `llama3.1:8b` cargado al 100 % en
 GPU. No se inició el run de los 29 canónicos: debe ejecutarse desde la UI. El
-despliegue Swarm y la alineación productiva permanecen fuera de este corte.
+manifiesto Swarm declara el worker aislado con concurrencia uno y el secreto
+externo `openai_api_key` para Enrich. La operación productiva debe ejecutar
+backup restaurable, fase `Migration`, verificación del head y recién después la
+fase `Application`; este documento no declara esos pasos ejecutados hasta
+registrar la evidencia operativa.
 Compose fija el volumen `growen_dev_pgdata` y las redes `growen_dev_*`; el
 volumen externo `growen_pgdata` y las redes overlay `growen_*` son exclusivos de
 Swarm y no deben reutilizarse para esta operación local.

@@ -89,6 +89,22 @@ def test_single_node_override_has_no_replicas_above_one() -> None:
     assert all(service["deploy"]["replicas"] == 1 for service in override["services"].values())
 
 
+def test_catalog_auditor_isolated_worker_is_declared_for_swarm() -> None:
+    stack = _yaml("docker-stack.yml")
+    service = stack["services"]["catalog_audit_worker"]
+
+    assert service["image"] == "${GROWEN_DRAMATIQ_IMAGE}"
+    assert service["command"][-4:] == ["--threads", "1", "--queues", "catalog_audit"]
+    assert service["environment"]["CATALOG_AUDIT_HEARTBEAT_ENABLED"] == "1"
+    assert service["environment"]["CATALOG_AUDIT_OLLAMA_URL"] == "http://host.docker.internal:11434"
+    assert service["secrets"] == ["postgres_password"]
+
+    enrichment = stack["services"]["enrichment_worker"]
+    assert enrichment["environment"]["OPENAI_API_KEY_FILE"] == "/run/secrets/openai_api_key"
+    assert "openai_api_key" in enrichment["secrets"]
+    assert stack["secrets"]["openai_api_key"] == {"external": True}
+
+
 def test_alembic_runner_keeps_password_out_of_arguments(tmp_path, monkeypatch) -> None:
     module = _load_alembic_runner()
     password_file = tmp_path / "postgres_password"
@@ -129,10 +145,14 @@ def test_rollout_scripts_offer_non_mutating_previews() -> None:
     assert "RegistryPasswordFile" in build and "--password-stdin" in build
     assert "filesystem.vulnerabilities.json" in build
     assert "MIGRATION_TEST_POSTGRES_URL" in migrations and "finally" in migrations
-    assert 'ValidateSet("Preflight", "Bootstrap", "Application")' in deploy
+    assert 'ValidateSet("Preflight", "Bootstrap", "Migration", "Application")' in deploy
     assert 'ValidateSet("SingleNode", "HA")' in deploy
     assert "versioned_tls_secret_required" in deploy
     assert '--filter "status=ready"' not in deploy
+    assert 'swarm_migration_ok' in deploy
+    assert 'Reset-TerminalMigrationService' in deploy
+    assert 'alembic_migration_already_active' in deploy
+    assert '"openai_api_key"' in deploy
 
 
 def test_postgres_migration_script_uses_windows_powershell_compatible_rng() -> None:

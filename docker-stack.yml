@@ -25,6 +25,11 @@ x-python-env: &python-env
   PUBLIC_MEDIA_ROOT: /data/media/public
   PRIVATE_MEDIA_ROOT: /data/media/private
   RUN_DOCTOR_ON_BOOT: "0"
+  MCP_WEB_SEARCH_URL: http://mcp_web_search:8002/mcp
+  OLLAMA_HOST: http://host.docker.internal:11434
+  CATALOG_AUDIT_OLLAMA_URL: http://host.docker.internal:11434
+  CATALOG_AUDIT_OLLAMA_MODEL: llama3.1:8b
+  CATALOG_AUDIT_HEARTBEAT_TTL_SECONDS: "60"
 
 x-python-deploy: &python-deploy
   restart_policy: {condition: on-failure, delay: 5s, max_attempts: 5, window: 120s}
@@ -160,9 +165,23 @@ services:
     image: ${GROWEN_DRAMATIQ_IMAGE}
     entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
     command: ["dramatiq", "services.jobs.enrichment_jobs", "--queues", "enrichment", "--processes", "1", "--threads", "2"]
-    environment: {<<: *python-env}
-    secrets: [postgres_password]
+    environment:
+      <<: *python-env
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
+    secrets: [postgres_password, openai_api_key]
     volumes: [growen_public_media:/data/media/public]
+    networks: [backend, egress]
+    deploy: {<<: *python-deploy, replicas: 1}
+
+  catalog_audit_worker:
+    image: ${GROWEN_DRAMATIQ_IMAGE}
+    entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
+    command: ["dramatiq", "services.jobs.catalog_audit_jobs", "--processes", "1", "--threads", "1", "--queues", "catalog_audit"]
+    environment:
+      <<: *python-env
+      CATALOG_AUDIT_HEARTBEAT_ENABLED: "1"
+    secrets: [postgres_password]
     networks: [backend, egress]
     deploy: {<<: *python-deploy, replicas: 1}
 
@@ -294,6 +313,7 @@ secrets:
   meli_client_secret: {external: true}
   meli_token_encryption_key: {external: true}
   cloudflare_meli_tunnel_token: {external: true}
+  openai_api_key: {external: true}
   lan_tls_cert:
     external: true
     name: ${LAN_TLS_CERT_SECRET:?LAN_TLS_CERT_SECRET es obligatorio}
