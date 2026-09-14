@@ -53,6 +53,7 @@ KNOWN_SERVICES = [
     "telegram_polling_worker",  # Worker de Long Polling para Telegram Bot
     "catalog_worker",  # Worker de creación batch de productos canónicos
     "enrichment_worker",  # Worker dedicado de contenido canónico Enrich v2
+    "catalog_audit_worker",  # Worker dedicado del auditor autónomo de catálogo
 ]
 
 
@@ -710,7 +711,7 @@ async def deps_check(name: str) -> Dict[str, Any]:
             ok = False
             missing.append("httpx")
             hints.append("pip install httpx")
-    elif name in {"catalog_worker", "enrichment_worker"}:
+    elif name in {"catalog_worker", "enrichment_worker", "catalog_audit_worker"}:
         # Verificar que Redis esté disponible para las colas
         try:
             import redis

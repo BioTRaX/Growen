@@ -46,7 +46,10 @@ python-magic==0.4.27 ; platform_system != "Windows" \
     --hash=sha256:c212960ad306f700aa0d01e5d7a325d20548ff97eb9920dcd29513174f0294d3
     # via -r requirements-base.txt
 "@
-        $content = $content.Replace('python-magic-bin==', $linuxMagic + 'python-magic-bin==')
+        $content = $content.Replace(
+            'python-magic-bin==',
+            $linuxMagic + [Environment]::NewLine + 'python-magic-bin=='
+        )
     }
     $content = $content.TrimEnd() + [Environment]::NewLine
     Set-Content -LiteralPath $absolute -Value $content -Encoding utf8 -NoNewline

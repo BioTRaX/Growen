@@ -1,0 +1,182 @@
+#!/usr/bin/env python
+# NG-HEADER: Nombre de archivo: test_catalog_audit_api.py
+# NG-HEADER: Ubicación: tests/test_catalog_audit_api.py
+# NG-HEADER: Descripción: Contrato HTTP, roles e idempotencia del auditor de catálogo.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+from db.models import CanonicalProduct, CatalogAuditItem, CatalogAuditRun, User
+from services.api import app
+from services.auth import hash_pw
+
+
+@pytest.mark.asyncio
+async def test_admin_inicia_run_seleccionado_y_recibe_202(client_admin, db_session, monkeypatch) -> None:
+    product = CanonicalProduct(name="Maceta Soplada 20L", content_revision=1)
+    db_session.add(product)
+    await db_session.commit()
+    await db_session.refresh(product)
+    sent: list[str] = []
+    monkeypatch.setattr("services.routers.catalog_audits.process_catalog_audit_run.send", sent.append)
+    monkeypatch.setattr("services.routers.catalog_audits._catalog_audit_preflight", _healthy_preflight)
+
+    response = await client_admin.post("/canonical-products/catalog-audits", json={
+        "scope": "selected", "canonical_product_ids": [product.id, product.id],
+        "include_orphans": False, "mode": "deterministic_only", "enrich_missing": False, "auto_fix": False,
+    })
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "queued"
+    assert body["status_url"].endswith(body["run_id"])
+    assert sent == [body["run_id"]]
+
+
+@pytest.mark.asyncio
+async def test_colaborador_no_puede_habilitar_autocorreccion(client_collab) -> None:
+    response = await client_collab.post("/canonical-products/catalog-audits", json={
+        "scope": "all", "include_orphans": True, "mode": "full", "enrich_missing": True, "auto_fix": True,
+    })
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_segundo_run_activo_responde_409(client_admin, db_session, monkeypatch) -> None:
+    db_session.add(CanonicalProduct(name="Producto con contenido", description_html="<p>Contenido</p>"))
+    await db_session.commit()
+    monkeypatch.setattr("services.routers.catalog_audits.process_catalog_audit_run.send", lambda _run_id: None)
+    monkeypatch.setattr("services.routers.catalog_audits._catalog_audit_preflight", _healthy_preflight)
+    payload = {"scope": "all", "include_orphans": False, "mode": "full", "enrich_missing": False, "auto_fix": False}
+
+    assert (await client_admin.post("/canonical-products/catalog-audits", json=payload)).status_code == 202
+    duplicate = await client_admin.post("/canonical-products/catalog-audits", json=payload)
+
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"]["code"] == "active_catalog_audit_exists"
+
+
+async def _healthy_preflight() -> dict:
+    return {
+        "ollama": {"ok": True, "model": "llama3.1:8b"},
+        "worker": {"ok": True}, "enrichment_worker": {"ok": True}, "queue": "catalog_audit",
+    }
+
+
+@pytest.mark.no_auth_override
+@pytest.mark.asyncio
+async def test_inicio_real_exige_sesion_csrf_y_rol_admin_para_autofix(db_session, monkeypatch) -> None:
+    admin = User(identifier="catalog-audit-admin", password_hash=hash_pw("segura-test-123"), role="admin")
+    collaborator = User(identifier="catalog-audit-collab", password_hash=hash_pw("segura-test-123"), role="colaborador")
+    admin_identifier = admin.identifier
+    collaborator_identifier = collaborator.identifier
+    db_session.add_all([admin, collaborator, CanonicalProduct(name="Producto auditable", description_html="<p>Ficha</p>")])
+    await db_session.commit()
+    monkeypatch.setattr("services.routers.catalog_audits._catalog_audit_preflight", _healthy_preflight)
+    monkeypatch.setattr("services.routers.catalog_audits.process_catalog_audit_run.send", lambda _run_id: None)
+    payload = {"scope": "all", "include_orphans": False, "mode": "full", "enrich_missing": False, "auto_fix": True}
+
+    with TestClient(app) as client:
+        assert client.post("/canonical-products/catalog-audits", json=payload).status_code in {401, 403}
+        assert client.post("/auth/login", json={"identifier": collaborator_identifier, "password": "segura-test-123"}).status_code == 200
+        csrf = client.cookies.get("csrf_token")
+        assert client.post("/canonical-products/catalog-audits", json=payload, headers={"X-CSRF-Token": csrf}).status_code == 403
+
+    with TestClient(app) as client:
+        assert client.post("/auth/login", json={"identifier": admin_identifier, "password": "segura-test-123"}).status_code == 200
+        assert client.post("/canonical-products/catalog-audits", json=payload).status_code == 403
+        csrf = client.cookies.get("csrf_token")
+        assert client.post("/canonical-products/catalog-audits", json=payload, headers={"X-CSRF-Token": csrf}).status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_reauditar_crea_run_nuevo_forzado_y_lo_encola(client_admin, db_session, monkeypatch) -> None:
+    product = CanonicalProduct(name="Producto ya auditado", description_html="<p>Ficha suficiente</p>", content_revision=3)
+    run = CatalogAuditRun(
+        id="run-finalizado", scope="selected", mode="deterministic_only", include_orphans=False,
+        enrich_missing=False, auto_fix=False, status="completed_with_issues", is_active_slot=False,
+    )
+    db_session.add_all([product, run])
+    await db_session.flush()
+    item = CatalogAuditItem(
+        run_id=run.id, canonical_product_id=product.id, target_key=f"canonical:{product.id}",
+        input_hash="a" * 64, rules_version="catalog-audit-r1", feedback_version="0",
+        status="needs_review", product_class="other",
+    )
+    db_session.add(item)
+    await db_session.commit()
+    await db_session.refresh(item)
+    sent: list[str] = []
+    monkeypatch.setattr("services.routers.catalog_audits.process_catalog_audit_run.send", sent.append)
+
+    response = await client_admin.post(
+        f"/canonical-products/catalog-audits/{run.id}/items/{item.id}/resolve",
+        json={"action": "reaudit", "note": "Revisar con las reglas vigentes"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["new_run_id"] and body["new_run_id"] != run.id
+    assert sent == [body["new_run_id"]]
+    new_run = await db_session.get(CatalogAuditRun, body["new_run_id"])
+    new_item = await db_session.scalar(select(CatalogAuditItem).where(CatalogAuditItem.run_id == new_run.id))
+    assert new_run.requested_ids == [product.id]
+    assert new_item.status == "pending"
+    assert new_item.reused_item_id is None
+
+
+@pytest.mark.asyncio
+async def test_colaborador_no_puede_clasificar_item(client_collab, db_session) -> None:
+    product = CanonicalProduct(name="Producto dudoso")
+    run = CatalogAuditRun(
+        id="run-colaborador", scope="selected", mode="deterministic_only", include_orphans=False,
+        enrich_missing=False, auto_fix=False, status="completed_with_issues", is_active_slot=False,
+    )
+    db_session.add_all([product, run])
+    await db_session.flush()
+    item = CatalogAuditItem(
+        run_id=run.id, canonical_product_id=product.id, target_key=f"canonical:{product.id}",
+        input_hash="b" * 64, rules_version="catalog-audit-r1", feedback_version="0", status="needs_review",
+    )
+    db_session.add(item)
+    await db_session.commit()
+    await db_session.refresh(item)
+
+    response = await client_collab.post(
+        f"/canonical-products/catalog-audits/{run.id}/items/{item.id}/resolve",
+        json={"action": "classification", "note": "Es un contenedor", "product_class": "container"},
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_correccion_manual_rechaza_campos_protegidos(client_admin, db_session) -> None:
+    product = CanonicalProduct(name="Producto protegido", content_revision=2)
+    run = CatalogAuditRun(
+        id="run-protegido", scope="selected", mode="full", include_orphans=False,
+        enrich_missing=False, auto_fix=False, status="completed_with_issues", is_active_slot=False,
+    )
+    db_session.add_all([product, run])
+    await db_session.flush()
+    item = CatalogAuditItem(
+        run_id=run.id, canonical_product_id=product.id, target_key=f"canonical:{product.id}",
+        input_hash="c" * 64, rules_version="catalog-audit-r1", feedback_version="0", status="needs_review",
+    )
+    db_session.add(item)
+    await db_session.commit()
+    await db_session.refresh(item)
+
+    response = await client_admin.post(
+        f"/canonical-products/catalog-audits/{run.id}/items/{item.id}/resolve",
+        json={
+            "action": "apply_correction", "note": "No debe alterar identidad",
+            "expected_content_revision": 2, "corrections": {"name": "Nombre nuevo"},
+        },
+    )
+
+    assert response.status_code == 422

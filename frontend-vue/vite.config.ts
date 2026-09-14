@@ -13,9 +13,17 @@ export default defineConfig(({ mode }) => {
   return {
     base: mode === 'production' ? '/vue-assets/' : '/',
     plugins: [vue(), vuetify({ autoImport: true })],
+    resolve: { preserveSymlinks: true },
     server: {
       host: true,
       port: 5176,
+      // Pretransforma los chunks lazy para evitar recargas durante el primer smoke E2E.
+      warmup: {
+        clientFiles: [
+          './src/app/**/*.ts', './src/auth/**/*.ts', './src/services/**/*.ts',
+          './src/modules/**/*.vue', './src/views/**/*.vue',
+        ],
+      },
       proxy: {
         '/api': {
           target: apiTarget,

@@ -3,6 +3,21 @@
 <!-- NG-HEADER: Descripción: Notas técnicas sobre fixes recientes en migraciones Alembic -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
+## Revisión `20260913_catalog_audit_v1`
+
+Revisión focal sobre `20260909_user_active`. Crea `catalog_audit_runs`,
+`catalog_audit_items` y `catalog_audit_feedback`; agrega estado, última
+auditoría y fecha a `canonical_products`. Un índice parcial permite un solo run
+activo. El downgrade se niega si existe historial.
+
+Validación del 2026-09-14: la cadena PostgreSQL limpia aprobó y la revisión se
+aplicó a la base local de desarrollo. `alembic current` quedó en
+`20260913_catalog_audit_v1 (head)`; se verificaron las tres tablas, las columnas
+de auditoría de `canonical_products` y el índice parcial
+`uq_catalog_audit_runs_active`. Swarm/producción no fue migrado en este corte.
+El clon local se identificó por `growen_dev_pgdata`; `growen_pgdata` continúa
+reservado para el servicio PostgreSQL del stack Swarm.
+
 ## Revisión `20260909_user_active`
 
 Revisión incremental sobre `20260905_meli_scopes_text`. Agrega

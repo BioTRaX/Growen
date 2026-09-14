@@ -8,16 +8,16 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from db.models import CanonicalEnrichmentJob, CanonicalProduct
+from db.models import CanonicalEnrichmentJob, CanonicalProduct, CatalogAuditItem, CatalogAuditRun
 from services.auth import SessionData
 from services.routers.enrichment import (
     EnrichmentApplyRequest,
     apply_enrichment_job,
     create_enrichment_job,
-    get_catalog_audit_report,
     get_enrichment_summary,
     serialize_job,
 )
+from services.routers.catalog_audits import legacy_catalog_audit_report
 
 
 @pytest.mark.asyncio
@@ -161,16 +161,6 @@ async def test_get_enrichment_summary_contract(db_session):
 
 @pytest.mark.asyncio
 async def test_get_catalog_audit_report_contract(db_session):
-    clean_p = CanonicalProduct(
-        name="Top Crop Deeper Underground 250ml",
-        brand="Top Crop",
-        ng_sku="NG-900002",
-        weight_kg=0.28,
-        height_cm=14.0,
-        width_cm=6.0,
-        depth_cm=6.0,
-        description_html="<p>Estimulador de raíces orgánico.</p>",
-    )
     bad_p = CanonicalProduct(
         name="Sustrato Top Crop Heavy Mix 50L",
         brand="Top Crop",
@@ -181,14 +171,28 @@ async def test_get_catalog_audit_report_contract(db_session):
         depth_cm=20.0,
         description_html="<p>Sustrato completo.</p>",
     )
-    db_session.add_all([clean_p, bad_p])
+    run = CatalogAuditRun(
+        id="legacy-report-run", scope="all", mode="full", status="completed_with_issues",
+        is_active_slot=False, total_items=2, processed_items=2, clean_items=1, issue_items=1,
+    )
+    db_session.add_all([bad_p, run])
+    await db_session.flush()
+    db_session.add_all([
+        CatalogAuditItem(
+            run_id=run.id, target_key="canonical:clean", input_hash="d" * 64,
+            rules_version="catalog-audit-r1", feedback_version="0", status="clean",
+        ),
+        CatalogAuditItem(
+            run_id=run.id, canonical_product_id=bad_p.id, target_key=f"canonical:{bad_p.id}",
+            input_hash="e" * 64, rules_version="catalog-audit-r1", feedback_version="0",
+            status="needs_review", findings_json={"flags": ["physical_discrepancy"]},
+        ),
+    ])
     await db_session.commit()
 
-    report = await get_catalog_audit_report(
-        limit=50,
-        session=db_session,
-        _user=SessionData(None, None, "admin"),
-    )
+    report = await legacy_catalog_audit_report(session=db_session)
+
+    assert report["run_id"] == run.id
     assert report["total_audited"] >= 2
     assert report["issues_count"] >= 1
     issue_ids = [issue["canonical_product_id"] for issue in report["issues"]]

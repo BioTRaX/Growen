@@ -270,7 +270,7 @@ def test_ollama_diagnostic_taxonomy(error, expected):
     assert diagnostic["code"] == expected
 
 
-def test_audit_failure_suppresses_automatic_fields(monkeypatch):
+def test_enrich_no_depende_del_auditor_para_aplicar_campos(monkeypatch):
     monkeypatch.setenv("ENRICH_AUTO_APPLY_ENABLED", "1")
     monkeypatch.setenv("ENRICH_MIN_INDEPENDENT_SOURCES", "1")
     canonical = CanonicalProduct(id=10, name="Sustrato GrowMix 80L", brand="Growmix")
@@ -288,7 +288,6 @@ def test_audit_failure_suppresses_automatic_fields(monkeypatch):
         },
     }
     result, automatic = _build_result(canonical, generated, sources, "full")
-    assert result["quality_audit"]["passed"] is False
-    assert "FLAG_PHYSICAL_DISCREPANCY" in result["quality_audit"]["flags"]
-    assert automatic == []
+    assert "quality_audit" not in result
+    assert automatic == ["description_html", "weight_kg"]
 

@@ -55,17 +55,30 @@ que el método de pago o saldo API estén activos.
 
 ### Auditoría y Consistencia Física (2026-09-10)
 
-El pipeline ejecuta `services.enrichment.auditor.audit_enrichment_proposal` en la etapa
-`validate`. Evalúa heurísticas deterministas antes de autorizar cualquier mutación:
+> **Histórico:** desde 2026-09-13 esta compuerta está retirada del pipeline.
+> Los jobs viejos pueden seguir exponiendo `quality_audit`, pero los nuevos no
+> lo generan. La auditoría vigente es posterior, persistente e independiente en
+> [`CATALOG_AUDITOR.md`](CATALOG_AUDITOR.md). El endpoint
+> `/canonical-products/catalog-audit-report` sólo lee el último run y nunca
+> inicia trabajo.
 
-- **Densidad / Coherencia Física:** Compara volumen extraído del título (ml, L) contra el peso propuesto (`weight_kg`). Líquidos y fertilizantes esperan densidad entre 0.85 y 1.45 kg/L; sustratos esperan densidad aparente entre 0.18 y 0.50 kg/L.
-- **Sanidad Dimensional:** Bloquea dimensiones $\le 0$ o absurdas ($> 350$ cm salvo carpas/indoor), y verifica que la caja envolvente ($Alto \times Ancho \times Profundidad$) no sea geométricamente menor que el volumen del contenido declarado.
-- **Fidelidad y Metadiscurso:** Penaliza metadiscurso de investigación ("según la fuente...", "como modelo de lenguaje"), HTML mal balanceado o confusión de marcas competidoras.
-- **Compuerta de Auto-aplicación:** Si la auditoría no pasa (`passed = False`), `auto_fields` se anula inmediatamente, forzando estado `review_required` en la UI de Vue.
-- **Exposición:** `result_json["quality_audit"]` persiste el scorecard (score 0-100, flags, warnings y field_issues) y la API lo expone vía `GET /canonical-products/{id}/enrichment-jobs/{job_id}` para renderizar un chip de calidad y alertas en Vue.
+Hasta el corte del 2026-09-10, Enrich ejecutaba
+`services.enrichment.auditor.audit_enrichment_proposal` como compuerta previa a
+la mutación. Esa arquitectura queda preservada sólo como dato histórico: desde
+el 2026-09-13 las reglas viven en `services.catalog_audit.rules`, se ejecutan en
+el worker autónomo después de Enrich cuando corresponde y no alteran
+`auto_fields`. La serialización de `quality_audit` se mantiene únicamente para
+leer jobs históricos.
+
+- **Clasificación previa:** las reglas de densidad y geometría se aplican según
+  la clase del producto; una maceta con volumen nominal no se trata como líquido.
+- **Evaluación completa:** combina reglas deterministas con Ollama y persiste el
+  resultado por canónico, versión de reglas, feedback y contenido efectivo.
+- **Resolución:** corrección, excepción, restauración y cuarentena pertenecen al
+  auditor de catálogo, no al ciclo de aplicación de Enrich.
 - **Monitoreo y Dashboard Técnico:**
   - `GET /canonical-products/enrichment-summary`: métricas en vivo del worker (estado, PID, broker Redis), profundidad de colas Dramatiq (`ready` y `delayed`), conteo de jobs por status y los últimos jobs con score de calidad. Integrado en `TechnicalDashboardView.vue`.
-  - `GET /canonical-products/catalog-audit-report`: auditoría determinista masiva sobre los productos canónicos existentes en la base de datos sin consumo de tokens de LLM.
+  - `GET /canonical-products/catalog-audit-report`: compatibilidad de lectura del último run persistido; nunca ejecuta trabajo.
   - Orquestación desde el Panel de Administración: `enrichment_worker` integrado en `services/orchestrator.py` y `WorkersView.vue` para arranque, parada y lectura de logs en `/admin/servicios/workers`.
 
 El flujo operativo nuevo es asíncrono y canónico. Diagnosticar en este orden:

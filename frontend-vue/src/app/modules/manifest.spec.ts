@@ -38,6 +38,12 @@ describe('manifiesto frontend', () => {
     expect(stock?.routes.map((route) => route.path)).toEqual(['/stock', '/stock/shortages'])
   })
 
+  it('expone el auditor autónomo desde Administración para staff', () => {
+    const audit = frontendManifest.modules.find((module) => module.id === 'admin-catalog-audit')
+    expect(audit).toMatchObject({ state: 'active', runtime: 'vue', roles: ['colaborador', 'admin'] })
+    expect(audit?.routes[0]?.path).toBe('/admin/auditor-catalogo')
+  })
+
   it('rechaza runtime Vue si el módulo no está active', () => {
     const invalid = structuredClone(frontendManifest) as FrontendManifest
     invalid.modules[0].runtime = 'vue'

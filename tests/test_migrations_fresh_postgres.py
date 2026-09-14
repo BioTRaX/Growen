@@ -281,9 +281,13 @@ def test_alembic_upgrade_head_from_empty_postgres() -> None:
 
         with target_engine.connect() as connection:
             versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            assert versions == ["20260909_user_active"]
+            assert versions == ["20260913_catalog_audit_v1"]
             user_columns = {column["name"] for column in schema.get_columns("users")}
             assert "is_active" in user_columns
+            assert {"catalog_audit_runs", "catalog_audit_items", "catalog_audit_feedback"} <= set(schema.get_table_names())
+            canonical_columns = {column["name"] for column in schema.get_columns("canonical_products")}
+            assert {"catalog_audit_status", "last_catalog_audit_item_id", "catalog_audited_at"} <= canonical_columns
+            assert {item["name"] for item in schema.get_indexes("catalog_audit_runs")} >= {"uq_catalog_audit_runs_active"}
             assert connection.execute(text("SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='meli_accounts' AND column_name='scopes'")).scalar_one() == "text"
 
             market_item_columns = {column["name"] for column in schema.get_columns("market_update_items")}

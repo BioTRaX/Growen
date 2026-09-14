@@ -4,6 +4,7 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import { useAuthStore } from '../../../auth/store'
 import { getHttpErrorMessage } from '../../../services/http'
@@ -25,6 +26,7 @@ import { useMassCanonicalDraft } from '../composables/useMassCanonicalDraft'
 import type { CanonicalBatchJobResponse, CreatedProduct, MassCanonicalDraftRow, ProductCategory, ProductDeleteResult, ProductListFilters, ProductListItem, ProductSupplier } from '../types'
 
 const auth = useAuthStore()
+const router = useRouter()
 const categories = ref<ProductCategory[]>([])
 const suppliers = ref<ProductSupplier[]>([])
 const metadataLoading = ref(false)
@@ -86,6 +88,16 @@ async function enrichSelection(): Promise<void> {
   await runOperation('enrich', async () => { await enrichProducts(ids) }, `${ids.length} producto(s) enviados a enriquecimiento`)
   selected.value = []
   retry()
+}
+
+function auditSelection(): void {
+  const canonicalIds = [...new Set(selectedProducts.value.map((product) => product.canonical_product_id).filter((id): id is number => Boolean(id)))]
+  if (!canonicalIds.length) {
+    notify('La selección no contiene canónicos. Abrimos el auditor para tratar huérfanos.', 'info')
+    void router.push('/admin/auditor-catalogo')
+    return
+  }
+  void router.push({ path: '/admin/auditor-catalogo', query: { canonical_ids: canonicalIds.join(',') } })
 }
 
 async function generateSelectionCatalog(): Promise<void> {
@@ -262,6 +274,7 @@ onMounted(() => {
         <v-btn color="primary" prepend-icon="mdi-source-branch" size="small" variant="tonal" @click="openMassCanonical">Crear canónicos</v-btn>
         <v-btn :loading="operationLoading === 'catalog'" prepend-icon="mdi-file-pdf-box" size="small" variant="tonal" @click="generateSelectionCatalog">Generar catálogo</v-btn>
         <v-btn :loading="operationLoading === 'enrich'" prepend-icon="mdi-auto-fix" size="small" variant="tonal" @click="enrichSelection">Enriquecer</v-btn>
+        <v-btn prepend-icon="mdi-clipboard-search-outline" size="small" variant="tonal" @click="auditSelection">Auditar</v-btn>
         <v-btn prepend-icon="mdi-tag-multiple-outline" size="small" variant="tonal" @click="bulkTagsOpen = true">Agregar tags</v-btn>
         <v-btn color="error" prepend-icon="mdi-delete-outline" size="small" variant="tonal" @click="requestBulkDelete">Borrar seleccionados</v-btn>
         <v-btn size="small" variant="text" @click="selected = []">Limpiar selección</v-btn>

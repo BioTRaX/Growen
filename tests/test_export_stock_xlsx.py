@@ -25,7 +25,7 @@ app.dependency_overrides[current_session] = lambda: SessionData(None, None, "adm
 app.dependency_overrides[require_csrf] = lambda: None
 
 
-async def _seed_basic():
+async def _seed_basic(*, audit_status: str = "unaudited"):
     from db.session import SessionLocal
     async with SessionLocal() as s:  # type: ignore
         sup = Supplier(slug="acme", name="ACME")
@@ -40,7 +40,10 @@ async def _seed_basic():
         sp.current_sale_price = 123.45
         s.add(sp)
         await s.flush()
-        cp = CanonicalProduct(name="Canon X", sku_custom="AAA_0001_BBB", category_id=category.id, subcategory_id=subcategory.id)
+        cp = CanonicalProduct(
+            name="Canon X", sku_custom="AAA_0001_BBB", category_id=category.id,
+            subcategory_id=subcategory.id, catalog_audit_status=audit_status,
+        )
         cp.sale_price = 99.99
         s.add(cp)
         await s.flush()
@@ -88,6 +91,16 @@ async def test_csv_and_pdf_share_stock_export_contract():
     assert pdf_response.status_code == 200
     assert pdf_response.headers["content-type"] == "application/pdf"
     assert pdf_response.content.startswith(b"%PDF")
+
+
+@pytest.mark.asyncio
+async def test_exportacion_publica_excluye_canonicos_en_cuarentena():
+    await _seed_basic(audit_status="quarantined")
+
+    response = client.get("/stock/export.csv?stock=eq:0")
+
+    assert response.status_code == 200
+    assert "Canon X" not in response.content.decode("utf-8-sig")
 
 
 @pytest.mark.asyncio

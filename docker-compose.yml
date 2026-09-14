@@ -366,6 +366,59 @@ services:
       - backend
       - egress
       - host_access
+  catalog_audit_worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.dramatiq
+    container_name: growen-catalog-audit-worker
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      CATALOG_AUDIT_OLLAMA_URL: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
+      CATALOG_AUDIT_OLLAMA_MODEL: ${CATALOG_AUDIT_OLLAMA_MODEL:-llama3.1:8b}
+      CATALOG_AUDIT_HEARTBEAT_TTL_SECONDS: ${CATALOG_AUDIT_HEARTBEAT_TTL_SECONDS:-60}
+      CATALOG_AUDIT_HEARTBEAT_ENABLED: "1"
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: ""
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_PUBLIC_BOT_ENABLED: "0"
+      TELEGRAM_ROLE_LINKING_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN_FILE: ""
+    depends_on:
+      - db
+      - redis
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    profiles: ["optional"]
+    command:
+      - python
+      - -m
+      - dramatiq
+      - services.jobs.catalog_audit_jobs
+      - --processes
+      - "1"
+      - --threads
+      - "1"
+      - --queues
+      - catalog_audit
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{.Name}}"
+    networks:
+      - backend
+      - host_access
   knowledge_worker:
     build:
       context: .

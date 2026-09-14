@@ -31,6 +31,18 @@ variable que apunta al archivo se debe recrear el contenedor.
 
 ## Enrich v2 local
 
+El auditor ya no forma parte de Enrich. Para iniciar ambos dominios separados:
+
+```powershell
+.\scripts\start-dev.ps1 -McpMode All -WithEnrichmentWorker -WithCatalogAuditWorker
+```
+
+`catalog_audit_worker` consume `catalog_audit` con un proceso/thread y expone
+`/health/catalog-audit-worker`. Enrich sólo es necesario si la ejecución activa
+`enrich_missing`. El modo determinista funciona sin Ollama, pero deja revisión
+pendiente y no marca auditoría completa. Ver
+[`../features/CATALOG_AUDITOR.md`](../features/CATALOG_AUDITOR.md).
+
 ```powershell
 scripts\start-dev.ps1 -McpMode All -WithEnrichmentWorker
 ```

@@ -431,6 +431,13 @@ class CanonicalProduct(Base):
     enriched_by: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    catalog_audit_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="unaudited", server_default="unaudited"
+    )
+    last_catalog_audit_item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("catalog_audit_items.id", ondelete="SET NULL", use_alter=True), nullable=True
+    )
+    catalog_audited_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     specs_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     # Taxonomía: categoría padre y subcategoría (opcional)
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True)
@@ -462,6 +469,122 @@ class CanonicalProduct(Base):
     content_versions: Mapped[list["CanonicalContentVersion"]] = relationship(
         back_populates="canonical_product", cascade="all, delete-orphan"
     )
+
+
+class CatalogAuditRun(Base):
+    """Ejecución persistente, reiniciable y globalmente serializada del auditor."""
+
+    __tablename__ = "catalog_audit_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','waiting_enrich','completed','completed_with_issues','failed','cancelled')",
+            name="ck_catalog_audit_runs_status",
+        ),
+        CheckConstraint("scope IN ('all','pending','selected')", name="ck_catalog_audit_runs_scope"),
+        CheckConstraint("mode IN ('full','deterministic_only')", name="ck_catalog_audit_runs_mode"),
+        CheckConstraint(
+            "(status IN ('queued','running','waiting_enrich') AND is_active_slot = true) OR "
+            "(status NOT IN ('queued','running','waiting_enrich') AND is_active_slot = false)",
+            name="ck_catalog_audit_runs_active_slot",
+        ),
+        Index(
+            "uq_catalog_audit_runs_active",
+            "is_active_slot",
+            unique=True,
+            postgresql_where=text("is_active_slot = true"),
+            sqlite_where=text("is_active_slot = 1"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    mode: Mapped[str] = mapped_column(String(24), nullable=False, default="full", server_default="full")
+    include_orphans: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    enrich_missing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    auto_fix: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", server_default="queued")
+    is_active_slot: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    requested_ids: Mapped[Optional[list]] = mapped_column(JSONBCompat, nullable=True, default=list, server_default="[]")
+    total_items: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    processed_items: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    clean_items: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    issue_items: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    items: Mapped[list["CatalogAuditItem"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", foreign_keys="CatalogAuditItem.run_id"
+    )
+
+
+class CatalogAuditItem(Base):
+    """Resultado y resolución de un canónico o producto interno huérfano."""
+
+    __tablename__ = "catalog_audit_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','skipped_unchanged','canonical_required','waiting_enrich','auditing','clean','auto_fixed','needs_review','quarantined','failed','cancelled')",
+            name="ck_catalog_audit_items_status",
+        ),
+        UniqueConstraint("run_id", "target_key", name="uq_catalog_audit_items_run_target"),
+        Index("ix_catalog_audit_items_run_status", "run_id", "status"),
+        Index("ix_catalog_audit_items_identity", "canonical_product_id", "input_hash", "rules_version"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("catalog_audit_runs.id", ondelete="CASCADE"), nullable=False)
+    canonical_product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=True)
+    product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id", ondelete="SET NULL"), nullable=True)
+    target_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    rules_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    feedback_version: Mapped[str] = mapped_column(String(64), nullable=False, default="0", server_default="0")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", server_default="pending")
+    product_class: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    passed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    findings_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    corrections_json: Mapped[Optional[list]] = mapped_column(JSONBCompat, nullable=True, default=list, server_default="[]")
+    semantic_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    evidence_json: Mapped[Optional[list]] = mapped_column(JSONBCompat, nullable=True, default=list, server_default="[]")
+    enrichment_job_id: Mapped[Optional[str]] = mapped_column(ForeignKey("canonical_enrichment_jobs.id", ondelete="SET NULL"), nullable=True)
+    reused_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("catalog_audit_items.id", ondelete="SET NULL"), nullable=True)
+    auto_fix_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    resolution: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    resolution_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolved_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    run: Mapped["CatalogAuditRun"] = relationship(back_populates="items", foreign_keys=[run_id])
+
+
+class CatalogAuditFeedback(Base):
+    """Regla humana versionada para clasificación, excepción o corrección."""
+
+    __tablename__ = "catalog_audit_feedback"
+    __table_args__ = (
+        CheckConstraint("kind IN ('classification','exception','correction')", name="ck_catalog_audit_feedback_kind"),
+        Index("ix_catalog_audit_feedback_scope", "canonical_product_id", "product_class", "active"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=True)
+    product_class: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    payload_json: Mapped[dict] = mapped_column(JSONBCompat, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
 
 
 class CanonicalKnowledgeAsset(Base):

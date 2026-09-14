@@ -5,6 +5,15 @@
 
 # UI de Productos y Canónicos
 
+## Auditor autónomo (2026-09-13)
+
+La barra de acciones de una selección staff ofrece **Auditar**. Los canónicos
+se deduplican y se envían a `/admin/auditor-catalogo`; una selección sólo con
+internos abre el tratamiento de huérfanos. La vista permite configurar alcance,
+modo, Enrich para contenido ausente y autocorrección admin, seguir progreso,
+cancelar, reanudar y resolver ítems. El listado conserva las cuarentenas para
+staff con indicador visible. Ver [`CATALOG_AUDITOR.md`](CATALOG_AUDITOR.md).
+
 ## Centro Conocimiento (2026-07-26)
 
 La ficha canónica muestra **Conocimiento** para staff. El centro compartido con Mercado reúne fuentes, documentos, imágenes, videos, hechos, historial e IA; permite alta, edición, procesamiento, revalidación, archivado/restauración y upload. Sus etiquetas/capacidades nunca se agregan a `Product.tags`. Mercado lo abre filtrado por `market`.

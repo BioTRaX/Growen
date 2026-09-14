@@ -5,6 +5,13 @@
 
 # Ollama local
 
+El auditor de catálogo usa un cliente separado de Chat y Enrich: fija
+`llama3.1:8b`, temperatura `0`, contexto `4096`, `num_predict=2048` y schema
+JSON. El worker opera con un proceso/thread; daemon, modelo o salida inválida
+fallan cerrado. La vista `/admin/auditor-catalogo` exige preflight para el modo
+completo. Variables: `CATALOG_AUDIT_OLLAMA_URL`,
+`CATALOG_AUDIT_OLLAMA_MODEL` y `CATALOG_AUDIT_HEARTBEAT_TTL_SECONDS`.
+
 Growen no envía Chat/RAG a proveedores externos. Producción fija `AI_MODE=ollama`, `AI_ALLOW_EXTERNAL=false`, `OLLAMA_MODEL=llama3.1:8b`, `RAG_EMBEDDING_MODEL=qwen3-embedding:4b` y `RAG_EMBEDDING_DIMENSIONS=1536`.
 
 `OllamaProvider` usa `httpx.AsyncClient` contra `/api/generate`; el servicio de embeddings usa `/api/embed` con `dimensions: 1536`. Daemon ausente, modelo ausente, HTTP inválido, respuesta vacía o dimensión incorrecta fallan cerrado. Nunca se devuelve el prompt como eco.

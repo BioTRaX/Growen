@@ -13,6 +13,7 @@ param(
     [switch]$WithCatalogWorker,
     [switch]$WithMarketWorker,
     [switch]$WithEnrichmentWorker,
+    [switch]$WithCatalogAuditWorker,
     [switch]$WithKnowledgeWorker,
     [switch]$WithSiyuanMcp,
     [switch]$CheckOnly
@@ -54,6 +55,8 @@ $mcpSiyuanStdoutLog = Join-Path $runLogDir 'mcp-siyuan.stdout.log'
 $mcpSiyuanStderrLog = Join-Path $runLogDir 'mcp-siyuan.stderr.log'
 $enrichmentWorkerStdoutLog = Join-Path $runLogDir 'enrichment-worker.stdout.log'
 $enrichmentWorkerStderrLog = Join-Path $runLogDir 'enrichment-worker.stderr.log'
+$catalogAuditWorkerStdoutLog = Join-Path $runLogDir 'catalog-audit-worker.stdout.log'
+$catalogAuditWorkerStderrLog = Join-Path $runLogDir 'catalog-audit-worker.stderr.log'
 $knowledgeWorkerStdoutLog = Join-Path $runLogDir 'knowledge-worker.stdout.log'
 $knowledgeWorkerStderrLog = Join-Path $runLogDir 'knowledge-worker.stderr.log'
 $stateFile = Join-Path $runLogDir 'state.json'
@@ -487,7 +490,7 @@ function Ensure-MarketWorker {
 }
 
 function Ensure-EnrichmentInfrastructure {
-    if (-not $WithEnrichmentWorker -and -not $WithKnowledgeWorker) {
+    if (-not $WithEnrichmentWorker -and -not $WithCatalogAuditWorker -and -not $WithKnowledgeWorker) {
         return
     }
     Invoke-LoggedNativeCommand -FilePath 'docker' `
@@ -544,6 +547,31 @@ function Start-EnrichmentWorker {
         throw "enrichment_worker no alcanzó un estado saludable. Ver: $enrichmentWorkerStderrLog"
     }
     Write-DevLog 'enrichment_worker saludable y consumiendo la cola enrichment.' 'OK'
+    return $process
+}
+
+function Start-CatalogAuditWorker {
+    if (-not $WithCatalogAuditWorker) {
+        return $null
+    }
+    $env:CATALOG_AUDIT_HEARTBEAT_ENABLED = '1'
+    Write-DevLog 'Iniciando catalog_audit_worker local (1 proceso, 1 thread).'
+    $process = Start-Process -FilePath $python `
+        -ArgumentList @(
+            '-m', 'dramatiq', 'services.jobs.catalog_audit_jobs',
+            '--processes', '1', '--threads', '1', '--queues', 'catalog_audit'
+        ) `
+        -WorkingDirectory $root `
+        -RedirectStandardOutput $catalogAuditWorkerStdoutLog `
+        -RedirectStandardError $catalogAuditWorkerStderrLog `
+        -WindowStyle Hidden `
+        -PassThru
+    $startedProcesses.Add($process)
+    $healthUri = 'http://127.0.0.1:8000/health/catalog-audit-worker'
+    if (-not (Wait-HttpEndpoint -Uri $healthUri -TimeoutSec $ApiTimeoutSec -Process $process -ErrorLog $catalogAuditWorkerStderrLog)) {
+        throw "catalog_audit_worker no alcanzó un estado saludable. Ver: $catalogAuditWorkerStderrLog"
+    }
+    Write-DevLog 'catalog_audit_worker saludable y consumiendo catalog_audit.' 'OK'
     return $process
 }
 
@@ -647,7 +675,7 @@ try {
     Assert-DevelopmentPrerequisites
     Assert-SiyuanPrerequisites
     if ($CheckOnly) {
-        Write-DevLog "Configuración válida. MCP mode: $McpMode. SiYuan MCP: $([bool]$WithSiyuanMcp). Catalog worker: $([bool]$WithCatalogWorker). Market worker: $([bool]$WithMarketWorker). Enrichment worker: $([bool]$WithEnrichmentWorker). Knowledge worker: $([bool]$WithKnowledgeWorker). No se iniciaron servicios ni migraciones." 'OK'
+        Write-DevLog "Configuración válida. MCP mode: $McpMode. SiYuan MCP: $([bool]$WithSiyuanMcp). Catalog worker: $([bool]$WithCatalogWorker). Market worker: $([bool]$WithMarketWorker). Enrichment worker: $([bool]$WithEnrichmentWorker). Auditor: $([bool]$WithCatalogAuditWorker). Knowledge worker: $([bool]$WithKnowledgeWorker). No se iniciaron servicios ni migraciones." 'OK'
         exit 0
     }
 
@@ -695,6 +723,7 @@ try {
             -StderrLog $mcpSiyuanStderrLog
     }
     $enrichmentWorkerProcess = Start-EnrichmentWorker
+    $catalogAuditWorkerProcess = Start-CatalogAuditWorker
     $knowledgeWorkerProcess = Start-KnowledgeWorker
     $frontendProcess = Start-DevelopmentFrontend
 
@@ -708,8 +737,8 @@ try {
         api_health = 'healthy'
         api_log_source_hint = if ($apiProcess) { $apiStderrLog } else { Find-PreviousLogSourceHint -Component 'api' -FileName 'api.stderr.log' }
         catalog_worker_mode = if ($WithCatalogWorker) { 'docker-compose' } else { 'off' }
-        redis_url = if ($WithCatalogWorker -or $WithMarketWorker -or $WithEnrichmentWorker -or $WithKnowledgeWorker) { 'redis://127.0.0.1:6379/0' } else { $null }
-        redis_health = if ($WithCatalogWorker -or $WithMarketWorker -or $WithEnrichmentWorker -or $WithKnowledgeWorker) { 'healthy' } else { 'off' }
+        redis_url = if ($WithCatalogWorker -or $WithMarketWorker -or $WithEnrichmentWorker -or $WithCatalogAuditWorker -or $WithKnowledgeWorker) { 'redis://127.0.0.1:6379/0' } else { $null }
+        redis_health = if ($WithCatalogWorker -or $WithMarketWorker -or $WithEnrichmentWorker -or $WithCatalogAuditWorker -or $WithKnowledgeWorker) { 'healthy' } else { 'off' }
         catalog_worker_health = if ($WithCatalogWorker) { 'running' } else { 'off' }
         catalog_worker_log_command = if ($WithCatalogWorker) { 'docker compose --profile optional logs -f dramatiq redis' } else { $null }
         catalog_worker_competing_local_pids = if ($WithCatalogWorker) { @($localCatalogWorkerPids) } else { @() }
@@ -720,6 +749,10 @@ try {
         enrichment_worker_pid = if ($enrichmentWorkerProcess) { $enrichmentWorkerProcess.Id } else { $null }
         enrichment_worker_health = if ($WithEnrichmentWorker) { 'healthy' } else { 'off' }
         enrichment_worker_log_source_hint = if ($WithEnrichmentWorker) { $enrichmentWorkerStderrLog } else { $null }
+        catalog_audit_worker_mode = if ($WithCatalogAuditWorker) { 'local' } else { 'off' }
+        catalog_audit_worker_pid = if ($catalogAuditWorkerProcess) { $catalogAuditWorkerProcess.Id } else { $null }
+        catalog_audit_worker_health = if ($WithCatalogAuditWorker) { 'healthy' } else { 'off' }
+        catalog_audit_worker_log_source_hint = if ($WithCatalogAuditWorker) { $catalogAuditWorkerStderrLog } else { $null }
         knowledge_worker_mode = if ($WithKnowledgeWorker) { 'local' } else { 'off' }
         knowledge_worker_pid = if ($knowledgeWorkerProcess) { $knowledgeWorkerProcess.Id } else { $null }
         knowledge_worker_health = if ($WithKnowledgeWorker) { 'healthy' } else { 'off' }
