@@ -159,6 +159,19 @@ def test_rollout_scripts_offer_non_mutating_previews() -> None:
     assert '"openai_api_key"' in deploy
 
 
+def test_single_node_override_avoids_start_first_deadlock() -> None:
+    override = (ROOT / "docker-stack.single-node.yml").read_text(encoding="utf-8")
+
+    for service in (
+        "api",
+        "frontend",
+        "meli_webhook_gateway",
+        "meli_sync_worker",
+        "meli_cloudflared",
+    ):
+        assert f"{service}: {{deploy: {{replicas: 1, update_config: {{order: stop-first}}}}}}" in override
+
+
 def test_postgres_migration_script_uses_windows_powershell_compatible_rng() -> None:
     migrations = (ROOT / "scripts" / "test-postgres-migrations.ps1").read_text(
         encoding="utf-8"
