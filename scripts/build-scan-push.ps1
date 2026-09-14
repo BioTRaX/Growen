@@ -59,11 +59,11 @@ function Invoke-CheckedDocker([string[]]$Arguments) {
 
 function Resolve-PublishedDigest([string]$Reference, [string]$ImageName) {
     $repository = "$Registry/growen/$ImageName"
-    $repoDigests = @(docker image inspect $Reference --format '{{range .RepoDigests}}{{println .}}{{end}}')
-    if ($LASTEXITCODE -ne 0) { throw "image_digest_missing:$ImageName" }
-    $published = @($repoDigests | Where-Object { $_ -match "^$([regex]::Escape($repository))@sha256:[0-9a-f]{64}$" })
-    if ($published.Count -ne 1) { throw "registry_image_digest_ambiguous:$ImageName" }
-    return $published[0].Trim()
+    $rawManifest = docker buildx imagetools inspect $Reference --format '{{json .Manifest}}'
+    if ($LASTEXITCODE -ne 0 -or -not $rawManifest) { throw "image_digest_missing:$ImageName" }
+    $manifest = $rawManifest | ConvertFrom-Json
+    if ($manifest.digest -notmatch '^sha256:[0-9a-f]{64}$') { throw "registry_image_digest_invalid:$ImageName" }
+    return "$repository@$($manifest.digest)"
 }
 
 function Invoke-Trivy([string]$Reference, [string]$SafeName) {

@@ -144,7 +144,8 @@ def test_rollout_scripts_offer_non_mutating_previews() -> None:
     assert "aquasec/trivy:0.74.0@sha256:62b1e65e" in build
     assert "RegistryPasswordFile" in build and "--password-stdin" in build
     assert "Resolve-PublishedDigest" in build
-    assert "registry_image_digest_ambiguous" in build
+    assert "docker buildx imagetools inspect" in build
+    assert "registry_image_digest_invalid" in build
     assert "{{index .RepoDigests 0}}" not in build
     assert "filesystem.vulnerabilities.json" in build
     assert "MIGRATION_TEST_POSTGRES_URL" in migrations and "finally" in migrations
