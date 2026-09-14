@@ -27,6 +27,8 @@
 - El manifiesto Swarm incorpora `catalog_audit_worker`, acceso local a Ollama y
   el secreto externo de OpenAI para Enrich. El despliegue separa una fase
   `Migration` repetible de la actualización de la aplicación.
+- Los tests y el typecheck Vue regeneran el manifiesto runtime antes de cargarlo,
+  evitando resultados dependientes de artefactos ignorados de otro worktree.
 
 ## 2026-09-13 — estabilización productiva Docker Swarm, unificación Vue 3 y ventas a colaboradores
 
