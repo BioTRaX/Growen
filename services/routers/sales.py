@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, cast, Float
+from sqlalchemy.orm import selectinload
 
 from db.session import get_session
 from db.models import Customer, Sale, SaleLine, SalePayment, SaleAttachment, Product, AuditLog, Return, ReturnLine
@@ -29,6 +30,7 @@ from services.sales.domain import (
     account_balance,
     add_account_entry,
     expire_reservations,
+    get_product_cost_price,
     money,
     quantity,
     recalculate_sale_totals,
@@ -235,14 +237,27 @@ async def quote_sale(payload: SaleQuoteRequest, db: AsyncSession = Depends(get_s
         total_amount=Decimal("0"),
         paid_total=Decimal("0"),
     )
+    is_collab = bool(payload.is_collaborator)
+    if not is_collab and payload.customer_id:
+        cust = await db.get(Customer, payload.customer_id)
+        if cust and cust.kind == "colaborador":
+            is_collab = True
     lines: list[SaleLine] = []
     for item in payload.items:
-        product = await db.get(Product, item.product_id)
+        product = await db.scalar(
+            select(Product).options(selectinload(Product.variants)).where(Product.id == item.product_id)
+        )
         if not product:
             raise HTTPException(status_code=404, detail=f"Producto {item.product_id} no encontrado")
         unit_price = item.unit_price
-        if unit_price is None:
-            unit_price = Decimal(str(product.variants[0].price if product.variants else 0))
+        if unit_price is None and is_collab:
+            cost_price, _ = await get_product_cost_price(db, item.product_id)
+            if cost_price is None or cost_price <= 0:
+                raise HTTPException(status_code=422, detail=f"Producto {item.product_id} no tiene precio de costo registrado")
+            unit_price = cost_price
+        elif unit_price is None:
+            v_price = (product.variants[0].price or product.variants[0].promo_price) if product.variants else None
+            unit_price = Decimal(str(v_price)) if v_price is not None else Decimal("0")
         if unit_price <= 0:
             raise HTTPException(status_code=422, detail=f"Producto {item.product_id} no tiene precio de venta")
         lines.append(
@@ -365,7 +380,7 @@ async def create_sale(
                 raise HTTPException(status_code=400, detail=f"additional_costs[{i}].amount inválido")
 
     # Cliente
-    customer_id: Optional[int] = customer_payload.get("id") if isinstance(customer_payload, dict) else None
+    customer_id: Optional[int] = (customer_payload.get("id") if isinstance(customer_payload, dict) else None) or payload.get("customer_id")
     customer_obj: Optional[Customer] = None
     if customer_id:
         customer_obj = await db.get(Customer, int(customer_id))
@@ -403,13 +418,25 @@ async def create_sale(
     items = payload.get("items") or []
     payments = payload.get("payments") or []
     created_lines: list[SaleLine] = []
+    is_collab = bool(customer_obj and customer_obj.kind == "colaborador") or bool(payload.get("is_collaborator"))
     for it in items:
         pid = int(it.get("product_id"))
         qty = quantity(it.get("qty"))
-        prod = await db.get(Product, pid)
+        prod = await db.scalar(
+            select(Product).options(selectinload(Product.variants)).where(Product.id == pid)
+        )
         if not prod:
             raise HTTPException(status_code=400, detail=f"Producto {pid} no encontrado")
-        unit_price = Decimal(str(it.get("unit_price") or 0)) or Decimal(str(prod.variants[0].price if prod.variants else 0))
+        raw_price = it.get("unit_price")
+        unit_price = Decimal(str(raw_price)) if raw_price is not None and str(raw_price).strip() != "" and Decimal(str(raw_price)) > 0 else Decimal("0")
+        cost_price, cost_sp_id = await get_product_cost_price(db, pid)
+        if is_collab and unit_price <= 0:
+            if cost_price is None or cost_price <= 0:
+                raise HTTPException(status_code=422, detail=f"Producto {pid} no tiene precio de costo registrado")
+            unit_price = cost_price
+        elif unit_price <= 0:
+            v_price = (prod.variants[0].price or prod.variants[0].promo_price) if prod.variants else None
+            unit_price = Decimal(str(v_price)) if v_price is not None else Decimal("0")
         if unit_price <= 0:
             raise HTTPException(status_code=400, detail="unit_price debe ser > 0")
         line_discount = Decimal(str(it.get("line_discount") or 0))
@@ -421,6 +448,8 @@ async def create_sale(
             qty=qty,
             unit_price=unit_price,
             line_discount=line_discount,
+            unit_cost_snapshot=cost_price,
+            cost_supplier_product_id=cost_sp_id,
         )
         db.add(sl)
         created_lines.append(sl)
@@ -542,6 +571,8 @@ async def sale_lines_ops(sale_id: int, payload: dict, db: AsyncSession = Depends
     if not ops:
         raise HTTPException(status_code=400, detail="ops requerido")
     audit_ops: list[dict] = []
+    sale_cust = await db.get(Customer, sale.customer_id) if sale.customer_id else None
+    is_collab = bool(sale_cust and sale_cust.kind == "colaborador")
     from decimal import Decimal as _D
     for op in ops:
         kind = (op.get("op") or "").lower()
@@ -551,10 +582,21 @@ async def sale_lines_ops(sale_id: int, payload: dict, db: AsyncSession = Depends
             if pid is None or qty is None:
                 raise HTTPException(status_code=400, detail="product_id y qty requeridos")
             qty_d = quantity(qty)
-            prod = await db.get(Product, int(pid))
+            prod = await db.scalar(
+                select(Product).options(selectinload(Product.variants)).where(Product.id == int(pid))
+            )
             if not prod:
                 raise HTTPException(status_code=400, detail="Producto no encontrado")
-            unit_price = _D(str(op.get("unit_price") or 0)) or _D(str(prod.variants[0].price if prod.variants else 0))
+            raw_price = op.get("unit_price")
+            unit_price = _D(str(raw_price)) if raw_price is not None and str(raw_price).strip() != "" and _D(str(raw_price)) > 0 else _D("0")
+            cost_price, cost_sp_id = await get_product_cost_price(db, prod.id)
+            if is_collab and unit_price <= 0:
+                if cost_price is None or cost_price <= 0:
+                    raise HTTPException(status_code=422, detail=f"Producto {prod.id} no tiene precio de costo registrado")
+                unit_price = cost_price
+            elif unit_price <= 0:
+                v_price = (prod.variants[0].price or prod.variants[0].promo_price) if prod.variants else None
+                unit_price = _D(str(v_price)) if v_price is not None else _D("0")
             if unit_price <= 0:
                 raise HTTPException(status_code=400, detail="unit_price debe ser > 0")
             line_discount = _D(str(op.get("line_discount") or 0))
@@ -566,6 +608,8 @@ async def sale_lines_ops(sale_id: int, payload: dict, db: AsyncSession = Depends
                 qty=qty_d,
                 unit_price=unit_price,
                 line_discount=line_discount,
+                unit_cost_snapshot=cost_price,
+                cost_supplier_product_id=cost_sp_id,
             )
             db.add(sl)
             await db.flush()
@@ -697,6 +741,8 @@ async def list_sales(
     channel_id: Optional[int] = Query(None),
     dt_from: Optional[str] = Query(None),
     dt_to: Optional[str] = Query(None),
+    is_collaborator: Optional[bool] = Query(None, description="Filtrar ventas de colaboradores (True) o clientes (False)"),
+    customer_kind: Optional[str] = Query(None, description="Filtrar por tipo de cliente (colaborador, cf, ri, minorista, mayorista)"),
     page: int = 1,
     page_size: int = 50,
     db: AsyncSession = Depends(get_session),
@@ -712,6 +758,14 @@ async def list_sales(
         stmt = stmt.where(Sale.customer_id == int(customer_id))
     if channel_id:
         stmt = stmt.where(Sale.channel_id == int(channel_id))
+    if is_collaborator is True:
+        stmt = stmt.join(Customer, Sale.customer_id == Customer.id).where(Customer.kind == "colaborador")
+    elif is_collaborator is False:
+        stmt = stmt.outerjoin(Customer, Sale.customer_id == Customer.id).where(
+            or_(Customer.kind != "colaborador", Sale.customer_id.is_(None), Customer.kind.is_(None))
+        )
+    if customer_kind:
+        stmt = stmt.join(Customer, Sale.customer_id == Customer.id).where(Customer.kind == customer_kind.lower())
     from datetime import datetime as _dt
     if dt_from:
         try:
@@ -729,16 +783,21 @@ async def list_sales(
     rows = (await db.execute(stmt.limit(page_size).offset((page-1)*page_size))).scalars().all()
     customer_ids = {row.customer_id for row in rows if row.customer_id is not None}
     channel_ids = {row.channel_id for row in rows if row.channel_id is not None}
-    customer_names = dict((await db.execute(select(Customer.id, Customer.name).where(Customer.id.in_(customer_ids)))).all()) if customer_ids else {}
+    customer_rows = (await db.execute(select(Customer.id, Customer.name, Customer.kind).where(Customer.id.in_(customer_ids)))).all() if customer_ids else []
+    customer_info = {row[0]: {"name": row[1], "kind": row[2]} for row in customer_rows}
     channel_names = dict((await db.execute(select(SalesChannel.id, SalesChannel.name).where(SalesChannel.id.in_(channel_ids)))).all()) if channel_ids else {}
     def _row(s: Sale):
+        c_data = customer_info.get(s.customer_id, {})
+        c_kind = c_data.get("kind")
         return {
             "id": s.id,
             "status": s.status,
             "sale_date": s.sale_date.isoformat(),
             "sale_kind": s.sale_kind,
             "customer_id": s.customer_id,
-            "customer_name": customer_names.get(s.customer_id),
+            "customer_name": c_data.get("name"),
+            "customer_kind": c_kind,
+            "is_collaborator": (c_kind == "colaborador"),
             "channel_id": s.channel_id,
             "channel_name": channel_names.get(s.channel_id),
             "payment_status": s.payment_status,
@@ -2520,7 +2579,7 @@ async def catalog_search(q: str = Query(..., min_length=1), limit: int = Query(1
     like = f"%{term}%"
     # Estrategia: priorizar productos con stock > 0 y término en título o canonical_sku (fallback a sku_root).
     # Buscar primero por canonical_sku, luego por sku_root como fallback temporal
-    stmt = select(Product).where(
+    stmt = select(Product).options(selectinload(Product.variants)).where(
         or_(
             Product.title.ilike(like),
             Product.canonical_sku.ilike(like),
@@ -2548,12 +2607,14 @@ async def catalog_search(q: str = Query(..., min_length=1), limit: int = Query(1
         if p.variants:
             v = p.variants[0]
             price = float(v.promo_price or v.price or 0)
+        cost_price, _ = await get_product_cost_price(db, p.id)
         items.append({
             "product_id": p.id,
             "canonical": True,  # Placeholder (futuro: distinguir canónico)
             "title": p.title,
             "sku": p.canonical_sku or p.sku_root,  # Priorizar canonical_sku
             "price": price,
+            "cost_price": float(cost_price) if cost_price is not None else None,
             "stock": p.stock,
             "score": s,
         })
@@ -2620,6 +2681,238 @@ async def sales_channels_report(db: AsyncSession = Depends(get_session)):
             {"channel_id": channel_id, "channel_name": name or "Sin canal", "sales_count": count, "total": float(total)}
             for channel_id, name, count, total in rows
         ]
+    }
+
+
+@router.get("/dashboard/purchases-summary", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def sales_purchases_summary(
+    dt_from: Optional[str] = Query(None, description="Fecha/hora ISO inicio (sale_date)"),
+    dt_to: Optional[str] = Query(None, description="Fecha/hora ISO fin (inclusive)"),
+    status: Optional[str] = Query(None, description="Filtrar por estado específico"),
+    db: AsyncSession = Depends(get_session),
+):
+    """Resumen analítico comparativo de compras de colaboradores (a costo) vs compras de clientes."""
+    from datetime import datetime as _dt, time as _time
+    d_from: _dt | None = None
+    d_to: _dt | None = None
+    if dt_from:
+        try:
+            d_from = _dt.fromisoformat(dt_from.replace("Z", "+00:00"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="dt_from formato inválido")
+    if dt_to:
+        try:
+            d_to = _dt.fromisoformat(dt_to.replace("Z", "+00:00"))
+            if len(dt_to.strip()) <= 10:
+                d_to = _dt.combine(d_to.date(), _time(23, 59, 59, 999999))
+        except Exception:
+            raise HTTPException(status_code=400, detail="dt_to formato inválido")
+
+    sales_filter = []
+    if status:
+        sales_filter.append(Sale.status == status.upper())
+    else:
+        sales_filter.append(Sale.status.in_(["CONFIRMADA", "ENTREGADA"]))
+    if d_from:
+        sales_filter.append(Sale.sale_date >= d_from)
+    if d_to:
+        sales_filter.append(Sale.sale_date <= d_to)
+
+    # 1. Ventas en el rango
+    stmt_sales = (
+        select(
+            Sale.id,
+            Sale.customer_id,
+            Customer.name.label("customer_name"),
+            Customer.kind.label("customer_kind"),
+            Customer.email.label("customer_email"),
+            Sale.total_amount,
+            Sale.paid_total,
+            Sale.status,
+            Sale.payment_status,
+            Sale.sale_date,
+        )
+        .outerjoin(Customer, Sale.customer_id == Customer.id)
+        .where(and_(*sales_filter))
+        .order_by(Sale.sale_date.desc(), Sale.id.desc())
+    )
+    sales_rows = (await db.execute(stmt_sales)).all()
+
+    # 2. Líneas de las ventas en el rango
+    stmt_lines = (
+        select(
+            SaleLine.sale_id,
+            SaleLine.product_id,
+            Product.title.label("product_title"),
+            SaleLine.qty,
+            SaleLine.total,
+            Customer.kind.label("customer_kind"),
+            Sale.customer_id,
+        )
+        .join(Sale, Sale.id == SaleLine.sale_id)
+        .outerjoin(Customer, Sale.customer_id == Customer.id)
+        .outerjoin(Product, Product.id == SaleLine.product_id)
+        .where(and_(*sales_filter))
+    )
+    lines_rows = (await db.execute(stmt_lines)).all()
+
+    # Separar y computar
+    collab_sales = []
+    cust_sales = []
+    for s in sales_rows:
+        if s.customer_kind == "colaborador":
+            collab_sales.append(s)
+        else:
+            cust_sales.append(s)
+
+    collab_lines = []
+    cust_lines = []
+    for l in lines_rows:
+        if l.customer_kind == "colaborador":
+            collab_lines.append(l)
+        else:
+            cust_lines.append(l)
+
+    from decimal import ROUND_HALF_UP
+    def _round_qty(v: object) -> float:
+        try:
+            return float(Decimal(str(v or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        except Exception:
+            return 0.0
+
+    def _calc_stats(sales, lines):
+        sales_count = len(sales)
+        total_amount = sum(Decimal(str(s.total_amount or 0)) for s in sales)
+        units_count = sum(Decimal(str(l.qty or 0)) for l in lines)
+        unique_buyers = len({s.customer_id for s in sales if s.customer_id is not None})
+        avg_ticket = (total_amount / sales_count) if sales_count else Decimal("0")
+
+        # Top compradores
+        buyers_map: dict[int, dict] = {}
+        for s in sales:
+            cid = s.customer_id or 0
+            if cid not in buyers_map:
+                buyers_map[cid] = {
+                    "customer_id": s.customer_id,
+                    "name": s.customer_name or "Consumidor Final",
+                    "kind": s.customer_kind,
+                    "sales_count": 0,
+                    "total_amount": Decimal("0"),
+                    "units_count": Decimal("0"),
+                }
+            buyers_map[cid]["sales_count"] += 1
+            buyers_map[cid]["total_amount"] += Decimal(str(s.total_amount or 0))
+
+        for l in lines:
+            cid = l.customer_id or 0
+            if cid in buyers_map:
+                buyers_map[cid]["units_count"] += Decimal(str(l.qty or 0))
+
+        top_buyers = sorted(buyers_map.values(), key=lambda b: (b["total_amount"], b["sales_count"]), reverse=True)[:10]
+        top_buyers_list = [
+            {
+                "customer_id": b["customer_id"],
+                "name": b["name"],
+                "kind": b["kind"],
+                "sales_count": b["sales_count"],
+                "total_amount": float(money(b["total_amount"])),
+                "units_count": _round_qty(b["units_count"]),
+            }
+            for b in top_buyers
+        ]
+
+        # Top productos
+        prods_map: dict[int, dict] = {}
+        for l in lines:
+            pid = l.product_id
+            if pid not in prods_map:
+                prods_map[pid] = {
+                    "product_id": pid,
+                    "title": l.product_title or f"Producto #{pid}",
+                    "qty": Decimal("0"),
+                    "total_amount": Decimal("0"),
+                }
+            prods_map[pid]["qty"] += Decimal(str(l.qty or 0))
+            prods_map[pid]["total_amount"] += Decimal(str(l.total or 0))
+
+        top_products = sorted(prods_map.values(), key=lambda p: (p["qty"], p["total_amount"]), reverse=True)[:10]
+        top_products_list = [
+            {
+                "product_id": p["product_id"],
+                "title": p["title"],
+                "qty": _round_qty(p["qty"]),
+                "total_amount": float(money(p["total_amount"])),
+            }
+            for p in top_products
+        ]
+
+        recent_sales_list = [
+            {
+                "id": s.id,
+                "sale_date": s.sale_date.isoformat(),
+                "customer_id": s.customer_id,
+                "customer_name": s.customer_name or "Consumidor Final",
+                "customer_kind": s.customer_kind,
+                "status": s.status,
+                "payment_status": s.payment_status,
+                "total": float(money(Decimal(str(s.total_amount or 0)))),
+                "paid_total": float(money(Decimal(str(s.paid_total or 0)))),
+            }
+            for s in sales[:15]
+        ]
+
+        return {
+            "summary": {
+                "sales_count": sales_count,
+                "total_amount": float(money(total_amount)),
+                "units_count": _round_qty(units_count),
+                "avg_ticket": float(money(avg_ticket)),
+                "unique_buyers": unique_buyers,
+            },
+            "top_buyers": top_buyers_list,
+            "top_products": top_products_list,
+            "recent_sales": recent_sales_list,
+        }
+
+    collab_data = _calc_stats(collab_sales, collab_lines)
+    cust_data = _calc_stats(cust_sales, cust_lines)
+
+    total_sales_count = collab_data["summary"]["sales_count"] + cust_data["summary"]["sales_count"]
+    total_amount = Decimal(str(collab_data["summary"]["total_amount"])) + Decimal(str(cust_data["summary"]["total_amount"]))
+    total_units = Decimal(str(collab_data["summary"]["units_count"])) + Decimal(str(cust_data["summary"]["units_count"]))
+
+    collab_amount_pct = float(money((Decimal(str(collab_data["summary"]["total_amount"])) / total_amount * 100) if total_amount else 0))
+    collab_units_pct = float(money((Decimal(str(collab_data["summary"]["units_count"])) / total_units * 100) if total_units else 0))
+
+    return {
+        "period": {
+            "dt_from": dt_from,
+            "dt_to": dt_to,
+            "status": status,
+        },
+        "summary": {
+            "collaborators": collab_data["summary"],
+            "customers": cust_data["summary"],
+            "totals": {
+                "sales_count": total_sales_count,
+                "total_amount": float(money(total_amount)),
+                "units_count": _round_qty(total_units),
+            },
+            "share": {
+                "collaborators_amount_pct": collab_amount_pct,
+                "collaborators_units_pct": collab_units_pct,
+            },
+        },
+        "collaborators": {
+            "top_buyers": collab_data["top_buyers"],
+            "top_products": collab_data["top_products"],
+            "recent_sales": collab_data["recent_sales"],
+        },
+        "customers": {
+            "top_buyers": cust_data["top_buyers"],
+            "top_products": cust_data["top_products"],
+            "recent_sales": cust_data["recent_sales"],
+        },
     }
 
 

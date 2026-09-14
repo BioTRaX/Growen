@@ -12,7 +12,10 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 import re
-from bs4 import BeautifulSoup  # type: ignore
+try:
+    from bs4 import BeautifulSoup  # type: ignore
+except ImportError:
+    BeautifulSoup = None  # type: ignore
 
 
 BASE = "https://www.santaplanta.com.ar"
@@ -54,6 +57,8 @@ async def _get(client: httpx.AsyncClient, url: str) -> str:
 
 
 async def search_by_title(title: str, max_results: int = 3) -> List[str]:
+    if BeautifulSoup is None:
+        return []
     # Normalize noisy titles (drop parentheses, promos, symbols) similar to crawler
     def _normalize_query(t: str) -> str:
         t = re.sub(r"\([^\)]*\)", " ", t)
@@ -84,6 +89,8 @@ async def search_by_title(title: str, max_results: int = 3) -> List[str]:
 
 
 async def extract_product_image(prod_url: str) -> Optional[str]:
+    if BeautifulSoup is None:
+        return None
     async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "GrowenBot/1.0"}) as client:
         html = await _get(client, prod_url)
         soup = BeautifulSoup(html, "html.parser")

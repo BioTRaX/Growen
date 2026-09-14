@@ -27,6 +27,7 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=appuser:appuser mcp_servers/siyuan_server /app/mcp_servers/siyuan_server
 COPY --chown=appuser:appuser mcp_servers/__init__.py mcp_servers/security.py /app/mcp_servers/
+COPY --chown=appuser:appuser agent_core /app/agent_core
 
 USER appuser
 EXPOSE 8104

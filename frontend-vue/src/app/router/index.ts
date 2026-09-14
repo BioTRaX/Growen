@@ -38,6 +38,7 @@ const loaders: Record<string, RouteComponent> = {
   'admin-catalog-diagnostics': () => import('../../modules/admin/views/CatalogDiagnosticsView.vue'),
   'admin-technical-dashboard': () => import('../../modules/admin/views/TechnicalDashboardView.vue'),
   'admin-catalog-audit': () => import('../../modules/catalog-audit/views/CatalogAuditView.vue'),
+  'admin-purchases-dashboard': () => import('../../modules/admin/views/PurchasesDashboardView.vue'),
   'admin-chat-inbox': () => import('../../modules/admin/views/ChatInboxView.vue'),
   'product-images': () => import('../../modules/images/views/ProductImagesView.vue'),
   'product-images-gallery': () => import('../../modules/images/views/ProductImagesGalleryView.vue'),

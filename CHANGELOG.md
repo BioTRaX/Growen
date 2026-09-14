@@ -26,6 +26,19 @@
   con el volumen y las overlays homónimas reservadas por Swarm.
 - Swarm/producción no fue modificado; su alineación queda para el cierre.
 
+## 2026-09-13 — estabilización productiva Docker Swarm, unificación Vue 3 y ventas a colaboradores
+
+- Se estabilizaron los 17 servicios del clúster Docker Swarm en topología `SingleNode`
+  sobre la IP fija LAN `192.168.100.100`, con tráfico HTTPS (puerto 443) y redirección
+  obligatoria desde HTTP (puerto 80).
+- Se unificó el frontend productivo sobre Vue 3 (`frontend-vue`) como SPA principal,
+  incorporando Vuetify, rutas completas con `LoginView.vue` y eliminando la dependencia
+  de fallback de React que ocasionaba bloqueos por Mixed Content.
+- Se corrigió `scripts/cleanup-docker-images.ps1` sustituyendo la plantilla de inspección,
+  agregando conciencia de servicios Swarm e indexación O(1) de imágenes protegidas.
+- Se implementaron ventas para colaboradores a precio de costo en el backend (`services/routers/sales.py`,
+  `customers.py`, `models.py`) y en la interfaz POS de Vue 3 (`SaleNewView.vue`, `CustomersView.vue`).
+
 ## 2026-09-10 — reconstrucción segura de documentación SiYuan
 
 - El publicador Git → SiYuan descubre los Markdown versionados de la raíz y de

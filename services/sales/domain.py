@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import CustomerAccountEntry, Sale, SaleLine, StockReservation
+from db.models import CustomerAccountEntry, Sale, SaleLine, StockReservation, SupplierProduct
 
 
 MONEY_QUANT = Decimal("0.01")
@@ -160,3 +160,23 @@ async def add_account_entry(
     )
     db.add(entry)
     return entry
+
+
+async def get_product_cost_price(db: AsyncSession, product_id: int) -> tuple[Decimal | None, int | None]:
+    """Obtiene el costo unitario autoritativo de compra del producto desde el último SupplierProduct registrado.
+
+    Retorna (cost_price, supplier_product_id).
+    """
+    cost_row = await db.execute(
+        select(SupplierProduct.id, SupplierProduct.current_purchase_price)
+        .where(
+            SupplierProduct.internal_product_id == product_id,
+            SupplierProduct.current_purchase_price.is_not(None),
+        )
+        .order_by(SupplierProduct.last_seen_at.desc().nulls_last(), SupplierProduct.id.desc())
+        .limit(1)
+    )
+    row = cost_row.first()
+    if not row or row[1] is None:
+        return None, None
+    return money(row[1]), row[0]

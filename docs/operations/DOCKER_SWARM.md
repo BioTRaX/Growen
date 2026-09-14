@@ -92,6 +92,55 @@ Estado operativo del 2026-09-10:
 
 Desde otro dispositivo con la CA instalada, proporcionar `ADMIN_USER_FILE`, `ADMIN_PASS_FILE`, `SMOKE_CA_BUNDLE` y ejecutar `scripts/test_login_flow.py`. Validar además navegador sin advertencias, CORS exacto, CSRF válido/inválido, cookie `Secure`, descarga privada autorizada y `404` no enumerable para accesos anónimos.
 
+### 5. Coexistencia con Dev y ciclo de actualización continua
+
+#### A. Aislamiento estricto de volúmenes y redes (Dev vs Swarm)
+- El entorno de desarrollo (`docker-compose.yml`) utiliza explícitamente el volumen persistente `growen_dev_pgdata` y redes dedicadas (`growen_dev_backend`, `growen_dev_host_access`, etc.).
+- Docker Swarm utiliza de forma independiente `growen_pgdata` y redes overlay con el prefijo del stack (`growen_backend`, etc.).
+- Este desacoplamiento previene dos riesgos mayores:
+  1. **Corrupción de PostgreSQL**: dos instancias de PostgreSQL nunca deben montar concurrentemente el mismo volumen de datos físico.
+  2. **Colisión de nombres de red**: Compose no interfiere con las redes overlay creadas por el despliegue de Swarm.
+
+#### B. Clonación y sincronización inicial de Base de Datos
+- Para inicializar o actualizar la base de desarrollo desde Swarm sin afectar producción:
+  ```powershell
+  # 1. Exportar dump lógico desde el contenedor Swarm
+  $swarmDb = (docker ps -q -f name=growen_db | Select-Object -First 1)
+  docker exec $swarmDb pg_dump -U growen -d growen -F c -f /tmp/growen_swarm.dump
+  docker cp ${swarmDb}:/tmp/growen_swarm.dump tmp/growen_swarm.dump
+  docker exec $swarmDb rm /tmp/growen_swarm.dump
+
+  # 2. Restaurar en el contenedor dev local
+  $devDb = (docker ps -q -f name=growen-postgres | Select-Object -First 1)
+  docker cp tmp/growen_swarm.dump ${devDb}:/tmp/growen_swarm.dump
+  docker exec $devDb pg_restore -U growen -d growen --no-owner --no-privileges /tmp/growen_swarm.dump
+  docker exec $devDb rm /tmp/growen_swarm.dump
+  Remove-Item tmp/growen_swarm.dump -Force
+  ```
+- Si se crea el secreto Swarm `postgres_password` con una credencial distinta a la que tenía PostgreSQL en desarrollo (`.env`), el motor no modificará la contraseña de usuario (`initdb` sólo se ejecuta en directorios de datos vírgenes). Para sincronizar la clave de la base con el secreto montado en Swarm:
+  ```powershell
+  $db = (docker ps -q -f name=growen_db | Select-Object -First 1)
+  docker exec $db sh -c 'psql -U growen -d growen -c "ALTER USER growen WITH PASSWORD '\''$(cat /run/secrets/postgres_password)'\'';"'
+  ```
+
+#### C. Replicación de cambios desde Dev hacia Swarm en Producción
+- **Código (Backend / Frontend / Workers / MCP)**:
+  1. Recompilar la imagen del servicio modificado (ej. `docker build -f infra/Dockerfile.api -t growen/api:production .`).
+  2. Actualizar el servicio en caliente con rolling update:
+     ```powershell
+     docker service update --image growen/api:production growen_api
+     ```
+     *(Gracias a `update_config: {order: start-first}`, Swarm levanta la réplica nueva, valida el healthcheck y recién entonces retira el contenedor anterior, garantizando zero-downtime)*.
+- **Esquema de Base de Datos (Migraciones Alembic)**:
+  1. Recompilar la imagen que contiene las nuevas migraciones en `db/migrations/versions/`.
+  2. Ejecutar la migración directamente en el contenedor API o mediante tarea administrativa antes de actualizar el resto de los consumidores:
+     ```powershell
+     $api = (docker ps -q -f name=growen_api | Select-Object -First 1)
+     docker exec $api alembic upgrade head
+     ```
+- **Datos puntuales**: Para sincronizar catálogos o registros sin pisar transacciones de producción, exportar con `docker exec growen-postgres pg_dump -U growen -d growen --data-only -t <tabla>` e importar con `docker exec -i <growen_db> psql -U growen -d growen`.
+- **Secretos**: Los secretos en Swarm son inmutables. Para rotar credenciales, crear un secreto versionado (ej. `secret_key_v2`) y actualizar el servicio (`docker service update --secret-rm ... --secret-add ...`).
+
 ## Criterios de aceptación
 
 - La cadena Alembic limpia alcanza `20260909_user_active` antes de arrancar la API.

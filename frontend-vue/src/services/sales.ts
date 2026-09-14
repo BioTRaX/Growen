@@ -11,10 +11,29 @@ export interface Sale {
   additional_cost_total?: number; tax?: number; total: number; paid_total: number; balance?: number
   lines?: SaleLine[]; payments?: any[]; attachments?: any[]; returns?: any[]; reservations?: any[]; allowed_actions?: Record<string, boolean>
 }
+export interface CatalogProduct {
+  product_id: number;
+  canonical?: boolean;
+  title: string;
+  sku?: string;
+  price?: number | null;
+  cost_price?: number | null;
+  stock?: number | null;
+  score?: number;
+}
+
 export interface SaleDraft {
-  customer?: { id?: number; name?: string }; items: SaleLine[]; sale_kind?: string; channel_id?: number
-  note?: string; sale_date?: string; additional_costs?: Array<{ concept: string; amount: number }>
-  discount_percent?: number; discount_amount?: number
+  customer?: { id?: number; name?: string };
+  customer_id?: number;
+  is_collaborator?: boolean;
+  items: SaleLine[];
+  sale_kind?: string;
+  channel_id?: number;
+  note?: string;
+  sale_date?: string;
+  additional_costs?: Array<{ concept: string; amount: number }>;
+  discount_percent?: number;
+  discount_amount?: number;
 }
 
 export async function listSales(params: Record<string, unknown> = {}) { return (await http.get('/sales', { params })).data }
@@ -31,9 +50,80 @@ export async function createReturn(id: number, payload: Record<string, unknown>)
 export async function reserveSale(id: number) { return (await http.post(`/sales/${id}/reserve`)).data }
 export async function releaseReservation(id: number) { return (await http.post(`/sales/${id}/release-reservation`)).data }
 export async function listChannels() { return (await http.get('/sales/channels')).data.items }
-export async function searchProducts(q: string) { return (await http.get('/sales/catalog/search', { params: { q } })).data.items }
+export async function searchProducts(q: string) { return (await http.get<{ items: CatalogProduct[] }>('/sales/catalog/search', { params: { q } })).data.items }
 export async function uploadAttachment(id: number, file: File) { const data = new FormData(); data.append('file', file); return (await http.post(`/sales/${id}/attachments`, data)).data }
 export async function deleteAttachment(id: number, attachmentId: number) { return (await http.delete(`/sales/${id}/attachments/${attachmentId}`)).data }
 export async function getTimeline(id: number) { return (await http.get(`/sales/${id}/timeline`)).data.events }
 export async function getMarginReport() { return (await http.get('/sales/reports/margin')).data }
 export async function getChannelsReport() { return (await http.get('/sales/reports/channels')).data }
+
+export interface BuyerRankingItem {
+  customer_id?: number | null
+  name: string
+  kind?: string | null
+  sales_count: number
+  total_amount: number
+  units_count: number
+}
+
+export interface ProductRankingItem {
+  product_id: number
+  title: string
+  qty: number
+  total_amount: number
+}
+
+export interface RecentSaleItem {
+  id: number
+  sale_date: string
+  customer_id?: number | null
+  customer_name?: string | null
+  customer_kind?: string | null
+  status: string
+  payment_status?: string | null
+  total: number
+  paid_total: number
+}
+
+export interface SegmentSummary {
+  sales_count: number
+  total_amount: number
+  units_count: number
+  avg_ticket: number
+  unique_buyers: number
+}
+
+export interface PurchasesSummaryReport {
+  period: {
+    dt_from?: string | null
+    dt_to?: string | null
+    status?: string | null
+  }
+  summary: {
+    collaborators: SegmentSummary
+    customers: SegmentSummary
+    totals: {
+      sales_count: number
+      total_amount: number
+      units_count: number
+    }
+    share: {
+      collaborators_amount_pct: number
+      collaborators_units_pct: number
+    }
+  }
+  collaborators: {
+    top_buyers: BuyerRankingItem[]
+    top_products: ProductRankingItem[]
+    recent_sales: RecentSaleItem[]
+  }
+  customers: {
+    top_buyers: BuyerRankingItem[]
+    top_products: ProductRankingItem[]
+    recent_sales: RecentSaleItem[]
+  }
+}
+
+export async function getPurchasesSummary(params: { dt_from?: string; dt_to?: string; status?: string } = {}) {
+  return (await http.get<PurchasesSummaryReport>('/sales/dashboard/purchases-summary', { params })).data
+}

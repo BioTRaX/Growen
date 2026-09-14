@@ -411,6 +411,15 @@ function Ensure-DevelopmentDatabase {
         }
     }
     else {
+        $existingContainer = Invoke-NativeProcess -FilePath 'docker' `
+            -ArgumentList @('ps', '-a', '--filter', 'name=^/growen-postgres$', '--format', '{{.ID}} (proyecto: {{.Label "com.docker.compose.project"}})')
+        $existingOutput = (@($existingContainer.Stdout) -join ' ').Trim()
+        if ($existingContainer.ExitCode -eq 0 -and $existingOutput) {
+            $currentProject = (Split-Path -Leaf $root).ToLowerInvariant()
+            if ($existingOutput -notmatch $currentProject) {
+                Write-DevLog "Existe un contenedor 'growen-postgres' de otro proyecto ($existingOutput); si falla compose up, detener ese contenedor primero." 'WARN'
+            }
+        }
         Invoke-LoggedNativeCommand -FilePath 'docker' `
             -ArgumentList @('compose', 'up', '-d', 'db') `
             -LogPath $databaseLog `

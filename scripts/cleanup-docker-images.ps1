@@ -108,17 +108,58 @@ try {
 }
 
 # ==============================
-# 2. Imágenes dangling
+# 2. Identificación de imágenes en uso (Contenedores y Swarm)
+# ==============================
+Write-Info "Relevando contenedores y servicios para proteger imágenes en uso..."
+
+$usedImageIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$usedImageNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+# 2.1 Contenedores (en ejecución o detenidos)
+$containers = docker ps -a -q 2>$null
+if ($containers) {
+    # Inspeccionar SHA256 exacto de la imagen de cada contenedor
+    $inspectImages = docker inspect --format '{{.Image}}' $containers 2>$null
+    foreach ($img in $inspectImages) {
+        if ($img) {
+            $clean = $img -replace '^sha256:', ''
+            $short = if ($clean.Length -ge 12) { $clean.Substring(0, 12) } else { $clean }
+            $null = $usedImageIds.Add($short)
+            $null = $usedImageIds.Add($clean)
+        }
+    }
+    # Proteger también por nombres/tags reportados en docker ps
+    $psImages = docker ps -a --format '{{.Image}}' 2>$null
+    foreach ($name in $psImages) {
+        if ($name) { $null = $usedImageNames.Add($name.Trim()) }
+    }
+}
+
+# 2.2 Servicios Swarm (si el nodo está activo)
+$nodeState = docker info --format '{{.Swarm.LocalNodeState}}' 2>$null
+if ($nodeState -eq 'active') {
+    $services = docker service ls -q 2>$null
+    if ($services) {
+        $svcImages = docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' $services 2>$null
+        foreach ($sImg in $svcImages) {
+            if ($sImg) {
+                $null = $usedImageNames.Add($sImg.Trim())
+                if ($sImg -match 'sha256:([a-fA-F0-9]{12,64})') {
+                    $clean = $matches[1]
+                    $short = if ($clean.Length -ge 12) { $clean.Substring(0, 12) } else { $clean }
+                    $null = $usedImageIds.Add($short)
+                    $null = $usedImageIds.Add($clean)
+                }
+            }
+        }
+    }
+}
+
+# ==============================
+# 3. Relevamiento de imágenes dangling y no usadas
 # ==============================
 Write-Info "Obteniendo imágenes dangling..."
 $danglingRaw = docker images -f "dangling=true" --format "{{.ID}}|{{.Repository}}|{{.Tag}}|{{.Size}}" 2>$null
-
-# ==============================
-# 3. Imágenes no usadas por contenedores
-# ==============================
-Write-Info "Listando todas las imágenes y contenedores..."
-$allImagesRaw = docker images --format "{{.ID}}|{{.Repository}}|{{.Tag}}|{{.Size}}"
-$containerImageIDs = docker ps -a --format "{{.ImageID}}" | Sort-Object -Unique
 
 $danglingIDs = @{}
 $danglingList = @()
@@ -139,6 +180,9 @@ if ($danglingRaw) {
     }
 }
 
+Write-Info "Listando todas las imágenes locales..."
+$allImagesRaw = docker images --format "{{.ID}}|{{.Repository}}|{{.Tag}}|{{.Size}}"
+
 $unusedList = @()
 foreach ($line in $allImagesRaw) {
     $parts = $line.Split('|')
@@ -148,7 +192,12 @@ foreach ($line in $allImagesRaw) {
     $tag = $parts[2]
     $size= $parts[3]
 
-    if ($containerImageIDs -contains $id) { continue }
+    $fullRef = "${rep}:${tag}"
+
+    # Si está protegida por ID o por nombre/tag, no se elimina
+    if ($usedImageIds.Contains($id)) { continue }
+    if ($usedImageNames.Contains($rep)) { continue }
+    if ($usedImageNames.Contains($fullRef)) { continue }
     if ($danglingIDs.ContainsKey($id)) { continue }
 
     $unusedList += [pscustomobject]@{
@@ -185,7 +234,7 @@ $allToRemove = $allToRemove | Group-Object -Property Id | ForEach-Object {
 Write-Host ""
 Write-Info "Resumen de imágenes candidatas a eliminación:" 
 $display = $allToRemove | Select-Object `
-    @{n='ID';e={$_.Id.Substring(0,12)}},
+    @{n='ID';e={if ($_.Id.Length -ge 12) { $_.Id.Substring(0,12) } else { $_.Id }}},
     @{n='Repositorio';e={$_.Repository}},
     @{n='Tag';e={$_.Tag}},
     @{n='Categoría';e={$_.Category}},
@@ -224,27 +273,34 @@ if ($PerImageConfirm) {
 }
 
 foreach ($img in $allToRemove) {
+    $shortId = if ($img.Id.Length -ge 12) { $img.Id.Substring(0,12) } else { $img.Id }
+    $target = if ($img.Category -ne 'dangling' -and $img.Repository -and $img.Repository -ne '<none>' -and $img.Tag -and $img.Tag -ne '<none>') {
+        "$($img.Repository):$($img.Tag)"
+    } else {
+        $img.Id
+    }
+
     if ($PerImageConfirm) {
-        $ans = Read-Host ("Eliminar imagen {0} ({1}:{2}) [{3}]? 'si' para confirmar" -f $img.Id.Substring(0,12), $img.Repository, $img.Tag, $img.Category)
+        $ans = Read-Host ("Eliminar imagen {0} ({1}) [{2}]? 'si' para confirmar" -f $shortId, $target, $img.Category)
         if ($ans.ToLower() -ne 'si') {
-            Write-Warn ("Saltando {0}" -f $img.Id.Substring(0,12))
+            Write-Warn ("Saltando {0}" -f $shortId)
             continue
         }
     }
 
-    Write-Info ("Eliminando {0} ({1}:{2}) ..." -f $img.Id.Substring(0,12), $img.Repository, $img.Tag)
+    Write-Info ("Eliminando {0} ({1}) ..." -f $shortId, $target)
 
     try {
-        $output = docker image rm $img.Id 2>&1
+        $output = docker image rm $target 2>&1
         if ($LASTEXITCODE -eq 0) {
-            Write-Ok ("Eliminada {0}" -f $img.Id.Substring(0,12))
+            Write-Ok ("Eliminada {0}" -f $shortId)
             $deleted += $img
         } else {
-            Write-Err ("Fallo al eliminar {0}: {1}" -f $img.Id.Substring(0,12), ($output -join ' '))
+            Write-Err ("Fallo al eliminar {0}: {1}" -f $shortId, ($output -join ' '))
             $failed += $img
         }
     } catch {
-        Write-Err ("Excepción al eliminar {0}: {1}" -f $img.Id.Substring(0,12), $_.Exception.Message)
+        Write-Err ("Excepción al eliminar {0}: {1}" -f $shortId, $_.Exception.Message)
         $failed += $img
     }
 }

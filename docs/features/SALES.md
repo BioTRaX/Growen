@@ -96,6 +96,45 @@ Cache interno 30s. Extracción de `elapsed_ms` desde JSON via `json_extract` (SQ
 - Por línea: `line_discount` (% 0-100) aplicado a (qty * unit_price)
 - Global: `discount_percent` o `discount_amount` (si ambos se envían prevalece monto). Se recalculan totales usando `Decimal` y se guardan `subtotal`, `total_amount`.
 
+## Ventas para Colaboradores (Precio de Costo)
+
+Permite registrar ventas para colaboradores o empleados del negocio aplicando autoritativamente el precio de costo del producto en lugar del precio de lista minorista.
+
+### Reglas y Comportamiento
+1. **Tipo de cliente**: En el módulo de clientes (`Customer`), se admite `kind = "colaborador"`.
+2. **Determinación del precio**:
+   - Al cotizar (`POST /sales/quote`) o crear la venta (`POST /sales`), si el cliente es de tipo `colaborador` (o se envía `is_collaborator: true`), las líneas que no especifiquen precio manual toman el costo de compra autoritativo (`SupplierProduct.current_purchase_price`).
+   - El endpoint de autocompletado de catálogo (`GET /sales/catalog/search`) expone `cost_price` para que el POS frontend identifique y precargue el precio de costo en tiempo real.
+   - Si un producto no tiene precio de costo registrado en el sistema, la cotización o creación para colaboradores se rechaza con error `422 Unprocessable Entity` ("El producto [id] no tiene precio de costo registrado").
+3. **Persistencia e Impacto en Márgenes**:
+   - La línea de venta registra de inmediato `unit_cost_snapshot` y `cost_supplier_product_id`.
+   - En el reporte de márgenes (`/sales/reports/margin`), las ventas a colaboradores reflejan margen cero (cobertura de costo 100%).
+4. **Experiencia POS (Vue)**:
+   - Al seleccionar un cliente con `kind === "colaborador"`, la pantalla muestra el distintivo `Colaborador · Precio de costo`.
+   - La adición de productos o el cambio de cliente ajusta los precios unitarios al costo automáticamente.
+
+## Dashboard de Compras: Colaboradores vs Clientes (Admin)
+
+En el panel de administración (`/admin/compras-dashboard`, alias `/admin/dashboard-compras`), se expone un tablero analítico para auditar y comparar las adquisiciones del personal a costo frente a las ventas comerciales regulares a clientes.
+
+### Endpoints
+- `GET /sales/dashboard/purchases-summary`:
+  - Parámetros: `dt_from` (ISO), `dt_to` (ISO), `status` (`CONFIRMADA`, `ENTREGADA`, etc.).
+  - Devuelve:
+    - Resumen segmentado (`collaborators` vs `customers`) con monto total, órdenes, unidades físicas, ticket promedio y compradores únicos.
+    - Totales combinados y ratios de participación (`share.collaborators_amount_pct` y `share.collaborators_units_pct`).
+    - Rankings de los 10 principales compradores por segmento.
+    - Rankings de los 10 productos más adquiridos por cada segmento.
+    - Listado de las 15 ventas más recientes por segmento.
+- `GET /sales`:
+  - Nuevos filtros: `is_collaborator` (booleano) y `customer_kind` (string).
+  - Cada ítem del listado ahora expone `customer_kind` e `is_collaborator: bool`.
+
+### Módulo Vue
+- Vista: `frontend-vue/src/modules/admin/views/PurchasesDashboardView.vue`
+- Módulo en `modules.json`: `admin-purchases-dashboard` (grupo: `Administración`, roles: `["admin", "colaborador"]`).
+- Funcionalidades: Filtros rápidos ("Hoy", "7 días", "30 días", "Mes actual", "Todo"), selector de rango de fechas, tarjetas de KPIs comparativos con Vuetify 3 y pestañas de detalle.
+
 ## Canales de Venta (nuevo 2025-11-30)
 Permite clasificar ventas por origen (Instagram, WhatsApp, Local, MercadoLibre, etc.).
 

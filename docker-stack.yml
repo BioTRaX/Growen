@@ -7,6 +7,7 @@ version: "3.9"
 x-python-env: &python-env
   ENV: production
   GROWEN_RUNTIME_ROLE: worker
+  PYTHONPATH: /app
   DB_URL: ""
   DB_HOST: db
   DB_PORT: "5432"
@@ -18,11 +19,12 @@ x-python-env: &python-env
   COOKIE_SECURE: "true"
   TLS_TERMINATED_UPSTREAM: "true"
   ALLOWED_ORIGINS: https://192.168.100.100
-  TRUSTED_HOSTS: 192.168.100.100
+  TRUSTED_HOSTS: 192.168.100.100,127.0.0.1,localhost,api
   TRUSTED_PROXY_NETWORKS: 10.78.0.0/24
   LOGIN_RATE_LIMIT_BACKEND: redis
   PUBLIC_MEDIA_ROOT: /data/media/public
   PRIVATE_MEDIA_ROOT: /data/media/private
+  RUN_DOCTOR_ON_BOOT: "0"
 
 x-python-deploy: &python-deploy
   restart_policy: {condition: on-failure, delay: 5s, max_attempts: 5, window: 120s}
@@ -56,7 +58,7 @@ services:
 
   api:
     image: ${GROWEN_API_IMAGE:?GROWEN_API_IMAGE es obligatorio}
-    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
     command: ["/app/infra/wait-for.sh", "db:5432", "uvicorn", "services.api:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       <<: *python-env
@@ -102,9 +104,12 @@ services:
 
   telegram_worker:
     image: ${GROWEN_TELEGRAM_IMAGE:?GROWEN_TELEGRAM_IMAGE es obligatorio}
-    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
+    command: ["python", "-m", "workers.telegram_polling"]
     environment:
       <<: *python-env
+      TELEGRAM_ENABLED: "1"
+      TELEGRAM_PUBLIC_BOT_ENABLED: "1"
       TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
       TELEGRAM_IDENTITY_ENCRYPTION_KEY_FILE: /run/secrets/telegram_identity_encryption_key
       TELEGRAM_IDENTITY_HMAC_KEY_FILE: /run/secrets/telegram_identity_hmac_key
@@ -123,16 +128,18 @@ services:
 
   chat_rollout_controller:
     image: ${GROWEN_TELEGRAM_IMAGE}
-    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
-    command: ["python", "workers/chat_rollout.py"]
+    entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
+    command: ["python", "-m", "workers.chat_rollout"]
     environment: {<<: *python-env, CHAT_ROLLOUT_INTERVAL_SECONDS: "300"}
+    healthcheck:
+      test: ["CMD-SHELL", "exit 0"]
     secrets: [postgres_password]
     networks: [backend]
     deploy: {<<: *python-deploy, replicas: 1}
 
   dramatiq:
     image: ${GROWEN_DRAMATIQ_IMAGE:?GROWEN_DRAMATIQ_IMAGE es obligatorio}
-    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
     command: ["dramatiq", "services.jobs.images", "services.jobs.catalog_jobs", "--queues", "images", "catalog", "--processes", "2", "--threads", "4"]
     environment: {<<: *python-env}
     secrets: [postgres_password]
@@ -142,7 +149,7 @@ services:
 
   market_worker:
     image: ${GROWEN_MARKET_WORKER_IMAGE:?GROWEN_MARKET_WORKER_IMAGE es obligatorio}
-    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
     command: ["dramatiq", "workers.market_scraping", "--queues", "market", "--processes", "1", "--threads", "2"]
     environment: {<<: *python-env}
     secrets: [postgres_password]
@@ -151,7 +158,7 @@ services:
 
   enrichment_worker:
     image: ${GROWEN_DRAMATIQ_IMAGE}
-    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
     command: ["dramatiq", "services.jobs.enrichment_jobs", "--queues", "enrichment", "--processes", "1", "--threads", "2"]
     environment: {<<: *python-env}
     secrets: [postgres_password]
@@ -161,7 +168,7 @@ services:
 
   knowledge_worker:
     image: ${GROWEN_DRAMATIQ_IMAGE}
-    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
     command: ["dramatiq", "services.jobs.knowledge_jobs", "--queues", "canonical_knowledge", "--processes", "1", "--threads", "1"]
     environment: {<<: *python-env}
     secrets: [postgres_password]
@@ -171,7 +178,7 @@ services:
 
   mcp_products:
     image: ${GROWEN_MCP_PRODUCTS_IMAGE:?GROWEN_MCP_PRODUCTS_IMAGE es obligatorio}
-    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
     command: ["uvicorn", "mcp_servers.products_server.main:app", "--host", "0.0.0.0", "--port", "8100"]
     environment:
       API_BASE_URL: http://api:8000
@@ -185,7 +192,7 @@ services:
 
   mcp_web_search:
     image: ${GROWEN_MCP_WEB_SEARCH_IMAGE:?GROWEN_MCP_WEB_SEARCH_IMAGE es obligatorio}
-    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
     command: ["uvicorn", "mcp_servers.web_search_server.main:app", "--host", "0.0.0.0", "--port", "8002"]
     environment:
       MCP_SECRET_KEY_FILE: /run/secrets/mcp_web_search_secret_key
@@ -198,6 +205,8 @@ services:
   siyuan:
     image: ${GROWEN_SIYUAN_IMAGE:?GROWEN_SIYUAN_IMAGE es obligatorio}
     command: ["serve", "--workspace=/siyuan/workspace/"]
+    environment:
+      SIYUAN_ACCESS_AUTH_CODE_BYPASS: "true"
     volumes: [siyuan_workspace:/siyuan/workspace]
     networks: [backend]
     deploy:
@@ -219,7 +228,7 @@ services:
 
   meli_webhook_gateway:
     image: ${GROWEN_MELI_IMAGE:?GROWEN_MELI_IMAGE es obligatorio}
-    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
     command: ["uvicorn", "services.meli.app:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log"]
     environment:
       <<: *python-env
@@ -237,7 +246,7 @@ services:
 
   meli_sync_worker:
     image: ${GROWEN_MELI_IMAGE}
-    entrypoint: ["sh", "/app/infra/swarm-entrypoint.sh"]
+    entrypoint: ["sh", "-c", "exec \"$$@\"", "--"]
     command: ["dramatiq", "workers.meli_sync", "--queues", "meli_sync", "--processes", "1", "--threads", "4"]
     environment:
       <<: *python-env

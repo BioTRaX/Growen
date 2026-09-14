@@ -257,6 +257,18 @@
       "aliases": []
     },
     {
+      "id": "admin-purchases-dashboard",
+      "title": "Compras Colaboradores y Clientes",
+      "icon": "mdi-chart-box-outline",
+      "group": "Administración",
+      "roles": ["colaborador", "admin"],
+      "capabilities": [],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/admin/compras-dashboard", "name": "admin-purchases-dashboard", "title": "Compras Colaboradores y Clientes", "component": "admin-purchases-dashboard", "roles": ["colaborador", "admin"] }],
+      "aliases": ["/admin/dashboard-compras"]
+    },
+    {
       "id": "admin-chat-inbox",
       "title": "Chat Inbox",
       "icon": "mdi-message-text-clock-outline",

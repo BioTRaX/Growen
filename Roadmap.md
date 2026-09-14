@@ -27,30 +27,39 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 - [ ] Confirmar en el router que `.100` esté fuera del pool DHCP, aplicar
   firewall LAN, importar la CA vigente en Windows/Docker Desktop y distribuirla
   a los dispositivos autorizados.
-- [ ] Completar login, push y pull contra el registro autenticado y TLS ya
+- [x] Completar login, push y pull contra el registro autenticado y TLS ya
   saludable; publicar sólo imágenes aprobadas por Trivy y conservar SBOM y
-  manifiesto de digests por commit.
-- [ ] Ejecutar las fases `Bootstrap` y `Application` con topología `SingleNode`
-  después de aprobar independientemente migración y despliegue.
+  manifiesto de digests por commit (2026-09-13, revisión `bb48d80`).
+- [x] Ejecutar las fases `Bootstrap` y `Application` con topología `SingleNode`
+  después de aprobar independientemente migración y despliegue; los 17 servicios
+  estabilizados en estado 1/1 saludable (2026-09-13).
 - [ ] Ejecutar el smoke autenticado desde otro dispositivo de la LAN contra
   `https://192.168.100.100` después de provisionar un certificado con IP SAN.
-- [ ] Aplicar en una ventana controlada la migración `20260909_user_active` y la
-  copia verificada de media privada; conservar originales hasta validar rollback.
+- [x] Aplicar en una ventana controlada la migración `20260909_user_active` y la
+  copia verificada de media privada; conservar originales hasta validar rollback
+  (2026-09-13).
 - [ ] Ejecutar carga y failover del rate limit Redis y del proxy TLS en el Swarm
   productivo antes de declarar operativa la primera puesta en producción.
 - [ ] Completar smokes autenticados de API, WebSocket, Telegram y MCP para los roles soportados.
 - [ ] Resolver el drift histórico de Alembic en una revisión separada y verificable.
 - [ ] Consolidar la observabilidad de costes, latencia y errores de proveedores IA.
 - [ ] Medir periódicamente activaciones y consumo de tokens de skills Growen/Superpowers para ajustar descripciones sin debilitar los gates locales.
-- [ ] Extender `scripts/audit_agentic_environment.py` para reportar locks de `scripts/agent_lock.py` vencidos y olvidados en `.agents/state/locks/`.
+- [x] Desacoplar y aislar volúmenes y redes entre Docker Compose (Dev) y Docker Swarm (Prod): volumen dedicado `growen_dev_pgdata` y prefijos `growen_dev_*` para prevenir colisiones de nombres y corrupción concurrente de PostgreSQL (2026-09-13).
 - [ ] Evaluar `git worktree add` por sesión de agente como aislamiento físico real, después de la serialización actual mediante el ámbito global `git-worktree`; requiere definir rutas, puertos y autoridad del checkout central antes de implementarse.
 
 ## Frontend Vue
 
+- [x] Unificar el frontend productivo sobre Vue 3 como SPA principal (rutas raíz y `/login` integradas a `LoginView.vue`), eliminando la dependencia de fallback de React y resolviendo el error de Mixed Content (2026-09-13).
+- [x] Edición en línea de nombre canónico en el detalle del producto (`/productos/:id`) con sincronización atómica de títulos vinculados, y normalización de descargas/adjuntos mediante `apiUrl` para evitar redirección a `/login` (2026-09-13).
 - [ ] Completar la paridad funcional pendiente y los smokes visuales autenticados.
-- [ ] Retirar gradualmente el fallback React después de dos releases estables y siete días sin incidentes críticos.
+- [ ] Retirar gradualmente el código React residual después de dos releases estables y siete días sin incidentes críticos.
 - [ ] Migrar los consumidores React restantes a contratos canónicos antes de eliminar código legado.
 - [ ] Retirar los adaptadores públicos de Enrich después del ciclo estable de compatibilidad.
+
+## Ventas y Clientes
+
+- [x] Habilitar ventas para colaboradores a precio de costo: cliente tipo `colaborador`, resolución autoritativa de costo vía `SupplierProduct.current_purchase_price`, exposición en `/sales/catalog/search`, cotización autoritativa y experiencia POS Vue con distintivo visual (2026-09-11).
+- [x] Dashboard de compras de colaboradores y clientes en el panel de administración (`/admin/compras-dashboard`): agregación analítica comparativa de monto, unidades y órdenes, ratios de participación (share), rankings de compradores y productos, listado de últimas compras y filtros avanzados por colaborador en `GET /sales` (2026-09-13).
 
 ## IA, Mercado y operaciones
 

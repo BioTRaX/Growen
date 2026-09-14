@@ -393,7 +393,7 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
                 (desired_sku[:40] + "-" + ''.join(_r.choices(_s.ascii_uppercase + _s.digits, k=5)))[:50]
             )
             try:
-                var = Variant(product_id=prod.id, sku=attempt_variant_sku)
+                var = Variant(product_id=prod.id, sku=attempt_variant_sku, price=payload.sale_price)
                 session.add(var)
                 await session.flush()
                 if attempt_variant_sku != desired_sku:
@@ -3729,6 +3729,7 @@ async def list_product_variants(product_id: int, session: AsyncSession = Depends
 
 
 class ProductUpdate(BaseModel):
+    title: str | None = None
     category_id: int | None = None
     subcategory_id: int | None = None
 
@@ -3755,6 +3756,11 @@ async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncS
     old_desc = getattr(prod, "description_html", None)
     old_cat = getattr(prod, "category_id", None)
     old_subcat = getattr(prod, "subcategory_id", None)
+    if "title" in data:
+        t = (data["title"] or "").strip()
+        if not t:
+            raise HTTPException(status_code=422, detail={"code": "invalid_title", "message": "El título no puede estar vacío"})
+        prod.title = t
     if "category_id" in data:
         # Validar existencia (permitir None para desasociar)
         if data["category_id"] is not None:

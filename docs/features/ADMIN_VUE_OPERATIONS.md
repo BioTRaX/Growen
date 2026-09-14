@@ -7,13 +7,13 @@
 
 ## Contexto
 
-Drive Sync, Scheduler, Conocimiento, Imágenes, Diagnóstico de catálogos, Dashboard técnico y Chat Inbox se registran como módulos Vue independientes. Las revisiones `20260718_admin_operations_v1` y `20260718_admin_jsonb_v2` agregan y alinean la persistencia operativa; deben aplicarse antes de activar estas rutas.
+Drive Sync, Scheduler, Conocimiento, Imágenes, Diagnóstico de catálogos, Dashboard técnico, Dashboard de compras y Chat Inbox se registran como módulos Vue independientes. Las revisiones `20260718_admin_operations_v1` y `20260718_admin_jsonb_v2` agregan y alinean la persistencia operativa; deben aplicarse antes de activar estas rutas.
 
 ## Observaciones
 
 - Drive Sync, Scheduler, Conocimiento y Operación de imágenes son exclusivos de `admin`.
-- Revisión/procesamiento de imágenes y Chat Inbox admiten `admin` y `colaborador`.
-- Dashboard técnico es de solo lectura. Las acciones de procesos permanecen en Servicios.
+- Revisión/procesamiento de imágenes, Chat Inbox y Dashboard de compras (Colaboradores vs Clientes) admiten `admin` y `colaborador`.
+- Dashboard técnico y Dashboard de compras son de solo lectura operativa. Las acciones de procesos permanecen en Servicios.
 - PostgreSQL conserva configuraciones, ejecuciones, eventos, tareas, feedback y versiones de prompt. Redis transporta colas y eventos en vivo.
 - Toda mutación usa la cookie de sesión y `X-CSRF-Token`. El WebSocket de Drive valida la sesión antes de aceptar.
 

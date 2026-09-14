@@ -39,6 +39,8 @@ class SaleLineInput(BaseModel):
 
 class SaleQuoteRequest(BaseModel):
     items: list[SaleLineInput]
+    customer_id: int | None = None
+    is_collaborator: bool = False
     discount_percent: Decimal = Field(default=Decimal("0"), ge=0, le=100)
     discount_amount: Decimal = Field(default=Decimal("0"), ge=0)
     tax: Decimal = Field(default=Decimal("0"), ge=0)
