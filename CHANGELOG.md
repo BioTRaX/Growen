@@ -32,6 +32,14 @@
 - El pipeline de imágenes selecciona el digest del repositorio privado después
   del push; las imágenes multi-arquitectura reflejadas ya no conservan por error
   el digest del repositorio de origen.
+- El despliegue productivo aplicó `20260913_catalog_audit_v1` después de validar
+  un backup restaurable, incorporó `catalog_audit_worker` y estabilizó 18
+  servicios Swarm en 1/1. El smoke confirmó TLS/API, heartbeat, acceso del worker
+  a `llama3.1:8b` y ejecución al 100 % GPU; la auditoría de los 29 canónicos no
+  se inició y permanece como acción explícita desde la UI.
+- La topología `SingleNode` usa `stop-first` para los servicios limitados a una
+  réplica por nodo, evitando que un rollout quede pendiente por falta de un
+  segundo nodo.
 
 ## 2026-09-13 — estabilización productiva Docker Swarm, unificación Vue 3 y ventas a colaboradores
 
