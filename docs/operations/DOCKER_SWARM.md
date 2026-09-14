@@ -22,7 +22,7 @@ La primera producción de Growen operará en un Swarm de un nodo, accesible sól
 
 ## Errores y/u outputs bloqueantes
 
-El rollout debe abortar ante una imagen sin digest, secreto faltante, SAN incorrecto, hallazgo HIGH/CRITICAL de Trivy, tarea Alembic fallida, réplica pendiente o configuración Swarm no renderizable. Un Swarm de un nodo no debe desplegarse con `-Topology HA`.
+El rollout debe abortar ante una imagen sin digest, secreto faltante, SAN incorrecto, hallazgo HIGH/CRITICAL de Trivy, tarea Alembic fallida, réplica pendiente o configuración Swarm no renderizable. Un Swarm de un nodo no debe desplegarse con `-Topology HA`; los servicios limitados a una réplica por nodo usan `stop-first` en esta topología para evitar que una actualización quede bloqueada esperando un segundo nodo.
 
 ## Objetivo
 
