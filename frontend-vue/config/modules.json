@@ -245,6 +245,18 @@
       "aliases": []
     },
     {
+      "id": "admin-catalog-audit",
+      "title": "Auditor de catálogo",
+      "icon": "mdi-clipboard-search-outline",
+      "group": "Administración",
+      "roles": ["colaborador", "admin"],
+      "capabilities": [],
+      "state": "active",
+      "runtime": "vue",
+      "routes": [{ "path": "/admin/auditor-catalogo", "name": "admin-catalog-audit", "title": "Auditor de catálogo", "component": "admin-catalog-audit", "roles": ["colaborador", "admin"] }],
+      "aliases": []
+    },
+    {
       "id": "admin-chat-inbox",
       "title": "Chat Inbox",
       "icon": "mdi-message-text-clock-outline",

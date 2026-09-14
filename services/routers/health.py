@@ -43,6 +43,7 @@ KNOWN_OPTIONAL_SERVICES = [
     "image_processing",
     "dramatiq",
     "enrichment_worker",
+    "catalog_audit_worker",
     "knowledge_worker",
 ]
 
@@ -57,7 +58,7 @@ def _status(ok: bool, detail: str | None = None) -> Dict[str, Any]:
 def _dramatiq_health_details(client: Any, prefix: str = "dramatiq") -> Dict[str, Any]:
     """Lee las estructuras reales de RedisBroker usadas por Dramatiq 2.x."""
     queues_info: Dict[str, Dict[str, Any]] = {}
-    for queue_name in ["images", "market", "drive_sync", "catalog", "enrichment", "canonical_knowledge"]:
+    for queue_name in ["images", "market", "drive_sync", "catalog", "enrichment", "catalog_audit", "canonical_knowledge"]:
         ready_key = f"{prefix}:{queue_name}"
         delayed_key = f"{ready_key}.DQ"
         ready = int(client.llen(ready_key))
@@ -75,12 +76,14 @@ def _dramatiq_health_details(client: Any, prefix: str = "dramatiq") -> Dict[str,
     workers_count = int(client.zcount(heartbeat_key, active_after, "+inf"))
     market_worker = _market_worker_health(client)
     enrichment_worker = _enrichment_worker_health(client)
+    catalog_audit_worker = _catalog_audit_worker_health(client)
     knowledge_worker = _knowledge_worker_health(client)
     return {
         "queues": queues_info,
         "workers": {"count": workers_count},
         "market_worker": market_worker,
         "enrichment_worker": enrichment_worker,
+        "catalog_audit_worker": catalog_audit_worker,
         "knowledge_worker": knowledge_worker,
     }
 
@@ -129,6 +132,23 @@ def _enrichment_worker_health(client: Any) -> Dict[str, Any]:
             "queue": payload.get("queue"),
             "version": payload.get("version"),
         }
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        return {"ok": False, "detail": f"heartbeat inválido: {exc}"}
+
+
+def _catalog_audit_worker_health(client: Any) -> Dict[str, Any]:
+    get_value = getattr(client, "get", None)
+    raw = get_value("growen:catalog_audit_worker:heartbeat") if get_value else None
+    if not raw:
+        return {"ok": False, "detail": "heartbeat ausente"}
+    try:
+        payload = json.loads(raw)
+        timestamp = datetime.fromisoformat(payload["timestamp"])
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
+        age_seconds = max(0.0, (datetime.now(UTC) - timestamp).total_seconds())
+        ttl = int(os.getenv("CATALOG_AUDIT_HEARTBEAT_TTL_SECONDS", "60"))
+        return {"ok": payload.get("queue") == "catalog_audit" and age_seconds <= ttl * 1.5, "age_seconds": round(age_seconds, 2), "queue": payload.get("queue"), "version": payload.get("version")}
     except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         return {"ok": False, "detail": f"heartbeat inválido: {exc}"}
 
@@ -293,6 +313,8 @@ async def health_service(name: str) -> Dict[str, Any]:
         return await health_market_worker()
     if name == "enrichment_worker":
         return await health_enrichment_worker()
+    if name == "catalog_audit_worker":
+        return await health_catalog_audit_worker()
     if name == "knowledge_worker":
         return await health_knowledge_worker()
     return {"service": name, "ok": False, "detail": "servicio desconocido"}
@@ -458,6 +480,22 @@ async def health_enrichment_worker() -> Dict[str, Any]:
             "ready": ready,
             "delayed": delayed,
         }
+    except Exception as exc:
+        return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
+
+
+@router.get("/catalog-audit-worker")
+async def health_catalog_audit_worker() -> Dict[str, Any]:
+    """Verifica heartbeat dedicado y profundidad de la cola de auditoría."""
+    try:
+        import redis
+
+        client = redis.from_url(os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"))
+        broker_ok = bool(client.ping())
+        worker = _catalog_audit_worker_health(client)
+        ready = int(client.llen("dramatiq:catalog_audit"))
+        delayed = int(client.zcard("dramatiq:catalog_audit.DQ"))
+        return {"ok": broker_ok and worker["ok"], "broker_ok": broker_ok, "worker": worker, "ready": ready, "delayed": delayed}
     except Exception as exc:
         return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
 

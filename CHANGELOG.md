@@ -4,6 +4,28 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-09-13 — auditor autónomo y persistente de catálogo
+
+- Se separó la auditoría de Enrich: Enrich conserva OpenAI → Ollama y ya no
+  ejecuta una compuerta `quality_audit` antes de aplicar contenido.
+- Se incorporaron runs, ítems, feedback versionado, fingerprint por contenido y
+  cuarentena mediante la revisión `20260913_catalog_audit_v1`.
+- El worker `catalog_audit_worker` usa una cola exclusiva y concurrencia uno;
+  la autocorrección exige dos fuentes, confianza 0,95, reglas aprobadas, CAS y
+  snapshots reversibles.
+- La vista Vue `/admin/auditor-catalogo` permite iniciar, seguir, cancelar,
+  reanudar y tratar hallazgos. `Maceta 20L` queda clasificada como contenedor.
+- El 2026-09-14 se aplicó la migración al head sobre el clon de desarrollo y se
+  reconstruyeron/recrearon `catalog_audit_worker` y `enrichment_worker`; ambos
+  quedaron saludables y con
+  heartbeat. Un smoke sintético validó JSON estricto y `llama3.1:8b` al 100 %
+  en GPU, sin iniciar la auditoría de los 29 canónicos.
+- Los locks multiplataforma vuelven a separar `python-magic`/`python-magic-bin`
+  por sistema e impiden instalar `pywin32` en imágenes Linux.
+- Compose fija `growen_dev_pgdata` y redes `growen_dev_*`, evitando colisiones
+  con el volumen y las overlays homónimas reservadas por Swarm.
+- Swarm/producción no fue modificado; su alineación queda para el cierre.
+
 ## 2026-09-10 — reconstrucción segura de documentación SiYuan
 
 - El publicador Git → SiYuan descubre los Markdown versionados de la raíz y de

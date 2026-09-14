@@ -2075,7 +2075,8 @@ python-dotenv==1.2.2 \
     #   uvicorn
 python-magic==0.4.27 ; platform_system != "Windows" \
     --hash=sha256:c212960ad306f700aa0d01e5d7a325d20548ff97eb9920dcd29513174f0294d3
-    # via -r requirements-base.txtpython-magic-bin==0.4.14 ; platform_system == "Windows" \
+    # via -r requirements-base.txt
+python-magic-bin==0.4.14 ; platform_system == "Windows" \
     --hash=sha256:34a788c03adde7608028203e2dbb208f1f62225ad91518787ae26d603ae68892 \
     --hash=sha256:7b1743b3dbf16601d6eedf4e7c2c9a637901b0faaf24ad4df4d4527e7d8f66a4 \
     --hash=sha256:90be6206ad31071a36065a2fc169c5afb5e0355cbe6030e87641c6c62edc2b69
@@ -2086,7 +2087,7 @@ python-multipart==0.0.32 \
     # via
     #   -r requirements-base.txt
     #   mcp
-pywin32==312 \
+pywin32==312 ; sys_platform == "win32" \
     --hash=sha256:02ebca0f0242b75292e218065004310d6a477407c09fa449bfe4f6022bc0c0fc \
     --hash=sha256:17948aeadbdb091f0ced6ef0841620794e68327b94ee415571c1203594b7215c \
     --hash=sha256:3020656e34f1cf7faeb7bccd2b84653a607c6ff0c55ada85e6487d61716deabd \

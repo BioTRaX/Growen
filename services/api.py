@@ -63,6 +63,7 @@ from .routers import (
     drive_sync,
     external_identities,
     enrichment,
+    catalog_audits,
     canonical_knowledge,
     chat_rollout,
     meli,
@@ -353,6 +354,8 @@ app.include_router(imports.router)
 app.include_router(canonical_products.canonical_router)
 app.include_router(canonical_products.equivalences_router)
 app.include_router(enrichment.router)
+app.include_router(catalog_audits.router)
+app.include_router(catalog_audits.legacy_router)
 app.include_router(canonical_knowledge.router)
 app.include_router(canonical_knowledge.capabilities_router)
 app.include_router(products_ex.router)

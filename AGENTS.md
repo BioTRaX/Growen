@@ -346,6 +346,7 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 ### Workers / Jobs Asíncronos (Dramatiq + Redis)
 - `start_worker_images.cmd`: Lanza worker de procesamiento de imágenes (cola `images`). Ver dependencias en README o `docs/features/IMAGES.md`.
 - `start_worker_market.cmd`: Lanza worker de scraping de precios de mercado (cola `market`). Requiere Redis. Ver `docs/features/API_MARKET.md`.
+- `start_worker_catalog_audit.cmd`: Lanza el auditor autónomo de catálogo (cola `catalog_audit`) con un proceso y un thread. Requiere Redis, la migración `20260913_catalog_audit_v1` y Ollama para modo completo. Ver `docs/features/CATALOG_AUDITOR.md`.
 - `start_worker_all.cmd`: Lanza worker unificado que procesa ambas colas (`images` + `market`) con 3 threads. Uso recomendado para entornos con recursos limitados.
   - Sintaxis: `start_worker_all.cmd [images|market|all]` (default: `all`)
   - Logs: `logs/worker_all.log` (modo `all`), `logs/worker_images.log` o `logs/worker_market.log` (modo específico)

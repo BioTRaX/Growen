@@ -295,7 +295,20 @@ async def _generate_catalog_legacy(data: CatalogGenerateIn, session: AsyncSessio
         )).all()
         can_ids = {cid for _, cid in sp_rows if cid}
         if can_ids:
-            cps = (await session.execute(select(CanonicalProduct).where(CanonicalProduct.id.in_(list(can_ids))))).scalars().all()
+            quarantined_ids = set((await session.scalars(
+                select(CanonicalProduct.id).where(
+                    CanonicalProduct.id.in_(list(can_ids)),
+                    CanonicalProduct.catalog_audit_status == "quarantined",
+                )
+            )).all())
+            quarantined_product_ids = {pid for pid, cid in sp_rows if cid in quarantined_ids}
+            products = [product for product in products if product.id not in quarantined_product_ids]
+            cps = (await session.execute(
+                select(CanonicalProduct).where(
+                    CanonicalProduct.id.in_(list(can_ids)),
+                    CanonicalProduct.catalog_audit_status != "quarantined",
+                )
+            )).scalars().all()
             idx = {c.id: c for c in cps}
             for pid, cid in sp_rows:
                 if cid and pid not in can_map:

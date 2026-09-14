@@ -68,6 +68,12 @@ Arquitectura: [docs/features/CANONICAL_KNOWLEDGE.md](./docs/features/CANONICAL_K
 
 Enrich v2 investiga fuentes externas mediante MCP Web Search, genera texto/datos estructurados y registra jobs/versiones. No consulta MCP Products y nunca calcula precios. Mercado es la única autoridad de referencias monetarias. Cada intento de OpenAI/Ollama deja un diagnóstico seguro persistido (código, HTTP, request ID y límites disponibles) que la ficha Vue permite consultar sin guardar prompts ni respuestas remotas.
 
+La calidad se procesa por separado en el **Auditor autónomo** de
+`/admin/auditor-catalogo`. Deduplica por contenido/reglas/feedback, reporta
+internos huérfanos y sólo solicita un Enrich idempotente cuando falta contenido.
+Enrich no depende del auditor y mantiene prioridad OpenAI → Ollama. Ver
+[`docs/features/CATALOG_AUDITOR.md`](docs/features/CATALOG_AUDITOR.md).
+
 El despliegue local del 2026-07-25 aplicó `20260725_canonical_enrichment_v2`,
 levantó MCP Web Search, Redis, worker, API y Vue, y activó
 `ENRICH_V2_ENABLED=1`. Ese smoke histórico obtuvo cinco fuentes y no aplicó

@@ -16,7 +16,6 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -29,6 +28,7 @@ from db.models import (
 )
 from db.session import get_session
 from services.auth import SessionData, current_session, require_csrf, require_roles
+from services.enrichment.service import create_enrichment_job, dispatch_enrichment_job
 
 
 router = APIRouter(prefix="/canonical-products", tags=["enrichment"])
@@ -75,8 +75,6 @@ def canonical_snapshot(product: CanonicalProduct) -> dict:
         "technical_specs": product.technical_specs or {},
         "usage_instructions": product.usage_instructions or {},
     }
-
-
 def serialize_job(job: CanonicalEnrichmentJob) -> dict:
     result = job.result_json or {}
     return {
@@ -115,8 +113,6 @@ def serialize_job(job: CanonicalEnrichmentJob) -> dict:
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
     }
-
-
 async def resolve_canonical_id(session: AsyncSession, product_id: int) -> int | None:
     return await session.scalar(
         select(ProductEquivalence.canonical_product_id)
@@ -125,99 +121,6 @@ async def resolve_canonical_id(session: AsyncSession, product_id: int) -> int | 
         .order_by(ProductEquivalence.id.asc())
         .limit(1)
     )
-
-
-def enrichment_config_snapshot() -> dict:
-    keys = (
-        "ENRICH_AI_MODE",
-        "ENRICH_OPENAI_MODEL",
-        "ENRICH_OLLAMA_MODEL",
-        "ENRICH_WEB_REQUIRED",
-        "ENRICH_AUTO_APPLY_ENABLED",
-        "ENRICH_AUTO_APPLY_MIN_CONFIDENCE",
-        "ENRICH_TECHNICAL_MIN_CONFIDENCE",
-        "ENRICH_MIN_INDEPENDENT_SOURCES",
-        "ENRICH_MAX_SEARCH_RESULTS",
-        "ENRICH_MAX_FETCH_SOURCES",
-        "ENRICH_JOB_MAX_RETRIES",
-        "ENRICH_JOB_TIME_LIMIT_MS",
-    )
-    return {key: os.getenv(key) for key in keys}
-
-
-async def create_enrichment_job(
-    session: AsyncSession,
-    *,
-    canonical_id: int,
-    requested_product_id: int | None,
-    client_request_id: str | None,
-    scope: str,
-    requested_by_user_id: int | None,
-    batch_id: str | None = None,
-) -> tuple[CanonicalEnrichmentJob, bool]:
-    if not await session.get(CanonicalProduct, canonical_id):
-        raise HTTPException(status_code=404, detail="Producto canónico no encontrado")
-    request_key = client_request_id or uuid4().hex
-    existing = await session.scalar(
-        select(CanonicalEnrichmentJob)
-        .options(selectinload(CanonicalEnrichmentJob.sources))
-        .where(CanonicalEnrichmentJob.client_request_id == request_key)
-    )
-    if existing:
-        if existing.canonical_product_id != canonical_id or existing.scope != scope:
-            raise HTTPException(status_code=409, detail="client_request_id ya fue usado con otro alcance")
-        return existing, False
-    job = CanonicalEnrichmentJob(
-        id=uuid4().hex,
-        canonical_product_id=canonical_id,
-        requested_product_id=requested_product_id,
-        client_request_id=request_key,
-        batch_id=batch_id,
-        scope=scope,
-        requested_by_user_id=requested_by_user_id,
-        config_snapshot=enrichment_config_snapshot(),
-    )
-    session.add(job)
-    try:
-        await session.commit()
-    except IntegrityError as exc:
-        await session.rollback()
-        duplicate = await session.scalar(
-            select(CanonicalEnrichmentJob)
-            .options(selectinload(CanonicalEnrichmentJob.sources))
-            .where(CanonicalEnrichmentJob.client_request_id == request_key)
-        )
-        if duplicate:
-            return duplicate, False
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "active_job_exists", "message": "El canónico ya tiene un job activo"},
-        ) from exc
-    await session.refresh(job)
-    return job, True
-
-
-async def dispatch_enrichment_job(job: CanonicalEnrichmentJob, session: AsyncSession) -> None:
-    if os.getenv("ENRICH_V2_ENABLED", "0") != "1":
-        raise HTTPException(status_code=503, detail={"code": "enrich_v2_disabled"})
-    try:
-        from services.jobs.enrichment_jobs import process_canonical_enrichment
-
-        if os.getenv("RUN_INLINE_JOBS", "0") == "1":
-            from services.jobs.enrichment_jobs import process_canonical_enrichment_async
-
-            await process_canonical_enrichment_async(job.id)
-        else:
-            process_canonical_enrichment.send(job.id)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        job.status = "failed"
-        job.error_code = "dispatch_failed"
-        job.error_message = str(exc)[:1000]
-        job.completed_at = datetime.utcnow()
-        await session.commit()
-        raise HTTPException(status_code=503, detail="No se pudo encolar el enriquecimiento") from exc
 
 
 @router.post(
@@ -246,8 +149,6 @@ async def start_enrichment_job(
         "status": job.status,
         "status_url": f"/canonical-products/{canonical_id}/enrichment-jobs/{job.id}",
     }
-
-
 @router.get(
     "/{canonical_id}/enrichment-jobs/{job_id}",
     dependencies=[Depends(require_roles("colaborador", "admin"))],
@@ -327,8 +228,6 @@ async def apply_enrichment_job(
         "applied_fields": job.applied_fields,
         "content_revision": product.content_revision,
     }
-
-
 @router.post(
     "/{canonical_id}/enrichment-jobs/{job_id}/discard",
     dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
@@ -551,59 +450,3 @@ async def get_enrichment_summary(
             "pending": max(0, total_canonical - enriched_canonical),
         },
     }
-
-
-@router.get("/catalog-audit-report")
-async def get_catalog_audit_report(
-    limit: int = 100,
-    session: AsyncSession = Depends(get_session),
-    _user: SessionData = Depends(require_roles("admin", "colaborador")),
-) -> dict:
-    """Ejecuta una auditoría determinista sobre los productos canónicos existentes en la BD."""
-    from services.enrichment.auditor import audit_enrichment_proposal
-
-    stmt = select(CanonicalProduct).order_by(CanonicalProduct.id.desc()).limit(limit)
-    result = await session.execute(stmt)
-    products = result.scalars().all()
-
-    clean_count = 0
-    issues: list[dict] = []
-
-    for product in products:
-        proposal = {
-            "weight_kg": product.weight_kg,
-            "height_cm": product.height_cm,
-            "width_cm": product.width_cm,
-            "depth_cm": product.depth_cm,
-            "description_html": product.description_html,
-        }
-        if not any(v is not None for v in proposal.values()):
-            continue
-
-        audit = audit_enrichment_proposal(
-            product_name=product.name,
-            brand=product.brand,
-            proposal=proposal,
-        )
-
-        if audit.passed and not audit.warnings:
-            clean_count += 1
-        else:
-            issues.append({
-                "canonical_product_id": product.id,
-                "name": product.name,
-                "brand": product.brand,
-                "score": audit.score,
-                "passed": audit.passed,
-                "flags": audit.flags,
-                "warnings": audit.warnings,
-                "field_issues": audit.field_issues,
-            })
-
-    return {
-        "total_audited": clean_count + len(issues),
-        "clean_count": clean_count,
-        "issues_count": len(issues),
-        "issues": issues,
-    }
-

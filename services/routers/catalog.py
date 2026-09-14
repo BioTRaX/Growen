@@ -2350,6 +2350,7 @@ async def _stock_export_records(
         .join(p, sp.internal_product_id == p.id)
         .outerjoin(eq, eq.supplier_product_id == sp.id)
         .outerjoin(cp, cp.id == eq.canonical_product_id)
+        .where(or_(cp.id.is_(None), cp.catalog_audit_status != "quarantined"))
     )
     if supplier_id is not None:
         stmt = stmt.where(sp.supplier_id == supplier_id)
@@ -2665,6 +2666,7 @@ async def list_products(
                 "canonical_sale_price": float(cp_obj.sale_price) if (cp_obj and cp_obj.sale_price is not None) else None,
                 "canonical_sku": (cp_obj.sku_custom if (cp_obj and cp_obj.sku_custom) else (cp_obj.ng_sku if cp_obj else None)),
                 "canonical_name": stylize_product_name(cp_obj.name) if cp_obj else None,
+                "catalog_audit_status": cp_obj.catalog_audit_status if cp_obj else None,
                 "first_variant_sku": skus_by_product.get(p_obj.id),
                 # Etapa 1: Datos estructurados de enriquecimiento
                 "technical_specs": getattr(p_obj, 'technical_specs', None),

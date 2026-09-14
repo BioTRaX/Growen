@@ -65,3 +65,20 @@ test('reserva Usuarios y Backups al rol admin', async ({ page }) => {
   await page.goto('/admin/backups')
   await expect(page.getByRole('heading', { name: 'Backups' })).toBeVisible()
 })
+
+test('expone el auditor de catálogo a colaboradores con preflight visible', async ({ page }) => {
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: {
+    is_authenticated: true, role: 'colaborador', user: { id: 9, identifier: 'auditor', role: 'colaborador' },
+  } }))
+  await page.route('**/api/canonical-products/catalog-audits/preflight', (route) => route.fulfill({ json: {
+    ollama: { ok: true, model: 'llama3.1:8b' }, worker: { ok: true },
+    enrichment_worker: { ok: true }, queue: 'catalog_audit',
+  } }))
+  await page.route('**/api/canonical-products/catalog-audits', (route) => route.fulfill({ json: { items: [] } }))
+
+  await page.goto('/admin/auditor-catalogo')
+
+  await expect(page.getByRole('heading', { name: 'Auditor autónomo de catálogo' })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('Worker disponible')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Iniciar auditoría' })).toBeEnabled()
+})

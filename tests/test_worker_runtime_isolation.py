@@ -13,6 +13,7 @@ NON_TELEGRAM_WORKERS = (
     "dramatiq",
     "market_worker",
     "enrichment_worker",
+    "catalog_audit_worker",
     "knowledge_worker",
 )
 
@@ -44,6 +45,10 @@ def test_only_ai_workers_mount_the_openai_secret() -> None:
         assert environment["OPENAI_API_KEY"] == "", service_name
         assert environment["OPENAI_API_KEY_FILE"] == "", service_name
 
+    audit_environment = compose["services"]["catalog_audit_worker"]["environment"]
+    assert audit_environment["OPENAI_API_KEY"] == ""
+    assert audit_environment["OPENAI_API_KEY_FILE"] == ""
+
     for service_name in ("enrichment_worker", "knowledge_worker"):
         service = compose["services"][service_name]
         environment = service["environment"]
@@ -55,3 +60,20 @@ def test_only_ai_workers_mount_the_openai_secret() -> None:
             for volume in service["volumes"]
             if isinstance(volume, dict)
         ), service_name
+
+
+def test_compose_defaults_keep_development_data_separate_from_swarm() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+
+    assert compose["volumes"]["pgdata"]["name"] == "${COMPOSE_PGDATA_VOLUME:-growen_dev_pgdata}"
+    assert compose["volumes"]["redis_data"]["name"] == "${COMPOSE_REDIS_DATA_VOLUME:-growen_dev_redis_data}"
+    assert compose["networks"]["backend"]["name"] == "${COMPOSE_BACKEND_NETWORK:-growen_dev_backend}"
+    assert compose["networks"]["host_access"]["name"] == "${COMPOSE_HOST_ACCESS_NETWORK:-growen_dev_host_access}"
+
+
+def test_worker_lock_ignores_windows_only_packages_on_linux() -> None:
+    lock = (ROOT / "requirements-worker-lock.txt").read_text(encoding="utf-8")
+
+    assert 'pywin32==312 ; sys_platform == "win32" \\' in lock
+    assert 'python-magic-bin==0.4.14 ; platform_system == "Windows" \\' in lock
+    assert '# via -r requirements-base.txtpython-magic-bin' not in lock

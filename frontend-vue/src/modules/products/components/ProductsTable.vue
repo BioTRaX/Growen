@@ -51,6 +51,8 @@ function formatPrice(value: number | null): string {
         <div v-if="item.tags.length" class="d-flex flex-wrap ga-1 mt-1">
           <v-chip v-for="tag in item.tags" :key="tag.id" size="x-small" variant="tonal">{{ tag.name }}</v-chip>
         </div>
+        <v-chip v-if="item.catalog_audit_status === 'quarantined'" class="mt-1" color="error" prepend-icon="mdi-shield-alert" size="x-small">En cuarentena</v-chip>
+        <v-chip v-else-if="item.catalog_audit_status && item.catalog_audit_status !== 'unaudited'" class="mt-1" color="info" size="x-small" variant="tonal">Auditor: {{ item.catalog_audit_status }}</v-chip>
       </div>
     </template>
     <template #item.sku="{ item }">{{ item.canonical_sku || item.first_variant_sku || '—' }}</template>

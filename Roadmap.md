@@ -63,8 +63,15 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 - [x] Unificar descubrimiento, validación, alta y extracción de Mercado en jobs persistentes individuales y masivos, con cuarentena y archivo recuperable.
 - [x] Incorporar detección focal de precio y validación manual auditada de ARS/entrega desde el detalle Vue.
 - [ ] Medir precisión de evidencia de entrega argentina y ampliar aliases de competidores a partir de resultados reales auditados.
-- [x] Incorporar motor de auditoría y coherencia física para Enrich v2 con bloqueo de auto-apply ante inconsistencias y visualización en Vue (2026-09-10).
-- [ ] Reejecutar Enrich sobre productos antiguos y validar calidad, deduplicación y estados terminales.
+- [x] Separar el auditor autónomo de Enrich, persistir runs/ítems/feedback,
+  deduplicar por huella efectiva y exponer operación Vue (2026-09-13).
+- [x] Aplicar `20260913_catalog_audit_v1` en desarrollo, reconstruir ambos
+  workers Compose y ejecutar un smoke sintético con Ollama 100 % GPU
+  (2026-09-14).
+- [ ] Iniciar desde la UI el primer run controlado y luego la auditoría de los
+  29 canónicos; al cierre, alinear migración, imágenes y servicios con el stack
+  Swarm productivo.
+- [ ] Resolver huérfanos, cuarentenas y feedback surgidos del primer run completo.
 - [ ] Completar evaluaciones RAG por rol, canal e intención con datos clasificados.
 - [ ] Evolucionar alertas de Mercado con score de confianza, circuit breaker y recomendaciones explicables con aprobación humana.
 - [ ] Incorporar inventario MeLi User Products/multiorigen después de validar el contrato oficial por site; el worker clásico falla cerrado mientras tanto.
