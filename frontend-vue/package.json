@@ -7,10 +7,12 @@
     "generate:nginx": "node tools/generate-nginx-routes.mjs",
     "predev": "npm run generate:nginx",
     "dev": "vite --host --port 5176",
+    "pretypecheck": "npm run generate:nginx",
     "typecheck": "vue-tsc -b",
     "prebuild": "npm run generate:nginx",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview --host --port 5176",
+    "pretest": "npm run generate:nginx",
     "test": "vitest --run",
     "test:e2e": "node tools/run-e2e.mjs"
   },
