@@ -29,6 +29,9 @@
   `Migration` repetible de la actualización de la aplicación.
 - Los tests y el typecheck Vue regeneran el manifiesto runtime antes de cargarlo,
   evitando resultados dependientes de artefactos ignorados de otro worktree.
+- El pipeline de imágenes selecciona el digest del repositorio privado después
+  del push; las imágenes multi-arquitectura reflejadas ya no conservan por error
+  el digest del repositorio de origen.
 
 ## 2026-09-13 — estabilización productiva Docker Swarm, unificación Vue 3 y ventas a colaboradores
 
