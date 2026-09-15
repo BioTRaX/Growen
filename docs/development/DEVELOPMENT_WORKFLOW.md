@@ -43,6 +43,23 @@ El auditor ya no forma parte de Enrich. Para iniciar ambos dominios separados:
 pendiente y no marca auditoría completa. Ver
 [`../features/CATALOG_AUDITOR.md`](../features/CATALOG_AUDITOR.md).
 
+La ejecución canónica del auditor en Dev es local. Administración → Workers
+inicia `scripts\start_worker_catalog_audit.cmd`, asegura primero Redis y muestra
+modo, PID, raíz del checkout y detalle del heartbeat. El inicio repetido es un
+`noop`; un proceso de otro worktree o más de un root Dramatiq produce
+`degraded` y no se termina automáticamente. Compose queda reservado para una
+integración solicitada de forma explícita.
+
+El Dashboard técnico y la expansión de `catalog_audit_worker` en Workers
+consultan `GET /canonical-products/catalog-audits/summary` para mostrar mensajes
+listos/programados, runs encolados/en curso y estados de ítems. Este resumen no
+carga el modelo local y puede consultarse aunque Ollama esté detenido.
+
+No corregir advertencias de labels eliminando volúmenes globales. Dev usa
+`growen_dev_pgdata` y `growen_dev_redis_data`; `growen_pgdata` y
+`growen_redis_data` pertenecen al stack productivo Swarm y deben permanecer
+intactos.
+
 ```powershell
 scripts\start-dev.ps1 -McpMode All -WithEnrichmentWorker
 ```

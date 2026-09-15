@@ -23,11 +23,14 @@ import {
   type HealthSummary,
 } from '../../../services/adminOperations'
 import { getHttpErrorMessage } from '../../../services/http'
+import { getCatalogAuditSummary } from '../../catalog-audit/api/catalogAudit'
+import type { CatalogAuditSummary } from '../../catalog-audit/types'
 
 const health = ref<HealthSummary>()
 const chat = ref<ChatStats>()
 const chatMetrics = ref<ChatMetrics>()
 const enrichment = ref<EnrichmentSummary>()
+const catalogAudit = ref<CatalogAuditSummary>()
 const operations = ref<Array<{ name: string; status: string; detail: string; to: string }>>([])
 const loading = ref(false)
 const error = ref('')
@@ -41,17 +44,19 @@ async function refresh(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const [healthResult, chatResult, metricsResult, drive, scheduler, schedulerRuns, catalogs, knowledge, knowledgeTasks, images, enrichSummary] = await Promise.all([
+    const [healthResult, chatResult, metricsResult, drive, scheduler, schedulerRuns, catalogs, knowledge, knowledgeTasks, images, enrichSummary, auditSummary] = await Promise.all([
       getTechnicalHealth(), getChatStats(), getChatMetrics(), listDriveRuns(1), getSchedulerStatus(), listSchedulerRuns(),
-      getCatalogSummaries(), getKnowledgeStatus(), listKnowledgeTasks(), getImageJobStatus(), getEnrichmentSummary(),
+      getCatalogSummaries(), getKnowledgeStatus(), listKnowledgeTasks(), getImageJobStatus(), getEnrichmentSummary(), getCatalogAuditSummary(),
     ])
     health.value = healthResult
     chat.value = chatResult
     chatMetrics.value = metricsResult
     enrichment.value = enrichSummary
+    catalogAudit.value = auditSummary
     const imageState = String(images.status ?? images.state ?? (images.running ? 'running' : 'idle'))
     operations.value = [
       { name: 'Enrich v2', status: enrichSummary.worker.status ?? (enrichSummary.worker.ok ? 'running' : 'stopped'), detail: `${enrichSummary.worker.ready} en cola · ${enrichSummary.jobs.by_status.review_required ?? 0} pendientes de revisión · ${enrichSummary.catalog_coverage.enriched}/${enrichSummary.catalog_coverage.total_canonical} enriquecidos`, to: '/admin/servicios/workers' },
+      { name: 'Auditor de catálogo', status: auditSummary.worker.status, detail: `${auditSummary.worker.ready} listos en Redis · ${auditSummary.runs.active} runs activos · ${auditSummary.catalog_coverage.audited}/${auditSummary.catalog_coverage.total_canonical} auditados`, to: '/admin/auditor-catalogo' },
       { name: 'Drive Sync', status: drive.items[0]?.status ?? 'sin ejecuciones', detail: drive.items[0]?.created_at ?? 'Sin historial', to: '/admin/drive-sync' },
       { name: 'Scheduler', status: scheduler.working ? 'running' : scheduler.enabled ? 'enabled' : 'disabled', detail: schedulerRuns.items[0]?.status ?? scheduler.next_run_time ?? 'Sin ejecuciones', to: '/admin/scheduler' },
       { name: 'Catálogos', status: catalogs[0]?.status ?? 'sin ejecuciones', detail: catalogs[0]?.generated_at ?? 'Sin historial', to: '/admin/catalogos-diagnostico' },
@@ -73,6 +78,38 @@ onMounted(refresh)
     <v-row>
       <v-col v-for="([name, value]) in cards" :key="name" cols="12" sm="6" lg="4"><v-card class="h-100"><v-card-item :title="name"><template #prepend><v-icon :color="isHealthy(value) ? 'success' : 'warning'">{{ isHealthy(value) ? 'mdi-check-circle' : 'mdi-alert-circle' }}</v-icon></template></v-card-item><v-card-text><pre class="text-caption text-wrap">{{ JSON.stringify(value, null, 2) }}</pre></v-card-text></v-card></v-col>
       <v-col cols="12"><v-card><v-card-title>Chat</v-card-title><v-card-text class="d-flex flex-wrap ga-6"><span>Sesiones: {{ chat?.total_sessions ?? 0 }}</span><span>Mensajes: {{ chat?.total_messages ?? 0 }}</span><span>Últimos 7 días: {{ chat?.sessions_last_7_days ?? 0 }}</span><span>Promedio: {{ chat?.avg_messages_per_session ?? 0 }}</span></v-card-text><v-card-actions><v-btn to="/admin/chats" variant="text">Abrir Chat Inbox</v-btn><v-btn to="/admin/servicios" variant="text">Abrir Servicios</v-btn></v-card-actions></v-card></v-col>
+      <v-col cols="12">
+        <v-card>
+          <v-card-item title="Auditor de catálogo">
+            <template #prepend><v-icon :color="catalogAudit?.worker.ok ? 'success' : 'warning'">mdi-clipboard-search-outline</v-icon></template>
+            <template #append><v-chip :color="catalogAudit?.worker.ok ? 'success' : 'warning'" size="small">Worker: {{ catalogAudit?.worker.status ?? 'stopped' }}</v-chip></template>
+          </v-card-item>
+          <v-card-text>
+            <div class="d-flex flex-wrap ga-6 mb-4">
+              <span><strong>Cola Redis:</strong> {{ catalogAudit?.worker.ready ?? 0 }} listos en Redis</span>
+              <span><strong>Programados:</strong> {{ catalogAudit?.worker.delayed ?? 0 }}</span>
+              <span><strong>Runs:</strong> {{ catalogAudit?.runs.by_status.queued ?? 0 }} encolado</span>
+              <span>{{ (catalogAudit?.runs.by_status.running ?? 0) + (catalogAudit?.runs.by_status.waiting_enrich ?? 0) }} en curso</span>
+              <span><strong>Ítems pendientes:</strong> {{ catalogAudit?.items.by_status.pending ?? 0 }}</span>
+              <span><strong>Cobertura:</strong> {{ catalogAudit?.catalog_coverage.audited ?? 0 }} / {{ catalogAudit?.catalog_coverage.total_canonical ?? 0 }}</span>
+            </div>
+            <v-table v-if="catalogAudit?.runs.recent.length" density="compact">
+              <thead><tr><th>Run</th><th>Estado</th><th>Progreso</th><th>Incidencias</th><th>Creado</th></tr></thead>
+              <tbody>
+                <tr v-for="run in catalogAudit.runs.recent" :key="run.run_id">
+                  <td><code>{{ run.run_id }}</code></td>
+                  <td><v-chip size="x-small">{{ run.status }}</v-chip></td>
+                  <td>{{ run.processed_items }} / {{ run.total_items }}</td>
+                  <td>{{ run.issue_items }}</td>
+                  <td>{{ run.created_at ? new Date(run.created_at).toLocaleString('es-AR') : '—' }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+            <v-empty-state v-else icon="mdi-clipboard-text-clock-outline" title="Sin auditorías registradas" />
+          </v-card-text>
+          <v-card-actions><v-btn to="/admin/auditor-catalogo" variant="text">Abrir auditor</v-btn><v-btn to="/admin/servicios/workers" variant="text">Ver worker</v-btn></v-card-actions>
+        </v-card>
+      </v-col>
       <v-col cols="12">
         <v-card>
           <v-card-item title="Enriquecimiento Canónico · Enrich v2">

@@ -57,12 +57,26 @@ pone en cuarentena un error crítico persistente; no hay rollback automático.
 
 - `POST/GET /canonical-products/catalog-audits`
 - `GET /canonical-products/catalog-audits/preflight`
+- `GET /canonical-products/catalog-audits/summary`
 - `GET /canonical-products/catalog-audits/{run_id}`
 - `POST .../{run_id}/cancel|retry`
 - `POST .../{run_id}/items/{item_id}/resolve`
 
 `GET /canonical-products/catalog-audit-report` lee el último run persistido y
 nunca inicia trabajo.
+
+El endpoint `summary` es de monitoreo ligero: no ejecuta el preflight de Ollama
+ni inicia trabajo. Devuelve estado del runtime, disponibilidad de Redis,
+mensajes listos/programados, runs agrupados por estado, estados de ítems,
+cobertura y los diez runs más recientes. Lo consumen el Dashboard técnico y el
+detalle de `catalog_audit_worker` en Workers.
+El worker confirma `running` y `auditing` antes de llamar a Ollama para que el
+progreso de una evaluación larga sea observable desde otra sesión.
+
+Las rutas del auditor se registran antes de
+`/canonical-products/{canonical_id}`. Esta precedencia es parte del contrato:
+evita que `catalog-audits`, `preflight` o `summary` se validen erróneamente como
+identificadores enteros.
 
 ```powershell
 .\scripts\start-dev.ps1 -McpMode All -WithEnrichmentWorker -WithCatalogAuditWorker
@@ -73,6 +87,25 @@ Validar `/health/catalog-audit-worker`, Redis, el heartbeat de Enrich si se
 habilita contenido faltante y Ollama desde la vista. Al iniciar, el proceso
 reencola los runs persistidos que continúan activos; mensajes duplicados son
 seguros porque cada ejecución vuelve a comprobar su slot y sus ítems.
+En Windows el módulo instala `WindowsSelectorEventLoopPolicy` antes de crear
+sesiones Psycopg; sin esa política el broker puede consumir el mensaje mientras
+el run permanece `queued` por incompatibilidad del event loop.
+
+El smoke Dev del 2026-09-14 verificó login real, inicio y segundo inicio `noop`,
+health, resumen a través del proxy Vue y un run del canónico 3 con transición
+`queued → running → completed`. El resultado fue `clean`, clase `container` y
+score 100. Una repetición sin cambios terminó `skipped_unchanged` y referenció
+el primer ítem, sin volver a auditar el contenido. El run global continúa como
+acción explícita desde la UI.
+
+En desarrollo, Administración → Workers usa siempre ese launcher local para
+`catalog_audit_worker`; no ejecuta Compose. El estado combina el árbol Dramatiq
+y el heartbeat: master e hijos cuentan como una sola instancia. La respuesta
+expone modo, PID y raíz. Un consumidor de otro worktree o roots múltiples dejan
+el servicio `degraded` y bloquean inicio y detención; un proceso propio con
+heartbeat vencido también queda `degraded`, pero puede detenerse de forma
+segura. El servicio Compose permanece sólo para integración explícita y no fija
+`container_name`, por lo que proyectos y worktrees quedan aislados.
 
 El 2026-09-14 se aplicó `20260913_catalog_audit_v1` sobre el clon PostgreSQL local de
 desarrollo y se reconstruyeron/recrearon ambos workers Compose. Sus healthchecks
@@ -91,4 +124,7 @@ contenedor confirmó `llama3.1:8b` con contexto 4096 al 100 % GPU. El run de los
 29 canónicos no se inició: continúa siendo una acción explícita desde la UI.
 Compose fija el volumen `growen_dev_pgdata` y las redes `growen_dev_*`; el
 volumen externo `growen_pgdata` y las redes overlay `growen_*` son exclusivos de
-Swarm y no deben reutilizarse para esta operación local.
+Swarm y no deben reutilizarse para esta operación local. Las advertencias que
+indican que `growen_pgdata` o `growen_redis_data` conservan labels antiguos no
+autorizan a recrearlos, relabelarlos ni eliminarlos: son volúmenes productivos
+montados por Swarm.

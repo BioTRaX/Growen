@@ -4,6 +4,39 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-09-14 — control local seguro del auditor desde Workers
+
+- Administración → Workers inicia el auditor con
+  `scripts/start_worker_catalog_audit.cmd`, asegura Redis y no invoca el
+  servicio Compose opcional.
+- El estado se reconcilia en cada listado y expone modo, PID, worktree y detalle;
+  master e hijos Dramatiq se agrupan como una instancia y un origen ajeno o
+  roots múltiples quedan `degraded` sin terminación automática.
+- El estado operativo exige proceso y heartbeat vigentes. Un proceso propio con
+  heartbeat degradado puede detenerse de forma verificada; el inicio repetido no
+  crea otro consumidor.
+- Los errores visibles priorizan la última causa y `ServiceLog` conserva el
+  output completo. Compose deja de fijar un nombre global para el auditor.
+- Las rutas estáticas `/canonical-products/catalog-audits*` se registran antes
+  que la ficha canónica dinámica, evitando interpretar `catalog-audits` como un
+  identificador entero.
+- El resumen operativo del auditor expone worker, broker, profundidad de cola,
+  runs, estados de ítems y cobertura. Dashboard técnico y Workers muestran los
+  trabajos encolados y en curso con acceso directo a su vista dedicada.
+- El worker local configura `WindowsSelectorEventLoopPolicy` antes de abrir
+  sesiones asíncronas, evitando que Psycopg consuma el mensaje sin poder mover
+  el run de `queued`.
+- Los estados `running` y `auditing` se confirman antes de invocar Ollama, por
+  lo que los trabajos largos permanecen visibles en Dashboard y en el detalle
+  del run mientras el modelo procesa.
+- El smoke autenticado Dev inició el worker desde su endpoint, comprobó el
+  inicio idempotente y auditó el canónico 3 (`container`, score 100, `clean`).
+  Un segundo run idéntico terminó `skipped_unchanged` reutilizando el ítem
+  anterior; no se lanzó el run global de 29 canónicos.
+- No se modifican migraciones ni dependencias. Los volúmenes productivos
+  `growen_pgdata` y `growen_redis_data` permanecen fuera de las operaciones del
+  panel; Dev continúa usando sus volúmenes `growen_dev_*`.
+
 ## 2026-09-13 — auditor autónomo y persistente de catálogo
 
 - Se separó la auditoría de Enrich: Enrich conserva OpenAI → Ollama y ya no
