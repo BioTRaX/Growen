@@ -370,7 +370,6 @@ services:
     build:
       context: .
       dockerfile: infra/Dockerfile.dramatiq
-    container_name: growen-catalog-audit-worker
     env_file: .env
     environment:
       DB_URL: ""

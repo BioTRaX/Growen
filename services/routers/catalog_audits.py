@@ -7,13 +7,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -153,9 +154,86 @@ async def _catalog_audit_preflight() -> dict:
     return {"ollama": ollama, "worker": worker, "enrichment_worker": enrichment_worker, "queue": "catalog_audit"}
 
 
+def _catalog_audit_queue_status() -> dict:
+    broker_ok = False
+    ready = 0
+    delayed = 0
+    try:
+        import redis
+
+        client = redis.from_url(
+            os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"),
+            socket_timeout=1,
+        )
+        broker_ok = bool(client.ping())
+        ready = int(client.llen("dramatiq:catalog_audit"))
+        delayed = int(client.zcard("dramatiq:catalog_audit.DQ"))
+    except Exception:
+        pass
+    return {"broker_ok": broker_ok, "ready": ready, "delayed": delayed}
+
+
+def _catalog_audit_runtime_status() -> dict:
+    from services.orchestrator import status_service
+
+    status = status_service("catalog_audit_worker")
+    return {
+        "status": status.status,
+        "ok": status.ok,
+        "pid": status.pid,
+        "detail": status.detail,
+    }
+
+
 @router.get("/preflight", dependencies=[Depends(require_roles("colaborador", "admin"))])
 async def catalog_audit_preflight() -> dict:
     return await _catalog_audit_preflight()
+
+
+@router.get("/summary", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def catalog_audit_summary(session: AsyncSession = Depends(get_session)) -> dict:
+    """Resume runtime, cola y trabajo persistido sin ejecutar el modelo semántico."""
+    queue_status, runtime_status = await asyncio.gather(
+        asyncio.to_thread(_catalog_audit_queue_status),
+        asyncio.to_thread(_catalog_audit_runtime_status),
+    )
+    run_counts_result = await session.execute(
+        select(CatalogAuditRun.status, func.count(CatalogAuditRun.id)).group_by(CatalogAuditRun.status)
+    )
+    run_counts = {str(status_name): int(count) for status_name, count in run_counts_result.all()}
+    item_counts_result = await session.execute(
+        select(CatalogAuditItem.status, func.count(CatalogAuditItem.id)).group_by(CatalogAuditItem.status)
+    )
+    item_counts = {str(status_name): int(count) for status_name, count in item_counts_result.all()}
+    active_runs = await session.scalar(
+        select(func.count(CatalogAuditRun.id)).where(CatalogAuditRun.is_active_slot.is_(True))
+    ) or 0
+    recent_runs = (await session.scalars(
+        select(CatalogAuditRun).order_by(CatalogAuditRun.created_at.desc()).limit(10)
+    )).all()
+    total_canonical = await session.scalar(select(func.count(CanonicalProduct.id))) or 0
+    audited_canonical = await session.scalar(
+        select(func.count(CanonicalProduct.id)).where(CanonicalProduct.last_catalog_audit_item_id.is_not(None))
+    ) or 0
+    quarantined_canonical = await session.scalar(
+        select(func.count(CanonicalProduct.id)).where(CanonicalProduct.catalog_audit_status == "quarantined")
+    ) or 0
+    return {
+        "worker": {**runtime_status, **queue_status},
+        "runs": {
+            "total": sum(run_counts.values()),
+            "active": int(active_runs),
+            "by_status": run_counts,
+            "recent": [_run_dict(run) for run in recent_runs],
+        },
+        "items": {"by_status": item_counts},
+        "catalog_coverage": {
+            "total_canonical": int(total_canonical),
+            "audited": int(audited_canonical),
+            "pending": max(0, int(total_canonical) - int(audited_canonical)),
+            "quarantined": int(quarantined_canonical),
+        },
+    }
 
 
 @router.get("/{run_id}", dependencies=[Depends(require_roles("colaborador", "admin"))])

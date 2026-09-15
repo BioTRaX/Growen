@@ -29,6 +29,12 @@ def test_non_telegram_workers_disable_telegram_runtime() -> None:
         assert environment["TELEGRAM_BOT_TOKEN_FILE"] == "", service_name
 
 
+def test_catalog_audit_compose_service_has_no_global_container_name() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+
+    assert "container_name" not in compose["services"]["catalog_audit_worker"]
+
+
 def test_telegram_worker_keeps_runtime_enabled_by_external_flags() -> None:
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     environment = compose["services"]["telegram_worker"]["environment"]

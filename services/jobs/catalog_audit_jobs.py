@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -17,6 +18,9 @@ from urllib.parse import urlparse
 
 import dramatiq
 from sqlalchemy import func, select, update
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import services.jobs  # noqa: F401
 from db.models import CanonicalContentVersion, CanonicalEnrichmentJob, CanonicalProduct, CatalogAuditFeedback, CatalogAuditItem, CatalogAuditRun
@@ -136,6 +140,9 @@ async def _audit_item(run: CatalogAuditRun, item: CatalogAuditItem, session) -> 
         return await _wait_for_enrich(run, item, product, session)
     item.status = "auditing"
     item.started_at = item.started_at or datetime.utcnow()
+    # Ollama puede demorar varios minutos. Persistir el estado antes de la
+    # llamada permite que Dashboard y la vista del run muestren trabajo real.
+    await session.commit()
     taxonomy = canonical_taxonomy(product)
     classification_feedback = await session.scalar(select(CatalogAuditFeedback).where(
         CatalogAuditFeedback.active.is_(True), CatalogAuditFeedback.kind == "classification",
@@ -258,6 +265,7 @@ async def process_catalog_audit_run_async(run_id: str) -> None:
             return
         run.status = "running"
         run.started_at = run.started_at or datetime.utcnow()
+        await session.commit()
         items = (await session.scalars(
             select(CatalogAuditItem).where(CatalogAuditItem.run_id == run.id).order_by(CatalogAuditItem.id)
         )).all()
