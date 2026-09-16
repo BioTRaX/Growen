@@ -181,12 +181,28 @@ Usuarios y Backups también están activos en Vue como módulos independientes, 
 
 La retrospectiva y el handoff del corte están en `docs/retrospectives/RETROSPECTIVE_FRONTEND_ADMIN_20260718.md`. El HTTP 500 informado durante una prueba no tuvo request ni stack trace suficientes para determinar causa raíz; no debe considerarse resuelto sin una nueva reproducción instrumentada.
 
+## Unificación completa de módulos Vue 3 y retiro de React legado (2026-09-15)
+
+Se completó la migración del dominio de Proveedores (`/proveedores/:id`) implementando `SupplierDetailView.vue`, incorporando consulta y edición de datos identificatorios, contacto, notas y gestión completa de archivos adjuntos (subida, listado y descarga autenticada mediante `apiUrl()`). En `SuppliersView.vue` se agregó la acción de navegación hacia el detalle.
+
+Con esta incorporación, se promovieron a `state: "active"` y `runtime: "vue"` la totalidad de los módulos en `modules.json`:
+- `suppliers`: `/proveedores` y `/proveedores/:id`.
+- `purchases`: `/compras`, `/compras/nueva` y `/compras/:id`.
+- `chat`: `/chat` para todos los roles con soporte streaming y fallback HTTP.
+- `dashboard`: `/` y `/guest` sirviendo el panel Vuetify adaptable por rol.
+- `admin`: `/admin/*` cubriendo operaciones, auditoría, crawlers, backups y configuraciones.
+
+### Retiro de código legado (`frontend/`)
+Con la autorización explícita del usuario que dispensó la ventana de estabilidad de 7 días, se desmanteló y eliminó por completo el árbol `frontend/` (~23.400 líneas de código React 19). La infraestructura (`infra/Dockerfile.frontend`) se simplificó a un único builder Vue 3 (`vue-builder`), y todos los scripts de arranque y CI operan exclusivamente sobre `frontend-vue`.
+
+Las reglas Nginx (`frontend-vue/generated/nginx-spa-routes.conf`) se regeneraron dirigiendo el 100% de las rutas operativas a la SPA Vue 3 (`/vue/index.html`). La suite Vitest cuenta con 109 pruebas aprobadas, `vue-tsc` finaliza con 0 errores y el build de producción `vite build` genera el bundle sin advertencias críticas.
+
 ## 6. Criterios de aceptación
 
-- Cada ruta migrada conserva permisos y contratos HTTP del frontend React.
+- Cada ruta migrada conserva permisos y contratos HTTP del frontend original.
 - Todo componente Vue usa Composition API con `script setup`.
-- Los módulos migrados tienen pruebas proporcionales a su riesgo.
+- Los módulos migrados tienen pruebas proporcionales a su riesgo (109 tests Vitest).
 - `npm run build` y `npm test` finalizan correctamente.
-- Solo los módulos `active` son servidos por Vue; el resto conserva fallback React.
-- Las dependencias nuevas quedan declaradas en `package.json` y fijadas en `package-lock.json`.
+- La SPA Vue 3 atiende la totalidad de rutas; no existen dependencias de runtime heredadas ni código React huérfano.
+- Las dependencias quedan declaradas en `frontend-vue/package.json` y fijadas en `package-lock.json`.
 - Se documentan los cambios y se actualiza cualquier contenido desactualizado en `Roadmap.md`, `README.md` y `docs/`.

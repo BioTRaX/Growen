@@ -4,6 +4,19 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-09-15 — finalización de paridad, unificación modular en Vue 3 y retiro de React legado
+
+- Se implementó la vista `SupplierDetailView.vue` para `/proveedores/:id`, cubriendo consulta y edición de datos del proveedor (slug, nombre, ubicación, contacto, notas) y gestión integral de archivos adjuntos (subida con validación de extensiones, listado y descarga autenticada con `apiUrl`).
+- Se amplió `SuppliersView.vue` con enlaces y columna de acciones para abrir el detalle de cada proveedor.
+- Se extendió el servicio HTTP `frontend-vue/src/services/suppliers.ts` incorporando operaciones tipadas de detalle, actualización, archivos y eliminación.
+- Se promovieron a `state: "active"` y `runtime: "vue"` los módulos de Proveedores, Compras, Chat y Dashboard en `frontend-vue/config/modules.json`.
+- Se regeneraron las directivas Nginx (`frontend-vue/generated/nginx-spa-routes.conf`), unificando la atención del tráfico de todas las rutas de negocio bajo la SPA Vue 3 (`/vue/index.html`).
+- Se desmanteló y eliminó por completo el código React 19 huérfano (`frontend/`, ~23.400 líneas) bajo dispensa expresa de la ventana de estabilidad de 7 días autorizada por el usuario.
+- Se preservó el documento histórico de arquitectura `frontend/brainstorming_Growen.md` como `docs/architecture/FRONTEND_VUE_ARCHITECTURE.md` con NG-HEADER.
+- Se simplificó `infra/Dockerfile.frontend` a un único stage de build Vue 3 (`vue-builder`), eliminando la etapa legacy de React.
+- Se unificaron los scripts del entorno local y desarrollo (`scripts/run_frontend.cmd`, `start.sh`, `Makefile`, `.gitignore`, `README.md`, `AGENTS.md`) apuntando exclusivamente a `frontend-vue`.
+- Se añadieron pruebas unitarias y de componentes en Vitest (`SupplierDetailView.spec.ts`) alcanzando 109 pruebas aprobadas y validación completa en `vue-tsc -b` y Vite production build.
+
 ## 2026-09-13 — auditor autónomo y persistente de catálogo
 
 - Se separó la auditoría de Enrich: Enrich conserva OpenAI → Ollama y ya no

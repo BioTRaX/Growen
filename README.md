@@ -754,12 +754,12 @@ Los alcances de Workers, Imágenes, archivos físicos y aliases legacy están de
 ## Instalación Frontend
 
 ```bash
-cd frontend
+cd frontend-vue
 npm install
 npm run dev
 ```
 
-En desarrollo, Vite proxya `/ws`, `/chat` y `/actions` hacia `http://localhost:8000`, evitando errores de CORS. Durante el arranque pueden mostrarse errores de proxy WebSocket si la API aún no está disponible; una vez arriba, la conexión se restablece sola. El chat abre un WebSocket en `/ws` y, si no está disponible, utiliza `POST /chat`, que admite la variante con o sin barra final para evitar redirecciones 307. El servidor envía un ping cada 30 s y corta la sesión tras 60 s sin recibir datos; el frontend ignora esos pings, cierra limpiamente y reintenta con backoff exponencial si la conexión se pierde. Para modificar las URLs se puede crear `frontend/.env.development` con `VITE_WS_URL` y `VITE_API_BASE`.
+En desarrollo, la SPA Vue 3 se ejecuta en el puerto `5176` y proxya `/api` hacia `http://localhost:8000`. Para arrancar el entorno de desarrollo completo de forma canónica, ejecutar `powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1`. Para ajustar la URL del backend se puede configurar `VITE_API_TARGET` (por defecto `http://127.0.0.1:8000`).
 
 ### Botón de reporte de bugs
 - La UI incluye un botón flotante global (abajo a la derecha) para enviar reportes manuales de errores o problemas.

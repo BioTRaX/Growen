@@ -51,9 +51,8 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 
 - [x] Unificar el frontend productivo sobre Vue 3 como SPA principal (rutas raíz y `/login` integradas a `LoginView.vue`), eliminando la dependencia de fallback de React y resolviendo el error de Mixed Content (2026-09-13).
 - [x] Edición en línea de nombre canónico en el detalle del producto (`/productos/:id`) con sincronización atómica de títulos vinculados, y normalización de descargas/adjuntos mediante `apiUrl` para evitar redirección a `/login` (2026-09-13).
-- [ ] Completar la paridad funcional pendiente y los smokes visuales autenticados.
-- [ ] Retirar gradualmente el código React residual después de dos releases estables y siete días sin incidentes críticos.
-- [ ] Migrar los consumidores React restantes a contratos canónicos antes de eliminar código legado.
+- [x] Completar la paridad funcional de Proveedores (`/proveedores/:id` con detalle, edición y gestión de adjuntos), Compras, Chat y Dashboard, activando el runtime Vue para todos los módulos de negocio en `modules.json` y regenerando las reglas Nginx (2026-09-15).
+- [x] Retiro total y desmantelamiento del código huérfano React legado (`frontend/`, ~23.400 líneas), unificando Dockerfile multietapa a un único build Vue 3 y orientando scripts de desarrollo/despliegue exclusivamente a `frontend-vue` (2026-09-15).
 - [ ] Retirar los adaptadores públicos de Enrich después del ciclo estable de compatibilidad.
 
 ## Ventas y Clientes

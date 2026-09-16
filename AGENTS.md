@@ -239,7 +239,7 @@ Antes de realizar cualquier cambio, el agente DEBE consultar la documentación r
 | **Base de datos / Modelos** | `docs/features/MIGRATIONS_NOTES.md`, `db/models.py`, `db/migrations/versions/` |
 | **API / Endpoints** | `services/api.py`, `services/routers/*.py`, documentos específicos en `docs/API_*.md` |
 | **Workers / Jobs asíncronos** | `docs/features/IMAGES.md`, `docs/features/API_MARKET.md`, `workers/*.py`, `services/jobs/*.py` |
-| **Frontend / UI** | `frontend-vue/src/**`, `frontend/src/**` (fallback React), `docs/development/FRONTEND_DEBUG.md`, `docs/features/PRODUCTS_UI.md` |
+| **Frontend / UI** | `frontend-vue/src/**`, `docs/development/FRONTEND_DEBUG.md`, `docs/features/PRODUCTS_UI.md`, `docs/architecture/FRONTEND_VUE_ARCHITECTURE.md` |
 | **Autenticación / Seguridad** | `docs/operations/SECURITY.md`, `services/auth.py` |
 | **Docker / Infraestructura** | `docker-compose.yml`, `infra/Dockerfile.*`, sección "Convenciones Docker" en este archivo |
 | **Tests** | `pytest.ini`, `tests/**`, sección correspondiente en `docs/` |
