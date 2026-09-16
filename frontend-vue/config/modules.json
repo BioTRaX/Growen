@@ -8,8 +8,8 @@
       "group": "Inicio",
       "roles": ["cliente", "proveedor", "colaborador", "admin"],
       "capabilities": [],
-      "state": "partial",
-      "runtime": "legacy",
+      "state": "active",
+      "runtime": "vue",
       "routes": [
         { "path": "/", "name": "home", "title": "Inicio", "component": "dashboard", "roles": ["cliente", "proveedor", "colaborador", "admin"] },
         { "path": "/guest", "name": "guest", "title": "Inicio", "component": "dashboard", "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"], "navigation": false }
@@ -23,8 +23,8 @@
       "group": "Inicio",
       "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"],
       "capabilities": [],
-      "state": "ready",
-      "runtime": "legacy",
+      "state": "active",
+      "runtime": "vue",
       "routes": [{ "path": "/chat", "name": "chat", "title": "Chat 😎", "component": "chat", "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"] }],
       "aliases": []
     },
@@ -64,10 +64,11 @@
       "group": "Productos",
       "roles": ["colaborador", "admin"],
       "capabilities": [],
-      "state": "partial",
-      "runtime": "legacy",
+      "state": "active",
+      "runtime": "vue",
       "routes": [
-        { "path": "/productos/:id/imagen", "name": "product-image", "title": "Imagen de producto", "component": "pending", "roles": ["colaborador", "admin"], "navigation": false }
+        { "path": "/productos/:id/imagen", "name": "product-image", "title": "Imagen de producto", "component": "product-images-gallery", "roles": ["colaborador", "admin"], "navigation": false },
+        { "path": "/productos/:id/imagenes", "name": "product-images-gallery", "title": "Galería de imágenes", "component": "product-images-gallery", "roles": ["colaborador", "admin"], "navigation": false }
       ],
       "aliases": []
     },
@@ -105,8 +106,8 @@
       "group": "Operaciones",
       "roles": ["colaborador", "admin"],
       "capabilities": [],
-      "state": "partial",
-      "runtime": "legacy",
+      "state": "active",
+      "runtime": "vue",
       "routes": [
         { "path": "/compras", "name": "purchases", "title": "Compras", "component": "purchases", "roles": ["colaborador", "admin"] },
         { "path": "/compras/nueva", "name": "purchase-new", "title": "Nueva compra", "component": "purchase-new", "roles": ["colaborador", "admin"], "navigation": false },
@@ -121,11 +122,11 @@
       "group": "Operaciones",
       "roles": ["colaborador", "admin"],
       "capabilities": [],
-      "state": "partial",
-      "runtime": "legacy",
+      "state": "active",
+      "runtime": "vue",
       "routes": [
         { "path": "/proveedores", "name": "suppliers", "title": "Proveedores", "component": "suppliers", "roles": ["colaborador", "admin"] },
-        { "path": "/proveedores/:id", "name": "supplier-detail", "title": "Detalle de proveedor", "component": "pending", "roles": ["colaborador", "admin"], "navigation": false }
+        { "path": "/proveedores/:id", "name": "supplier-detail", "title": "Detalle de proveedor", "component": "supplier-detail", "roles": ["colaborador", "admin"], "navigation": false }
       ],
       "aliases": []
     },
@@ -327,8 +328,8 @@
       "group": "Administración",
       "roles": ["colaborador", "admin"],
       "capabilities": [],
-      "state": "pending",
-      "runtime": "legacy",
+      "state": "active",
+      "runtime": "vue",
       "routes": [{ "path": "/admin/:pathMatch(.*)*", "name": "admin", "title": "Administración", "component": "pending", "roles": ["colaborador", "admin"], "navigation": false }],
       "aliases": []
     }

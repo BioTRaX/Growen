@@ -21,7 +21,7 @@ describe('manifiesto frontend', () => {
       .every((module) => module.state === 'active')).toBe(true)
   })
 
-  it('activa catálogo y detalle en Vue sin capturar la imagen avanzada legacy', () => {
+  it('activa catálogo, detalle e imágenes de producto en Vue', () => {
     const products = frontendManifest.modules.find((module) => module.id === 'products')
     const detail = frontendManifest.modules.find((module) => module.id === 'product-detail')
     const images = frontendManifest.modules.find((module) => module.id === 'product-image-legacy')
@@ -29,7 +29,7 @@ describe('manifiesto frontend', () => {
     expect(products?.routes.map((route) => route.path)).toEqual(['/productos'])
     expect(detail).toMatchObject({ state: 'active', runtime: 'vue' })
     expect(detail?.routes.find((route) => route.name === 'product-knowledge')?.roles).toEqual(['colaborador', 'admin'])
-    expect(images).toMatchObject({ state: 'partial', runtime: 'legacy' })
+    expect(images).toMatchObject({ state: 'active', runtime: 'vue' })
   })
 
   it('activa Stock y Faltantes conjuntamente en Vue', () => {
@@ -46,15 +46,16 @@ describe('manifiesto frontend', () => {
 
   it('rechaza runtime Vue si el módulo no está active', () => {
     const invalid = structuredClone(frontendManifest) as FrontendManifest
+    invalid.modules[0].state = 'pending'
     invalid.modules[0].runtime = 'vue'
     expect(() => validateManifest(invalid)).toThrow(/requiere|sin estar active/)
   })
 
-  it('activa servicios admin sin capturar el resto del panel legacy', () => {
+  it('activa servicios admin y comodín de administración en Vue', () => {
     const services = frontendManifest.modules.find((module) => module.id === 'admin-services')
-    const legacy = frontendManifest.modules.find((module) => module.id === 'admin')
+    const admin = frontendManifest.modules.find((module) => module.id === 'admin')
     expect(services).toMatchObject({ state: 'active', runtime: 'vue', capabilities: ['services.control'] })
     expect(services?.routes.find((route) => route.name === 'admin-mcp')?.roles).toEqual(['admin'])
-    expect(legacy).toMatchObject({ runtime: 'legacy' })
+    expect(admin).toMatchObject({ state: 'active', runtime: 'vue' })
   })
 })

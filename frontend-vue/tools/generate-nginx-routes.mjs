@@ -51,10 +51,22 @@ for (const module of manifest.modules) {
   }
 }
 
+async function safeWriteFile(filePath, content, encoding = 'utf8') {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await writeFile(filePath, content, encoding)
+      return
+    } catch (err) {
+      if (attempt === 4) throw err
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)))
+    }
+  }
+}
+
 await mkdir(dirname(target), { recursive: true })
-await writeFile(target, `${lines.join('\n')}\n`, 'utf8')
-await writeFile(runtimeTarget, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
-await writeFile(metadataTarget, `${JSON.stringify({
+await safeWriteFile(target, `${lines.join('\n')}\n`, 'utf8')
+await safeWriteFile(runtimeTarget, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+await safeWriteFile(metadataTarget, `${JSON.stringify({
   sha: process.env.BUILD_SHA || 'local',
   chatRuntime,
   builtAt: process.env.BUILD_DATE || 'local',
