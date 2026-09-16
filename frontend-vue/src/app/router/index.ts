@@ -21,6 +21,7 @@ const loaders: Record<string, RouteComponent> = {
   'purchase-new': () => import('../../modules/purchases/views/PurchaseNewView.vue'),
   'purchase-detail': () => import('../../modules/purchases/views/PurchaseDetailView.vue'),
   suppliers: () => import('../../modules/suppliers/views/SuppliersView.vue'),
+  'supplier-detail': () => import('../../modules/suppliers/views/SupplierDetailView.vue'),
   customers: () => import('../../modules/customers/views/CustomersView.vue'),
   'customer-detail': () => import('../../modules/customers/views/CustomerDetailView.vue'),
   sales: () => import('../../modules/sales/views/SalesView.vue'),

@@ -45,8 +45,26 @@ onMounted(refresh)
       <v-card-text><v-text-field v-model="query" prepend-inner-icon="mdi-magnify" label="Buscar por nombre o identificador" clearable hide-details /></v-card-text>
       <v-data-table :items="filtered" :loading="loading" :headers="[
         { title: 'Nombre', key: 'name' }, { title: 'Identificador', key: 'slug' },
-        { title: 'Archivos', key: 'files_count' }, { title: 'Última carga', key: 'last_upload_at' },
-      ]" />
+        { title: 'Archivos', key: 'files_count', align: 'center' }, { title: 'Última carga', key: 'last_upload_at', align: 'center' },
+        { title: '', key: 'actions', sortable: false, align: 'end' },
+      ]">
+        <template #item.name="{ item }">
+          <router-link :to="`/proveedores/${item.id}`" class="text-decoration-none font-weight-medium text-primary">
+            {{ item.name }}
+          </router-link>
+        </template>
+        <template #item.files_count="{ value }">
+          {{ value ?? 0 }}
+        </template>
+        <template #item.last_upload_at="{ value }">
+          {{ value ? new Date(value).toLocaleDateString('es-AR') : '-' }}
+        </template>
+        <template #item.actions="{ item }">
+          <v-btn size="small" variant="text" color="primary" prepend-icon="mdi-eye" :to="`/proveedores/${item.id}`">
+            Abrir
+          </v-btn>
+        </template>
+      </v-data-table>
     </v-card>
     <SupplierCreateDialog v-model="createOpen" @created="created" />
   </v-container>
