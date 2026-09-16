@@ -5,9 +5,14 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 import pytest
 
 from db.models import CanonicalEnrichmentJob, CanonicalProduct, CatalogAuditItem, CatalogAuditRun
+from db.session import SessionLocal
 from services.catalog_audit.repository import create_run_items
 from services.jobs.catalog_audit_jobs import (
     _eligible_corrections,
@@ -15,6 +20,27 @@ from services.jobs.catalog_audit_jobs import (
     _wait_for_enrich,
     process_catalog_audit_run_async,
 )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="La regresión sólo afecta al loop de Windows")
+def test_importar_worker_configura_selector_loop_para_psycopg() -> None:
+    command = (
+        "import asyncio; "
+        "import services.jobs.catalog_audit_jobs; "
+        "loop=asyncio.get_event_loop_policy().new_event_loop(); "
+        "print(type(loop).__name__); loop.close()"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", command],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+        env={**os.environ, "CATALOG_AUDIT_HEARTBEAT_ENABLED": "0"},
+    )
+
+    assert "Selector" in result.stdout
 
 
 def test_autocorreccion_excluye_identidad_dinero_y_fuente_unica() -> None:
@@ -52,6 +78,39 @@ async def test_modo_determinista_no_marca_auditoria_completa(db_session) -> None
     assert finished.is_active_slot is False
     assert item is not None and item.status == "needs_review"
     assert item.error_code == "semantic_audit_skipped"
+
+
+@pytest.mark.asyncio
+async def test_estado_running_y_auditing_es_visible_mientras_ollama_trabaja(db_session, monkeypatch) -> None:
+    product = CanonicalProduct(name="Maceta visible", description_html="<p>Ficha suficiente.</p>")
+    run = CatalogAuditRun(
+        id="run-visible-durante-ollama", scope="selected", mode="full", status="queued",
+        is_active_slot=True, include_orphans=False, enrich_missing=False,
+    )
+    db_session.add_all([product, run])
+    await db_session.flush()
+    item = (await create_run_items(db_session, run, [product], include_orphans=False))[0]
+    run_id, item_id = run.id, item.id
+    await db_session.commit()
+    observed: dict[str, str] = {}
+
+    class InspectingSemanticClient:
+        async def audit(self, _payload) -> dict:
+            async with SessionLocal() as probe:
+                persisted_run = await probe.get(CatalogAuditRun, run_id)
+                persisted_item = await probe.get(CatalogAuditItem, item_id)
+                observed["run"] = persisted_run.status
+                observed["item"] = persisted_item.status
+            return {"classification": "container", "score": 90, "critical": False, "fields": []}
+
+    monkeypatch.setattr(
+        "services.jobs.catalog_audit_jobs.CatalogAuditOllamaClient",
+        InspectingSemanticClient,
+    )
+
+    await process_catalog_audit_run_async(run_id)
+
+    assert observed == {"run": "running", "item": "auditing"}
 
 
 @pytest.mark.asyncio

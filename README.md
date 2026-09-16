@@ -74,6 +74,15 @@ internos huérfanos y sólo solicita un Enrich idempotente cuando falta contenid
 Enrich no depende del auditor y mantiene prioridad OpenAI → Ollama. Ver
 [`docs/features/CATALOG_AUDITOR.md`](docs/features/CATALOG_AUDITOR.md).
 
+En Dev, Administración → Workers controla el auditor mediante
+`scripts\start_worker_catalog_audit.cmd`, no mediante Compose. El panel
+reconcilia proceso, heartbeat, PID y worktree en cada consulta; rechaza crear un
+segundo consumidor y no detiene procesos cuyo origen sea ambiguo o ajeno.
+El Dashboard técnico y el detalle del worker muestran la profundidad real de
+Redis, los runs encolados/en curso y los ítems pendientes. La vista obtiene ese
+estado desde `GET /canonical-products/catalog-audits/summary`, que no ejecuta
+Ollama ni inicia auditorías.
+
 El despliegue local del 2026-07-25 aplicó `20260725_canonical_enrichment_v2`,
 levantó MCP Web Search, Redis, worker, API y Vue, y activó
 `ENRICH_V2_ENABLED=1`. Ese smoke histórico obtuvo cinco fuentes y no aplicó
@@ -423,6 +432,9 @@ scripts\start_worker_market.cmd
 
 # Worker de sincronización Drive (cola drive_sync)
 scripts\start_worker_drive_sync.cmd
+
+# Worker auditor de catálogo (cola catalog_audit, 1 proceso / 1 thread)
+scripts\start_worker_catalog_audit.cmd
 ```
 
 **Opción 2 - Worker unificado** (recomendado para desarrollo):
@@ -453,9 +465,17 @@ set RUN_INLINE_JOBS=1
 - `logs/worker_images.log`: worker de imágenes
 - `logs/worker_market.log`: worker de mercado
 - `logs/worker_drive_sync.log`: worker de sincronización Drive
+- `logs/worker_catalog_audit.log`: worker auditor de catálogo iniciado desde Administración
 - `logs/worker_all.log`: worker unificado
 
 El servicio Compose `dramatiq` liviano consume `drive_sync` y `catalog`. Mercado usa `market_worker`, una imagen dedicada Python 3.14.6 no-root con Playwright/Chromium, cola exclusiva, heartbeat y health propio. En desarrollo se inicia con `scripts\start-dev.ps1 -WithMarketWorker`; `scripts\start_worker_market.cmd` queda como alternativa local. El scraper prioriza ofertas JSON-LD del producto antes de heurísticas visuales. Administración reconcilia su estado con Compose aunque haya sido iniciado desde Docker Desktop; `DOCKER_PROBE_TIMEOUT_S` controla la espera de detección y usa 8 segundos por defecto. La ruta `/mercado` ya se sirve desde Vue y React permanece como fallback temporal durante un ciclo.
+
+El auditor usa un launcher local dedicado desde Administración. El servicio
+Compose `catalog_audit_worker` queda disponible sólo para integración explícita
+y no comparte un `container_name` global entre proyectos. Dev conserva
+`growen_dev_pgdata`/`growen_dev_redis_data`; nunca eliminar
+`growen_pgdata`/`growen_redis_data` para silenciar advertencias de labels porque
+esos volúmenes pertenecen a producción Swarm.
 
 #### Monitoreo
 

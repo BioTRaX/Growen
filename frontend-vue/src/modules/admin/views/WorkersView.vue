@@ -14,6 +14,8 @@ import {
   startAdminService, stopAdminService, type AdminService, type ServiceLog,
 } from '../../../services/adminServices'
 import { getHttpErrorMessage } from '../../../services/http'
+import { getCatalogAuditSummary } from '../../catalog-audit/api/catalogAudit'
+import type { CatalogAuditSummary } from '../../catalog-audit/types'
 
 const labels: Record<string, string> = {
   pdf_import: 'Importador PDF (OCR)', playwright: 'Playwright / Chromium', image_processing: 'Procesamiento de imágenes',
@@ -24,6 +26,7 @@ const labels: Record<string, string> = {
 const auth = useAuthStore()
 const toasts = useToastStore()
 const rows = ref<AdminService[]>([])
+const auditSummary = ref<CatalogAuditSummary>()
 const logs = ref<Record<string, ServiceLog[]>>({})
 const health = ref<Record<string, { ok: boolean; hints?: string[] }>>({})
 const busy = ref('')
@@ -40,7 +43,14 @@ function uptime(seconds?: number | null) { if (!seconds) return '—'; const h =
 
 async function refresh() {
   loading.value = true; error.value = ''
-  try { rows.value = (await listAdminServices()).sort((a, b) => a.name.localeCompare(b.name)) }
+  try {
+    const [services, audit] = await Promise.all([
+      listAdminServices(),
+      getCatalogAuditSummary().catch(() => undefined),
+    ])
+    rows.value = services.sort((a, b) => a.name.localeCompare(b.name))
+    auditSummary.value = audit
+  }
   catch (exception) { error.value = getHttpErrorMessage(exception, 'No se pudieron cargar los workers') }
   finally { loading.value = false }
 }
@@ -83,12 +93,27 @@ onBeforeUnmount(() => { streams.forEach((stream) => stream.close()); streams.cle
     <v-alert v-if="error" type="error" closable class="mb-4" @click:close="error=''">{{ error }}</v-alert>
     <v-expansion-panels variant="accordion">
       <v-expansion-panel v-for="row in rows" :key="row.name" @group:selected="(event) => { if (event.value) loadDetails(row) }">
-        <v-expansion-panel-title><div class="d-flex align-center ga-3 flex-grow-1"><v-icon icon="mdi-circle" size="small" :color="statusColor(row.status)" /><strong>{{ labels[row.name] ?? row.name }}</strong><v-chip size="x-small" :color="statusColor(row.status)">{{ row.status }}</v-chip><span class="text-caption text-medium-emphasis">uptime {{ uptime(row.uptime_s) }}</span></div></v-expansion-panel-title>
+        <v-expansion-panel-title><div class="d-flex align-center flex-wrap ga-3 flex-grow-1"><v-icon icon="mdi-circle" size="small" :color="statusColor(row.status)" /><strong>{{ labels[row.name] ?? row.name }}</strong><v-chip size="x-small" :color="statusColor(row.status)">{{ row.status }}</v-chip><v-chip v-if="row.runtime_mode && row.runtime_mode !== 'none'" size="x-small" variant="tonal">{{ row.runtime_mode }}</v-chip><v-chip v-if="row.pid" size="x-small" variant="tonal">PID {{ row.pid }}</v-chip><span class="text-caption text-medium-emphasis">uptime {{ uptime(row.uptime_s) }}</span></div></v-expansion-panel-title>
         <v-expansion-panel-text>
           <v-alert v-if="row.last_error" type="warning" variant="tonal" class="mb-4">{{ row.last_error }}</v-alert>
+          <div v-if="row.runtime_root || row.detail" class="text-body-2 text-medium-emphasis mb-4">
+            <div v-if="row.runtime_root"><strong>Origen:</strong> <code>{{ row.runtime_root }}</code></div>
+            <div v-if="row.detail"><strong>Runtime:</strong> {{ row.detail }}</div>
+          </div>
+          <v-card v-if="row.name === 'catalog_audit_worker' && auditSummary" class="mb-4" variant="tonal">
+            <v-card-text class="d-flex flex-wrap ga-4">
+              <span><strong>Cola:</strong> {{ auditSummary.worker.ready }} listos en Redis</span>
+              <span><strong>Programados:</strong> {{ auditSummary.worker.delayed }}</span>
+              <span><strong>Runs:</strong> {{ auditSummary.runs.by_status.queued ?? 0 }} run encolado</span>
+              <span>{{ (auditSummary.runs.by_status.running ?? 0) + (auditSummary.runs.by_status.waiting_enrich ?? 0) }} run en curso</span>
+              <span><strong>Ítems:</strong> {{ auditSummary.items.by_status.pending ?? 0 }} ítems pendientes</span>
+              <span>{{ auditSummary.items.by_status.auditing ?? 0 }} auditando</span>
+            </v-card-text>
+            <v-card-actions><v-btn to="/admin/auditor-catalogo" variant="text">Abrir auditor</v-btn></v-card-actions>
+          </v-card>
           <div class="d-flex align-center flex-wrap ga-2 mb-4">
             <v-select v-if="row.name==='drive_sync_worker' && row.status!=='running'" v-model="driveMode" :items="['docker','local']" label="Modo" density="compact" hide-details max-width="160" />
-            <v-btn v-if="row.status!=='running'" color="primary" :loading="busy===row.name" @click="start(row)">Iniciar</v-btn><v-btn v-else color="error" :loading="busy===row.name" @click="stop(row)">Detener</v-btn>
+            <v-btn v-if="row.status==='stopped' || row.status==='failed'" color="primary" :loading="busy===row.name" @click="start(row)">Iniciar</v-btn><v-btn v-else-if="row.status==='running' || (row.status==='degraded' && row.can_stop)" color="error" :loading="busy===row.name" @click="stop(row)">Detener</v-btn>
             <v-switch :model-value="row.auto_start" label="Inicio automático" hide-details density="compact" @update:model-value="(value) => autoStart(row,value)" />
             <v-btn variant="tonal" @click="checkDeps(row)">Validar dependencias</v-btn><v-btn v-if="canInstall" variant="tonal" color="warning" :loading="busy===row.name" @click="installDeps(row)">Instalar dependencias</v-btn>
             <v-btn variant="text" @click="loadDetails(row)">Actualizar detalle</v-btn><v-btn variant="text" @click="toggleStream(row)">{{ streams.has(row.name) ? 'Detener stream' : 'Logs en vivo' }}</v-btn>

@@ -12,6 +12,7 @@ from sqlalchemy import select
 from db.models import CanonicalProduct, CatalogAuditItem, CatalogAuditRun, User
 from services.api import app
 from services.auth import hash_pw
+from services.routers import catalog_audits as catalog_audits_router
 
 
 @pytest.mark.asyncio
@@ -65,6 +66,64 @@ async def _healthy_preflight() -> dict:
         "ollama": {"ok": True, "model": "llama3.1:8b"},
         "worker": {"ok": True}, "enrichment_worker": {"ok": True}, "queue": "catalog_audit",
     }
+
+
+@pytest.mark.asyncio
+async def test_listado_del_auditor_no_es_capturado_como_id_canonico(client_admin, db_session) -> None:
+    db_session.add(CatalogAuditRun(
+        id="run-listado-visible", scope="selected", mode="deterministic_only",
+        include_orphans=False, enrich_missing=False, auto_fix=False,
+        status="completed", is_active_slot=False,
+    ))
+    await db_session.commit()
+
+    response = await client_admin.get("/canonical-products/catalog-audits")
+
+    assert response.status_code == 200
+    assert [item["run_id"] for item in response.json()["items"]] == ["run-listado-visible"]
+
+
+@pytest.mark.asyncio
+async def test_resumen_operativo_expone_cola_runs_e_items(client_admin, db_session, monkeypatch) -> None:
+    product = CanonicalProduct(name="Producto pendiente de auditoría")
+    run = CatalogAuditRun(
+        id="run-encolado-visible", scope="selected", mode="deterministic_only",
+        include_orphans=False, enrich_missing=False, auto_fix=False,
+        status="queued", is_active_slot=True,
+    )
+    db_session.add_all([product, run])
+    await db_session.flush()
+    db_session.add(CatalogAuditItem(
+        run_id=run.id, canonical_product_id=product.id,
+        target_key=f"canonical:{product.id}", input_hash="d" * 64,
+        rules_version="catalog-audit-r1", feedback_version="0", status="pending",
+    ))
+    await db_session.commit()
+    monkeypatch.setattr(
+        catalog_audits_router,
+        "_catalog_audit_queue_status",
+        lambda: {"broker_ok": True, "ready": 2, "delayed": 1},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        catalog_audits_router,
+        "_catalog_audit_runtime_status",
+        lambda: {"status": "running", "ok": True, "pid": 4321, "detail": "heartbeat vigente"},
+        raising=False,
+    )
+
+    response = await client_admin.get("/canonical-products/catalog-audits/summary")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["worker"] == {
+        "status": "running", "ok": True, "pid": 4321, "detail": "heartbeat vigente",
+        "broker_ok": True, "ready": 2, "delayed": 1,
+    }
+    assert body["runs"]["active"] == 1
+    assert body["runs"]["by_status"] == {"queued": 1}
+    assert body["items"]["by_status"] == {"pending": 1}
+    assert body["runs"]["recent"][0]["run_id"] == "run-encolado-visible"
 
 
 @pytest.mark.no_auth_override

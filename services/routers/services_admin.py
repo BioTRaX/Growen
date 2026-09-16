@@ -74,6 +74,41 @@ def _cid() -> str:
     return uuid.uuid4().hex
 
 
+def _summarize_service_error(detail: Optional[str]) -> Optional[str]:
+    """Prioriza la causa operativa sin perder el detalle completo en ServiceLog."""
+    lines = [line.strip() for line in (detail or "").splitlines() if line.strip()]
+    if not lines:
+        return None
+    causal = next(
+        (
+            line
+            for line in reversed(lines)
+            if "error response from daemon:" in line.lower() or line.lower().startswith("error")
+        ),
+        lines[-1],
+    )
+    return causal[:500]
+
+
+def _service_runtime_payload(row: Service) -> Dict[str, Any]:
+    meta = row.meta if isinstance(row.meta, dict) else {}
+    return {
+        "runtime_mode": meta.get("runtime_mode"),
+        "pid": meta.get("pid"),
+        "runtime_root": meta.get("runtime_root"),
+        "detail": meta.get("runtime_detail"),
+        "can_stop": bool(meta.get("managed")),
+    }
+
+
+def _merge_runtime_meta(row: Service, *, detail: Optional[str], pid: Optional[int], meta: Optional[Dict[str, Any]]) -> None:
+    current = dict(row.meta) if isinstance(row.meta, dict) else {}
+    current.update(meta or {})
+    current["pid"] = pid
+    current["runtime_detail"] = detail
+    row.meta = current
+
+
 async def _ensure_row(db: AsyncSession, name: str) -> Service:
     row = await db.scalar(select(Service).where(Service.name == name))
     if row:
@@ -129,20 +164,23 @@ async def list_services(db: AsyncSession = Depends(get_session)) -> Dict[str, An
     await db.commit()
     rows = (await db.execute(select(Service))).scalars().all()
 
-    # Mercado se ejecuta en un contenedor dedicado y puede haber sido iniciado
-    # fuera del panel (launcher o Docker Desktop). Reconciliar su estado real
-    # evita mostrar indefinidamente un fallo persistido de una operación vieja.
-    market_row = next((row for row in rows if row.name == "market_worker"), None)
-    if market_row is not None:
-        live = await asyncio.to_thread(_status, "market_worker")
-        if market_row.status != live.status:
-            market_row.status = live.status
-            if live.status == "running":
-                market_row.started_at = market_row.started_at or datetime.utcnow()
-                market_row.last_error = None
-            elif live.status in {"stopped", "failed"}:
-                market_row.started_at = None
-            await db.commit()
+    # Estos runtimes pueden iniciarse fuera del panel. Reconciliarlos en cada
+    # listado evita contradecir el proceso real o un worktree competidor.
+    for runtime_name in ("market_worker", "catalog_audit_worker"):
+        runtime_row = next((row for row in rows if row.name == runtime_name), None)
+        if runtime_row is None:
+            continue
+        live = await asyncio.to_thread(_status, runtime_name)
+        runtime_row.status = live.status
+        _merge_runtime_meta(runtime_row, detail=live.detail, pid=live.pid, meta=live.meta)
+        if live.status == "running":
+            runtime_row.started_at = runtime_row.started_at or datetime.utcnow()
+            runtime_row.last_error = None
+        elif live.status in {"stopped", "failed"}:
+            runtime_row.started_at = None
+        elif live.status == "degraded":
+            runtime_row.last_error = _summarize_service_error(live.detail)
+    await db.commit()
 
     items = [
         {
@@ -155,6 +193,7 @@ async def list_services(db: AsyncSession = Depends(get_session)) -> Dict[str, An
             "uptime_s": (int((datetime.utcnow() - r.started_at).total_seconds()) if (r.status == "running" and r.started_at) else (r.uptime_s or 0)),
             "start_ms": (r.meta or {}).get("last_start_ms") if isinstance(r.meta, dict) else None,
             "last_error": r.last_error,
+            **_service_runtime_payload(r),
         }
         for r in rows
     ]
@@ -184,16 +223,19 @@ async def status(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str
     row = await _ensure_row(db, name)
     st = await asyncio.to_thread(_status, name)
     row.status = st.status
-    # If stopped, store final uptime and clear started_at
-    if st.status != "running":
+    _merge_runtime_meta(row, detail=st.detail, pid=st.pid, meta=st.meta)
+    # Sólo los estados terminales cierran el uptime. Un runtime degradado o en
+    # arranque sigue teniendo un proceso observable.
+    if st.status in {"stopped", "failed"}:
         if row.started_at:
             try:
                 row.uptime_s = int((datetime.utcnow() - row.started_at).total_seconds())
             except Exception:
                 pass
         row.started_at = None
+    row.last_error = _summarize_service_error(st.detail) if st.status in {"degraded", "failed"} else None
     await db.commit()
-    return {"name": name, "status": st.status, "detail": st.detail}
+    return {"name": name, "status": st.status, "detail": st.detail, **_service_runtime_payload(row)}
 
 
 @router.get("/pdf_import/metrics", dependencies=[Depends(require_roles("admin", "colaborador"))])
@@ -434,8 +476,9 @@ async def start(name: str, mode: Optional[str] = Query(None, description="Modo d
         st = await asyncio.to_thread(_start, name, correlation_id=cid, mode=mode)
         dur = int((time.perf_counter() - t0) * 1000)
         row.status = st.status
+        _merge_runtime_meta(row, detail=st.detail, pid=st.pid, meta=st.meta)
         if st.ok:
-            row.started_at = datetime.utcnow()
+            row.started_at = row.started_at or datetime.utcnow()
             row.uptime_s = 0
             # persist last start duration in meta
             meta = (row.meta or {}) if isinstance(row.meta, dict) else {}
@@ -443,10 +486,10 @@ async def start(name: str, mode: Optional[str] = Query(None, description="Modo d
             row.meta = meta
             row.last_error = None
         else:
-            row.last_error = (st.detail or "")[:500]
-        db.add(ServiceLog(service=name, correlation_id=cid, action="start", host=socket.gethostname(), pid=None, duration_ms=dur, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
+            row.last_error = _summarize_service_error(st.detail)
+        db.add(ServiceLog(service=name, correlation_id=cid, action="start", host=socket.gethostname(), pid=st.pid, duration_ms=dur, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
         await db.commit()
-        return {"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid, "detail": st.detail}
+        return {"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid, "detail": st.detail, **_service_runtime_payload(row)}
     except Exception as e:
         await _record_operation_failure(
             db,
@@ -469,18 +512,21 @@ async def stop(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, 
     try:
         st = await asyncio.to_thread(_stop, name, correlation_id=cid)
         dur = int((time.perf_counter() - t0) * 1000)
-        # update persisted uptime and clear started_at
+        # Cerrar uptime sólo cuando la detención fue efectiva o terminal.
         row = await _ensure_row(db, name)
-        if row.started_at:
+        if st.status in {"stopped", "failed"} and row.started_at:
             try:
                 row.uptime_s = int((datetime.utcnow() - row.started_at).total_seconds())
             except Exception:
                 pass
-        row.started_at = None
+        if st.status in {"stopped", "failed"}:
+            row.started_at = None
         row.status = st.status
-        db.add(ServiceLog(service=name, correlation_id=cid, action="stop", host=socket.gethostname(), pid=None, duration_ms=dur, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
+        _merge_runtime_meta(row, detail=st.detail, pid=st.pid, meta=st.meta)
+        row.last_error = None if st.ok else _summarize_service_error(st.detail)
+        db.add(ServiceLog(service=name, correlation_id=cid, action="stop", host=socket.gethostname(), pid=st.pid, duration_ms=dur, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
         await db.commit()
-        return {"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid, "detail": st.detail}
+        return {"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid, "detail": st.detail, **_service_runtime_payload(row)}
     except Exception as e:
         await _record_operation_failure(
             db,

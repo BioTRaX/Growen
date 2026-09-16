@@ -15,6 +15,11 @@ export interface AdminService {
   started_at?: string | null
   uptime_s?: number | null
   last_error?: string | null
+  runtime_mode?: 'local' | 'docker' | 'none' | null
+  pid?: number | null
+  runtime_root?: string | null
+  detail?: string | null
+  can_stop?: boolean
 }
 
 export interface ServiceLog {

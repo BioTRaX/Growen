@@ -6,6 +6,7 @@ import { http } from '../../../services/http'
 import type {
   CatalogAuditCreated, CatalogAuditOptions, CatalogAuditPreflight, CatalogAuditResolution,
   CatalogAuditResolutionResult, CatalogAuditRun,
+  CatalogAuditSummary,
 } from '../types'
 
 export async function createCatalogAudit(options: CatalogAuditOptions): Promise<CatalogAuditCreated> {
@@ -20,6 +21,9 @@ export async function getCatalogAudit(runId: string, signal?: AbortSignal): Prom
 }
 export async function getCatalogAuditPreflight(signal?: AbortSignal): Promise<CatalogAuditPreflight> {
   return (await http.get<CatalogAuditPreflight>('/canonical-products/catalog-audits/preflight', { signal })).data
+}
+export async function getCatalogAuditSummary(signal?: AbortSignal): Promise<CatalogAuditSummary> {
+  return (await http.get<CatalogAuditSummary>('/canonical-products/catalog-audits/summary', { signal })).data
 }
 export async function cancelCatalogAudit(runId: string): Promise<void> {
   await http.post(`/canonical-products/catalog-audits/${runId}/cancel`)

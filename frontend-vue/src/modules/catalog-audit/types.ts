@@ -72,3 +72,27 @@ export interface CatalogAuditPreflight {
   enrichment_worker: { ok: boolean; code?: string | null }
   queue: string
 }
+export interface CatalogAuditSummary {
+  worker: {
+    status: string
+    ok: boolean
+    pid?: number | null
+    detail?: string | null
+    broker_ok: boolean
+    ready: number
+    delayed: number
+  }
+  runs: {
+    total: number
+    active: number
+    by_status: Record<string, number>
+    recent: CatalogAuditRun[]
+  }
+  items: { by_status: Record<string, number> }
+  catalog_coverage: {
+    total_canonical: number
+    audited: number
+    pending: number
+    quarantined: number
+  }
+}

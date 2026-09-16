@@ -76,12 +76,20 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 - [x] Aplicar `20260913_catalog_audit_v1` en desarrollo, reconstruir ambos
   workers Compose y ejecutar un smoke sintético con Ollama 100 % GPU
   (2026-09-14).
-- [ ] Iniciar desde la UI el primer run controlado y luego la auditoría de los
-  29 canónicos.
+- [x] Ejecutar el primer run controlado del canónico 3 y verificar desde los
+  contratos de la UI `queued → running → completed`, clasificación `container`
+  y score 100; la repetición terminó `skipped_unchanged` (2026-09-14).
+- [ ] Iniciar desde la UI la auditoría de los 29 canónicos.
 - [x] Aplicar en producción la migración, imágenes y servicios Swarm preparados
   para el auditor; backup restaurado en PostgreSQL aislado, head
   `20260913_catalog_audit_v1`, 18 servicios en 1/1 y smoke operativo con Ollama
   al 100 % GPU (2026-09-14).
+- [x] Separar el control local de `catalog_audit_worker` del controlador Compose:
+  reconciliar proceso, heartbeat, PID y worktree desde Workers, impedir roots
+  competidores y aislar el nombre del contenedor opcional (2026-09-14).
+- [x] Corregir la prioridad de rutas del auditor y exponer en Dashboard/Workers
+  la cola Redis, los runs encolados o activos y el progreso persistido
+  (2026-09-14).
 - [ ] Resolver huérfanos, cuarentenas y feedback surgidos del primer run completo.
 - [ ] Completar evaluaciones RAG por rol, canal e intención con datos clasificados.
 - [ ] Evolucionar alertas de Mercado con score de confianza, circuit breaker y recomendaciones explicables con aprobación humana.
