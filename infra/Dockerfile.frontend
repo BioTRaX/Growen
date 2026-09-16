@@ -1,14 +1,7 @@
 # NG-HEADER: Nombre de archivo: Dockerfile.frontend
 # NG-HEADER: Ubicación: infra/Dockerfile.frontend
-# NG-HEADER: Descripción: Build dual React/Vue y runtime Nginx para migración progresiva por dominio.
+# NG-HEADER: Descripción: Build de producción Vue 3 y runtime Nginx unificado.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-
-FROM node:22-alpine AS react-builder
-WORKDIR /app
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
-COPY frontend/ ./
-RUN npm run build
 
 FROM node:22-alpine AS vue-builder
 WORKDIR /app
@@ -23,7 +16,6 @@ RUN npm run generate:nginx && npm run build
 
 FROM nginx:stable-alpine AS runtime
 RUN rm -rf /usr/share/nginx/html/*
-COPY --from=react-builder /app/dist/ /usr/share/nginx/html/legacy/
 COPY --from=vue-builder /app/dist/index.html /usr/share/nginx/html/index.html
 COPY --from=vue-builder /app/dist/index.html /usr/share/nginx/html/vue/index.html
 COPY --from=vue-builder /app/dist/assets/ /usr/share/nginx/html/vue-assets/assets/

@@ -1,11 +1,11 @@
 @echo off
 setlocal
 set "ROOT=%~dp0.."
-cd /d "%ROOT%\frontend"
+cd /d "%ROOT%\frontend-vue"
 
 if not exist "package.json" (
-  echo [ERROR] No existe frontend\package.json
-  echo Verifique que la carpeta frontend este correcta.
+  echo [ERROR] No existe frontend-vue\package.json
+  echo Verifique que la carpeta frontend-vue este correcta.
   dir /b
   pause
   exit /b 1

@@ -40,7 +40,7 @@ if ! .venv/bin/python -m alembic upgrade head; then
 fi
 ( uvicorn services.api:app --host 0.0.0.0 --port 8000 --reload --log-level debug --access-log ) &
 
-cd frontend
+cd frontend-vue
 if [[ ! -d node_modules ]]; then
   echo "[INFO] Instalando dependencias frontend..."
   npm install
