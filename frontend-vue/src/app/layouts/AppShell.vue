@@ -39,7 +39,7 @@ async function logout(): Promise<void> {
       <v-icon color="success" icon="mdi-sprout" size="32" />
       <div>
         <div class="text-h6">Growen</div>
-        <div class="text-caption text-medium-emphasis">Vue 3 · migración activa</div>
+        <div class="text-caption text-medium-emphasis">v0.1.0 · Sistema operativo</div>
       </div>
     </div>
 

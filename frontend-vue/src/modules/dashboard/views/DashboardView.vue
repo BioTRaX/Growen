@@ -17,10 +17,10 @@ const modules = computed(() => navigationItemsFor(auth.role).filter((item) => it
     <v-row>
       <v-col cols="12">
         <v-card class="hero pa-6" color="surface">
-          <v-chip color="success" prepend-icon="mdi-check-circle-outline" variant="tonal">Base Vue operativa</v-chip>
+          <v-chip color="success" prepend-icon="mdi-check-circle-outline" variant="tonal">Sistema activo</v-chip>
           <h1 class="text-h3 mt-4">Hola{{ auth.user?.name ? `, ${auth.user.name}` : '' }}</h1>
           <p class="text-body-1 text-medium-emphasis mt-2 mb-0">
-            El shell, la sesión y las reglas por rol ya funcionan sobre Vue 3 y Vuetify.
+            Panel principal de gestión y operaciones de Growen.
           </p>
         </v-card>
       </v-col>
@@ -29,10 +29,10 @@ const modules = computed(() => navigationItemsFor(auth.role).filter((item) => it
         <v-card :to="item.to" class="h-100 pa-2" hover>
           <v-card-item :prepend-icon="item.icon" :title="item.title">
             <template #append>
-              <v-chip :color="item.migrationState === 'active' ? 'success' : 'warning'" size="small" variant="tonal">{{ item.migrationState === 'active' ? 'Operativo' : 'Por migrar' }}</v-chip>
+              <v-chip :color="item.migrationState === 'active' ? 'success' : 'warning'" size="small" variant="tonal">{{ item.migrationState === 'active' ? 'Operativo' : 'En desarrollo' }}</v-chip>
             </template>
           </v-card-item>
-          <v-card-text>{{ item.migrationState === 'active' ? 'Módulo funcional disponible en Vue.' : 'La ruta y sus permisos ya están registrados; la vista de negocio continuará en React hasta completar su corte.' }}</v-card-text>
+          <v-card-text>{{ item.migrationState === 'active' ? 'Módulo operativo disponible.' : 'Módulo en desarrollo.' }}</v-card-text>
         </v-card>
       </v-col>
     </v-row>

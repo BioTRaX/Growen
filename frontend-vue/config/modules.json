@@ -330,7 +330,7 @@
       "capabilities": [],
       "state": "active",
       "runtime": "vue",
-      "routes": [{ "path": "/admin/:pathMatch(.*)*", "name": "admin", "title": "Administración", "component": "pending", "roles": ["colaborador", "admin"], "navigation": false }],
+      "routes": [{ "path": "/admin/:pathMatch(.*)*", "name": "admin", "title": "Página no encontrada", "component": "not-found", "roles": ["colaborador", "admin"], "navigation": false }],
       "aliases": []
     }
   ]

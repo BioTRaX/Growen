@@ -165,7 +165,7 @@ onMounted(load)
       </header>
 
       <v-alert v-if="product.canonical_status === 'canonical_required'" type="warning" variant="tonal" class="mb-5">
-        Esta ficha muestra los datos internos básicos. Para generar contenido hay que crear o asignar un producto canónico desde la administración de equivalencias.
+        Esta ficha muestra los datos internos básicos. Para generar contenido canónico o enriquecimiento, creá o vinculá el producto canónico desde el catálogo de Productos.
         <template #append>
           <v-btn v-if="canViewOperational" to="/productos" variant="text">Crear o asignar canónico</v-btn>
         </template>

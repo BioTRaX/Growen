@@ -43,13 +43,14 @@ const loaders: Record<string, RouteComponent> = {
   'admin-chat-inbox': () => import('../../modules/admin/views/ChatInboxView.vue'),
   'product-images': () => import('../../modules/images/views/ProductImagesView.vue'),
   'product-images-gallery': () => import('../../modules/images/views/ProductImagesGalleryView.vue'),
-  pending: () => import('../../views/MigrationPendingView.vue'),
+  'not-found': () => import('../../views/NotFoundView.vue'),
+  pending: () => import('../../views/NotFoundView.vue'),
 }
 
 const moduleRoutes: RouteRecordRaw[] = frontendManifest.modules.flatMap((module) => module.routes.map((route) => ({
   path: route.path.slice(1),
   name: route.name,
-  component: loaders[route.component] ?? loaders.pending,
+  component: loaders[route.component] ?? loaders['not-found'],
   meta: {
     title: route.title,
     roles: route.roles,
@@ -79,6 +80,12 @@ export const router = createRouter({
       name: 'forbidden',
       component: () => import('../../views/ForbiddenView.vue'),
       meta: { title: 'Acceso denegado', public: true },
+    },
+    {
+      path: '/404',
+      name: 'not-found',
+      component: () => import('../../views/NotFoundView.vue'),
+      meta: { title: 'Página no encontrada', public: true },
     },
     {
       path: '/productos/:id/imagenes',
