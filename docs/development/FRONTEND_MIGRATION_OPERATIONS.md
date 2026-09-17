@@ -1,26 +1,26 @@
 <!-- NG-HEADER: Nombre de archivo: FRONTEND_MIGRATION_OPERATIONS.md -->
 <!-- NG-HEADER: Ubicación: docs/development/FRONTEND_MIGRATION_OPERATIONS.md -->
-<!-- NG-HEADER: Descripción: Operación, activación y rollback de la convivencia React/Vue bajo Nginx. -->
+<!-- NG-HEADER: Descripción: Operación y gobernanza del frontend unificado en Vue 3 y Vuetify 3 bajo Nginx. -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 
-# Operación de la migración React/Vue
+# Operación del frontend unificado Vue 3
 
 ## 1. Contexto
 
-El contenedor `frontend` compila ambas SPAs y Nginx decide el runtime por ruta. React conserva `/assets/`; Vue publica bundles bajo `/vue-assets/`. FastAPI queda detrás de `/api/` y los medios detrás de `/media/`, todos bajo el mismo origen.
+La migración a Vue 3 y Vuetify 3 se encuentra formalmente concluida. El código de React 19 legado (`frontend/`, ~23.400 líneas) fue desmantelado y retirado en su totalidad el 15 de septiembre de 2026.
+El contenedor `frontend` compila de forma exclusiva la SPA de Vue 3 (`frontend-vue`) mediante un builder único (`infra/Dockerfile.frontend`). Nginx atiende el 100% de las rutas operativas y administrativas bajo `/vue/index.html` y publica los bundles bajo `/vue-assets/`. FastAPI queda detrás de `/api/` y los archivos multimedia detrás de `/media/`, todos unificados bajo el mismo origen.
 `/health` se proxifica al healthcheck de FastAPI y también alimenta el `HEALTHCHECK` del contenedor frontend.
 
 ## 2. Observaciones
 
-La fuente de verdad es `frontend-vue/config/modules.json`. De ella se generan Vue Router, el sidebar y `frontend-vue/generated/nginx-spa-routes.conf`. Un módulo declara identidad, grupo, rutas, aliases, roles, capacidades, estado y runtime.
+La fuente de verdad continúa siendo `frontend-vue/config/modules.json`. De ella se generan Vue Router, el sidebar y `frontend-vue/generated/nginx-spa-routes.conf`. Un módulo declara identidad, grupo, rutas, aliases, roles, capacidades, estado y runtime.
 
 Reglas invariantes:
 
-- `runtime: "vue"` solo es válido con `state: "active"`.
-- Una ruta pública mantiene el mismo path al cambiar de runtime.
-- Navegar desde Vue hacia una ruta legacy fuerza carga completa; Nginx selecciona React.
+- Todos los módulos de negocio y administración operan en `state: "active"` y `runtime: "vue"`.
 - Los aliases `/admin/imagenes` y `/admin/imagenes-productos` redirigen a `/imagenes-productos`.
-- Las guardas frontend mejoran UX; FastAPI continúa siendo la autoridad.
+- Las rutas no mapeadas bajo `/admin/*` y páginas inexistentes son canalizadas a `NotFoundView.vue` (404) dentro del shell.
+- Las guardas frontend mejoran UX; FastAPI continúa siendo la autoridad final de permisos.
 
 Variables públicas Vue:
 
@@ -63,7 +63,7 @@ npm audit --audit-level=high
 ```
 
 El E2E inicia una instancia aislada de Vite en el puerto 5186. Playwright Chromium debe instalarse una vez con `npm exec playwright install chromium`.
-Mientras React sea el fallback, el quality gate también compila y audita `frontend/`; ambas auditorías deben quedar sin vulnerabilidades altas.
+El quality gate y las auditorías de dependencias operan exclusivamente sobre `frontend-vue`.
 
 Antes de un smoke manual, verificar que no se esté reutilizando un proceso anterior a la configuración que se prueba:
 
@@ -75,23 +75,23 @@ Invoke-WebRequest http://127.0.0.1:5176/api/health -UseBasicParsing
 
 La última respuesta debe ser JSON de FastAPI. Para reiniciar el entorno completo usar `scripts/stop-dev.ps1` y luego `scripts/start-dev.ps1`; no finalizar procesos ajenos sin identificar primero el PID propietario del puerto.
 
-### Activar un dominio
+### Incorporación de nuevas rutas o módulos
 
-1. Confirmar paridad por rol, capacidad y acción, pruebas aprobadas y smoke productivo.
-2. Cambiar el módulo a `state: "active"` y `runtime: "vue"` en el manifiesto.
-3. Ejecutar el generador y el quality gate.
-4. Reconstruir y desplegar la imagen `frontend`.
-5. Validar `/health`, `/auth/me`, una lectura, una mutación CSRF, refresh directo y navegación Vue/React.
+1. Declarar el nuevo módulo en `frontend-vue/config/modules.json` con `state: "active"` y `runtime: "vue"`.
+2. Asignar el componente en `frontend-vue/src/app/router/index.ts` bajo la carpeta modular respectiva (`src/modules/<dominio>/views/`).
+3. Ejecutar `npm run generate:nginx` para actualizar las directivas de Nginx.
+4. Validar tipos con `npm run typecheck`, suite unitaria con `npm test` y build con `npm run build`.
+5. Reconstruir y desplegar la imagen `frontend`.
 
-### Rollback
+### Rollback y contingencias
 
-1. Cambiar el runtime del módulo a `legacy` y su estado a `ready` o `partial`.
-2. Regenerar reglas, reconstruir y desplegar frontend.
-3. Repetir smoke de sesión y dominio. No se revierten base de datos ni backend.
+Al haberse retirado la imagen dual y el código fuente de React, cualquier rollback de emergencia sobre la capa de presentación opera a nivel de infraestructura y versionado:
+1. Desplegar el tag previo de la imagen Docker de `frontend` o revertir el commit respectivo en Git.
+2. No se requieren cambios en base de datos ni migraciones reversivas a menos que el cambio involucre esquema.
 
-### Retiro de React
+### Retiro consumado de React (2026-09-15)
 
-React se elimina solo después de dos releases exitosos y siete días sin incidentes críticos atribuibles a Vue. El cambio final debe retirar el builder React, el fallback Nginx y la dependencia productiva de `frontend/dist` en una entrega separada.
+El 15 de septiembre de 2026 se ejecutó el retiro definitivo de React 19 tras completarse la paridad de Proveedores y con la dispensa expresa de la ventana de estabilidad de 7 días autorizada por el usuario. Se eliminó la carpeta `frontend/`, se unificó el Dockerfile a un builder único y se sanearon las rutas de fallback.
 
 ## 6. Criterios de aceptación
 

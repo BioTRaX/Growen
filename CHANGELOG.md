@@ -4,6 +4,16 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-09-17 — saneamiento de UI, router y formalización del cierre de migración
+
+- Se creó la vista `NotFoundView.vue` para atender errores 404 de navegación y subrutas administrativas no mapeadas, reutilizando el patrón visual de `v-empty-state` y eliminando referencias anacrónicas al frontend legado de React.
+- Se actualizó `MigrationPendingView.vue` para delegar en `NotFoundView.vue`.
+- Se mapeó el comodín de administración `/admin/:pathMatch(.*)*` en `config/modules.json` hacia el componente `not-found` con título "Página no encontrada".
+- Se saneó `AppShell.vue`, actualizando el subtítulo del brand de "Vue 3 · migración activa" a "v0.1.0 · Sistema operativo".
+- Se sanearon los textos del hero y tarjetas modulares en `DashboardView.vue`, eliminando referencias a la convivencia con React.
+- Se ajustó el aviso en `ProductDetailView.vue` para guiar al usuario directamente hacia el catálogo de productos para vincular o crear canónicos.
+- Se actualizó `docs/development/FRONTEND_MIGRATION_OPERATIONS.md` y `Roadmap.md` archivando procedimientos de convivencia dual y consolidando la operación del frontend unificado en Vue 3.
+
 ## 2026-09-15 — finalización de paridad, unificación modular en Vue 3 y retiro de React legado
 
 - Se implementó la vista `SupplierDetailView.vue` para `/proveedores/:id`, cubriendo consulta y edición de datos del proveedor (slug, nombre, ubicación, contacto, notas) y gestión integral de archivos adjuntos (subida con validación de extensiones, listado y descarga autenticada con `apiUrl`).
