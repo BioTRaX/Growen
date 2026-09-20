@@ -34,6 +34,11 @@ Al editar una fuente Mercado, staff configura tipo de lectura, obligatoriedad, e
 
 El SKU canónico muestra un lápiz para `colaborador|admin`. La edición requiere confirmar con el botón de check o Enter; Escape/cancelar descarta el borrador y perder foco nunca guarda. El backend normaliza a mayúsculas, exige `XXX_0000_YYY` y valida unicidad antes del commit. Un SKU existente devuelve `409 duplicate_sku`, mantiene abierto el editor y no aplica ningún cambio.
 
+### Edición manual de descripción (2026-09-20)
+La tarjeta de descripción en `/productos/:id` incluye un botón de edición con lápiz para roles `admin` y `colaborador`. Abre un modal con pestañas de Editor y Vista previa en tiempo real. Soporta texto plano (se formatea a `<p>...</p>` automáticamente) o HTML estándar (`<p>`, `<ul>`, `<strong>`). Al guardar:
+- Si el producto tiene canónico vinculado, actualiza `canonical_products.description_html`, incrementa `content_revision`, crea un snapshot en `canonical_content_versions` con origen `manual_edit` y sincroniza los productos vinculados.
+- Si el producto no tiene canónico aún, actualiza directamente `products.description_html`.
+
 Sin canónico se muestra una ficha básica y la acción para asignarlo; Enrich queda bloqueado. El stock es sólo lectura y enlaza a `/stock`. Staff ve actividad, fuentes, selección de campos y una card que consume exclusivamente `/market`. La ruta `/productos/:id/imagen` y equivalencias avanzadas continúan en React.
 
 Los jobs pueden quedar `review_required` o `partially_applied`; la aplicación exige `expected_content_revision` y devuelve `409` ante cambios concurrentes. El backend entrega HTML escapado/permitido: el modelo sólo devuelve texto y datos estructurados.

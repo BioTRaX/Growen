@@ -56,7 +56,7 @@ la documentación privada se mantienen exclusivamente en SiYuan.
 
 ## Base de Conocimiento Canónica (2026-07-26)
 
-La revisión `20260726_canonical_knowledge_v1` reemplaza las fuentes propias de Enrich y la tabla `market_sources` por activos reutilizables del producto canónico. El Centro **Conocimiento** se abre desde el detalle de Producto y desde Mercado; gestiona fuentes, documentos, imágenes, videos, hechos, historial e IA sin contaminar `Product.tags` ni MCP Products. La ficha Vue permite además editar el SKU canónico con confirmación explícita, formato estricto y rechazo de duplicados sin sobrescritura.
+La revisión `20260726_canonical_knowledge_v1` reemplaza las fuentes propias de Enrich y la tabla `market_sources` por activos reutilizables del producto canónico. El Centro **Conocimiento** se abre desde el detalle de Producto y desde Mercado; gestiona fuentes, documentos, imágenes, videos, hechos, historial e IA sin contaminar `Product.tags` ni MCP Products. La ficha Vue permite además editar el nombre, el SKU canónico y la descripción con formateo automático a párrafos HTML y vista previa en tiempo real.
 
 Enrich consulta primero conocimiento persistido y sólo usa MCP Web Search cuando falta cobertura. Mercado es la única autoridad de precios y consume activos confirmados con etiqueta `market`, capacidad `price` y perfil técnico válido.
 
