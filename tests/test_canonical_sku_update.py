@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from db.models import CanonicalProduct, Product
+from sqlalchemy import select
+from db.models import CanonicalProduct, CanonicalContentVersion, Product
 
 
 @pytest.mark.asyncio
@@ -123,4 +124,77 @@ async def test_product_title_update_via_patch_products(client_collab, db_session
 
     await db_session.refresh(prod)
     assert prod.title == "Nuevo Título de Producto"
+
+
+@pytest.mark.asyncio
+async def test_canonical_description_update_creates_version_and_syncs_product(client_collab, db_session):
+    target = CanonicalProduct(
+        name="Producto Con Desc",
+        ng_sku="NG-940001",
+        sku_custom="TEST_0002_SKU",
+        description_html="<p>Vieja descripción</p>",
+        content_revision=1,
+    )
+    db_session.add(target)
+    await db_session.flush()
+
+    prod = Product(
+        title="Producto Con Desc",
+        sku_root="TEST-ROOT-DESC",
+        canonical_sku="TEST_0002_SKU",
+        description_html="<p>Vieja descripción</p>",
+    )
+    db_session.add(prod)
+    await db_session.commit()
+
+    resp = await client_collab.patch(
+        f"/canonical-products/{target.id}",
+        json={"description_html": "<p>Nueva descripción manual</p>"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["description_html"] == "<p>Nueva descripción manual</p>"
+    assert data["content_revision"] == 2
+
+    await db_session.refresh(target)
+    assert target.description_html == "<p>Nueva descripción manual</p>"
+    assert target.content_revision == 2
+
+    await db_session.refresh(prod)
+    assert prod.description_html == "<p>Nueva descripción manual</p>"
+
+    # Verificar que se creó la versión de contenido
+    version = await db_session.scalar(
+        select(CanonicalContentVersion)
+        .where(
+            CanonicalContentVersion.canonical_product_id == target.id,
+            CanonicalContentVersion.origin == "manual_edit",
+        )
+    )
+    assert version is not None
+    assert version.revision == 2
+    assert version.snapshot_json.get("description_html") == "<p>Nueva descripción manual</p>"
+
+
+@pytest.mark.asyncio
+async def test_product_description_update_via_patch_products(client_collab, db_session):
+    prod = Product(
+        title="Producto Sin Canónico",
+        sku_root="TEST-ROOT-DIRECT",
+        description_html="<p>Descripción anterior</p>",
+    )
+    db_session.add(prod)
+    await db_session.commit()
+
+    resp = await client_collab.patch(
+        f"/products/{prod.id}",
+        json={"description_html": "  <p>Descripción directa actualizada</p>  "},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "ok"
+    assert resp.json()["description_html"] == "<p>Descripción directa actualizada</p>"
+
+    await db_session.refresh(prod)
+    assert prod.description_html == "<p>Descripción directa actualizada</p>"
+
 
