@@ -42,6 +42,7 @@ let pollTimer: ReturnType<typeof setTimeout> | undefined
 let controller: AbortController | undefined
 
 const active = computed(() => current.value && ['queued', 'running', 'waiting_enrich'].includes(current.value.status))
+const hasRetryableItems = computed(() => current.value?.items?.some((item) => ['failed', 'cancelled'].includes(item.status)) ?? false)
 const progress = computed(() => current.value?.total_items ? Math.round(current.value.processed_items * 100 / current.value.total_items) : 0)
 const canStart = computed(() => Boolean(preflight.value?.worker.ok)
   && (!options.value.enrich_missing || Boolean(preflight.value?.enrichment_worker.ok))
@@ -180,16 +181,21 @@ onBeforeUnmount(stopPolling)
     <v-card v-if="current" class="mb-6">
       <v-card-item :title="`Ejecución ${current.run_id.slice(0, 8)}`" :subtitle="`${current.status} · ${current.processed_items}/${current.total_items}`"><template #append><v-chip>{{ current.mode }}</v-chip></template></v-card-item>
       <v-card-text><v-progress-linear class="mb-4" color="primary" height="12" :model-value="progress" rounded /><div class="d-flex flex-wrap ga-5"><span>Limpios/reutilizados: {{ current.clean_items }}</span><span>Con tratamiento: {{ current.issue_items }}</span><span>Progreso: {{ progress }}%</span></div></v-card-text>
-      <v-card-actions><v-btn v-if="active" color="error" variant="tonal" @click="cancel">Cancelar</v-btn><v-btn v-else-if="['failed','cancelled'].includes(current.status)" variant="tonal" @click="retry">Reanudar fallidos</v-btn></v-card-actions>
+      <v-card-actions><v-btn v-if="active" color="error" variant="tonal" @click="cancel">Cancelar</v-btn><v-btn v-else-if="['failed','cancelled'].includes(current.status) || hasRetryableItems" variant="tonal" @click="retry">Reanudar fallidos</v-btn></v-card-actions>
       <v-divider />
       <v-table density="compact"><thead><tr><th>Producto</th><th>Estado</th><th>Clase</th><th>Score</th><th>Tratamiento</th></tr></thead><tbody>
         <tr v-for="item in current.items ?? []" :key="item.item_id">
-          <td><v-btn v-if="item.product_id" :to="`/productos/${item.product_id}`" size="small" variant="text">Interno #{{ item.product_id }}</v-btn><span v-else>Canónico #{{ item.canonical_product_id }}</span></td>
+          <td><div class="d-flex flex-column align-start py-1">
+            <v-btn v-if="item.product_detail_id" class="px-0" :to="`/productos/${item.product_detail_id}`" size="small" variant="text">{{ item.canonical_name ?? 'Producto sin nombre' }}</v-btn>
+            <span v-else>{{ item.canonical_name ?? 'Producto sin nombre' }}</span>
+            <span v-if="item.canonical_product_id" class="text-caption text-medium-emphasis">Canónico #{{ item.canonical_product_id }}</span>
+            <span v-if="!item.product_detail_id" class="text-caption text-medium-emphasis">Sin ficha interna vinculada</span>
+          </div></td>
           <td><v-chip :color="statusColors[item.status] ?? 'grey'" size="small">{{ item.status }}</v-chip></td><td>{{ item.product_class ?? '—' }}</td><td>{{ item.score ?? '—' }}</td>
           <td class="py-2"><div class="d-flex flex-wrap ga-1">
             <v-btn v-if="item.status === 'canonical_required'" to="/productos" size="x-small" variant="tonal">Canonizar</v-btn>
             <v-btn v-if="['failed','needs_review'].includes(item.status)" size="x-small" variant="tonal" @click="openResolution(item, 'reaudit')">Reauditar</v-btn>
-            <v-btn v-if="item.product_id && ['needs_review','quarantined'].includes(item.status)" :to="`/productos/${item.product_id}`" size="x-small" variant="tonal">Editar ficha</v-btn>
+            <v-btn v-if="item.product_detail_id && ['needs_review','quarantined'].includes(item.status)" :to="`/productos/${item.product_detail_id}`" size="x-small" variant="tonal">Editar ficha</v-btn>
             <v-btn v-if="auth.role === 'admin' && item.status === 'needs_review'" size="x-small" variant="tonal" @click="openResolution(item, 'accept_exception')">Aceptar excepción</v-btn>
             <v-btn v-if="auth.role === 'admin' && item.status === 'needs_review'" size="x-small" variant="tonal" @click="openResolution(item, 'classification')">Corregir clase</v-btn>
             <v-btn v-if="auth.role === 'admin' && item.status === 'needs_review'" size="x-small" variant="tonal" @click="openResolution(item, 'apply_correction')">Aplicar corrección</v-btn>

@@ -66,7 +66,7 @@ Las propuestas deben diferenciar entre ampliar una skill existente, crear una nu
 
 ## Aprendizajes operativos incorporados
 
-La retrospectiva de [Chat, Telegram, RAG y Vue del 2026-08-17](./RETROSPECTIVE_CHAT_RAG_VUE_20260817.md)
+La retrospectiva de [Chat, Telegram, RAG y Vue del 2026-08-17](../retrospectives/RETROSPECTIVE_CHAT_RAG_VUE_20260817.md)
 dejó tres controles reutilizables para futuras entregas:
 
 - aislar en tests tanto el secreto directo como su variante `*_FILE`, para que el
@@ -79,7 +79,7 @@ dejó tres controles reutilizables para futuras entregas:
 Estos controles amplían el contexto operativo; no sustituyen las skills
 `git-commit-push`, `git-secret-forensics` ni sus gates de autorización.
 
-La retrospectiva de [Enrich v2 y Conocimiento Vue del 2026-08-20](./RETROSPECTIVE_ENRICH_KNOWLEDGE_VUE_20260820.md)
+La retrospectiva de [Enrich v2 y Conocimiento Vue del 2026-08-20](../retrospectives/RETROSPECTIVE_ENRICH_KNOWLEDGE_VUE_20260820.md)
 incorporó un control adicional a `vue-module-migration`:
 
 - elegir página, diálogo o drawer antes de implementar una superficie compuesta;
@@ -91,7 +91,7 @@ incorporó un control adicional a `vue-module-migration`:
 El checklist canónico vive junto a la skill en
 `.agents/skills/vue-module-migration/references/visual-validation-checklist.md`.
 
-La retrospectiva de [SiYuan MCP del 2026-08-28](./RETROSPECTIVE_SIYUAN_MCP_20260828.md)
+La retrospectiva de [SiYuan MCP del 2026-08-28](../retrospectives/RETROSPECTIVE_SIYUAN_MCP_20260828.md)
 incorporó un contrato especializado a `create-service` para mutaciones
 documentales y Attribute Views:
 
@@ -104,7 +104,7 @@ documentales y Attribute Views:
 La referencia canónica vive en
 `.agents/skills/create-service/references/siyuan-mcp-mutations.md`.
 
-La retrospectiva del [widget Crono de SiYuan del 2026-08-29](./RETROSPECTIVE_SIYUAN_WIDGET_CRONO_20260829.md)
+La retrospectiva del [widget Crono de SiYuan del 2026-08-29](../retrospectives/RETROSPECTIVE_SIYUAN_WIDGET_CRONO_20260829.md)
 evaluó crear una skill especializada, pero el escenario de control sin esa skill
 ya produjo el procedimiento correcto. Para evitar duplicación, el aprendizaje
 mecánico se materializó en `scripts/sync-siyuan-widget.ps1`:

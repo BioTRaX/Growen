@@ -95,16 +95,19 @@ class CatalogAuditOllamaClient:
         }
         try:
             async with httpx.AsyncClient(transport=self.transport, timeout=180) as client:
-                response = await client.post(f"{self.base_url}/api/generate", json=payload)
-                response.raise_for_status()
-                envelope = response.json()
-                raw = envelope.get("response")
+                for attempt in range(2):
+                    response = await client.post(f"{self.base_url}/api/generate", json=payload)
+                    response.raise_for_status()
+                    envelope = response.json()
+                    raw = envelope.get("response")
+                    try:
+                        result = json.loads(raw)
+                        break
+                    except (TypeError, json.JSONDecodeError) as exc:
+                        if attempt == 1:
+                            raise SemanticAuditError("invalid_json") from exc
         except httpx.HTTPError as exc:
             raise SemanticAuditError("daemon_unavailable") from exc
-        try:
-            result = json.loads(raw)
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise SemanticAuditError("invalid_json") from exc
         if not self._valid(result):
             raise SemanticAuditError("schema_invalid")
         result["_runtime"] = {

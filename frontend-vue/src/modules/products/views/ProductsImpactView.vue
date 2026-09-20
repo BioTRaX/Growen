@@ -19,6 +19,7 @@ import MassCanonicalDraftRecoveryDialog from '../components/MassCanonicalDraftRe
 import MassCanonicalWizard from '../components/MassCanonicalWizard.vue'
 import TagManagementDialog from '../components/TagManagementDialog.vue'
 import CatalogHistoryDialog from '../components/CatalogHistoryDialog.vue'
+import CatalogAuditReviewDialog from '../components/CatalogAuditReviewDialog.vue'
 import ProductsFilters from '../components/ProductsFilters.vue'
 import ProductsTable from '../components/ProductsTable.vue'
 import { useProductList } from '../composables/useProductList'
@@ -42,6 +43,7 @@ const recoveryOpen = ref(false)
 const omittedCanonicalCount = ref(0)
 const bulkTagsOpen = ref(false)
 const catalogHistoryOpen = ref(false)
+const auditReviewProduct = ref<ProductListItem | null>(null)
 const operationLoading = ref('')
 const { items, total, loading, error, filters, totalPages, setFilters, retry } = useProductList()
 const massDraft = useMassCanonicalDraft(auth.user?.id ?? 0)
@@ -140,6 +142,12 @@ function priceSaved(price: number): void {
     ? { ...item, canonical_sale_price: price }
     : { ...item, precio_venta: price })
   notify('Precio de venta actualizado')
+}
+
+function auditReviewResolved(): void {
+  auditReviewProduct.value = null
+  retry()
+  notify('Revisión aceptada y trazabilidad registrada')
 }
 
 function requestBulkDelete(): void {
@@ -281,10 +289,12 @@ onMounted(() => {
       </div>
       <ProductsTable
         :can-edit="auth.isStaff"
+        :can-resolve-audit="auth.role === 'admin'"
         :items="items"
         :loading="loading"
         :selected="selected"
         @delete="deleteProducts = [$event]"
+        @accept-audit="auditReviewProduct = $event"
         @edit-price="priceProduct = $event"
         @edit-stock="stockProduct = $event"
         @update:selected="selected = $event"
@@ -341,6 +351,12 @@ onMounted(() => {
       @saved="retry(); notify('Tags asignados a la selección')"
     />
     <CatalogHistoryDialog v-model="catalogHistoryOpen" />
+    <CatalogAuditReviewDialog
+      :model-value="Boolean(auditReviewProduct)"
+      :product="auditReviewProduct"
+      @resolved="auditReviewResolved"
+      @update:model-value="!$event && (auditReviewProduct = null)"
+    />
     <v-snackbar v-model="snackbar.open" :color="snackbar.color" timeout="4500">{{ snackbar.message }}</v-snackbar>
   </v-container>
 </template>

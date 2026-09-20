@@ -6,12 +6,19 @@
 import type { ProductListItem } from '../types'
 import { effectiveSalePrice } from '../productPresentation'
 
-defineProps<{ items: ProductListItem[]; loading: boolean; canEdit: boolean; selected: number[] }>()
+defineProps<{
+  items: ProductListItem[]
+  loading: boolean
+  canEdit: boolean
+  canResolveAudit: boolean
+  selected: number[]
+}>()
 const emit = defineEmits<{
   'update:selected': [value: number[]]
   editStock: [product: ProductListItem]
   editPrice: [product: ProductListItem]
   delete: [product: ProductListItem]
+  acceptAudit: [product: ProductListItem]
 }>()
 
 const headers = [
@@ -75,7 +82,14 @@ function formatPrice(value: number | null): string {
       </v-chip>
     </template>
     <template #item.actions="{ item }">
-      <div class="d-flex justify-end">
+      <div class="d-flex flex-wrap justify-end">
+        <v-btn
+          v-if="canResolveAudit && item.catalog_audit_status === 'needs_review' && item.catalog_audit_run_id && item.catalog_audit_item_id"
+          color="primary"
+          size="small"
+          variant="tonal"
+          @click="emit('acceptAudit', item)"
+        >Aceptar revisión</v-btn>
         <v-btn :to="`/productos/${item.product_id}`" size="small" variant="text">Ver detalle</v-btn>
         <v-btn v-if="canEdit" color="error" icon="mdi-delete-outline" size="small" title="Borrar producto" variant="text" @click="emit('delete', item)" />
       </div>

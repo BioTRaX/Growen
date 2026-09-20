@@ -19,11 +19,19 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from db.models import CanonicalContentVersion, CanonicalProduct, CatalogAuditFeedback, CatalogAuditItem, CatalogAuditRun
+from db.models import (
+    CanonicalContentVersion,
+    CanonicalProduct,
+    CatalogAuditFeedback,
+    CatalogAuditItem,
+    CatalogAuditRun,
+    ProductEquivalence,
+    SupplierProduct,
+)
 from db.session import get_session
 from services.auth import SessionData, require_csrf, require_roles
 from services.catalog_audit.ollama_client import CatalogAuditOllamaClient
-from services.catalog_audit.repository import canonical_content, create_run_items
+from services.catalog_audit.repository import canonical_snapshot, create_run_items
 from services.jobs.catalog_audit_jobs import process_catalog_audit_run
 
 
@@ -77,6 +85,8 @@ def _item_dict(
     *,
     content_revision: int | None = None,
     content_versions: list[dict] | None = None,
+    canonical_name: str | None = None,
+    product_detail_id: int | None = None,
 ) -> dict:
     return {
         "item_id": item.id, "canonical_product_id": item.canonical_product_id, "product_id": item.product_id,
@@ -87,6 +97,7 @@ def _item_dict(
         "evidence": item.evidence_json or [], "enrichment_job_id": item.enrichment_job_id,
         "reused_item_id": item.reused_item_id, "resolution": item.resolution,
         "content_revision": content_revision, "content_versions": content_versions or [],
+        "canonical_name": canonical_name, "product_detail_id": product_detail_id,
         "error": {"code": item.error_code, "message": item.error_message} if item.error_code else None,
     }
 
@@ -243,11 +254,28 @@ async def get_catalog_audit(run_id: str, session: AsyncSession = Depends(get_ses
         raise HTTPException(status_code=404, detail="Auditoría no encontrada")
     canonical_ids = {item.canonical_product_id for item in run.items if item.canonical_product_id}
     revisions: dict[int, int] = {}
+    names: dict[int, str] = {}
+    product_links: dict[int, int] = {}
     versions: dict[int, list[dict]] = {canonical_id: [] for canonical_id in canonical_ids}
     if canonical_ids:
-        revisions = dict((await session.execute(select(
-            CanonicalProduct.id, CanonicalProduct.content_revision,
-        ).where(CanonicalProduct.id.in_(canonical_ids)))).all())
+        canonical_rows = (await session.execute(select(
+            CanonicalProduct.id, CanonicalProduct.name, CanonicalProduct.content_revision,
+        ).where(CanonicalProduct.id.in_(canonical_ids)))).all()
+        names = {canonical_id: name for canonical_id, name, _revision in canonical_rows}
+        revisions = {canonical_id: revision for canonical_id, _name, revision in canonical_rows}
+        linked_rows = (await session.execute(
+            select(
+                ProductEquivalence.canonical_product_id,
+                func.min(SupplierProduct.internal_product_id),
+            )
+            .join(SupplierProduct, SupplierProduct.id == ProductEquivalence.supplier_product_id)
+            .where(
+                ProductEquivalence.canonical_product_id.in_(canonical_ids),
+                SupplierProduct.internal_product_id.is_not(None),
+            )
+            .group_by(ProductEquivalence.canonical_product_id)
+        )).all()
+        product_links = dict(linked_rows)
         stored_versions = (await session.scalars(select(CanonicalContentVersion).where(
             CanonicalContentVersion.canonical_product_id.in_(canonical_ids),
         ).order_by(CanonicalContentVersion.created_at.desc()))).all()
@@ -264,6 +292,8 @@ async def get_catalog_audit(run_id: str, session: AsyncSession = Depends(get_ses
             item,
             content_revision=revisions.get(item.canonical_product_id),
             content_versions=versions.get(item.canonical_product_id, []),
+            canonical_name=names.get(item.canonical_product_id),
+            product_detail_id=product_links.get(item.canonical_product_id) or item.product_id,
         )
         for item in run.items
     ]
@@ -291,9 +321,19 @@ async def retry_catalog_audit(run_id: str, session: AsyncSession = Depends(get_s
     if run.is_active_slot:
         raise HTTPException(status_code=409, detail="La auditoría sigue activa")
     run.status, run.is_active_slot, run.cancel_requested, run.completed_at = "queued", True, False, None
+    run.error_code, run.error_message = None, None
     for item in run.items:
         if item.status in {"failed", "cancelled"}:
             item.status, item.error_code, item.error_message, item.completed_at = "pending", None, None, None
+            item.enrichment_job_id = None
+    terminal_statuses = {
+        "skipped_unchanged", "canonical_required", "clean", "auto_fixed",
+        "needs_review", "quarantined", "failed", "cancelled",
+    }
+    clean_statuses = {"clean", "auto_fixed", "skipped_unchanged"}
+    run.processed_items = sum(item.status in terminal_statuses for item in run.items)
+    run.clean_items = sum(item.status in clean_statuses for item in run.items)
+    run.issue_items = run.processed_items - run.clean_items
     try:
         await session.commit()
     except IntegrityError as exc:
@@ -327,7 +367,7 @@ async def resolve_catalog_audit_item(
                 raise HTTPException(status_code=422, detail="corrections y expected_content_revision son obligatorios")
             if not set(payload.corrections) <= allowed:
                 raise HTTPException(status_code=422, detail="La corrección contiene campos protegidos")
-            before = canonical_content(product)
+            before = canonical_snapshot(product)
             changes = {**payload.corrections, "content_revision": payload.expected_content_revision + 1}
             cas = await session.execute(update(CanonicalProduct).where(
                 CanonicalProduct.id == product.id,
@@ -343,7 +383,7 @@ async def resolve_catalog_audit_item(
             await session.refresh(product)
             session.add(CanonicalContentVersion(
                 canonical_product_id=product.id, origin="catalog_audit_manual_fix",
-                revision=product.content_revision, snapshot_json=canonical_content(product), is_applied=True,
+                revision=product.content_revision, snapshot_json=canonical_snapshot(product), is_applied=True,
                 created_by_user_id=user.user.id if user.user else None,
             ))
         if payload.action == "restore_version":
@@ -356,7 +396,7 @@ async def resolve_catalog_audit_item(
             if not version:
                 raise HTTPException(status_code=404, detail="Versión no encontrada")
             allowed = {"description_html", "weight_kg", "height_cm", "width_cm", "depth_cm", "technical_specs", "usage_instructions"}
-            before = canonical_content(product)
+            before = canonical_snapshot(product)
             restored = {key: value for key, value in version.snapshot_json.items() if key in allowed}
             restored["content_revision"] = payload.expected_content_revision + 1
             cas = await session.execute(update(CanonicalProduct).where(
@@ -373,7 +413,7 @@ async def resolve_catalog_audit_item(
             await session.refresh(product)
             session.add(CanonicalContentVersion(
                 canonical_product_id=product.id, origin="catalog_audit_restore",
-                revision=product.content_revision, snapshot_json=canonical_content(product), is_applied=True,
+                revision=product.content_revision, snapshot_json=canonical_snapshot(product), is_applied=True,
                 created_by_user_id=user.user.id if user.user else None,
             ))
         feedback = CatalogAuditFeedback(

@@ -541,10 +541,10 @@ Si encuentras problemas:
 
 ## 📚 Referencias
 
-- [Guía Completa del Sistema](./MARKET_ALERTS.md)
-- [Sistema de Alertas](./MARKET_ALERTS.md)
-- [Entorno Python Correcto](./PYTHON_ENVIRONMENT_SETUP.md)
-- [API Documentation](./API_PRODUCTS.md)
+- [Guía Completa del Sistema](../features/MARKET_ALERTS.md)
+- [Sistema de Alertas](../features/MARKET_ALERTS.md)
+- [Entorno Python Correcto](../development/PYTHON_ENVIRONMENT_SETUP.md)
+- [API Documentation](../features/API_PRODUCTS.md)
 
 ---
 

@@ -80,7 +80,13 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 - [x] Ejecutar el primer run controlado del canónico 3 y verificar desde los
   contratos de la UI `queued → running → completed`, clasificación `container`
   y score 100; la repetición terminó `skipped_unchanged` (2026-09-14).
-- [ ] Iniciar desde la UI la auditoría de los 29 canónicos.
+- [x] Ejecutar la auditoría real de los 29 canónicos mediante sesión admin y
+  CSRF: 18 limpios, 10 en revisión manual, 1 reutilizado y cero fallos técnicos;
+  una repetición estable reutilizó los 29 preservando 19
+  `skipped_unchanged` y 10 `needs_review` (2026-09-17).
+- [ ] Repetir el inicio mediante clic desde una sesión Vue autenticada; el
+  contrato del componente y el endpoint real ya están cubiertos, pero el
+  navegador aislado del smoke no disponía de sesión.
 - [x] Aplicar en producción la migración, imágenes y servicios Swarm preparados
   para el auditor; backup restaurado en PostgreSQL aislado, head
   `20260913_catalog_audit_v1`, 18 servicios en 1/1 y smoke operativo con Ollama
@@ -91,7 +97,13 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 - [x] Corregir la prioridad de rutas del auditor y exponer en Dashboard/Workers
   la cola Redis, los runs encolados o activos y el progreso persistido
   (2026-09-14).
-- [ ] Resolver huérfanos, cuarentenas y feedback surgidos del primer run completo.
+- [ ] Resolver editorialmente los 10 canónicos clasificados `needs_review` por
+  el primer run completo. No surgieron huérfanos ni cuarentenas y ninguna
+  recomendación se aplicó automáticamente.
+- [x] Implementar identidad legible y navegación segura desde el auditor, más
+  aceptación admin de `needs_review` desde Productos con nota y trazabilidad
+  (2026-09-19). El smoke Vue autenticado y la resolución editorial de los 10
+  canónicos siguen pendientes; no se declara producción verificada.
 - [ ] Completar evaluaciones RAG por rol, canal e intención con datos clasificados.
 - [ ] Evolucionar alertas de Mercado con score de confianza, circuit breaker y recomendaciones explicables con aprobación humana.
 - [ ] Incorporar inventario MeLi User Products/multiorigen después de validar el contrato oficial por site; el worker clásico falla cerrado mientras tanto.

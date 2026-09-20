@@ -47,6 +47,7 @@ from db.models import (
     ProductTag,
     CanonicalEnrichmentJob,
     CanonicalContentVersion,
+    CatalogAuditItem,
 )
 from db.session import get_session
 from db.text_utils import stylize_product_name
@@ -2553,6 +2554,19 @@ async def list_products(
     result = await session.execute(stmt)
     rows = result.all()
 
+    audit_item_ids = {
+        cp_obj.last_catalog_audit_item_id
+        for _, _, _, _, cp_obj in rows
+        if cp_obj and cp_obj.last_catalog_audit_item_id
+    }
+    audit_items_by_id: dict[int, str] = {}
+    if audit_item_ids:
+        audit_rows = (await session.execute(
+            select(CatalogAuditItem.id, CatalogAuditItem.run_id)
+            .where(CatalogAuditItem.id.in_(audit_item_ids))
+        )).all()
+        audit_items_by_id = dict(audit_rows)
+
     # Prefetch primer SKU por producto para evitar N+1
     product_ids = [p_obj.id for _, p_obj, *_ in rows]
     skus_by_product: dict[int, str | None] = {}
@@ -2667,6 +2681,8 @@ async def list_products(
                 "canonical_sku": (cp_obj.sku_custom if (cp_obj and cp_obj.sku_custom) else (cp_obj.ng_sku if cp_obj else None)),
                 "canonical_name": stylize_product_name(cp_obj.name) if cp_obj else None,
                 "catalog_audit_status": cp_obj.catalog_audit_status if cp_obj else None,
+                "catalog_audit_item_id": cp_obj.last_catalog_audit_item_id if cp_obj else None,
+                "catalog_audit_run_id": audit_items_by_id.get(cp_obj.last_catalog_audit_item_id) if cp_obj else None,
                 "first_variant_sku": skus_by_product.get(p_obj.id),
                 # Etapa 1: Datos estructurados de enriquecimiento
                 "technical_specs": getattr(p_obj, 'technical_specs', None),
