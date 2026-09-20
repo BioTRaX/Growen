@@ -15,7 +15,7 @@ beautifulsoup4>=4.15.0,<5
 soupsieve>=2.9.0,<3
 
 # Google APIs (Drive integration)
-google-api-python-client>=2.0.0
+google-api-python-client>=2.198.0
 google-auth>=2.0.0
 
 # File monitoring for hot-reload (dev)
