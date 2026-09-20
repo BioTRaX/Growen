@@ -48,6 +48,6 @@ openai>=1.40.0
 mcp>=1.27,<2
 
 # RAG
-pgvector>=0.3.8
+pgvector>=0.5.0
 langchain-text-splitters>=0.3.0
 tiktoken>=0.8.0
