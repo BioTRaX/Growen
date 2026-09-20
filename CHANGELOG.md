@@ -4,6 +4,22 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-09-20 — alineación de producción Swarm y base de datos con dev
+
+- Se sincronizó la base de datos productiva (`growen_pgdata`) desde el volcado
+  lógico completo de desarrollo (`dev`), preservando las 11 corridas de auditoría,
+  123 ítems auditados, 13 feedbacks, 59 trabajos de enriquecimiento, 173 activos
+  de conocimiento y 43 versiones de contenido sin necesidad de reauditar el catálogo.
+- Se sincronizaron los volúmenes externos de media `growen_public_media` (logos)
+  y `growen_private_media` (comprobantes de compras).
+- Se construyeron, escanearon con Trivy y publicaron las 13 imágenes productivas
+  inmutables bajo el commit `325fba480aa9aa000a78b385bf4c5283180fd964`, generando
+  el manifiesto `images.manifest.json` y script de entorno de digests.
+- Se desplegó el stack en Docker Swarm (`SingleNode`), logrando la convergencia
+  de los 18 servicios en estado 1/1 y verificando `/health`, `/api/health` y
+  `/api/health/summary` (saludable con 7 workers activos).
+- Se alinea la rama `main` del repositorio con `dev` al cierre de la sesión.
+
 ## 2026-09-19 — actualización de seguridad de Soup Sieve
 
 - Se elevó el mínimo transitivo de `soupsieve` a `2.9.0` en API, workers y MCP

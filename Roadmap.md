@@ -29,10 +29,10 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
   a los dispositivos autorizados.
 - [x] Completar login, push y pull contra el registro autenticado y TLS ya
   saludable; publicar sólo imágenes aprobadas por Trivy y conservar SBOM y
-  manifiesto de digests por commit (2026-09-13, revisión `bb48d80`).
+  manifiesto de digests por commit (2026-09-20, revisión `325fba4`).
 - [x] Ejecutar las fases `Bootstrap` y `Application` con topología `SingleNode`
-  después de aprobar independientemente migración y despliegue; los 17 servicios
-  estabilizados en estado 1/1 saludable (2026-09-13).
+  después de aprobar independientemente migración y despliegue; los 18 servicios
+  estabilizados en estado 1/1 saludable (2026-09-20).
 - [ ] Ejecutar el smoke autenticado desde otro dispositivo de la LAN contra
   `https://192.168.100.100` después de provisionar un certificado con IP SAN.
 - [x] Aplicar en una ventana controlada la migración `20260909_user_active` y la
