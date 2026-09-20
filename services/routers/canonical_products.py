@@ -5,18 +5,31 @@
 """Endpoints para productos canónicos y equivalencias."""
 from __future__ import annotations
 
+import os
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from decimal import Decimal
 
 from db.models import (
     CanonicalProduct,
+    CanonicalContentVersion,
+    CanonicalBatchJob,
+    CanonicalBatchJobItem,
+    Category,
+    AuditLog,
     ProductEquivalence,
     Supplier,
     SupplierProduct,
+    Product,
 )
+from db.sku_generator import generate_canonical_sku
+from db.sku_utils import CANONICAL_SKU_REGEX, build_canonical_sku as compose_canonical_sku, normalize_code
 from db.session import get_session
 from db.text_utils import stylize_product_name
 from services.auth import require_csrf, require_roles, current_session, SessionData
@@ -41,21 +54,81 @@ class CanonicalUpdate(BaseModel):
     sku_custom: str | None = None
     category_id: int | None = None
     subcategory_id: int | None = None
+    description_html: str | None = None
 
 
 class CanonicalBatchItem(BaseModel):
-    """Item para creación batch de producto canónico."""
     name: str
     brand: str | None = None
     category_id: int | None = None
     subcategory_id: int | None = None
     sku_custom: str | None = None
     source_product_id: int | None = None  # ID del producto de mercado origen
+    tag_names: list[str] = Field(default_factory=list)
 
 
 class CanonicalBatchRequest(BaseModel):
     """Request para creación batch de productos canónicos."""
+    client_request_id: str | None = None
     items: list[CanonicalBatchItem]
+
+
+class CanonicalSkuPreviewItem(BaseModel):
+    category_id: int
+    subcategory_id: int
+
+
+class CanonicalSkuPreviewRequest(BaseModel):
+    items: list[CanonicalSkuPreviewItem]
+
+
+async def _validate_taxonomy(
+    session: AsyncSession,
+    category_id: int | None,
+    subcategory_id: int | None,
+    *,
+    required: bool,
+) -> tuple[Category | None, Category | None]:
+    if required and not category_id:
+        raise HTTPException(status_code=422, detail={"code": "invalid_category", "message": "La categoría es obligatoria"})
+    if required and not subcategory_id:
+        raise HTTPException(status_code=422, detail={"code": "invalid_subcategory", "message": "La subcategoría es obligatoria"})
+    category = await session.get(Category, category_id) if category_id else None
+    subcategory = await session.get(Category, subcategory_id) if subcategory_id else None
+    if category_id and (not category or category.kind != "category"):
+        raise HTTPException(status_code=422, detail={"code": "invalid_category", "message": "La categoría debe existir y ser de tipo category"})
+    if subcategory_id and (not subcategory or subcategory.kind != "subcategory"):
+        raise HTTPException(status_code=422, detail={"code": "invalid_subcategory", "message": "La subcategoría debe existir y ser de tipo subcategory"})
+    return category, subcategory
+
+
+async def _dispatch_canonical_batch_job(
+    job: CanonicalBatchJob,
+    session: AsyncSession,
+) -> None:
+    """Ejecuta o encola un lote ya persistido y registra fallos de despacho."""
+    run_inline = os.getenv("RUN_INLINE_JOBS", "0") == "1"
+    if run_inline:
+        from services.jobs.catalog_jobs import _process_canonical_batch_async
+
+        try:
+            await _process_canonical_batch_async(job.id)
+        except Exception as exc:
+            job.status = "FAILED"
+            job.error_message = str(exc)[:500]
+            await session.commit()
+            raise HTTPException(status_code=500, detail="Error procesando el lote") from exc
+        return
+
+    try:
+        from services.jobs.catalog_jobs import process_canonical_batch
+
+        process_canonical_batch.send(job.id)
+    except Exception as exc:
+        job.status = "FAILED"
+        job.error_message = str(exc)[:500]
+        await session.commit()
+        raise HTTPException(status_code=503, detail="No se pudo encolar el lote") from exc
 
 
 @canonical_router.get("/resolve", dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))])
@@ -94,83 +167,38 @@ async def create_canonical_product(
     session: AsyncSession = Depends(get_session),
     sess: SessionData = Depends(current_session),
 ) -> dict:
-    """Crea un producto canónico y genera un ``ng_sku`` único.
-
-    Si no viene ``sku_custom``, genera uno en base a categoría/subcategoría y próxima secuencia por categoría.
-    Valida unicidad (mayúsculas).
-    """
-    sku_custom = (req.sku_custom or '').strip() or None
-    if sku_custom:
-        sku_custom = normalize_sku(sku_custom)
-    # Autogeneración de SKU si no viene definido:
-    # - Si hay categoría, la secuencia es por categoría
-    # - Si no hay categoría, la secuencia agrupa por category_id NULL y usa prefijos por defecto
+    """Crea un canónico usando el generador transaccional compartido."""
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail={"code": "invalid_name", "message": "El nombre es obligatorio"})
+    category, subcategory = await _validate_taxonomy(
+        session, req.category_id, req.subcategory_id, required=True
+    )
+    sku_custom = normalize_sku(req.sku_custom or "") or None
+    if sku_custom and not CANONICAL_SKU_REGEX.fullmatch(sku_custom):
+        raise HTTPException(status_code=422, detail={"code": "invalid_sku", "message": "El SKU debe cumplir XXX_0000_YYY"})
     if not sku_custom:
-        import re as _re
-        # Determinar secuencia inicial basándose en el MÁXIMO número de secuencia existente
-        # (no en contar productos, ya que pueden haberse eliminado registros)
-        if req.category_id is not None:
-            sku_stmt = select(CanonicalProduct.sku_custom).where(
-                CanonicalProduct.category_id == req.category_id,
-                CanonicalProduct.sku_custom.isnot(None)
-            )
-        else:
-            sku_stmt = select(CanonicalProduct.sku_custom).where(
-                CanonicalProduct.category_id.is_(None),
-                CanonicalProduct.sku_custom.isnot(None)
-            )
-        sku_result = await session.execute(sku_stmt)
-        existing_skus = [row[0] for row in sku_result.all() if row[0]]
-        
-        # Extraer el número de secuencia de cada SKU (formato: XXX_####_YYY)
-        sku_pattern = _re.compile(r'^[A-Z]{3}_(\d{4})_[A-Z]{3}$')
-        max_seq = 0
-        for sku in existing_skus:
-            match = sku_pattern.match(sku.upper())
-            if match:
-                seq_num = int(match.group(1))
-                if seq_num > max_seq:
-                    max_seq = seq_num
-        
-        next_seq = max_seq + 1
-        cat_name = await _get_category_name(session, req.category_id)
-        sub_name = await _get_category_name(session, req.subcategory_id) if req.subcategory_id else None
-        # Reintento ante colisión: incrementar secuencia y reconstruir
-        attempts = 0
-        while attempts < 5:
-            candidate = build_canonical_sku(cat_name, sub_name, next_seq)
-            exists = await session.scalar(select(CanonicalProduct).where(CanonicalProduct.sku_custom == candidate))
-            if not exists:
-                sku_custom = candidate
-                break
-            attempts += 1
-            next_seq += 1
-        if not sku_custom:
-            # Último recurso: usar sufijo aleatorio corto para no bloquear creación
-            import random, string
-            suf = ''.join(random.choices(string.ascii_uppercase + string.digits, k=2))
-            sku_custom = f"{build_canonical_sku(cat_name, sub_name, next_seq)}{suf}"
-    # Unicidad
-    if sku_custom:
-        exists = await session.scalar(select(CanonicalProduct).where(CanonicalProduct.sku_custom == sku_custom))
-        if exists:
-            raise HTTPException(status_code=409, detail="SKU canónico duplicado")
+        sku_custom = await generate_canonical_sku(
+            session,
+            category.name if category else "Sin categoría",
+            subcategory.name if subcategory else (category.name if category else "General"),
+        )
+    exists = await session.scalar(select(CanonicalProduct.id).where(CanonicalProduct.sku_custom == sku_custom))
+    if exists:
+        raise HTTPException(status_code=409, detail={"code": "duplicate_sku", "message": "SKU canónico duplicado"})
     cp = CanonicalProduct(
-        name=req.name,
-        brand=req.brand,
+        name=name,
+        brand=(req.brand or "").strip() or None,
         specs_json=req.specs_json,
         sku_custom=sku_custom,
         category_id=req.category_id,
         subcategory_id=req.subcategory_id,
     )
     session.add(cp)
-    # Insert first to get an id, then set ng_sku and commit
     await session.flush()
     cp.ng_sku = f"NG-{cp.id:06d}"
     await session.commit()
     await session.refresh(cp)
-    # Auditoría
-    # Incluir correlation id si viene del request
     _cid = request.headers.get("x-correlation-id") or request.headers.get("x-request-id") if request else None
     await _audit(session, action="create", table="canonical_products", entity_id=cp.id, meta={
         "sku_custom": cp.sku_custom,
@@ -199,22 +227,10 @@ async def create_canonical_product(
 async def create_canonical_batch_job(
     req: CanonicalBatchRequest,
     request: Request,
+    session: AsyncSession = Depends(get_session),
     sess: SessionData = Depends(current_session),
 ) -> dict:
-    """Encola creación batch de productos canónicos.
-    
-    Retorna un job_id para tracking. El procesamiento se realiza en segundo plano
-    mediante Dramatiq workers. Se intenta procesar todos los items, reportando
-    errores parciales en lugar de rollback total.
-    
-    **Límite**: Máximo 100 productos por request.
-    
-    **Response 202 Accepted**:
-    - `job_id`: Identificador único del job
-    - `message`: Mensaje descriptivo
-    - `total_items`: Cantidad de items encolados
-    """
-    import os
+    """Persiste y encola un lote idempotente de productos canónicos."""
     import uuid
     
     if not req.items:
@@ -223,43 +239,148 @@ async def create_canonical_batch_job(
     if len(req.items) > 100:
         raise HTTPException(status_code=400, detail="Máximo 100 productos por request")
     
-    # Generar job_id único
-    job_id = f"batch-canon-{uuid.uuid4().hex[:12]}"
+    client_request_id = (req.client_request_id or uuid.uuid4().hex).strip()
+    if not client_request_id or len(client_request_id) > 64:
+        raise HTTPException(status_code=422, detail="client_request_id inválido")
+    existing = await session.scalar(
+        select(CanonicalBatchJob)
+        .where(CanonicalBatchJob.client_request_id == client_request_id)
+        .with_for_update()
+    )
+    if existing:
+        if sess.role != "admin" and existing.created_by_user_id and (not sess.user or sess.user.id != existing.created_by_user_id):
+            raise HTTPException(status_code=403, detail="El identificador idempotente pertenece a otro usuario")
+        if existing.status == "FAILED" and existing.processed_items == 0:
+            existing.status = "QUEUED"
+            existing.error_message = None
+            await session.commit()
+            await _dispatch_canonical_batch_job(existing, session)
+            return {
+                "status": "QUEUED",
+                "job_id": existing.id,
+                "message": "El lote fallido fue reenviado",
+                "total_items": existing.total_items,
+                "status_url": f"/canonical-products/batch-jobs/{existing.id}",
+            }
+        return {
+            "status": existing.status,
+            "job_id": existing.id,
+            "message": "El lote ya había sido recibido",
+            "total_items": existing.total_items,
+            "status_url": f"/canonical-products/batch-jobs/{existing.id}",
+        }
+
+    job_id = f"batch-canon-{uuid.uuid4()}"
+    job = CanonicalBatchJob(
+        id=job_id,
+        client_request_id=client_request_id,
+        created_by_user_id=sess.user.id if sess.user else None,
+        total_items=len(req.items),
+    )
+    session.add(job)
+    for position, item in enumerate(req.items):
+        session.add(CanonicalBatchJobItem(
+            job_id=job_id,
+            position=position,
+            source_product_id=item.source_product_id,
+            name=item.name.strip(),
+            brand=(item.brand or "").strip() or None,
+            category_id=item.category_id,
+            subcategory_id=item.subcategory_id,
+            tag_names=item.tag_names,
+            requested_sku=normalize_sku(item.sku_custom or "") or None,
+        ))
+    await session.commit()
     
-    # Preparar items para el worker
-    items_data = [item.model_dump() for item in req.items]
-    
-    # Verificar si ejecutar inline (sincrónico) o enviar al worker
     run_inline = os.getenv("RUN_INLINE_JOBS", "0") == "1"
-    
-    if run_inline:
-        # Ejecutar sincrónicamente (sin worker)
-        import asyncio
-        from services.jobs.catalog_jobs import _process_canonical_batch_async
-        try:
-            asyncio.create_task(_process_canonical_batch_async(job_id, items_data))
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error procesando batch: {str(e)}"
-            )
-    else:
-        # Encolar job en Dramatiq (requiere worker activo)
-        try:
-            from services.jobs.catalog_jobs import process_canonical_batch
-            process_canonical_batch.send(job_id, items_data)
-        except Exception as e:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Error encolando job: {str(e)}. Verifica que el worker esté corriendo."
-            )
+    await _dispatch_canonical_batch_job(job, session)
     
     return {
-        "status": "accepted",
+        "status": "QUEUED",
         "job_id": job_id,
         "message": f"{'Procesando' if run_inline else 'Encolados'} {len(req.items)} productos para creación",
         "total_items": len(req.items),
+        "status_url": f"/canonical-products/batch-jobs/{job_id}",
     }
+
+
+@canonical_router.post(
+    "/sku-preview",
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
+)
+async def preview_canonical_skus(
+    req: CanonicalSkuPreviewRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Devuelve vistas previas no reservantes y únicas dentro de la solicitud."""
+    if not req.items or len(req.items) > 100:
+        raise HTTPException(status_code=400, detail="Debe proporcionar entre 1 y 100 productos")
+    existing = (await session.execute(select(CanonicalProduct.sku_custom))).scalars().all()
+    maxima: dict[str, int] = {}
+    for value in existing:
+        if value and CANONICAL_SKU_REGEX.fullmatch(value):
+            prefix, number, _suffix = value.split("_")
+            maxima[prefix] = max(maxima.get(prefix, 0), int(number))
+    previews = []
+    for position, item in enumerate(req.items):
+        category, subcategory = await _validate_taxonomy(
+            session, item.category_id, item.subcategory_id, required=True
+        )
+        prefix = normalize_code(category.name if category else None)
+        suffix = normalize_code(subcategory.name if subcategory else None)
+        maxima[prefix] = maxima.get(prefix, 0) + 1
+        if maxima[prefix] > 9999:
+            raise HTTPException(status_code=409, detail={"code": "sku_sequence_exhausted", "message": f"Secuencia agotada para {prefix}"})
+        previews.append({
+            "position": position,
+            "sku": compose_canonical_sku(prefix, maxima[prefix], suffix),
+            "definitive": False,
+        })
+    return {"items": previews}
+
+
+def _serialize_batch_job(job: CanonicalBatchJob) -> dict:
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "total_items": job.total_items,
+        "processed_items": job.processed_items,
+        "success_count": job.success_count,
+        "error_count": job.error_count,
+        "error_message": job.error_message,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "items": [{
+            "position": item.position,
+            "source_product_id": item.source_product_id,
+            "status": item.status,
+            "canonical_product_id": item.canonical_product_id,
+            "sku_custom": item.sku_custom,
+            "error": ({"code": item.error_code, "message": item.error_message} if item.error_code else None),
+        } for item in job.items],
+    }
+
+
+@canonical_router.get(
+    "/batch-jobs/{job_id}",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+)
+async def get_canonical_batch_job(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+) -> dict:
+    job = await session.scalar(
+        select(CanonicalBatchJob)
+        .options(selectinload(CanonicalBatchJob.items))
+        .where(CanonicalBatchJob.id == job_id)
+    )
+    if not job:
+        raise HTTPException(status_code=404, detail="Lote no encontrado")
+    if sess.role != "admin" and job.created_by_user_id and (not sess.user or sess.user.id != job.created_by_user_id):
+        raise HTTPException(status_code=403, detail="No autorizado para consultar este lote")
+    return _serialize_batch_job(job)
 
 
 @canonical_router.get("")
@@ -311,12 +432,14 @@ async def get_canonical_product(
         "name": stylize_product_name(cp.name),
         "brand": cp.brand,
         "specs_json": cp.specs_json,
+        "description_html": cp.description_html,
+        "content_revision": cp.content_revision,
     }
 
 
 @canonical_router.patch(
     "/{canonical_id}",
-    dependencies=[Depends(require_csrf), Depends(require_roles("admin"))],
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
 )
 async def update_canonical_product(
     canonical_id: int,
@@ -330,14 +453,105 @@ async def update_canonical_product(
     if not cp:
         raise HTTPException(status_code=404, detail="Canonical product not found")
     data = req.model_dump(exclude_unset=True)
-    if "sku_custom" in data and data["sku_custom"]:
-        data["sku_custom"] = normalize_sku(data["sku_custom"])
-        exists = await session.scalar(select(CanonicalProduct).where(CanonicalProduct.sku_custom == data["sku_custom"], CanonicalProduct.id != cp.id))
+    if "name" in data:
+        name_clean = (data["name"] or "").strip()
+        if not name_clean:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid_name", "message": "El nombre canónico no puede estar vacío"},
+            )
+        data["name"] = name_clean
+    if "sku_custom" in data:
+        normalized_sku = normalize_sku(data["sku_custom"] or "")
+        if not normalized_sku or not CANONICAL_SKU_REGEX.fullmatch(normalized_sku):
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid_sku", "message": "El SKU debe cumplir XXX_0000_YYY"},
+            )
+        exists = await session.scalar(
+            select(CanonicalProduct.id).where(
+                CanonicalProduct.id != cp.id,
+                (
+                    func.lower(CanonicalProduct.sku_custom) == normalized_sku.lower()
+                ) | (
+                    func.lower(CanonicalProduct.ng_sku) == normalized_sku.lower()
+                ),
+            )
+        )
         if exists:
-            raise HTTPException(status_code=409, detail="SKU canónico duplicado")
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "duplicate_sku", "message": "El SKU ya existe. Ingrese uno diferente."},
+            )
+        data["sku_custom"] = normalized_sku
+    if "description_html" in data:
+        desc_clean = data["description_html"]
+        if isinstance(desc_clean, str):
+            desc_clean = desc_clean.strip() or None
+        data["description_html"] = desc_clean
     for k, v in data.items():
         setattr(cp, k, v)
-    await session.commit()
+    if "description_html" in data:
+        from services.routers.enrichment import canonical_snapshot
+
+        cp.content_revision = (cp.content_revision or 0) + 1
+        cp.last_enriched_at = datetime.utcnow()
+        cp.enriched_by = sess.user.id if sess and sess.user else None
+        session.add(
+            CanonicalContentVersion(
+                canonical_product_id=cp.id,
+                origin="manual_edit",
+                revision=cp.content_revision,
+                snapshot_json=canonical_snapshot(cp),
+                is_applied=True,
+                created_by_user_id=sess.user.id if sess and sess.user else None,
+            )
+        )
+    if "name" in data or "description_html" in data:
+        linked_prods = list(
+            (
+                await session.scalars(
+                    select(Product)
+                    .join(SupplierProduct, SupplierProduct.internal_product_id == Product.id)
+                    .join(ProductEquivalence, ProductEquivalence.supplier_product_id == SupplierProduct.id)
+                    .where(ProductEquivalence.canonical_product_id == cp.id)
+                )
+            ).all()
+        )
+        for p in linked_prods:
+            if "name" in data:
+                p.title = data["name"]
+            if "description_html" in data:
+                p.description_html = data["description_html"]
+        if cp.sku_custom or cp.ng_sku:
+            sku_list = [s for s in (cp.sku_custom, cp.ng_sku) if s]
+            prods_by_sku = list(
+                (
+                    await session.scalars(
+                        select(Product).where(Product.canonical_sku.in_(sku_list))
+                    )
+                ).all()
+            )
+            for p in prods_by_sku:
+                if "name" in data:
+                    p.title = data["name"]
+                if "description_html" in data:
+                    p.description_html = data["description_html"]
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        integrity_detail = str(exc.orig).lower()
+        if (
+            "sku_custom" in data
+            and "sku_custom" in integrity_detail
+            and ("unique" in integrity_detail or "duplicate" in integrity_detail)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "duplicate_sku", "message": "El SKU ya existe. Ingrese uno diferente."},
+            ) from exc
+        raise
     await session.refresh(cp)
     _cid = request.headers.get("x-correlation-id") or request.headers.get("x-request-id") if request else None
     await _audit(session, action="update", table="canonical_products", entity_id=cp.id, meta={"fields": list(data.keys()), **({"cid": _cid} if _cid else {})}, sess=sess, request=request)
@@ -350,6 +564,8 @@ async def update_canonical_product(
         "sku_custom": cp.sku_custom,
         "category_id": cp.category_id,
         "subcategory_id": cp.subcategory_id,
+        "description_html": cp.description_html,
+        "content_revision": cp.content_revision,
     }
 
 
@@ -568,8 +784,6 @@ async def list_offers(
     return offers
 
 # --- Helpers internos ---
-from db.models import Category, AuditLog
-from sqlalchemy import text
 
 def normalize_sku(value: str) -> str:
     return (value or '').strip().upper()
@@ -583,7 +797,7 @@ async def _get_category_name(session: AsyncSession, category_id: int | None) -> 
 def _slugify3(name: str | None, fallback: str) -> str:
     """Toma hasta 3 letras del nombre, removiendo acentos/diacríticos.
 
-    Evita usar clases Unicode (\p{M}) no soportadas por `re` estándar en Python.
+    Evita usar clases Unicode (\\p{M}) no soportadas por `re` estándar en Python.
     """
     if not name:
         return fallback

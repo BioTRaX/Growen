@@ -209,7 +209,8 @@ async def detect_price_alerts(
     db: AsyncSession,
     product_id: int,
     new_market_price: Decimal,
-    currency: str = "ARS"
+    currency: str = "ARS",
+    previous_market_price: Optional[Decimal] = None,
 ) -> List[MarketAlert]:
     """
     Detecta y genera alertas por variación de precio de mercado.
@@ -273,18 +274,23 @@ async def detect_price_alerts(
                     alerts_created.append(alert)
         
         # 2. Alerta: Precio mercado actual vs anterior
-        if product.market_price_reference and product.market_price_reference > 0:
+        baseline_market_price = (
+            previous_market_price
+            if previous_market_price is not None
+            else product.market_price_reference
+        )
+        if baseline_market_price and baseline_market_price > 0:
             delta_vs_prev = calculate_percentage_change(
-                product.market_price_reference, 
+                baseline_market_price,
                 new_market_price
             )
             
             if delta_vs_prev > Decimal(str(THRESHOLD_MARKET_VS_PREVIOUS)):
-                difference = new_market_price - product.market_price_reference
+                difference = new_market_price - baseline_market_price
                 
                 message = (
                     f"El precio de mercado de '{product_name}' cambió {delta_vs_prev*100:.1f}%. "
-                    f"Anterior: ${product.market_price_reference:,.2f} → "
+                    f"Anterior: ${baseline_market_price:,.2f} → "
                     f"Actual: ${new_market_price:,.2f} {currency}"
                 )
                 
@@ -294,14 +300,14 @@ async def detect_price_alerts(
                     alert_type = "market_spike"
                     message = (
                         f"⚠️ AUMENTO REPENTINO: '{product_name}' subió {delta_vs_prev*100:.1f}%. "
-                        f"${product.market_price_reference:,.2f} → ${new_market_price:,.2f} {currency}"
+                        f"${baseline_market_price:,.2f} → ${new_market_price:,.2f} {currency}"
                     )
                 elif difference < 0 and delta_vs_prev > Decimal(str(THRESHOLD_DROP)):
                     # Caída repentina
                     alert_type = "market_drop"
                     message = (
                         f"⚠️ CAÍDA REPENTINA: '{product_name}' bajó {delta_vs_prev*100:.1f}%. "
-                        f"${product.market_price_reference:,.2f} → ${new_market_price:,.2f} {currency}"
+                        f"${baseline_market_price:,.2f} → ${new_market_price:,.2f} {currency}"
                     )
                 else:
                     # Cambio normal
@@ -311,7 +317,7 @@ async def detect_price_alerts(
                     db=db,
                     product_id=product_id,
                     alert_type=alert_type,
-                    old_value=product.market_price_reference,
+                    old_value=baseline_market_price,
                     new_value=new_market_price,
                     delta_percentage=delta_vs_prev,
                     message=message

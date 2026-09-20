@@ -16,6 +16,7 @@ from sqlalchemy import (
     Time,
     ForeignKey,
     Integer,
+    BigInteger,
     Numeric,
     Float,
     String,
@@ -24,10 +25,15 @@ from sqlalchemy import (
     CheckConstraint,
     Index,
     Enum,
+    func,
+    select,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
+from .base import Base
 
 # RAG: Soporte vectorial para embeddings (Etapa 2)
 from pgvector.sqlalchemy import Vector
@@ -47,9 +53,6 @@ class JSONBCompat(TypeDecorator):
             return dialect.type_descriptor(JSONB())
         return dialect.type_descriptor(JSON())
 
-from .base import Base
-
-
 class Product(Base):
     __tablename__ = "products"
 
@@ -60,6 +63,7 @@ class Product(Base):
     title: Mapped[str] = mapped_column(String(200))
     brand_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+    subcategory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"))
     description_html: Mapped[Optional[str]] = mapped_column(Text)
     # URL pública hacia archivo .txt con fuentes de enriquecimiento IA (si existe)
     enrichment_sources_url: Mapped[Optional[str]] = mapped_column(String(600), nullable=True)
@@ -73,7 +77,6 @@ class Product(Base):
     height_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
     width_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
     depth_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
-    market_price_reference: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
     # Etapa 1: Enriquecimiento de datos estructurados para IA
     technical_specs: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
     usage_instructions: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
@@ -81,7 +84,7 @@ class Product(Base):
     status: Mapped[Optional[str]] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
-    stock: Mapped[int] = mapped_column(Integer, default=0)
+    stock: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
 
     variants: Mapped[list["Variant"]] = relationship(back_populates="product")
     images: Mapped[list["Image"]] = relationship(back_populates="product")
@@ -118,8 +121,8 @@ class Inventory(Base):
         ForeignKey("variants.id", ondelete="CASCADE"), unique=True
     )
     warehouse: Mapped[Optional[str]] = mapped_column(String(100))
-    stock_qty: Mapped[int] = mapped_column(Integer, default=0)
-    min_qty: Mapped[Optional[int]] = mapped_column(Integer)
+    stock_qty: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
+    min_qty: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2))
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
     variant: Mapped["Variant"] = relationship(back_populates="inventory")
@@ -241,6 +244,11 @@ class Category(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
     parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
+    kind: Mapped[str] = mapped_column(String(20), default="category", server_default="category", nullable=False)
+    __table_args__ = (
+        CheckConstraint("kind IN ('category', 'subcategory')", name="ck_categories_kind"),
+        Index("ux_categories_kind_lower_name", "kind", func.lower(name), unique=True),
+    )
 
 
 class Tag(Base):
@@ -248,6 +256,9 @@ class Tag(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
+    __table_args__ = (
+        Index("ux_tags_lower_name", func.lower(name), unique=True),
+    )
     products: Mapped[list["Product"]] = relationship(
         secondary="product_tags", back_populates="tags"
     )
@@ -377,6 +388,8 @@ class SupplierPriceHistory(Base):
     as_of_date: Mapped[date]
     purchase_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
     sale_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
+    purchase_id: Mapped[Optional[int]] = mapped_column(ForeignKey("purchases.id", ondelete="SET NULL"), nullable=True)
+    purchase_line_id: Mapped[Optional[int]] = mapped_column(ForeignKey("purchase_lines.id", ondelete="SET NULL"), nullable=True)
     delta_purchase_pct: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
     delta_sale_pct: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
@@ -400,6 +413,31 @@ class CanonicalProduct(Base):
     market_price_reference: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
     # Fecha de última actualización del precio de mercado de referencia
     market_price_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Contenido enriquecido canónico. Product conserva sus columnas legacy sólo
+    # durante la ventana de compatibilidad React.
+    description_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    weight_kg: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 3), nullable=True)
+    height_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
+    width_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
+    depth_cm: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
+    technical_specs: Mapped[Optional[dict]] = mapped_column(
+        JSONBCompat, nullable=True, default=dict, server_default="{}"
+    )
+    usage_instructions: Mapped[Optional[dict]] = mapped_column(
+        JSONBCompat, nullable=True, default=dict, server_default="{}"
+    )
+    content_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_enriched_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    enriched_by: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    catalog_audit_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="unaudited", server_default="unaudited"
+    )
+    last_catalog_audit_item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("catalog_audit_items.id", ondelete="SET NULL", use_alter=True), nullable=True
+    )
+    catalog_audited_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     specs_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     # Taxonomía: categoría padre y subcategoría (opcional)
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True)
@@ -410,42 +448,511 @@ class CanonicalProduct(Base):
     equivalences: Mapped[list["ProductEquivalence"]] = relationship(
         back_populates="canonical_product"
     )
-    market_sources: Mapped[list["MarketSource"]] = relationship(
-        back_populates="product", cascade="all, delete-orphan"
+    knowledge_assets: Mapped[list["CanonicalKnowledgeAsset"]] = relationship(
+        back_populates="canonical_product", cascade="all, delete-orphan"
+    )
+    market_sources: Mapped[list["CanonicalKnowledgeMarketProfile"]] = relationship(
+        "CanonicalKnowledgeMarketProfile",
+        secondary="canonical_knowledge_assets",
+        primaryjoin="CanonicalProduct.id == CanonicalKnowledgeAsset.canonical_product_id",
+        secondaryjoin="CanonicalKnowledgeAsset.id == CanonicalKnowledgeMarketProfile.asset_id",
+        viewonly=True,
     )
     price_history: Mapped[list["MarketPriceHistory"]] = relationship(
         back_populates="product", cascade="all, delete-orphan", order_by="MarketPriceHistory.created_at.desc()"
     )
     category: Mapped[Optional["Category"]] = relationship(foreign_keys=[category_id])
     subcategory: Mapped[Optional["Category"]] = relationship(foreign_keys=[subcategory_id])
+    enrichment_jobs: Mapped[list["CanonicalEnrichmentJob"]] = relationship(
+        back_populates="canonical_product", cascade="all, delete-orphan"
+    )
+    content_versions: Mapped[list["CanonicalContentVersion"]] = relationship(
+        back_populates="canonical_product", cascade="all, delete-orphan"
+    )
 
 
-class MarketSource(Base):
-    """Fuente de precio de mercado para un producto canónico."""
-    __tablename__ = "market_sources"
+class CatalogAuditRun(Base):
+    """Ejecución persistente, reiniciable y globalmente serializada del auditor."""
+
+    __tablename__ = "catalog_audit_runs"
     __table_args__ = (
-        Index("idx_market_sources_product_id", "product_id"),
-        UniqueConstraint("product_id", "url", name="uq_market_sources_product_url"),
+        CheckConstraint(
+            "status IN ('queued','running','waiting_enrich','completed','completed_with_issues','failed','cancelled')",
+            name="ck_catalog_audit_runs_status",
+        ),
+        CheckConstraint("scope IN ('all','pending','selected')", name="ck_catalog_audit_runs_scope"),
+        CheckConstraint("mode IN ('full','deterministic_only')", name="ck_catalog_audit_runs_mode"),
+        CheckConstraint(
+            "(status IN ('queued','running','waiting_enrich') AND is_active_slot = true) OR "
+            "(status NOT IN ('queued','running','waiting_enrich') AND is_active_slot = false)",
+            name="ck_catalog_audit_runs_active_slot",
+        ),
+        Index(
+            "uq_catalog_audit_runs_active",
+            "is_active_slot",
+            unique=True,
+            postgresql_where=text("is_active_slot = true"),
+            sqlite_where=text("is_active_slot = 1"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    mode: Mapped[str] = mapped_column(String(24), nullable=False, default="full", server_default="full")
+    include_orphans: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    enrich_missing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    auto_fix: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", server_default="queued")
+    is_active_slot: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    requested_ids: Mapped[Optional[list]] = mapped_column(JSONBCompat, nullable=True, default=list, server_default="[]")
+    total_items: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    processed_items: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    clean_items: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    issue_items: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    items: Mapped[list["CatalogAuditItem"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", foreign_keys="CatalogAuditItem.run_id"
+    )
+
+
+class CatalogAuditItem(Base):
+    """Resultado y resolución de un canónico o producto interno huérfano."""
+
+    __tablename__ = "catalog_audit_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','skipped_unchanged','canonical_required','waiting_enrich','auditing','clean','auto_fixed','needs_review','quarantined','failed','cancelled')",
+            name="ck_catalog_audit_items_status",
+        ),
+        UniqueConstraint("run_id", "target_key", name="uq_catalog_audit_items_run_target"),
+        Index("ix_catalog_audit_items_run_status", "run_id", "status"),
+        Index("ix_catalog_audit_items_identity", "canonical_product_id", "input_hash", "rules_version"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    product_id: Mapped[int] = mapped_column(
-        ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
+    run_id: Mapped[str] = mapped_column(ForeignKey("catalog_audit_runs.id", ondelete="CASCADE"), nullable=False)
+    canonical_product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=True)
+    product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id", ondelete="SET NULL"), nullable=True)
+    target_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    rules_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    feedback_version: Mapped[str] = mapped_column(String(64), nullable=False, default="0", server_default="0")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", server_default="pending")
+    product_class: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    passed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    findings_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    corrections_json: Mapped[Optional[list]] = mapped_column(JSONBCompat, nullable=True, default=list, server_default="[]")
+    semantic_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    evidence_json: Mapped[Optional[list]] = mapped_column(JSONBCompat, nullable=True, default=list, server_default="[]")
+    enrichment_job_id: Mapped[Optional[str]] = mapped_column(ForeignKey("canonical_enrichment_jobs.id", ondelete="SET NULL"), nullable=True)
+    reused_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("catalog_audit_items.id", ondelete="SET NULL"), nullable=True)
+    auto_fix_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    resolution: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    resolution_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolved_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    run: Mapped["CatalogAuditRun"] = relationship(back_populates="items", foreign_keys=[run_id])
+
+
+class CatalogAuditFeedback(Base):
+    """Regla humana versionada para clasificación, excepción o corrección."""
+
+    __tablename__ = "catalog_audit_feedback"
+    __table_args__ = (
+        CheckConstraint("kind IN ('classification','exception','correction')", name="ck_catalog_audit_feedback_kind"),
+        Index("ix_catalog_audit_feedback_scope", "canonical_product_id", "product_class", "active"),
     )
-    source_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    url: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=True)
+    product_class: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    payload_json: Mapped[dict] = mapped_column(JSONBCompat, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+
+
+class CanonicalKnowledgeAsset(Base):
+    """Activo reusable de conocimiento asociado a un producto canónico."""
+
+    __tablename__ = "canonical_knowledge_assets"
+    __table_args__ = (
+        Index("ix_canonical_knowledge_assets_product_status", "canonical_product_id", "status"),
+        CheckConstraint("asset_type IN ('web','document','image','video')", name="ck_canonical_knowledge_assets_type"),
+        CheckConstraint("status IN ('pending','confirmed','archived')", name="ck_canonical_knowledge_assets_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    asset_type: Mapped[str] = mapped_column(String(24), nullable=False, default="web", server_default="web")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", server_default="pending")
+    origin: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", server_default="manual")
+    exclude_from_enrichment: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    trust_score: Mapped[float] = mapped_column(Float, nullable=False, default=0, server_default="0")
+    trust_breakdown: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    ai_trust_adjustment: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ai_trust_reason: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now())
+
+    canonical_product: Mapped["CanonicalProduct"] = relationship(back_populates="knowledge_assets")
+    locations: Mapped[list["CanonicalKnowledgeLocation"]] = relationship(back_populates="asset", cascade="all, delete-orphan", lazy="selectin")
+    labels: Mapped[list["CanonicalKnowledgeLabel"]] = relationship(back_populates="asset", cascade="all, delete-orphan", lazy="selectin")
+    capabilities: Mapped[list["CanonicalKnowledgeAssetCapability"]] = relationship(back_populates="asset", cascade="all, delete-orphan", lazy="selectin")
+    versions: Mapped[list["CanonicalKnowledgeVersion"]] = relationship(back_populates="asset", cascade="all, delete-orphan")
+    market_profile: Mapped[Optional["CanonicalKnowledgeMarketProfile"]] = relationship(back_populates="asset", cascade="all, delete-orphan", uselist=False)
+
+
+class CanonicalKnowledgeLocation(Base):
+    """Ubicación o representación concreta de un activo."""
+
+    __tablename__ = "canonical_knowledge_locations"
+    __table_args__ = (
+        Index("ix_canonical_knowledge_locations_asset", "asset_id"),
+        Index("ix_canonical_knowledge_locations_hash", "content_hash"),
+        Index(
+            "uq_canonical_knowledge_location_url",
+            "asset_id",
+            "normalized_url",
+            unique=True,
+            postgresql_where=text("normalized_url IS NOT NULL"),
+            sqlite_where=text("normalized_url IS NOT NULL"),
+        ),
+        CheckConstraint("status IN ('pending','ready','failed','stale','archived')", name="ck_canonical_knowledge_locations_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), nullable=False)
+    url: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    normalized_url: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    storage_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    mime_type: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    content_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", server_default="pending")
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    last_fetched_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now())
+    asset: Mapped["CanonicalKnowledgeAsset"] = relationship(back_populates="locations")
+
+
+class CanonicalKnowledgeLabel(Base):
+    """Etiqueta controlada, independiente de los tags de producto."""
+
+    __tablename__ = "canonical_knowledge_labels"
+    __table_args__ = (
+        CheckConstraint(
+            "label IN ('manufacturer','supplier','market','manual','catalog','msds','official','other')",
+            name="ck_canonical_knowledge_labels_value",
+        ),
+    )
+
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), primary_key=True)
+    label: Mapped[str] = mapped_column(String(32), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    asset: Mapped["CanonicalKnowledgeAsset"] = relationship(back_populates="labels")
+
+
+class KnowledgeCapability(Base):
+    """Catálogo extensible de capacidades consumibles por módulos."""
+
+    __tablename__ = "knowledge_capabilities"
+
+    code: Mapped[str] = mapped_column(String(48), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+
+
+class CanonicalKnowledgeAssetCapability(Base):
+    """Capacidad habilitada para un activo."""
+
+    __tablename__ = "canonical_knowledge_asset_capabilities"
+
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), primary_key=True)
+    capability_code: Mapped[str] = mapped_column(ForeignKey("knowledge_capabilities.code", ondelete="RESTRICT"), primary_key=True)
+    origin: Mapped[str] = mapped_column(String(24), nullable=False, default="manual", server_default="manual")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0, server_default="0")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    asset: Mapped["CanonicalKnowledgeAsset"] = relationship(back_populates="capabilities")
+    capability: Mapped["KnowledgeCapability"] = relationship()
+
+
+class CanonicalKnowledgeVersion(Base):
+    """Snapshot inmutable del contenido procesado."""
+
+    __tablename__ = "canonical_knowledge_versions"
+    __table_args__ = (
+        UniqueConstraint("location_id", "version", name="uq_canonical_knowledge_location_version"),
+        Index("ix_canonical_knowledge_versions_asset_created", "asset_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), nullable=False)
+    location_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_locations.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    extracted_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    asset: Mapped["CanonicalKnowledgeAsset"] = relationship(back_populates="versions")
+    location: Mapped["CanonicalKnowledgeLocation"] = relationship()
+
+
+class CanonicalKnowledgeClaim(Base):
+    """Afirmación extraída de una versión con evidencia."""
+
+    __tablename__ = "canonical_knowledge_claims"
+    __table_args__ = (
+        Index("ix_canonical_knowledge_claims_product_key", "canonical_product_id", "fact_key"),
+        CheckConstraint("status IN ('proposed','confirmed','contradicted','rejected')", name="ck_canonical_knowledge_claims_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), nullable=False)
+    version_id: Mapped[Optional[int]] = mapped_column(ForeignKey("canonical_knowledge_versions.id", ondelete="SET NULL"), nullable=True)
+    capability_code: Mapped[str] = mapped_column(ForeignKey("knowledge_capabilities.code", ondelete="RESTRICT"), nullable=False)
+    fact_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    value_json: Mapped[dict] = mapped_column(JSONBCompat, nullable=False)
+    unit: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="proposed", server_default="proposed")
+    evidence_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+
+
+class CanonicalKnowledgeFact(Base):
+    """Resolución vigente de claims coincidentes o contradictorios."""
+
+    __tablename__ = "canonical_knowledge_facts"
+    __table_args__ = (UniqueConstraint("canonical_product_id", "fact_key", name="uq_canonical_knowledge_fact_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False)
+    fact_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    capability_code: Mapped[str] = mapped_column(ForeignKey("knowledge_capabilities.code", ondelete="RESTRICT"), nullable=False)
+    value_json: Mapped[dict] = mapped_column(JSONBCompat, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="confirmed", server_default="confirmed")
+    supporting_claim_ids: Mapped[list] = mapped_column(JSONBCompat, nullable=False, default=list, server_default="[]")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now())
+
+
+class CanonicalKnowledgeEvent(Base):
+    """Evento append-only de auditoría."""
+
+    __tablename__ = "canonical_knowledge_events"
+    __table_args__ = (Index("ix_canonical_knowledge_events_asset_created", "asset_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False)
+    asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="SET NULL"), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    payload_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+
+
+class CanonicalKnowledgeJob(Base):
+    """Job persistente de ingestión o reprocesamiento."""
+
+    __tablename__ = "canonical_knowledge_jobs"
+    __table_args__ = (
+        Index("ix_canonical_knowledge_jobs_asset_created", "asset_id", "created_at"),
+        Index(
+            "uq_canonical_knowledge_jobs_active",
+            "asset_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued','running')"),
+            sqlite_where=text("status IN ('queued','running')"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", server_default="queued")
+    stage: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    result_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class CanonicalKnowledgeMarketProfile(Base):
+    """Estado técnico de Mercado; identidad y URL pertenecen al activo."""
+
+    __tablename__ = "canonical_knowledge_market_profiles"
+    __table_args__ = (
+        UniqueConstraint("asset_id", name="uq_canonical_knowledge_market_profile_asset"),
+        CheckConstraint(
+            "source_type IS NULL OR source_type IN ('static','dynamic','manual')",
+            name="ck_canonical_knowledge_market_profiles_source_type",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("canonical_knowledge_assets.id", ondelete="CASCADE"), nullable=False)
     last_price: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
     last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    is_mandatory: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    # Campos adicionales para gestión de scraping
-    currency: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, default="ARS")
-    source_type: Mapped[Optional[str]] = mapped_column(
-        Enum("static", "dynamic", name="source_type_enum"), nullable=True, default="static"
+    is_mandatory: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
     )
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    validation_status: Mapped[str] = mapped_column(
+        String(24), default="warning", server_default="warning", nullable=False
+    )
+    ars_confirmed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    argentina_delivery_confirmed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    validation_detail: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    last_success_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # Campos adicionales para gestión de scraping
+    currency: Mapped[Optional[str]] = mapped_column(
+        String(10), nullable=True, default="ARS", server_default="ARS"
+    )
+    source_type: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, default="static", server_default="static"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        default=datetime.utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now()
+    )
 
-    product: Mapped["CanonicalProduct"] = relationship(back_populates="market_sources")
+    asset: Mapped["CanonicalKnowledgeAsset"] = relationship(back_populates="market_profile", lazy="joined")
+
+    @hybrid_property
+    def product_id(self) -> Optional[int]:
+        return self.asset.canonical_product_id if self.asset else None
+
+    @product_id.inplace.expression
+    @classmethod
+    def _product_id_expression(cls):
+        return select(CanonicalKnowledgeAsset.canonical_product_id).where(
+            CanonicalKnowledgeAsset.id == cls.asset_id
+        ).scalar_subquery()
+
+    @product_id.inplace.setter
+    def _set_product_id(self, value: int) -> None:
+        self._ensure_asset().canonical_product_id = value
+
+    @hybrid_property
+    def source_name(self) -> str:
+        return self.asset.title if self.asset else "Fuente de Mercado"
+
+    @source_name.inplace.expression
+    @classmethod
+    def _source_name_expression(cls):
+        return select(CanonicalKnowledgeAsset.title).where(
+            CanonicalKnowledgeAsset.id == cls.asset_id
+        ).scalar_subquery()
+
+    @source_name.inplace.setter
+    def _set_source_name(self, value: str) -> None:
+        self._ensure_asset().title = value
+
+    @hybrid_property
+    def url(self) -> Optional[str]:
+        if not self.asset:
+            return None
+        # Evita iniciar IO implícito desde una hybrid property bajo AsyncSession.
+        # Los queries de Mercado cargan ubicaciones de forma explícita; un perfil
+        # manual recién creado legítimamente no posee ninguna.
+        locations = self.asset.__dict__.get("locations", ())
+        location = next((item for item in locations if item.is_primary), None)
+        return location.url if location else None
+
+    @url.inplace.expression
+    @classmethod
+    def _url_expression(cls):
+        return select(CanonicalKnowledgeLocation.url).where(
+            CanonicalKnowledgeLocation.asset_id == cls.asset_id,
+            CanonicalKnowledgeLocation.is_primary.is_(True),
+        ).order_by(CanonicalKnowledgeLocation.id).limit(1).scalar_subquery()
+
+    @url.inplace.setter
+    def _set_url(self, value: Optional[str]) -> None:
+        asset = self._ensure_asset()
+        locations = asset.__dict__.get("locations")
+        if locations is None:
+            if asset.id is None:
+                locations = asset.locations
+            else:
+                raise RuntimeError("Las ubicaciones deben cargarse antes de modificar la URL de Mercado")
+        location = next((item for item in locations if item.is_primary), None)
+        if location:
+            location.url = value
+            location.normalized_url = value
+        elif value:
+            asset.locations.append(
+                CanonicalKnowledgeLocation(url=value, normalized_url=value, is_primary=True)
+            )
+
+    @property
+    def product(self) -> Optional["CanonicalProduct"]:
+        return self.asset.canonical_product if self.asset else None
+
+    def _ensure_asset(self) -> "CanonicalKnowledgeAsset":
+        if not self.asset:
+            self.asset = CanonicalKnowledgeAsset(
+                canonical_product_id=0,
+                title="Fuente de Mercado",
+                asset_type="web",
+                status="confirmed",
+                origin="market_compat",
+            )
+            self.asset.labels.append(CanonicalKnowledgeLabel(label="market"))
+            self.asset.capabilities.extend(
+                CanonicalKnowledgeAssetCapability(
+                    capability_code=code,
+                    origin="market_compat",
+                    confidence=0.72,
+                )
+                for code in ("price", "availability", "offers")
+            )
+        return self.asset
+
+
+# Adaptador temporal para imports Python legacy. No existe una tabla market_sources.
+MarketSource = CanonicalKnowledgeMarketProfile
 
 
 class MarketPriceHistory(Base):
@@ -469,20 +976,171 @@ class MarketPriceHistory(Base):
         ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
     )
     source_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("market_sources.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("canonical_knowledge_market_profiles.id", ondelete="SET NULL"), nullable=True
     )
     price: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False)
-    currency: Mapped[str] = mapped_column(String(10), default="ARS", nullable=False)
+    currency: Mapped[str] = mapped_column(
+        String(10), default="ARS", server_default="ARS", nullable=False
+    )
     # Metadatos adicionales para auditoría
     source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     source_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     # Diferencia porcentual con el precio anterior (calculado al insertar)
     price_change_pct: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
+    observation_type: Mapped[str] = mapped_column(
+        String(16), default="source", server_default="source", nullable=False
+    )
+    capture_method: Mapped[str] = mapped_column(
+        String(16), default="static", server_default="static", nullable=False
+    )
+    job_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("market_update_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    job_item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("market_update_items.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        default=datetime.utcnow, server_default=func.now(), nullable=False
+    )
 
     # Relaciones
     product: Mapped["CanonicalProduct"] = relationship(back_populates="price_history")
-    source: Mapped[Optional["MarketSource"]] = relationship()
+    source: Mapped[Optional["CanonicalKnowledgeMarketProfile"]] = relationship()
+
+
+class MarketUpdateJob(Base):
+    """Solicitud auditable de actualización de uno o más productos de Mercado."""
+
+    __tablename__ = "market_update_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','partial','succeeded','failed','cancelled')",
+            name="ck_market_update_jobs_status",
+        ),
+        Index("ix_market_update_jobs_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trigger: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    correlation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    config_snapshot: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    total_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    processed_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    success_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    error_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    items: Mapped[list["MarketUpdateItem"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan", order_by="MarketUpdateItem.id"
+    )
+
+
+class MarketUpdateItem(Base):
+    """Estado terminal e idempotencia de una actualización por producto."""
+
+    __tablename__ = "market_update_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','partial','succeeded','failed','cancelled')",
+            name="ck_market_update_items_status",
+        ),
+        CheckConstraint(
+            "stage IN ('queued','discovering','validating','extracting','completed')",
+            name="ck_market_update_items_stage",
+        ),
+        Index("ix_market_update_items_job_status", "job_id", "status"),
+        Index("ix_market_update_items_product_created", "product_id", "created_at"),
+        Index(
+            "uq_market_update_items_active_product",
+            "product_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+            sqlite_where=text("status IN ('queued', 'running')"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("market_update_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
+    stage: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    competitors_existing: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sources_discovered: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sources_confirmed: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sources_quarantined: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sources_total: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sources_succeeded: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    sources_failed: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    market_price_reference: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    job: Mapped["MarketUpdateJob"] = relationship(back_populates="items")
+    source_results: Mapped[list["MarketUpdateSourceResult"]] = relationship(
+        back_populates="item", cascade="all, delete-orphan", order_by="MarketUpdateSourceResult.id"
+    )
+
+
+class MarketUpdateSourceResult(Base):
+    """Resultado de scraping o captura manual de una fuente dentro de un job."""
+
+    __tablename__ = "market_update_source_results"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','succeeded','failed','skipped')",
+            name="ck_market_update_source_results_status",
+        ),
+        Index("ix_market_update_source_results_item_status", "item_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("market_update_items.id", ondelete="CASCADE"), nullable=False
+    )
+    source_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("canonical_knowledge_market_profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    operation: Mapped[str] = mapped_column(String(24), default="extraction", server_default="extraction", nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    http_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    used_browser: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    observation_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("market_price_history.id", ondelete="SET NULL"), nullable=True
+    )
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    retryable: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    item: Mapped["MarketUpdateItem"] = relationship(back_populates="source_results")
 
 
 class ProductEquivalence(Base):
@@ -510,6 +1168,191 @@ class ProductEquivalence(Base):
     canonical_product: Mapped["CanonicalProduct"] = relationship(
         back_populates="equivalences"
     )
+
+
+class CanonicalBatchJob(Base):
+    """Cabecera persistente de un alta masiva de productos canónicos."""
+
+    __tablename__ = "canonical_batch_jobs"
+    __table_args__ = (
+        Index("ix_canonical_batch_jobs_status", "status"),
+        Index("ix_canonical_batch_jobs_created_by", "created_by_user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_request_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default="QUEUED", server_default="QUEUED", nullable=False)
+    total_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    processed_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    success_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    error_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    items: Mapped[list["CanonicalBatchJobItem"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan", order_by="CanonicalBatchJobItem.position"
+    )
+
+
+class CanonicalBatchJobItem(Base):
+    """Entrada y resultado individual de un alta masiva canónica."""
+
+    __tablename__ = "canonical_batch_job_items"
+    __table_args__ = (
+        UniqueConstraint("job_id", "position", name="uq_canonical_batch_job_position"),
+        Index("ix_canonical_batch_job_items_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("canonical_batch_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("supplier_products.id", ondelete="SET NULL"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    brand: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    category_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("categories.id", ondelete="SET NULL"), nullable=True
+    )
+    subcategory_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("categories.id", ondelete="SET NULL"), nullable=True
+    )
+    tag_names: Mapped[Optional[list]] = mapped_column(
+        JSONBCompat, nullable=True, default=list, server_default="[]"
+    )
+    requested_sku: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", server_default="PENDING", nullable=False)
+    canonical_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="SET NULL"), nullable=True
+    )
+    sku_custom: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    job: Mapped["CanonicalBatchJob"] = relationship(back_populates="items")
+
+
+class CanonicalEnrichmentJob(Base):
+    """Trabajo persistente de investigación y contenido para un canónico."""
+
+    __tablename__ = "canonical_enrichment_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','review_required','partially_applied','applied','failed','cancelled','discarded')",
+            name="ck_canonical_enrichment_jobs_status",
+        ),
+        CheckConstraint(
+            "scope IN ('full','description','technical')",
+            name="ck_canonical_enrichment_jobs_scope",
+        ),
+        Index("ix_canonical_enrichment_jobs_canonical_created", "canonical_product_id", "created_at"),
+        Index(
+            "uq_canonical_enrichment_jobs_active",
+            "canonical_product_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued','running')"),
+            sqlite_where=text("status IN ('queued','running')"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
+    )
+    requested_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("products.id", ondelete="SET NULL"), nullable=True
+    )
+    client_request_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    batch_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    scope: Mapped[str] = mapped_column(String(20), nullable=False, default="full", server_default="full")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", server_default="queued")
+    stage: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    provider: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    config_snapshot: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    result_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    applied_fields: Mapped[Optional[list]] = mapped_column(JSONBCompat, nullable=True, default=list, server_default="[]")
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    canonical_product: Mapped["CanonicalProduct"] = relationship(back_populates="enrichment_jobs")
+    sources: Mapped[list["CanonicalEnrichmentSource"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan"
+    )
+
+
+class CanonicalEnrichmentSource(Base):
+    """Evidencia acotada consultada durante un job de enriquecimiento."""
+
+    __tablename__ = "canonical_enrichment_sources"
+    __table_args__ = (
+        Index("ix_canonical_enrichment_sources_job", "job_id"),
+        UniqueConstraint("job_id", "url", name="uq_canonical_enrichment_source_url"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("canonical_enrichment_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    knowledge_asset_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("canonical_knowledge_assets.id", ondelete="SET NULL"), nullable=True
+    )
+    knowledge_version_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("canonical_knowledge_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    source_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    mime_type: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    evidence_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    accessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    job: Mapped["CanonicalEnrichmentJob"] = relationship(back_populates="sources")
+
+
+class CanonicalContentVersion(Base):
+    """Snapshot revisable de contenido canónico aplicado o heredado."""
+
+    __tablename__ = "canonical_content_versions"
+    __table_args__ = (
+        Index("ix_canonical_content_versions_canonical_created", "canonical_product_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_product_id: Mapped[int] = mapped_column(
+        ForeignKey("canonical_products.id", ondelete="CASCADE"), nullable=False
+    )
+    origin: Mapped[str] = mapped_column(String(32), nullable=False)
+    origin_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("products.id", ondelete="SET NULL"), nullable=True
+    )
+    job_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("canonical_enrichment_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot_json: Mapped[dict] = mapped_column(JSONBCompat, nullable=False)
+    is_applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+
+    canonical_product: Mapped["CanonicalProduct"] = relationship(back_populates="content_versions")
 
 
 class ImportJob(Base):
@@ -551,6 +1394,7 @@ class User(Base):
     name: Mapped[Optional[str]] = mapped_column(String(100))
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     supplier_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True
     )
@@ -658,6 +1502,11 @@ class Purchase(Base):
     status: Mapped[str] = mapped_column(String(16), default="BORRADOR")
     global_discount: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
     vat_rate: Mapped[Optional[Numeric]] = mapped_column(Numeric(5, 2), default=0)
+    documented_total: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), default="ARS", server_default="ARS")
+    import_profile: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    extraction_meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     note: Mapped[Optional[str]] = mapped_column(Text)
     created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
@@ -679,15 +1528,20 @@ class PurchaseLine(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     purchase_id: Mapped[int] = mapped_column(ForeignKey("purchases.id", ondelete="CASCADE"))
-    supplier_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("supplier_products.id", ondelete="CASCADE"), nullable=True)
-    product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=True)
+    supplier_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("supplier_products.id", ondelete="SET NULL"), nullable=True)
+    product_id: Mapped[Optional[int]] = mapped_column(ForeignKey("products.id", ondelete="SET NULL"), nullable=True)
     supplier_sku: Mapped[Optional[str]] = mapped_column(String(120))
     title: Mapped[str] = mapped_column(String(300))
-    qty: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    qty: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
     unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     line_discount: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
+    line_vat_rate: Mapped[Optional[Numeric]] = mapped_column(Numeric(5, 2), nullable=True)
+    documented_subtotal: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
+    documented_total: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
+    extraction_confidence: Mapped[Optional[Numeric]] = mapped_column(Numeric(5, 4), nullable=True)
     state: Mapped[str] = mapped_column(String(24), default="OK")
     note: Mapped[Optional[str]] = mapped_column(Text)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     purchase: Mapped["Purchase"] = relationship(back_populates="lines")
     supplier_item: Mapped[Optional["SupplierProduct"]] = relationship()
@@ -700,8 +1554,11 @@ class PurchaseAttachment(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     purchase_id: Mapped[int] = mapped_column(ForeignKey("purchases.id", ondelete="CASCADE"))
     filename: Mapped[str] = mapped_column(String(255))
+    original_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     mime: Mapped[Optional[str]] = mapped_column(String(100))
     size: Mapped[Optional[int]] = mapped_column(Integer)
+    sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    document_type: Mapped[str] = mapped_column(String(32), default="REMITO", server_default="REMITO")
     path: Mapped[str] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
@@ -800,8 +1657,9 @@ class Customer(Base):
     province: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    kind: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # cf/ri/minorista/mayorista
+    kind: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # cf/ri/minorista/mayorista/colaborador
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    credit_limit: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -836,6 +1694,8 @@ class Sale(Base):
     sale_kind: Mapped[str] = mapped_column(String(16), default="MOSTRADOR")  # MOSTRADOR|PEDIDO
     # Costos adicionales (envío, packaging, etc.) como JSON: [{"concept": "Envío", "amount": 500}, ...]
     additional_costs: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    additional_cost_total: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, unique=True)
     # Totales y descuentos
     discount_percent: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)
     discount_amount: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
@@ -864,7 +1724,7 @@ class SaleLine(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id", ondelete="CASCADE"))
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
-    qty: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    qty: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
     unit_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     line_discount: Mapped[Optional[Numeric]] = mapped_column(Numeric(6, 2), default=0)  # porcentaje lineal 0-100
     note: Mapped[Optional[str]] = mapped_column(Text)
@@ -874,6 +1734,11 @@ class SaleLine(Base):
     subtotal: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
     tax: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
     total: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2), default=0)
+    unit_cost_snapshot: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
+    cost_supplier_product_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("supplier_products.id", ondelete="SET NULL"), nullable=True
+    )
+    global_discount_allocated: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
     supplier_item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     state: Mapped[Optional[str]] = mapped_column(String(16), default="OK")  # OK/SIN_VINCULAR
 
@@ -947,7 +1812,7 @@ class ReturnLine(Base):
     return_id: Mapped[int] = mapped_column(ForeignKey("returns.id", ondelete="CASCADE"))
     sale_line_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sale_lines.id", ondelete="SET NULL"), nullable=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
-    qty: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    qty: Mapped[Numeric] = mapped_column(Numeric(14, 2), default=0)
     unit_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     subtotal: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -955,6 +1820,51 @@ class ReturnLine(Base):
     return_ref: Mapped["Return"] = relationship(back_populates="lines")
     sale_line: Mapped[Optional["SaleLine"]] = relationship()
     product: Mapped["Product"] = relationship()
+
+
+class StockReservation(Base):
+    __tablename__ = "stock_reservations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('ACTIVE','CONSUMED','RELEASED','EXPIRED')",
+            name="ck_stock_reservations_status",
+        ),
+        Index("ix_stock_reservations_product_status", "product_id", "status", "expires_at"),
+        Index("ix_stock_reservations_sale", "sale_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id", ondelete="CASCADE"))
+    sale_line_id: Mapped[int] = mapped_column(ForeignKey("sale_lines.id", ondelete="CASCADE"))
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
+    qty: Mapped[Numeric] = mapped_column(Numeric(14, 2))
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE")
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    released_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class CustomerAccountEntry(Base):
+    __tablename__ = "customer_account_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "entry_type IN ('SALE_CHARGE','PAYMENT','RETURN_CREDIT','ANNUL_CREDIT','ADJUSTMENT_DEBIT','ADJUSTMENT_CREDIT')",
+            name="ck_customer_account_entries_type",
+        ),
+        UniqueConstraint("source_type", "source_id", "entry_type", name="uq_customer_account_entry_source"),
+        Index("ix_customer_account_entries_customer_date", "customer_id", "occurred_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"))
+    entry_type: Mapped[str] = mapped_column(String(24))
+    amount: Mapped[Numeric] = mapped_column(Numeric(14, 2))
+    source_type: Mapped[str] = mapped_column(String(24))
+    source_id: Mapped[int] = mapped_column(Integer)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    correlation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
 
 class MarketAlert(Base):
@@ -995,7 +1905,8 @@ class MarketAlert(Base):
     severity: Mapped[str] = mapped_column(
         Enum("low", "medium", "high", "critical", name="alert_severity_enum"),
         nullable=False,
-        default="medium"
+        default="medium",
+        server_default="medium",
     )
     
     # Valores involucrados
@@ -1007,22 +1918,41 @@ class MarketAlert(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     
     # Estado de la alerta
-    resolved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    resolved: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     resolved_by: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     resolution_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    job_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("market_update_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    job_item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("market_update_items.id", ondelete="SET NULL"), nullable=True
+    )
+    source_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("canonical_knowledge_market_profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    observation_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("market_price_history.id", ondelete="SET NULL"), nullable=True
+    )
     
     # Notificaciones enviadas
-    email_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    email_sent: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     email_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
     # Timestamps
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        default=datetime.utcnow, server_default=func.now(), nullable=False
+    )
     updated_at: Mapped[datetime] = mapped_column(
         default=datetime.utcnow, 
         onupdate=datetime.utcnow, 
+        server_default=func.now(),
         nullable=False
     )
     
@@ -1044,8 +1974,8 @@ class StockLedger(Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
     source_type: Mapped[str] = mapped_column(String(20))  # 'sale' | 'return' | futuro: 'adjust' | 'purchase'
     source_id: Mapped[int] = mapped_column(Integer)
-    delta: Mapped[int] = mapped_column(Integer)  # negativo venta, positivo devolución
-    balance_after: Mapped[int] = mapped_column(Integer)
+    delta: Mapped[Numeric] = mapped_column(Numeric(14, 2))  # negativo venta, positivo devolución
+    balance_after: Mapped[Numeric] = mapped_column(Numeric(14, 2))
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
@@ -1072,7 +2002,7 @@ class StockShortage(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"))
     user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    quantity: Mapped[int] = mapped_column(Integer)  # Siempre positivo (reduce stock)
+    quantity: Mapped[Numeric] = mapped_column(Numeric(14, 2))  # Siempre positivo (reduce stock)
     reason: Mapped[str] = mapped_column(String(20))  # GIFT, PENDING_SALE, UNKNOWN
     status: Mapped[str] = mapped_column(String(16), default="OPEN")  # OPEN, RECONCILED
     observation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -1090,6 +2020,8 @@ class KnowledgeSource(Base):
     __table_args__ = (
         Index("ix_knowledge_sources_hash", "hash"),
         Index("ix_knowledge_sources_created", "created_at"),
+        Index("ix_knowledge_sources_status_expiry", "status", "expires_at"),
+        CheckConstraint("status IN ('active','stale','disabled')", name="ck_knowledge_sources_status"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -1097,6 +2029,13 @@ class KnowledgeSource(Base):
     hash: Mapped[str] = mapped_column(String(64), nullable=False)  # SHA256 para detectar duplicados
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
     meta_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
+    role_scope: Mapped[list] = mapped_column(JSONBCompat, default=list, server_default='["admin"]', nullable=False)
+    channel_scope: Mapped[list] = mapped_column(JSONBCompat, default=list, server_default='["web"]', nullable=False)
+    visibility: Mapped[str] = mapped_column(String(24), default="internal", server_default="internal", nullable=False)
+    content_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="disabled", server_default="disabled", nullable=False)
+    indexed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Relación con fragmentos vectorizados
     chunks: Mapped[list["KnowledgeChunk"]] = relationship(
@@ -1124,6 +2063,87 @@ class KnowledgeChunk(Base):
     source: Mapped["KnowledgeSource"] = relationship(back_populates="chunks")
 
 
+class ExternalIdentity(Base):
+    """Vínculo cifrado y revocable entre una identidad externa y un usuario."""
+
+    __tablename__ = "external_identities"
+    __table_args__ = (
+        UniqueConstraint("provider", "external_id_hmac", name="uq_external_identity_provider_hmac"),
+        Index("ix_external_identities_user_status", "user_id", "status"),
+        Index(
+            "uq_external_identity_active_user_provider",
+            "user_id",
+            "provider",
+            unique=True,
+            postgresql_where=text("user_id IS NOT NULL AND status IN ('active','pending_approval')"),
+            sqlite_where=text("user_id IS NOT NULL AND status IN ('active','pending_approval')"),
+        ),
+        CheckConstraint(
+            "status IN ('pending_approval','active','revoked')",
+            name="ck_external_identities_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_id_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    external_id_hmac: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending_approval", nullable=False)
+    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    approved_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    revoked_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class ExternalIdentityLinkRequest(Base):
+    """Código de vinculación de un uso; sólo se persiste su hash."""
+
+    __tablename__ = "external_identity_link_requests"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_external_identity_link_token_hash"),
+        Index("ix_external_identity_link_user_status", "user_id", "status"),
+        CheckConstraint("status IN ('pending','consumed','expired')", name="ck_external_identity_link_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    external_identity_id: Mapped[Optional[int]] = mapped_column(ForeignKey("external_identities.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TelegramUpdate(Base):
+    """Deduplicación persistente y estado seguro de updates de Telegram."""
+
+    __tablename__ = "telegram_updates"
+    __table_args__ = (
+        UniqueConstraint("bot_id_hash", "update_id", name="uq_telegram_update_bot_update"),
+        Index("ix_telegram_updates_status_received", "status", "received_at"),
+        CheckConstraint(
+            "status IN ('queued','processing','succeeded','failed','skipped')",
+            name="ck_telegram_updates_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    update_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    processing_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 class ChatSession(Base):
     """Sesión de chat persistente para mantener contexto conversacional."""
     __tablename__ = "chat_sessions"
@@ -1132,17 +2152,35 @@ class ChatSession(Base):
         Index("ix_chat_sessions_status", "status"),
         Index("ix_chat_sessions_last_message", "last_message_at"),
         Index("ix_chat_sessions_created", "created_at"),
+        Index("ix_chat_sessions_channel_subject", "channel", "subject_hmac"),
         CheckConstraint(
             "status IN ('new','reviewed','archived')",
             name="ck_chat_sessions_status"
         ),
     )
 
-    session_id: Mapped[str] = mapped_column(String(100), primary_key=True)  # Ej: "telegram:12345"
-    user_identifier: Mapped[str] = mapped_column(String(100), nullable=False)  # ID externo del usuario
+    session_id: Mapped[str] = mapped_column(String(100), primary_key=True)  # Ej: "telegram:<clave-opaca>"
+    user_identifier: Mapped[str] = mapped_column(String(100), nullable=False)  # Sujeto opaco; nunca Telegram ID en claro
     status: Mapped[str] = mapped_column(String(20), default="new")  # 'new', 'reviewed', 'archived'
     tags: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')
     admin_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    channel: Mapped[str] = mapped_column(String(24), default="web", server_default="web", nullable=False)
+    external_identity_id: Mapped[Optional[int]] = mapped_column(ForeignKey("external_identities.id", ondelete="SET NULL"), nullable=True)
+    subject_hmac: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    conversation_key: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True)
+    assigned_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    detected_intent: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    sentiment: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    classification_confidence: Mapped[Optional[Numeric]] = mapped_column(Numeric(5, 4), nullable=True)
+    classification_model: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    problem_signals: Mapped[Optional[list]] = mapped_column(JSONBCompat, nullable=True)
+    classified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    reviewed_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -1170,3 +2208,465 @@ class ChatMessage(Base):
     meta: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default='{}')  # Ej: {"tool_name": "...", "tokens": 123}
 
     session: Mapped["ChatSession"] = relationship(back_populates="messages")
+
+
+class ChatRun(Base):
+    """Trazabilidad agregada de una respuesta sin contenido conversacional."""
+
+    __tablename__ = "chat_runs"
+    __table_args__ = (
+        Index("ix_chat_runs_created_channel_status", "created_at", "channel", "status"),
+        Index("ix_chat_runs_role_model", "effective_role", "model"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[Optional[str]] = mapped_column(ForeignKey("chat_sessions.session_id", ondelete="SET NULL"), nullable=True)
+    correlation_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    channel: Mapped[str] = mapped_column(String(24), nullable=False)
+    account_role: Mapped[str] = mapped_column(String(20), nullable=False)
+    effective_role: Mapped[str] = mapped_column(String(20), nullable=False)
+    model: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    provider: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    input_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    estimated_cost: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 6), nullable=True)
+    rag_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    citation_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tool_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cache_hit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class ChatToolEvent(Base):
+    """Evento de tool sin argumentos ni resultados completos."""
+
+    __tablename__ = "chat_tool_events"
+    __table_args__ = (Index("ix_chat_tool_events_tool_created", "tool_name", "created_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("chat_runs.id", ondelete="CASCADE"), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    authorized: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    cache_hit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ChatFeedbackEvent(Base):
+    """Feedback agregado vinculado por correlation ID, sin contenido de chat."""
+
+    __tablename__ = "chat_feedback_events"
+    __table_args__ = (
+        CheckConstraint("rating IN ('positive','negative')", name="ck_chat_feedback_events_rating"),
+        Index("ix_chat_feedback_events_rating_created", "rating", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    correlation_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    rating: Mapped[str] = mapped_column(String(16), nullable=False)
+    channel: Mapped[str] = mapped_column(String(24), default="web", nullable=False)
+    account_role: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ChatRolloutState(Base):
+    """Estado singleton que gobierna el acceso gradual de Chat y Telegram."""
+
+    __tablename__ = "chat_rollout_state"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_chat_rollout_state_singleton"),
+        CheckConstraint("status IN ('active','paused')", name="ck_chat_rollout_state_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    phase: Mapped[str] = mapped_column(String(32), default="disabled", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="paused", nullable=False)
+    auto_advance: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    phase_started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    reason_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+
+class ChatRolloutEvent(Base):
+    """Decisión de transición sin contenido conversacional ni identificadores."""
+
+    __tablename__ = "chat_rollout_events"
+    __table_args__ = (Index("ix_chat_rollout_events_created_phase", "created_at", "to_phase"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    from_phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    to_phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision: Mapped[str] = mapped_column(String(24), nullable=False)
+    result: Mapped[str] = mapped_column(String(24), nullable=False)
+    metrics: Mapped[dict] = mapped_column(JSONBCompat, default=dict, server_default="{}", nullable=False)
+    reason_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ChatRolloutCheck(Base):
+    """Resultado seguro de un gate de rollout."""
+
+    __tablename__ = "chat_rollout_checks"
+    __table_args__ = (Index("ix_chat_rollout_checks_phase_created", "phase", "created_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    check_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# --- Operaciones administrativas persistentes ---
+
+class DriveSyncRun(Base):
+    """Ejecución auditable de sincronización de imágenes desde Drive."""
+
+    __tablename__ = "drive_sync_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','cancel_requested','cancelled','completed','partial','failed')",
+            name="ck_drive_sync_runs_status",
+        ),
+        Index("ix_drive_sync_runs_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    parent_run_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("drive_sync_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    source_folder_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="queued", server_default="queued", nullable=False)
+    initiated_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    total_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    processed_items: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    success_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    error_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    current_filename: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    cancel_requested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    items: Mapped[list["DriveSyncItem"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="DriveSyncItem.position"
+    )
+
+
+class DriveSyncItem(Base):
+    """Resultado de un archivo individual dentro de una sincronización."""
+
+    __tablename__ = "drive_sync_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','processing','processed','failed','skipped','cancelled')",
+            name="ck_drive_sync_items_status",
+        ),
+        UniqueConstraint("run_id", "position", name="uq_drive_sync_items_run_position"),
+        Index("ix_drive_sync_items_run_status", "run_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("drive_sync_runs.id", ondelete="CASCADE"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_file_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    sku: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", server_default="pending", nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True, default=dict, server_default="{}")
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    run: Mapped["DriveSyncRun"] = relationship(back_populates="items")
+
+
+class SchedulerSetting(Base):
+    """Configuración singleton persistente del scheduler de mercado."""
+
+    __tablename__ = "scheduler_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), default="America/Argentina/Buenos_Aires", nullable=False)
+    start_hour: Mapped[str] = mapped_column(String(5), default="02:00", nullable=False)
+    interval_hours: Mapped[int] = mapped_column(Integer, default=24, nullable=False)
+    update_frequency_days: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    max_products_per_run: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    prioritize_mandatory: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SchedulerRun(Base):
+    """Historial de ejecuciones automáticas y manuales del scheduler."""
+
+    __tablename__ = "scheduler_runs"
+    __table_args__ = (Index("ix_scheduler_runs_status_created", "status", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trigger: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="queued", nullable=False)
+    initiated_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    products_enqueued: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sources_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duration_seconds: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 3), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    config_snapshot: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class KnowledgeIndexTask(Base):
+    """Seguimiento persistente de indexación del conocimiento RAG."""
+
+    __tablename__ = "knowledge_index_tasks"
+    __table_args__ = (Index("ix_knowledge_index_tasks_status_created", "status", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    target: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    result: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class CatalogGenerationRun(Base):
+    """Ejecución persistente de generación de catálogos."""
+
+    __tablename__ = "catalog_generation_runs"
+    __table_args__ = (Index("ix_catalog_generation_runs_status_created", "status", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(24), default="queued", nullable=False)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    product_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    artifact_filename: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class CatalogGenerationEvent(Base):
+    """Evento estructurado y descargable de una generación de catálogo."""
+
+    __tablename__ = "catalog_generation_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence", name="uq_catalog_generation_event_sequence"),
+        Index("ix_catalog_generation_events_run", "run_id", "sequence"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_generation_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    step: Mapped[str] = mapped_column(String(64), nullable=False)
+    level: Mapped[str] = mapped_column(String(16), default="INFO", nullable=False)
+    payload: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ChatMessageFeedback(Base):
+    """Evaluación humana de una respuesta del asistente."""
+
+    __tablename__ = "chat_message_feedback"
+    __table_args__ = (
+        UniqueConstraint("message_id", "reviewer_user_id", name="uq_chat_feedback_message_reviewer"),
+        Index("ix_chat_message_feedback_rating_created", "rating", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False)
+    rating: Mapped[str] = mapped_column(String(16), nullable=False)
+    categories: Mapped[Optional[list]] = mapped_column(JSONBCompat, nullable=True)
+    comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reviewer_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AIPromptVersion(Base):
+    """Versión auditable y reversible de un prompt por persona/tarea."""
+
+    __tablename__ = "ai_prompt_versions"
+    __table_args__ = (
+        UniqueConstraint("prompt_key", "version", name="uq_ai_prompt_key_version"),
+        Index("ix_ai_prompt_versions_key_status", "prompt_key", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    prompt_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="candidate", nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metrics: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    approved_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    activated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class AIPromptEvaluation(Base):
+    """Resultado reproducible de evaluar una versión candidata de prompt."""
+
+    __tablename__ = "ai_prompt_evaluations"
+    __table_args__ = (Index("ix_ai_prompt_evaluations_prompt_created", "prompt_version_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    prompt_version_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_prompt_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    dataset_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    composite_score: Mapped[Numeric] = mapped_column(Numeric(7, 4), nullable=False)
+    safety_passed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class MeliAccount(Base):
+    """Autorización OAuth cifrada de una cuenta seller de Mercado Libre."""
+
+    __tablename__ = "meli_accounts"
+    __table_args__ = (
+        UniqueConstraint("application_id", "seller_id", name="uq_meli_accounts_application_seller"),
+        CheckConstraint("status IN ('active','revoked','error')", name="ck_meli_accounts_status"),
+        Index("ix_meli_accounts_status_expires", "status", "token_expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    application_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seller_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    site_id: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    scopes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    access_token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    token_expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    token_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    last_error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class MeliOAuthState(Base):
+    """State OAuth de un uso; nunca persiste el valor crudo."""
+
+    __tablename__ = "meli_oauth_states"
+    __table_args__ = (Index("ix_meli_oauth_states_expires_consumed", "expires_at", "consumed_at"),)
+
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    code_verifier_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    redirect_uri: Mapped[str] = mapped_column(String(800), nullable=False)
+    requested_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class MeliNotification(Base):
+    """Sobre mínimo durable de una notificación no confiable."""
+
+    __tablename__ = "meli_notifications"
+    __table_args__ = (
+        CheckConstraint("status IN ('queued','processing','succeeded','failed','skipped')", name="ck_meli_notifications_status"),
+        Index("ix_meli_notifications_status_received", "status", "received_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("meli_accounts.id", ondelete="SET NULL"))
+    application_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seller_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    topic: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource: Mapped[str] = mapped_column(String(1000), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    processing_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class MeliItemLink(Base):
+    """Mapeo explícito de stock Growen a ítem o variación MeLi."""
+
+    __tablename__ = "meli_item_links"
+    __table_args__ = (
+        UniqueConstraint("account_id", "item_id", "variation_id", name="uq_meli_item_links_target"),
+        Index("ix_meli_item_links_product_active", "product_id", "active"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("meli_accounts.id", ondelete="CASCADE"), nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    item_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    variation_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_synced_quantity: Mapped[Optional[Numeric]] = mapped_column(Numeric(14, 2), nullable=True)
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class MeliSyncJob(Base):
+    """Outbox durable procesado exclusivamente por la cola meli_sync."""
+
+    __tablename__ = "meli_sync_jobs"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_meli_sync_jobs_dedupe_key"),
+        CheckConstraint("kind IN ('notification','stock','reconcile')", name="ck_meli_sync_jobs_kind"),
+        CheckConstraint("status IN ('queued','running','succeeded','failed','skipped')", name="ck_meli_sync_jobs_status"),
+        Index("ix_meli_sync_jobs_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("meli_accounts.id", ondelete="CASCADE"))
+    notification_id: Mapped[Optional[str]] = mapped_column(ForeignKey("meli_notifications.id", ondelete="CASCADE"))
+    item_link_id: Mapped[Optional[int]] = mapped_column(ForeignKey("meli_item_links.id", ondelete="CASCADE"))
+    payload_json: Mapped[Optional[dict]] = mapped_column(JSONBCompat, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

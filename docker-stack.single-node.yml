@@ -1,0 +1,15 @@
+# NG-HEADER: Nombre de archivo: docker-stack.single-node.yml
+# NG-HEADER: Ubicación: docker-stack.single-node.yml
+# NG-HEADER: Descripción: Override productivo sin alta disponibilidad para un único nodo Swarm.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+version: "3.9"
+
+services:
+  api: {deploy: {replicas: 1, update_config: {order: stop-first}}}
+  frontend: {deploy: {replicas: 1, update_config: {order: stop-first}}}
+  mcp_products: {deploy: {replicas: 1}}
+  mcp_web_search: {deploy: {replicas: 1}}
+  mcp_siyuan: {deploy: {replicas: 1}}
+  meli_webhook_gateway: {deploy: {replicas: 1, update_config: {order: stop-first}}}
+  meli_sync_worker: {deploy: {replicas: 1, update_config: {order: stop-first}}}
+  meli_cloudflared: {deploy: {replicas: 1, update_config: {order: stop-first}}}

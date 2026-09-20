@@ -12,7 +12,7 @@ logs-clean:
 admin-dev:
 	@echo "Start backend + frontend (see README for details)"
 	@echo "- Backend: use scripts/start_stack.ps1 or scripts/run_api.cmd on Windows"
-	@echo "- Frontend: cd frontend && npm run dev"
+	@echo "- Frontend: cd frontend-vue && npm run dev"
 
 admin-logs-clean:
 	$(PY) scripts/clear_logs.py

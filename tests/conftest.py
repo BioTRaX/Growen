@@ -5,6 +5,9 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 import os
 import sys
+import tempfile
+import asyncio
+import socket
 from pathlib import Path
 from typing import AsyncGenerator
 import pytest
@@ -17,12 +20,26 @@ if str(project_root) not in sys.path:
 
 # -------- Entorno base de tests --------
 # DB en memoria y flags por defecto que suavizan validaciones durante tests
-os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["ENV"] = "test"
+os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
+os.environ.setdefault("ADMIN_PASS", "test-admin-password")
+os.environ.setdefault("ALLOWED_ORIGINS", "http://testserver")
+os.environ.setdefault("MCP_SECRET_KEY", "test-mcp-secret-key-not-for-production")
+os.environ.setdefault("MCP_PRODUCTS_SECRET_KEY", "test-products-key-not-for-production")
+os.environ.setdefault("MCP_WEB_SEARCH_SECRET_KEY", "test-web-key-not-for-production")
+os.environ["OPENAI_API_KEY"] = ""
+# Una base temporal por proceso evita que TestClient/WebSocket pierda el esquema
+# al cruzar hilos o abrir una conexión SQLite diferente. Cada test conserva el
+# aislamiento mediante create_all/drop_all en el fixture autouse.
+_test_db_path = Path(tempfile.gettempdir()) / f"growen-pytest-{os.getpid()}.db"
+os.environ["DB_URL"] = f"sqlite+aiosqlite:///{_test_db_path.as_posix()}"
 # En el entorno de tests usamos modo NO estricto por defecto para no exigir category_name
 # en creaciones simples y mantener compatibilidad con payloads legacy.
 os.environ.setdefault("CANONICAL_SKU_STRICT", "0")
 os.environ.setdefault("SALES_RATE_LIMIT_DISABLED", "0")  # mantener activo pero limpiar bucket por test
 os.environ.setdefault("AUTH_ENABLED", "true")
+# Las pruebas nunca deben publicar trabajos en el Redis local del desarrollador.
+os.environ["RUN_INLINE_JOBS"] = "1"
 
 # Recargar módulo de sesión para que tome DB_URL
 import db.session as _session  # type: ignore
@@ -33,6 +50,7 @@ from sqlalchemy import text as _text  # noqa: E402
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.ext.asyncio import create_async_engine as _create_engine
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+from db.models import KnowledgeCapability
 
 if str(_session.engine.url).startswith("postgres"):
     mem_url = "sqlite+aiosqlite:///file:memdb1?mode=memory&cache=shared"
@@ -44,10 +62,28 @@ else:
 
 Base = _base.Base
 
+_KNOWLEDGE_CAPABILITIES = (
+    "description",
+    "technical_specs",
+    "compatibility",
+    "images",
+    "manuals",
+    "price",
+    "availability",
+    "offers",
+    "seo",
+    "video",
+    "warranty",
+    "certifications",
+)
+
 
 @pytest_asyncio.fixture(scope="function", autouse=True)
-async def db_session():
+async def db_session(request):
     """DB limpia por test (SQLite memoria compartida). Retorna sesión para usar en fixtures/tests."""
+    if request.node.get_closest_marker("no_db"):
+        yield None
+        return
     engine = _session.engine
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -60,18 +96,21 @@ async def db_session():
     
     # Crear y retornar sesión para que fixtures puedan usarla
     async with _session.SessionLocal() as session:
+        session.add_all(
+            KnowledgeCapability(code=code, name=code.replace("_", " ").title())
+            for code in _KNOWLEDGE_CAPABILITIES
+        )
+        await session.commit()
         yield session
     
     # Cleanup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
-    await engine.dispose()
 
 
 # -------- Overrides de auth/CSRF y utilidades comunes --------
 from services.api import app  # noqa: E402
 from services.auth import current_session, require_csrf, SessionData  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
 from httpx import AsyncClient, ASGITransport  # noqa: E402
 from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
 from starlette.requests import Request  # noqa: E402
@@ -121,16 +160,25 @@ app.dependency_overrides[require_csrf] = lambda: None
 @pytest.fixture(autouse=True)
 def _force_admin_and_disable_csrf(request):
     """Reafirma overrides por test para evitar contaminación entre módulos.
-    Se desactiva si el test tiene marker 'no_auth_override'."""
+    El marker ``no_auth_override`` ejecuta autenticación y CSRF reales."""
+    original_session = app.dependency_overrides.get(current_session)
+    original_csrf = app.dependency_overrides.get(require_csrf)
     
     # Skip override si el test pide auth real
     if "no_auth_override" in request.keywords:
-        # Limpiar override para que use auth real
+        # Limpiar ambos overrides: mantener CSRF simulado ocultaría fallos del
+        # ciclo login -> cookie -> mutación autenticada.
         app.dependency_overrides.pop(current_session, None)
-        app.dependency_overrides[require_csrf] = lambda: None
+        app.dependency_overrides.pop(require_csrf, None)
         yield
-        # Restaurar default después del test
-        app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
+        if original_session is not None:
+            app.dependency_overrides[current_session] = original_session
+        else:
+            app.dependency_overrides.pop(current_session, None)
+        if original_csrf is not None:
+            app.dependency_overrides[require_csrf] = original_csrf
+        else:
+            app.dependency_overrides.pop(require_csrf, None)
         return
     
     # Comportamiento normal: forzar admin
@@ -153,8 +201,10 @@ def _clear_sales_rate_limit_bucket():
 
 
 @pytest.fixture()
-def admin_client() -> TestClient:
+def admin_client():
     """Cliente HTTP con contexto admin y CSRF coherente (por si algún endpoint valida)."""
+    from fastapi.testclient import TestClient
+
     c = TestClient(app)
     c.cookies.set("csrf_token", "test-csrf")
     c.headers.update({"X-CSRF-Token": "test-csrf"})
@@ -209,6 +259,46 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
     """Cliente HTTP async genérico con contexto admin."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
+
+
+@pytest_asyncio.fixture
+async def live_asgi_server() -> AsyncGenerator[dict[str, str], None]:
+    """Sirve la aplicación con Uvicorn en loopback y el mismo event loop del test."""
+    import uvicorn
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = int(listener.getsockname()[1])
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host="127.0.0.1",
+            port=port,
+            log_level="error",
+            lifespan="off",
+            access_log=False,
+        )
+    )
+    task = asyncio.create_task(server.serve(sockets=[listener]))
+    for _ in range(200):
+        if server.started:
+            break
+        if task.done():
+            await task
+        await asyncio.sleep(0.01)
+    else:
+        server.should_exit = True
+        await task
+        raise RuntimeError("Uvicorn no inició dentro del plazo de la prueba")
+
+    try:
+        yield {"http": f"http://127.0.0.1:{port}", "ws": f"ws://127.0.0.1:{port}"}
+    finally:
+        server.should_exit = True
+        await asyncio.wait_for(task, timeout=5)
+        listener.close()
 
 
 @pytest_asyncio.fixture

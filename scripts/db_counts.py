@@ -13,7 +13,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 load_dotenv(root / ".env", override=True)
 DB_URL = os.getenv("DB_URL")
-print("DB_URL:", DB_URL.replace(DB_URL.split(":")[2].split("@")[0], "***") if DB_URL else None)
+print("Configuración de base disponible:", bool(DB_URL))
 
 engine = create_engine(DB_URL, future=True)
 with engine.connect() as conn:

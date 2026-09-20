@@ -128,25 +128,9 @@ PRODUCT_INFO_KEYWORDS = {
     "especificaciones",
     "descripcion",
     "descripción",
-    "hablame",
-    "contame",
-    "decime",
-    "dame",
-    "mostrame",
-    "buscame",
-    "buscar",
-    "encontrar",
     "sobre el producto",
     "sobre este producto",
     "del producto",
-    "que es",
-    "qué es",
-    "como es",
-    "cómo es",
-    "como funciona",
-    "cómo funciona",
-    "para que sirve",
-    "para qué sirve",
 }
 
 COMMAND_ALIASES = {
@@ -261,31 +245,14 @@ SMALL_TALK_TERMS = {
     "dale",
 }
 
-RECOMMENDATION_TERMS = {
-    "recomendar",
-    "recomendarme",
-    "recomiendame",
-    "recomiendanos",
-    "recomiendas",
-    "recomienda",
-    "aconsejar",
-    "aconsejame",
-    "sugerir",
-    "sugerime",
-    "sugerencia",
-    "sugerirme",
-    "podrias",
-    "puedes",
-    "podrian",
-    "podrias",
-}
-
-
-
 SKU_COMMAND_RE = re.compile(r"^[\s/]*(?P<command>[a-zA-Z]+)\s+(?P<body>.+)$")
 SKU_TAG_RE = re.compile(r"\bsku[:#\s-]*([A-Za-z0-9._\-]{2,})\b", re.IGNORECASE)
 ALNUM_TOKEN_RE = re.compile(r"[A-Za-z0-9._\-]+")
 NUMERIC_TOKEN_RE = re.compile(r"\b\d{3,}\b")
+CHAT_STATUS_RE = re.compile(
+    r"\b(?:estoy|estas|esta|andas|seguis|sigue)\s+(?:disponible|funcionando|activo|activa|bien)\b",
+    re.IGNORECASE,
+)
 
 LOW_STOCK_THRESHOLD = 2
 FUZZY_THRESHOLD = 0.85
@@ -402,6 +369,15 @@ def _tokenize(normalized_text: str) -> List[str]:
             continue
         terms.append(token)
     return terms
+
+
+def _contains_keyword(text: str, keywords: Iterable[str]) -> bool:
+    """Busca señales completas para evitar coincidencias dentro de otras palabras."""
+    return any(
+        re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", text) is not None
+        for keyword in keywords
+        if keyword != "$"
+    )
 
 
 def _extract_sku_candidates(raw: str, normalized: str) -> List[str]:
@@ -1146,9 +1122,11 @@ def extract_product_query(text: str) -> Optional[ProductQuery]:
             body = match.group("body") or ""
     normalized = _normalize_text(body)
     lowered = normalized.lower()
-    has_price = any(keyword in lowered for keyword in PRICE_KEYWORDS)
-    has_stock = any(keyword in lowered for keyword in STOCK_KEYWORDS)
-    has_product_info = any(keyword in lowered for keyword in PRODUCT_INFO_KEYWORDS)
+    if CHAT_STATUS_RE.search(lowered):
+        return None
+    has_price = _contains_keyword(lowered, PRICE_KEYWORDS)
+    has_stock = _contains_keyword(lowered, STOCK_KEYWORDS)
+    has_product_info = _contains_keyword(lowered, PRODUCT_INFO_KEYWORDS)
     if "$" in raw:
         has_price = True
     if command == "price":
@@ -1162,8 +1140,6 @@ def extract_product_query(text: str) -> Optional[ProductQuery]:
 
     command_signal = command in {"price", "stock"}
     all_smalltalk = bool(terms) and all(term in SMALL_TALK_TERMS for term in terms)
-    has_recommendation = any(term in RECOMMENDATION_TERMS for term in terms)
-    stripped_terms = [term for term in terms if term not in SMALL_TALK_TERMS]
 
     # Verificar si es smalltalk ANTES de establecer has_price por defecto
     if all_smalltalk:
@@ -1171,10 +1147,9 @@ def extract_product_query(text: str) -> Optional[ProductQuery]:
     
     has_product_signal = has_price or has_stock or has_product_info or bool(sku_candidates) or command_signal
     if not has_product_signal:
-        if has_recommendation:
-            return None
-        if not stripped_terms:
-            return None
+        # Deny-by-default: una frase general no debe convertirse implícitamente
+        # en una consulta de precio. El catálogo exige una señal explícita.
+        return None
 
     explicit_price = has_price
     explicit_stock = has_stock
@@ -1467,6 +1442,29 @@ def render_product_response(result: ProductLookupResult) -> str:
 
 def render_price_response(result: ProductLookupResult) -> str:
     return render_product_response(result)
+
+
+def render_product_response_for_role(result: ProductLookupResult, role: str) -> str:
+    """Renderiza catálogo sin SKU, proveedor ni stock exacto para perfiles públicos."""
+    if role in {"colaborador", "admin"}:
+        return render_product_response(result)
+    if result.status == "invalid":
+        return "Necesito un nombre o código para buscar el producto."
+    if result.status == "no_match":
+        return "No encontré productos que coincidan con tu búsqueda."
+    if not result.entries:
+        return "No pude determinar el producto solicitado."
+    if result.status == "ambiguous" and len(result.entries) > 1:
+        options = []
+        for entry in result.entries[:3]:
+            availability = "disponible" if entry.stock_status in {"ok", "low"} else "sin disponibilidad inmediata"
+            options.append(f"{entry.name} ({availability})")
+        return "Encontré varias opciones: " + "; ".join(options) + ". Decime cuál te interesa."
+    entry = result.entries[0]
+    formatted = _format_price(entry.price, entry.currency) if entry.price is not None else None
+    price_text = f"El precio de {entry.name} es {formatted}." if formatted else f"{entry.name} no tiene precio de venta publicado."
+    availability = "Hay disponibilidad." if entry.stock_status in {"ok", "low"} else "Sin disponibilidad inmediata."
+    return f"{price_text} {availability}"
 
 
 async def log_product_lookup(

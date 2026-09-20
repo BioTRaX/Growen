@@ -27,6 +27,8 @@ from services.auth import (
     check_login_rate_limit,
     record_failed_login,
     reset_login_attempts,
+    client_ip_from_request,
+    invalidate_user_sessions,
     SessionData,
 )
 from sqlalchemy.exc import OperationalError
@@ -37,6 +39,7 @@ except Exception:  # pragma: no cover
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+debug_router = APIRouter(prefix="/auth/debug", tags=["auth-debug"])
 
 
 class LoginIn(BaseModel):
@@ -49,11 +52,10 @@ logger = logging.getLogger("growen.auth")
 @router.post("/login")
 async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(get_session)):
     t0 = secrets.token_hex(4)
-    logger.debug("[login:start] tag=%s ip=%s identifier=%s", t0, request.client.host if request.client else None, payload.identifier)
-    ip = request.client.host if request.client else "unknown"
-    check_login_rate_limit(ip)
-
     ident = (payload.identifier or "").strip()
+    logger.debug("[login:start] tag=%s", t0)
+    ip = client_ip_from_request(request)
+    await check_login_rate_limit(ip, ident)
     stmt = select(User).where(
         or_(
             func.lower(User.identifier) == ident.lower(),
@@ -91,16 +93,16 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
 
     user = res.scalar_one_or_none()
     if not user:
-        logger.debug("[login:not_found] tag=%s identifier=%s", t0, ident)
+        logger.debug("[login:not_found] tag=%s", t0)
     if user and not verify_pw(payload.password, user.password_hash):
         logger.debug("[login:bad_password] tag=%s user_id=%s", t0, user.id)
-    if not user or not verify_pw(payload.password, user.password_hash):
-        record_failed_login(ip)
+    if not user or not user.is_active or not verify_pw(payload.password, user.password_hash):
+        await record_failed_login(ip, ident)
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
-    reset_login_attempts(ip)
+    await reset_login_attempts(ip, ident)
     prev = await current_session(request, db)
-    sess, csrf = await create_session(
+    sess, sid, csrf = await create_session(
         db, user.role, request, user, prev_session=prev.session
     )
     resp = JSONResponse(
@@ -113,33 +115,33 @@ async def login(payload: LoginIn, request: Request, db: AsyncSession = Depends(g
             "supplier_id": user.supplier_id,
         }
     )
-    await set_session_cookies(resp, sess.id, csrf, request)
-    logger.debug("[login:ok] tag=%s user_id=%s role=%s session=%s", t0, user.id, user.role, sess.id[:12])
+    await set_session_cookies(resp, sid, csrf, request)
+    logger.debug("[login:ok] tag=%s user_id=%s role=%s", t0, user.id, user.role)
     return resp
 
 
 @router.post("/guest")
 async def login_guest(request: Request, db: AsyncSession = Depends(get_session)):
     t0 = secrets.token_hex(4)
-    logger.debug("[guest:start] tag=%s ip=%s", t0, request.client.host if request.client else None)
+    logger.debug("[guest:start] tag=%s", t0)
     prev = await current_session(request, db)
-    sess, csrf = await create_session(
+    sess, sid, csrf = await create_session(
         db, "guest", request, prev_session=prev.session
     )
     resp = JSONResponse({"role": "guest"})
-    await set_session_cookies(resp, sess.id, csrf, request)
-    logger.debug("[guest:ok] tag=%s session=%s", t0, sess.id[:12])
+    await set_session_cookies(resp, sid, csrf, request)
+    logger.debug("[guest:ok] tag=%s", t0)
     return resp
 
 
 @router.post("/logout", dependencies=[Depends(require_csrf)])
 async def logout(request: Request, db: AsyncSession = Depends(get_session)):
     prev = await current_session(request, db)
-    new_sess, csrf = await create_session(
+    new_sess, sid, csrf = await create_session(
         db, "guest", request, prev_session=prev.session
     )
     resp = JSONResponse({"status": "ok"})
-    await set_session_cookies(resp, new_sess.id, csrf, request)
+    await set_session_cookies(resp, sid, csrf, request)
     return resp
 
 
@@ -179,6 +181,7 @@ class UserUpdate(BaseModel):
     name: str | None = None
     role: str | None = None
     supplier_id: int | None = None
+    is_active: bool | None = None
 
 
 @router.get("/users", dependencies=[Depends(require_roles("admin"))])
@@ -211,6 +214,7 @@ async def list_users(
             "name": u.name,
             "role": u.role,
             "supplier_id": u.supplier_id,
+            "is_active": u.is_active,
         }
         for u in res.scalars().all()
     ]
@@ -239,6 +243,7 @@ async def create_user(payload: UserCreate, db: AsyncSession = Depends(get_sessio
         "name": user.name,
         "role": user.role,
         "supplier_id": user.supplier_id,
+        "is_active": user.is_active,
     }
 
 
@@ -257,9 +262,17 @@ async def update_user(
     if payload.name is not None:
         user.name = payload.name
     if payload.role is not None:
+        role_changed = payload.role != user.role
         user.role = payload.role
+        if role_changed:
+            await invalidate_user_sessions(db, user.id)
     if payload.supplier_id is not None:
         user.supplier_id = payload.supplier_id
+    if payload.is_active is not None:
+        active_changed = payload.is_active != user.is_active
+        user.is_active = payload.is_active
+        if active_changed:
+            await invalidate_user_sessions(db, user.id)
     await db.commit()
     return {
         "id": user.id,
@@ -268,6 +281,7 @@ async def update_user(
         "name": user.name,
         "role": user.role,
         "supplier_id": user.supplier_id,
+        "is_active": user.is_active,
     }
 
 
@@ -281,6 +295,7 @@ async def reset_password(user_id: int, db: AsyncSession = Depends(get_session)):
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     new_password = secrets.token_urlsafe(8)
     user.password_hash = hash_pw(new_password)
+    await invalidate_user_sessions(db, user.id)
     await db.commit()
     return {"password": new_password}
 
@@ -306,44 +321,30 @@ async def delete_user(user_id: int, db: AsyncSession = Depends(get_session)):
 
 
 # --- Debug endpoints (solo entorno dev) ---
-@router.get("/debug/current")
+@debug_router.get("/current")
 async def debug_current(sess: SessionData = Depends(current_session)):
     """Devuelve la sesión cruda (solo dev)."""
-    from agent_core.config import settings as _s
-    if _s.env != "dev":
-        raise HTTPException(status_code=404)
     out = {"role": sess.role, "has_session": bool(sess.session)}
     if sess.session:
         out["session"] = {
-            "id": sess.session.id,
             "user_id": sess.session.user_id,
             "expires_at": sess.session.expires_at.isoformat() if sess.session.expires_at else None,
         }
     if sess.user:
-        out["user"] = {"id": sess.user.id, "identifier": sess.user.identifier, "role": sess.user.role}
+        out["user"] = {"id": sess.user.id, "role": sess.user.role}
     return out
 
 
-@router.get("/debug/sessions")
+@debug_router.get("/sessions")
 async def debug_sessions(db: AsyncSession = Depends(get_session)):
     """Lista sesiones activas (solo dev): id, user, rol, expira."""
-    from agent_core.config import settings as _s
-    if _s.env != "dev":
-        raise HTTPException(status_code=404)
     from sqlalchemy import select
-    from db.models import Session as DBSess, User as DBUser
+    from db.models import Session as DBSess
     rows = []
     res = await db.execute(select(DBSess))
     for s in res.scalars().all():
-        u_ident = None
-        if s.user_id:
-            u = await db.get(DBUser, s.user_id)
-            if u:
-                u_ident = u.identifier
         rows.append({
-            "id": s.id,
             "user_id": s.user_id,
-            "user_identifier": u_ident,
             "role": s.role,
             "expires_at": s.expires_at.isoformat() if s.expires_at else None,
         })

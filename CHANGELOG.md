@@ -4,7 +4,668 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-09-20 — alineación de producción Swarm y base de datos con dev
+
+- Se sincronizó la base de datos productiva (`growen_pgdata`) desde el volcado
+  lógico completo de desarrollo (`dev`), preservando las 11 corridas de auditoría,
+  123 ítems auditados, 13 feedbacks, 59 trabajos de enriquecimiento, 173 activos
+  de conocimiento y 43 versiones de contenido sin necesidad de reauditar el catálogo.
+- Se sincronizaron los volúmenes externos de media `growen_public_media` (logos)
+  y `growen_private_media` (comprobantes de compras).
+- Se construyeron, escanearon con Trivy y publicaron las 13 imágenes productivas
+  inmutables bajo el commit `325fba480aa9aa000a78b385bf4c5283180fd964`, generando
+  el manifiesto `images.manifest.json` y script de entorno de digests.
+- Se desplegó el stack en Docker Swarm (`SingleNode`), logrando la convergencia
+  de los 18 servicios en estado 1/1 y verificando `/health`, `/api/health` y
+  `/api/health/summary` (saludable con 7 workers activos).
+- Se alinea la rama `main` del repositorio con `dev` al cierre de la sesión.
+
+## 2026-09-19 — actualización de seguridad de Soup Sieve
+
+- Se elevó el mínimo transitivo de `soupsieve` a `2.9.0` en API, workers y MCP
+  Web Search para resolver CVE-2026-85999 y CVE-2026-86000.
+- Se regeneraron los locks reproducibles con hashes; el cambio no agrega una
+  dependencia nueva ni altera contratos funcionales.
+- El regenerador de locks conserva el marcador de plataforma de `pywin32`
+  también con finales CRLF, evitando su instalación en imágenes Linux.
+- El gate local, el workflow manual y la configuración de Ruff dejan de
+  referenciar el frontend React retirado y validan únicamente Vue.
+
+## 2026-09-19 — identificación y aceptación supervisada del auditor
+
+- El detalle de las corridas expone el nombre canónico y el `Product.id`
+  vinculado mediante consultas agrupadas; Vue muestra el nombre como identidad
+  principal y evita enlaces construidos con IDs canónicos.
+- `GET /products` entrega las coordenadas persistidas del último ítem auditado.
+  Sólo admin puede aceptar desde Productos un `needs_review` con nota mediante
+  `accept_exception`; el flujo registra trazabilidad y no aplica correcciones
+  de IA.
+- Se agregaron pruebas backend y Vue de payloads, navegación, permisos,
+  validación de nota, éxito y error. El smoke autenticado sigue pendiente y no
+  se declara despliegue ni producción verificada.
+
+## 2026-09-17 — piloto integral y recuperación del auditor de catálogo
+
+- Se procesaron los 29 canónicos reales sin fallos técnicos: 18 quedaron
+  limpios, 10 en revisión manual y 1 reutilizado; una repetición estable
+  reutilizó los 29 preservando 19 `skipped_unchanged` y 10 `needs_review`, sin
+  duplicar jobs ni feedback.
+- MCP Web Search ahora valida tokens con el secreto específico de su audiencia,
+  corrigiendo los 401 que bloqueaban Enrich durante la auditoría.
+- La reanudación de runs limpia el job Enrich terminal, recalcula contadores y
+  usa una clave nueva por intento; `review_required` se conserva como revisión
+  manual, actualiza la cobertura persistida y no se convierte en fallo técnico.
+- Ollama reintenta una sola vez una respuesta no JSON y mantiene fallo cerrado
+  si la segunda respuesta también es inválida.
+- Los snapshots de corrección y restauración serializan medidas `Decimal` sin
+  pérdida antes de persistir JSONB. Se verificó una corrección controlada, su
+  restauración y las versiones de auditoría asociadas.
+- Vue muestra **Reanudar fallidos** en runs `completed_with_issues` que todavía
+  contienen ítems fallidos, con cobertura de componente.
+
+## 2026-09-17 — saneamiento de UI, router y formalización del cierre de migración
+
+- Se creó la vista `NotFoundView.vue` para atender errores 404 de navegación y subrutas administrativas no mapeadas, reutilizando el patrón visual de `v-empty-state` y eliminando referencias anacrónicas al frontend legado de React.
+- Se actualizó `MigrationPendingView.vue` para delegar en `NotFoundView.vue`.
+- Se mapeó el comodín de administración `/admin/:pathMatch(.*)*` en `config/modules.json` hacia el componente `not-found` con título "Página no encontrada".
+- Se saneó `AppShell.vue`, actualizando el subtítulo del brand de "Vue 3 · migración activa" a "v0.1.0 · Sistema operativo".
+- Se sanearon los textos del hero y tarjetas modulares en `DashboardView.vue`, eliminando referencias a la convivencia con React.
+- Se ajustó el aviso en `ProductDetailView.vue` para guiar al usuario directamente hacia el catálogo de productos para vincular o crear canónicos.
+- Se actualizó `docs/development/FRONTEND_MIGRATION_OPERATIONS.md` y `Roadmap.md` archivando procedimientos de convivencia dual y consolidando la operación del frontend unificado en Vue 3.
+
+## 2026-09-15 — finalización de paridad, unificación modular en Vue 3 y retiro de React legado
+
+- Se implementó la vista `SupplierDetailView.vue` para `/proveedores/:id`, cubriendo consulta y edición de datos del proveedor (slug, nombre, ubicación, contacto, notas) y gestión integral de archivos adjuntos (subida con validación de extensiones, listado y descarga autenticada con `apiUrl`).
+- Se amplió `SuppliersView.vue` con enlaces y columna de acciones para abrir el detalle de cada proveedor.
+- Se extendió el servicio HTTP `frontend-vue/src/services/suppliers.ts` incorporando operaciones tipadas de detalle, actualización, archivos y eliminación.
+- Se promovieron a `state: "active"` y `runtime: "vue"` los módulos de Proveedores, Compras, Chat y Dashboard en `frontend-vue/config/modules.json`.
+- Se regeneraron las directivas Nginx (`frontend-vue/generated/nginx-spa-routes.conf`), unificando la atención del tráfico de todas las rutas de negocio bajo la SPA Vue 3 (`/vue/index.html`).
+- Se desmanteló y eliminó por completo el código React 19 huérfano (`frontend/`, ~23.400 líneas) bajo dispensa expresa de la ventana de estabilidad de 7 días autorizada por el usuario.
+- Se preservó el documento histórico de arquitectura `frontend/brainstorming_Growen.md` como `docs/architecture/FRONTEND_VUE_ARCHITECTURE.md` con NG-HEADER.
+- Se simplificó `infra/Dockerfile.frontend` a un único stage de build Vue 3 (`vue-builder`), eliminando la etapa legacy de React.
+- Se unificaron los scripts del entorno local y desarrollo (`scripts/run_frontend.cmd`, `start.sh`, `Makefile`, `.gitignore`, `README.md`, `AGENTS.md`) apuntando exclusivamente a `frontend-vue`.
+- Se añadieron pruebas unitarias y de componentes en Vitest (`SupplierDetailView.spec.ts`) alcanzando 109 pruebas aprobadas y validación completa en `vue-tsc -b` y Vite production build.
+
+## 2026-09-14 — control local seguro del auditor desde Workers
+
+- Administración → Workers inicia el auditor con
+  `scripts/start_worker_catalog_audit.cmd`, asegura Redis y no invoca el
+  servicio Compose opcional.
+- El estado se reconcilia en cada listado y expone modo, PID, worktree y detalle;
+  master e hijos Dramatiq se agrupan como una instancia y un origen ajeno o
+  roots múltiples quedan `degraded` sin terminación automática.
+- El estado operativo exige proceso y heartbeat vigentes. Un proceso propio con
+  heartbeat degradado puede detenerse de forma verificada; el inicio repetido no
+  crea otro consumidor.
+- Los errores visibles priorizan la última causa y `ServiceLog` conserva el
+  output completo. Compose deja de fijar un nombre global para el auditor.
+- Las rutas estáticas `/canonical-products/catalog-audits*` se registran antes
+  que la ficha canónica dinámica, evitando interpretar `catalog-audits` como un
+  identificador entero.
+- El resumen operativo del auditor expone worker, broker, profundidad de cola,
+  runs, estados de ítems y cobertura. Dashboard técnico y Workers muestran los
+  trabajos encolados y en curso con acceso directo a su vista dedicada.
+- El worker local configura `WindowsSelectorEventLoopPolicy` antes de abrir
+  sesiones asíncronas, evitando que Psycopg consuma el mensaje sin poder mover
+  el run de `queued`.
+- Los estados `running` y `auditing` se confirman antes de invocar Ollama, por
+  lo que los trabajos largos permanecen visibles en Dashboard y en el detalle
+  del run mientras el modelo procesa.
+- El smoke autenticado Dev inició el worker desde su endpoint, comprobó el
+  inicio idempotente y auditó el canónico 3 (`container`, score 100, `clean`).
+  Un segundo run idéntico terminó `skipped_unchanged` reutilizando el ítem
+  anterior; no se lanzó el run global de 29 canónicos.
+- No se modifican migraciones ni dependencias. Los volúmenes productivos
+  `growen_pgdata` y `growen_redis_data` permanecen fuera de las operaciones del
+  panel; Dev continúa usando sus volúmenes `growen_dev_*`.
+
+## 2026-09-13 — auditor autónomo y persistente de catálogo
+
+- Se separó la auditoría de Enrich: Enrich conserva OpenAI → Ollama y ya no
+  ejecuta una compuerta `quality_audit` antes de aplicar contenido.
+- Se incorporaron runs, ítems, feedback versionado, fingerprint por contenido y
+  cuarentena mediante la revisión `20260913_catalog_audit_v1`.
+- El worker `catalog_audit_worker` usa una cola exclusiva y concurrencia uno;
+  la autocorrección exige dos fuentes, confianza 0,95, reglas aprobadas, CAS y
+  snapshots reversibles.
+- La vista Vue `/admin/auditor-catalogo` permite iniciar, seguir, cancelar,
+  reanudar y tratar hallazgos. `Maceta 20L` queda clasificada como contenedor.
+- El 2026-09-14 se aplicó la migración al head sobre el clon de desarrollo y se
+  reconstruyeron/recrearon `catalog_audit_worker` y `enrichment_worker`; ambos
+  quedaron saludables y con
+  heartbeat. Un smoke sintético validó JSON estricto y `llama3.1:8b` al 100 %
+  en GPU, sin iniciar la auditoría de los 29 canónicos.
+- Los locks multiplataforma vuelven a separar `python-magic`/`python-magic-bin`
+  por sistema e impiden instalar `pywin32` en imágenes Linux.
+- Compose fija `growen_dev_pgdata` y redes `growen_dev_*`, evitando colisiones
+  con el volumen y las overlays homónimas reservadas por Swarm.
+- El manifiesto Swarm incorpora `catalog_audit_worker`, acceso local a Ollama y
+  el secreto externo de OpenAI para Enrich. El despliegue separa una fase
+  `Migration` repetible de la actualización de la aplicación.
+- Los tests y el typecheck Vue regeneran el manifiesto runtime antes de cargarlo,
+  evitando resultados dependientes de artefactos ignorados de otro worktree.
+- El pipeline de imágenes selecciona el digest del repositorio privado después
+  del push; las imágenes multi-arquitectura reflejadas ya no conservan por error
+  el digest del repositorio de origen.
+- El despliegue productivo aplicó `20260913_catalog_audit_v1` después de validar
+  un backup restaurable, incorporó `catalog_audit_worker` y estabilizó 18
+  servicios Swarm en 1/1. El smoke confirmó TLS/API, heartbeat, acceso del worker
+  a `llama3.1:8b` y ejecución al 100 % GPU; la auditoría de los 29 canónicos no
+  se inició y permanece como acción explícita desde la UI.
+- La topología `SingleNode` usa `stop-first` para los servicios limitados a una
+  réplica por nodo, evitando que un rollout quede pendiente por falta de un
+  segundo nodo.
+
+## 2026-09-13 — estabilización productiva Docker Swarm, unificación Vue 3 y ventas a colaboradores
+
+- Se estabilizaron los 17 servicios del clúster Docker Swarm en topología `SingleNode`
+  sobre la IP fija LAN `192.168.100.100`, con tráfico HTTPS (puerto 443) y redirección
+  obligatoria desde HTTP (puerto 80).
+- Se unificó el frontend productivo sobre Vue 3 (`frontend-vue`) como SPA principal,
+  incorporando Vuetify, rutas completas con `LoginView.vue` y eliminando la dependencia
+  de fallback de React que ocasionaba bloqueos por Mixed Content.
+- Se corrigió `scripts/cleanup-docker-images.ps1` sustituyendo la plantilla de inspección,
+  agregando conciencia de servicios Swarm e indexación O(1) de imágenes protegidas.
+- Se implementaron ventas para colaboradores a precio de costo en el backend (`services/routers/sales.py`,
+  `customers.py`, `models.py`) y en la interfaz POS de Vue 3 (`SaleNewView.vue`, `CustomersView.vue`).
+
+## 2026-09-10 — reconstrucción segura de documentación SiYuan
+
+- El publicador Git → SiYuan descubre los Markdown versionados de la raíz y de
+  `docs/`, exige un árbol documental limpio y rechaza formas conocidas de
+  secretos antes de escribir.
+- Se agregó `--rebuild` con confirmación literal para eliminar y recrear sólo
+  `/Growen/Documentación técnica`, preservando las raíces privadas y
+  `/Growen/Pruebas MCP`.
+- La reconstrucción registra SHA Git, fase e ID eliminado fuera del repositorio,
+  persiste checkpoints por documento y permite reanudar un fallo parcial con
+  `--apply` sin repetir el borrado. Los timeouts destructivos se reconcilian por
+  lectura y cada creación espera hasta que el documento sea legible antes de
+  confirmar su checkpoint.
+- Los locks cooperativos incorporan renovación de leases y el ámbito global
+  `git-worktree`, que serializa cambios de rama sobre el checkout físico
+  compartido; once pruebas cubren adquisición, renovación, conflicto y liberación.
+
+## 2026-09-10 — auditor de calidad de Enrich v2, orquestación y monitoreo técnico
+
+- Se implementó el motor de auditoría y coherencia física (`services.enrichment.auditor`)
+  para evaluar propuestas de Enrich v2: consistencia de densidad (fertilizantes/líquidos
+  y sustratos), sanidad dimensional, detección de metadiscurso de investigación,
+  HTML desbalanceado y confusión de marcas competidoras.
+- Se incorporó la compuerta de auto-aplicación en `enrichment_jobs`: si la auditoría
+  no pasa, se anula `auto_fields` y se fuerza el estado `review_required`.
+- Se integró `enrichment_worker` al orquestador backend local (`services/orchestrator.py`)
+  y al panel administrativo de workers (`WorkersView.vue`) con gestión de ciclo de vida
+  y logs persistentes.
+- Se agregaron los endpoints `GET /canonical-products/enrichment-summary` y
+  `GET /canonical-products/catalog-audit-report` para diagnóstico en tiempo real de colas
+  Dramatiq/Redis y auditoría retrospectiva determinista del catálogo sin costo de tokens.
+- Se integró la tarjeta de monitoreo en el Dashboard Técnico (`TechnicalDashboardView.vue`)
+  y la visualización de scorecards de calidad y alertas por campo en `EnrichmentPanel.vue`.
+
+## 2026-09-10 — compuertas operativas para el rollout LAN
+
+- Se incorporaron PKI LAN, registro privado TLS con autenticación, construcción
+  y análisis Trivy, SBOM, publicación inmutable y prueba Alembic efímera.
+- El despliegue separa `Preflight`, `Bootstrap` y `Application`, ofrece override
+  `SingleNode` y exige imágenes por digest y secretos TLS versionados.
+- Los identificadores anónimos de Chat/WebSocket usan HMAC-SHA256; los SHA-1 de
+  compatibilidad histórica declaran explícitamente que no son criptográficos.
+- El smoke LAN lee credenciales desde archivos, exige una CA explícita y valida
+  HTTPS, sesión, diagnósticos ausentes y cabeceras defensivas.
+- Se retiró la integración de Notion, su SDK, configuración, CLI y endpoints. Los
+  reportes quedan en logs locales y la documentación privada canónica reside en
+  SiYuan.
+- Se generó fuera del repositorio la PKI persistente LAN `2026091002`, cuyas
+  hojas contienen IP SAN y AKI, y se crearon secretos Swarm TLS versionados sin
+  eliminar los anteriores. No se migraron datos ni se desplegó la aplicación.
+- El conjunto Python modificado y el gate Ruff vigente terminan en cero; el
+  barrido global conserva 798 incidencias legacy y queda registrado en Roadmap
+  como deuda bloqueante para una futura compuerta de lint de todo el árbol.
+- El servidor quedó configurado y verificado en `192.168.100.100/24` manual,
+  con gateway `192.168.100.1` activo. El registro privado quedó saludable con
+  TLS y autenticación; reserva DHCP, firewall, confianza de CA en Docker,
+  publicación de imágenes y despliegue de la aplicación continúan pendientes.
+- La generación de certificados añade AKI enlazado con la CA. Una prueba de
+  regresión valida AKI, IP SAN y correspondencia entre certificados y claves.
+
+## 2026-09-09 — endurecimiento para la primera puesta en producción
+
+- Las descargas privadas de Compras, Ventas y Conocimiento requieren sesión y
+  rol; las respuestas no revelan la existencia de recursos ajenos.
+- La API productiva falla cerrada ante autenticación, TLS, hosts, proxies,
+  orígenes, Redis, raíces de media o secretos inválidos; los routers de debug
+  sólo se montan en desarrollo.
+- Se separaron `PUBLIC_MEDIA_ROOT` y `PRIVATE_MEDIA_ROOT`, con migración local
+  idempotente, dry-run, hashes y preservación de originales.
+- La descarga remota de imágenes valida DNS y peer, bloquea redes no globales,
+  revalida redirecciones y limita MIME, tiempo y tamaño.
+- Login usa rate limit Redis por IP confiable e identificador normalizado; los
+  cambios de contraseña, rol o estado activo invalidan las sesiones del usuario.
+- Swarm termina TLS en la LAN `192.168.100.100`, aplica cabeceras defensivas,
+  restringe CORS y monta secretos externos por dominio. No se desplegó ni se
+  aplicó la migración en esta entrega.
+- El incidente histórico de Telegram figura cerrado por confirmación operativa;
+  no quedan acciones pendientes asociadas a su erradicación.
+- Se actualizó WeasyPrint a `70.0` por `CVE-2026-55073`, Vitest y sus paquetes
+  internos a `4.1.11` por `GHSA-82fw-gwwq-j7x9`, y `pip-tools` a `7.6.1` para
+  compatibilidad con pip 26.2. No se agregaron dependencias nuevas.
+
+## 2026-09-05 — branching efímero y cierre agéntico secuencial
+
+- Todo trabajo agéntico comienza en una rama efímera creada desde `dev`; quedan prohibidos los commits directos a la rama de integración.
+- `Cerrar sesión` y `Cerremos sesión` activan retrospectiva, evolución del entorno, compuerta de riesgo, documentación, sincronización, resolución verificable, merge y push.
+- El auditor y las pruebas cubren triggers exactos y contratos esenciales de las skills Git y de retrospectiva.
+- La matriz Growen/Superpowers separa metodología general de reglas locales para reducir duplicación y consumo de contexto. No se agregaron dependencias.
+- La compuerta de seguridad elevó `cryptography` a `>=50,<51`, `pypdf` a `>=6.16.1,<7` y `pip` a `>=26.2,<27`; los locks con hashes se regeneraron para todos los runtimes.
+- Los locks React y Vue actualizaron dependencias transitivas vulnerables de Brace Expansion, Browserslist, Nano ID, PostCSS y React Router; `npm audit` quedó sin hallazgos y el gate ahora bloquea desde severidad moderada.
+- La retrospectiva consolidada documenta implementaciones, incidentes, evolución agéntica y riesgos residuales del cierre.
+
+## 2026-08-31 — worker transaccional MeLi, Cloudflare Tunnel y Swarm
+
+- Se agregó el dominio `services/meli`, con configuración fail-fast, OAuth Authorization Code + PKCE, cifrado AES-256-GCM, cuentas múltiples, webhooks idempotentes y outbox durable.
+- `meli_sync_worker` consume una cola exclusiva y sincroniza stock entero Growen → MeLi sólo para ítems clásicos cuya propiedad fue verificada; inventario multiorigen falla cerrado.
+- El gateway público sólo expone health, callback y webhook; `cloudflared` comparte con él una red interna exclusiva y usa token por archivo.
+- Compose incorpora el perfil `meli`; `docker-stack.yml` agrega el stack Growen reproducible con réplicas MeLi, overlays separadas y secretos Swarm externos.
+- Se añadió la revisión Alembic `20260831_meli_sync_v1`, pruebas focales y guías de integración/Swarm. No se agregaron dependencias Python.
+
+## 2026-08-30 — detección focal y validación manual de fuentes de Mercado
+
+- El detalle Vue abre cada fuente web en una pestaña segura del navegador y
+  permite encolar una detección de precio para esa fuente, sin redescubrir ni
+  procesar competidores ajenos.
+- Colaboradores y administradores pueden confirmar ARS y entrega en Argentina
+  con evidencia obligatoria, usuario y fecha auditables.
+- Un precio detectado se conserva visible aun si la fuente continúa en
+  cuarentena; sólo participa del promedio al completar ambas validaciones.
+- No se agregaron dependencias ni cambios de esquema.
+
+## 2026-08-29 — consumidores React de Enrich y auditoría agéntica
+
+- ProductDetail y Stock del fallback React crean batches mediante
+  `POST /canonical-products/enrichment-batches`; los adaptadores legacy quedan
+  disponibles únicamente para compatibilidad y rollback.
+- La UI interpreta `jobs[].error` y `skipped`, evita falsos éxitos y conserva
+  seleccionados en Stock los productos que no pudieron procesarse.
+- El auditor ejecutable del entorno agéntico valida gobernanza, frontmatter
+  canónico y adaptadores legacy desde `scripts/check-quality.ps1 -AgentOnly`.
+- La auditoría usa el directorio de trabajo por defecto y rechaza bloques de
+  frontmatter cuyo delimitador no siga inmediatamente a `description`.
+- La carga opcional de `rembg` permanece diferida para aislar el arranque de API
+  y las pruebas de la cadena multimedia pesada.
+
+## 2026-08-29 — Crono persiste tiempo y estados en SiYuan
+
+- El widget Crono descubre las columnas numéricas `Minutos` y `Segundos`,
+  acumula y normaliza ambos valores y los persiste antes de marcar el checkbox.
+- Las ejecuciones menores a un minuto ya no pierden el tiempo registrado: por
+  ejemplo, una ejecución de dos segundos guarda `0` minutos y `2` segundos.
+- Se agregó una prueba Node de regresión y documentación del contrato de la
+  Attribute View; sólo este widget queda versionado dentro de
+  `siyuan-widgets/`.
+- La columna `Estado` se reconcilia como `Sin iniciar`, cambia a `Iniciada` con
+  Play y se guarda como `Completada` antes de marcar el checkbox con Stop.
+- `Categoria` se presenta en el centro de la tarjeta con etiquetas coloreadas
+  de sólo lectura, sin enviar mutaciones sobre esa columna.
+- `sync-siyuan-widget.ps1` compara hashes por defecto y sincroniza con `-Apply`
+  sólo archivos runtime, sin borrar extras ni leer secretos; una prueba pytest
+  cubre drift, aplicación y exclusión de documentación.
+
+## 2026-08-28 — Mercado automático: descubrimiento y extracción
+
+- Una solicitud individual o masiva completa cobertura hasta tres competidores, valida candidatas y extrae precios dentro del `market_worker`.
+- Los jobs persistentes exponen etapa, cobertura, confirmadas, cuarentena y resultados por fuente; una reconciliación cierra leases vencidos y la finalización bloquea la cabecera para evitar contadores perdidos.
+- Web Search usa el cliente MCP autenticado compartido; el encolado devuelve `503 market_worker_unavailable` antes de crear el job si Redis o el heartbeat no están saludables.
+- Las fuentes automáticas fallidas quedan en cuarentena. El borrado archiva con histórico recuperable y se agregó restauración, edición, revalidación y redescubrimiento forzado en Vue.
+- La revisión `20260828_market_pipeline_v2` cierra trabajos activos anteriores con causa auditable y agrega etapas y contadores de descubrimiento.
+- El worker usa conexiones SQLAlchemy sin pool compartido entre los event loops de Dramatiq, evitando fallos concurrentes `bound to a different event loop`.
+- La imagen mínima incorpora el runtime del cliente MCP autenticado y conserva el marcador Linux/Windows de `pywin32` al regenerar locks.
+- El adaptador de Web Search acepta `error: null` como respuesta exitosa; una regresión TDD cubre este contrato.
+- Los resultados por fuente priorizan fallos HTTP/scraping sobre validaciones posteriores y registran el intento de navegador incluso cuando el fallback dinámico no encuentra precio.
+
+## 2026-08-27 — edición privada segura y sincronización SiYuan
+
+- El MCP SiYuan separa `/Growen` gobernado por Git de `/Negocio` y `/Operación` privados.
+- `admin` y agentes STDIO locales pueden crear y actualizar documentos privados; `colaborador` sólo busca y lee `/Growen` sin recibir snippets privados.
+- `read_siyuan_document` devuelve una revisión SHA-256 y la nueva tool `update_siyuan_document` exige esa revisión, crea historial y no reintenta escrituras.
+- `create_siyuan_task_database` crea por MCP una sección privada `Tareas` con base table, fila inicial y campos de fecha, estado y última modificación; su reejecución reconcilia la columna vacía generada por SiYuan 3.8.1.
+- El publicador Git → SiYuan incorpora estado externo, actualización incremental, conflictos explícitos, forzado confirmado y reporte de documentos huérfanos sin borrarlos.
+- Se agregaron auditoría anonimizada, variables de raíces privadas y cobertura focal de permisos, historial, concurrencia, manifiestos y smoke.
+
+## 2026-08-27 — batch de Enrich Vue sobre contrato canónico
+
+- El listado operativo Vue dejó de enviar `POST /products/enrich-multiple` y
+  ahora crea batches en `POST /canonical-products/enrichment-batches`.
+- Se agregó contrato TypeScript y prueba del cliente para garantizar un job por
+  canónico y evitar regresiones hacia el endpoint legacy.
+- React y los adaptadores backend se conservan temporalmente para rollback.
+- El import pesado opcional de `rembg` pasó a ser diferido hasta la operación
+  de quitar fondo, evitando bloquear la carga de `services.api` y pytest.
+
+## 2026-08-27 — limpieza de código inalcanzable y auditoría de migraciones
+
+- Se eliminó la implementación legacy inalcanzable de enriquecimiento masivo,
+  individual y borrado en `services/routers/catalog.py`.
+- Se agregó una prueba estática para impedir que esos adaptadores vuelvan a
+  conservar sentencias después de su retorno.
+- Se mantienen temporalmente los endpoints adaptadores, los campos legacy de
+  `Product` y el alias `MarketSource` porque todavía tienen consumidores activos.
+- Se documentó que la base local usa `20260816_chat_rollout_v1` y que
+  `market_sources` ya no existe.
+
+## 2026-08-20 — presentación editorial de Enrich v2
+
+- Las descripciones generadas hablan directamente del producto con frases breves y tono natural; ya no deben mencionar fuentes, evidencia ni el proceso de investigación.
+- Especificaciones e instrucciones se presentan como campos y listas legibles en lugar de JSON crudo.
+- El acceso de Producto a Conocimiento deja de usar un modal y navega a `/productos/:id/Conocimiento`, una vista completa con espacio propio para fuentes, medios, hechos, historial y jobs IA. Mercado conserva su diálogo contextual reutilizando el mismo componente.
+- La retrospectiva de sesión evolucionó `vue-module-migration` con un checklist de elección página/diálogo/drawer, regeneración de rutas y smoke visual autenticado desde la acción de origen.
+
+## 2026-08-19 — Enrich adopta GPT-5.6 Luna
+
+- El proveedor OpenAI de Enrich usa `gpt-5.6-luna` con razonamiento `none`,
+  temperatura `0`, JSON y un máximo de 2048 tokens de salida.
+- Se desactivaron los reintentos internos del SDK para este pipeline; Dramatiq
+  sólo reintenta cuando existe al menos un fallo transitorio.
+- `credit_balance_exhausted`, `insufficient_quota` e `invalid_api_key` se
+  clasifican como permanentes y terminan el job sin repetir solicitudes.
+- El smoke mínimo alcanzó el modelo, pero OpenAI respondió HTTP 429 porque la
+  organización no tiene créditos disponibles; el límite mensual de USD 120 no
+  constituye saldo API.
+
+## 2026-08-17 — Diagnóstico tipado de proveedores Enrich
+
+- Enrich emite eventos estructurados por inicio, éxito y fallo de cada proveedor con correlación por job e intento.
+- Los jobs persisten hasta veinte diagnósticos seguros: código del proveedor, HTTP, request ID, límites/resets y condición reintentable, sin prompts ni cuerpos remotos.
+- Ollama diferencia `timeout`, `http_error`, `empty_response`, `invalid_json` y `schema_invalid`; OpenAI conserva códigos como `insufficient_quota` aun cuando el SDK envuelva la excepción.
+- La ficha Vue recupera el último job y muestra los diagnósticos; se agregaron pruebas backend, de contrato y de componente.
+
+## 2026-08-17 — Aislamiento de Telegram por runtime
+
+- La validación de transporte, flags y secretos Telegram dejó de ejecutarse al construir la configuración global y ahora pertenece al arranque explícito de `telegram_worker`.
+- `dramatiq`, `market_worker`, `enrichment_worker` y `knowledge_worker` fuerzan los flags Telegram a `0` y eliminan `TELEGRAM_BOT_TOKEN_FILE` de su entorno efectivo.
+- Enrich y Conocimiento ya no requieren ni reciben el token del bot; se agregaron pruebas de configuración y Compose para evitar regresiones.
+- Los secretos OpenAI también quedaron acotados por dominio: Enrich y Conocimiento reciben un archivo de sólo lectura en `/run/secrets/growen/openai_api_key`; Dramatiq genérico y Mercado neutralizan tanto el valor como la ruta heredados de `.env`.
+- Se reconstruyeron y recrearon los cuatro workers. Los health checks de Enrich, Conocimiento y Mercado respondieron `ok=true`; el job pendiente fue consumido y terminó `failed` tras tres intentos porque OpenAI respondió HTTP 429 y Ollama no estuvo disponible, ya fuera del problema de arranque.
+- Se documentó que un worker ajeno a Telegram en `Restarting` con `telegram_bot_token_missing` indica contaminación de entorno, no una dependencia funcional.
+
+## 2026-08-17 — Cierre técnico y aprendizaje agéntico
+
+- Se publicó en `dev` el corte de Chat, Telegram, RAG local, rollout auditable y paridad Vue mediante tres commits atómicos.
+- El gate final aprobó 66 pruebas backend focales, 91 pruebas Vue, typecheck, build y head Alembic único.
+- La auditoría previa al push cubrió 107 archivos y no detectó secretos ni archivos `.env` reales.
+- Se documentaron como aprendizajes reutilizables el aislamiento de `*_FILE` en tests, la verificación de artefactos ignorados y la autorización explícita de destinos externos.
+- Continúan pendientes los smokes autenticados de cinco roles, la validación canónica del catálogo y la activación de Vue.
+
+## 2026-08-17 — RAG operativo y paridad de Chat Vue
+
+- Se cargó en desarrollo el corpus RAG v1: 8 fuentes sintéticas/centinela y 2 documentos reales curados, todos con scopes explícitos de rol y canal.
+- El gate real aprobó sin fugas: recall@5 sintético y curado 1,00, MRR 1,00, citas 100 %, presupuesto de contexto 100 % y cache separada/invalidation correcta.
+- Los documentos curados ahora se fragmentan antes de generar embeddings; se eliminó el uso de `datetime.utcnow()` en el runner RAG para Python 3.14.
+- WebSocket incorpora RAG autorizado dentro de `ChatOrchestrator` y devuelve citas tanto en respuestas normales como al finalizar streaming.
+- HTTP usa el resolver local determinista de catálogo con Ollama. HTTP y WebSocket sanitizan en backend SKU, proveedor, fuentes internas y stock exacto para perfiles públicos.
+- Chat Vue consume el contrato real `data.results`, renderiza precio/disponibilidad pública y campos operativos sólo para staff. Aprobaron typecheck, 91 pruebas Vue y build.
+- El smoke guest real aprobó carga y respuesta WebSocket sin errores de consola; la UI deja de quedar bloqueada si el socket se corta durante una respuesta.
+- `/chat` conserva `ready/legacy`: estos avances habilitan smoke local, no activación automática de tráfico Vue.
+
+- Se agregó captura segura de `telegram_canary_user_id` mediante long polling y
+  comando privado `/canary`, junto con una guía específica que separa canary y
+  controlador de rollout.
+- `OPENAI_API_KEY_FILE` usa el lector central de secretos; el generador admite
+  captura oculta y el proveedor OpenAI deja de devolver prompts como fallback.
+- Se activó el preflight local restringido al canary, se validó el primer
+  procesamiento Telegram y se corrigió el filtro JSONB de scopes RAG en
+  PostgreSQL.
+- Se eliminó el fallback legacy que clasificaba cualquier frase general como
+  consulta de precio; Telegram deriva ahora el smalltalk al chat general.
+- Se corrigió `OLLAMA_MODEL`/`ENRICH_OLLAMA_MODEL` a `llama3.1:8b`; el nombre
+  incompleto provocaba HTTP 404 antes de reservar VRAM para generación.
+- Telegram usa resolución determinista para catálogo cuando el proveedor es
+  Ollama y aplica un render público sin SKU, proveedor ni stock exacto.
+- Los fallos internos Telegram se registran como `ChatRun.failed` con códigos
+  seguros, aunque el usuario reciba un mensaje público controlado.
+
+## 2026-08-17 — Perfil Ollama con VRAM prioritaria
+
+- Se reemplazó el requisito fijo de 16 GiB de RAM libre por gates de VRAM, overhead de RAM, pagefile y disco.
+- Se agregó `scripts/ollama-preflight.ps1`, contexto explícito de 4096 y separación entre `OLLAMA_HOST` local y `OLLAMA_HOST_DOCKER`.
+- El generador de secretos admite captura interactiva oculta del token y del canary.
+- El preflight Ollama real aprobó y se agregó un modo `--development` sin autoavance para probar Telegram con un único usuario permitido.
+
+## 2026-08-16 — Chat local y rollout auditable
+
+- WebSocket asíncrono con orquestación completa y fixtures SQLite sin `dispose()` por prueba.
+- Ollama async fail-closed y RAG local de 1536 dimensiones con corpus/evaluador controlado.
+- Rate limit Redis multiproceso, polling recuperable, secretos `*_FILE` y worker Compose dedicado.
+- Migración `20260816_chat_rollout_v1`, controlador automático y activación Vue condicionada a `vue_eligible` con rollback.
+- Tráfico no habilitado: preflight de RAM/modelos y smokes productivos siguen pendientes.
+
+## 2026-08-15 — Gate explícito para retrospectivas de sesión
+
+- `retrospectiva-tecnica-sesion` sólo se activa cuando el usuario informa que llegó el final de la sesión o chat.
+- Completar una implementación, diagnóstico o migración, pedir estado o nombrar la skill sin declarar el cierre ya no genera una retrospectiva.
+- Se actualizaron las instrucciones compartidas y los ejemplos para Codex, Gemini CLI y GitHub Copilot.
+
+## 2026-08-15 — Auditoría de implementación Chat/Telegram/RAG
+
+- Se verificó el head único `20260726_canonical_knowledge_v1`, el esquema local y la ausencia de datos operativos Chat/Telegram/RAG y de sesiones Telegram numéricas legacy.
+- La suite focal backend aprobó 50 pruebas (6 omitidas); Vue aprobó typecheck, 89 pruebas y build. Persisten como deuda warnings de conexiones SQLite heredadas.
+- Se retiró el router webhook de la API, la configuración rechaza transportes distintos de `polling` y Telegram permanece apagado por flags.
+- WebSocket recarga `User.role` por mensaje y sus rutas principales —tools, fallback local, respuesta general y streaming— pasan por `ChatOrchestrator`; las aclaraciones heredadas aún deben converger.
+- `Chat 😎` incorpora streaming WebSocket sin mensajes duplicados, sanitización defensiva de cards, panel de vínculos propios y aprobación/revocación administrativa. Continúa `ready/legacy`: React conserva `/chat` hasta el smoke por rol.
+- El dashboard técnico recibe health seguro del worker; la trazabilidad estima tokens sin conservar contenido. El costo real queda pendiente de un proveedor configurado.
+- Se confirmó la rotación de secretos y que el entorno queda deliberadamente sin API keys; no se habilitó ningún flag ni worker.
+- Se reconciliaron README, Roadmap y documentación de Chat, arquitectura, Vue, pruebas, migraciones, seguridad, RAG y roles con el estado comprobado y el plan de implementación pendiente.
+- Se agregó la skill `git-secret-forensics`; `git-commit-push` deriva hacia ella
+  cualquier reescritura destructiva de historia y exige autorización separada.
+- `scripts/check-quality.ps1` incorpora `-SkillsOnly` y `-SkillName` para
+  validar skills focalmente sin confundir ese chequeo estructural con el gate
+  ampliado `-AgentOnly`; la metadata acepta LF y CRLF.
+- La retrospectiva forense registra tareas, bloqueos, soluciones y deuda
+  residual sin reproducir valores de credenciales.
+- La retrospectiva de Chat/Telegram registra evidencia de pruebas, obstáculos,
+  endurecimiento de logs y gates pendientes sin habilitar flags ni credenciales.
+
+## 2026-07-30 — Saneamiento histórico del token Telegram
+
+- Se reescribieron con `git filter-repo` y publicaron coordinadamente `main`
+  (`1e117589d8547e07d12d30c94ddc0513a6452695`) y `dev`
+  (`5eaf36a42771c0a3ed7104b60a08a9f488fd75af`) sin alterar el árbol final de
+  desarrollo.
+- Se eliminaron cuatro ramas Dependabot que heredaban el secreto y una
+  clonación independiente confirmó cero coincidencias en 130 referencias de
+  ramas y tags.
+- En el cierre original, diez referencias internas `refs/pull/*` administradas
+  por GitHub aún alcanzaban el objeto. La actualización operativa de 2026-09-09
+  confirma su purga y el cierre del incidente sin pendientes.
+
+## 2026-07-26 — Edición segura del SKU canónico
+
+- La ficha Vue suma lápiz, confirmación y cancelación explícitas para el SKU canónico.
+- `PATCH /canonical-products/{id}` normaliza el SKU, exige `XXX_0000_YYY`, detecta duplicados antes del commit y convierte carreras de unicidad en `409 duplicate_sku`.
+- Ante colisión, el editor permanece abierto, muestra el error y conserva el SKU anterior sin aplicar cambios.
+
+## 2026-07-26 — Base de Conocimiento del Producto Canónico
+
+- `20260726_canonical_knowledge_v1` creó activos, ubicaciones, etiquetas, capacidades, versiones, claims, hechos, eventos, jobs y perfiles técnicos Mercado; `market_sources` dejó de existir.
+- Mercado conserva IDs de perfil y contratos legacy, pero URLs/nombres/producto pertenecen al activo; `DELETE` archiva y conserva histórico.
+- Enrich knowledge-first reutiliza hechos y fuentes antes de buscar y persiste descubrimientos; las clasificaciones dudosas quedan excluidas.
+- Se agregó `knowledge_worker` con HTML/PDF seguro vía MCP, PDF/OCR, imagen, video, transcripción, heartbeat y health.
+- Vue suma el Centro **Conocimiento** compartido por Producto y Mercado.
+- Las fuentes Mercado automáticas sólo participan con activo confirmado, etiqueta `market`, capacidad `price`, ARS y entrega argentina confirmados; el Centro permite registrar esa confirmación con revisión y auditoría.
+- El despliegue real conservó 1 fuente, 6 observaciones, 3 resultados y 1 alerta, y completó un job autenticado con CSRF/polling.
+
+## 2026-07-25 — Detalle canónico Vue y Enrich v2
+
+- Se agregó la revisión irreversible `20260725_canonical_enrichment_v2`, con backfill conservador, jobs, evidencias acotadas y versiones restaurables.
+- Se retiró `products.market_price_reference`; `/market` y `CanonicalProduct.market_price_reference` continúan como autoridad exclusiva.
+- Los contratos canónicos soportan idempotencia, aplicación parcial, descarte, restore y conflicto `409` por revisión.
+- MCP Web Search suma `fetch_web_document` para HTML/PDF público con controles SSRF; `pypdf>=6.4,<7` quedó fijado en su lock.
+- Se creó `enrichment_worker` con cola y health dedicados y configuración híbrida OpenAI/Ollama sin fallback de eco.
+- El detalle `/productos/:id` pasó a Vue y agrega registros equivalentes; la edición avanzada de imágenes conserva React.
+- El despliegue real corrigió el marcador Linux de `pywin32`, el contenido de la
+  imagen MCP, la normalización `/mcp/`, el descubrimiento dirigido, redirects
+  DuckDuckGo, retries idempotentes, sanitización de errores, Redis de la API y el
+  binding loopback del frontend.
+- Se activó `ENRICH_V2_ENABLED=1`; el smoke autenticado persistió cinco fuentes y
+  confirmó un error explícito por falta de proveedor IA, sin aplicar contenido.
+
+## 2026-07-25 — Reconciliación documental de Stock y Mercado
+
+- Se contrastaron manifiesto, reglas Nginx, componentes Vue, clientes HTTP, roles y pruebas.
+- Stock y Mercado quedan documentados como `active/vue`; React se conserva únicamente como fallback temporal para rollback.
+- `docs/STOCK.md` pasa a ser el contrato operativo de Stock y Faltantes, y `docs/API_MARKET.md` la fuente canónica de Mercado.
+- Se retiraron referencias `legacy/pending` desactualizadas y se marcó la integración React de Mercado como histórica.
+
+## 2026-07-22 — Chat multicanal, Telegram, RAG y observabilidad
+
+- Se incorporaron identidades externas cifradas, vínculos de un uso, doble aprobación admin y revocación inmediata basada en `User.role`.
+- Telegram ahora usa `from.id`, sesiones opacas, rate limit, deduplicación persistente, cola acotada, orden por remitente, retries seguros y health sin datos personales.
+- Se centralizaron políticas MCP/tools con denegación por defecto y sanitización de catálogo público.
+- RAG suma scopes de rol/canal, estado y vigencia, búsqueda híbrida, cache versionado, presupuesto de tokens y citas tipadas.
+- Se agregaron trazas y métricas sin prompts, argumentos ni resultados completos, junto al archivado automático a 90 días.
+- Se implementó `Chat 😎` en Vue como módulo independiente en estado `ready/legacy`.
+- Se corrigió la pérdida de tablas SQLite en pruebas WebSocket usando una base temporal aislada por proceso.
+- Alembic y los scripts de diagnóstico dejaron de imprimir DB URLs, incluso enmascaradas.
+- `cryptography` quedó declarada como dependencia directa para AES-GCM; ya formaba parte de los locks existentes como dependencia transitiva. No se agregaron paquetes npm.
+
+## 2026-07-21 — Retrospectiva técnica de Mercado
+
+- Se documentaron las tareas completadas, los incidentes post-implementación, sus causas y la deuda residual de Mercado.
+- El flujo de diagnóstico ahora exige detectar listeners duplicados, comprobar la frescura de imágenes Docker y registrar bloqueos de permisos.
+- Se corrigieron instrucciones desactualizadas de pruebas, estado del módulo y warnings async en la documentación de Mercado.
+
+## 2026-07-21 — Corrección de extracción y presentación en Mercado
+
+- Los scrapers estático y Chromium priorizan `Product/Offer` de JSON-LD y contenedores del producto antes de clases genéricas, evitando capturar carrito, cuotas o carruseles.
+- Mercado separa el nombre canónico del SKU personalizado y refresca la tabla automáticamente cuando un job llega a estado terminal.
+- Se corrigió la observación de `SUS_0001_INE`: la fuente y el promedio vigente quedaron en `3700 ARS`; las capturas incorrectas permanecen en el histórico auditable.
+
+## 2026-07-21 — Reconciliación del worker Mercado en Administración
+
+- El panel de workers deja de conservar un falso estado `failed` cuando `market_worker` fue iniciado fuera de la UI.
+- La detección de Docker Desktop amplía su timeout configurable y el health genérico delega al chequeo específico de broker, heartbeat y cola de Mercado.
+
+## 2026-07-21 — Auditoría y estabilización de Mercado
+
+- Se incorporó la revisión focal `20260721_market_observability_v1` con alertas, jobs/items/resultados por fuente, validación y observaciones inmutables; se validó upgrade incremental y desde PostgreSQL vacío.
+- Mercado opera exclusivamente en ARS y calcula un promedio aritmético con una observación efectiva por fuente activa; automáticas vencen por defecto a los siete días y manuales al ser reemplazadas.
+- Refresh individual y batch crean trabajos idempotentes y consultables; los fallos de broker y scraping terminan de forma explícita y conservan trazabilidad.
+- Se agregó `market_worker` Docker no-root con dependencias bloqueadas, Chromium, cola exclusiva, cuatro hilos configurables, lock por dominio, heartbeat y health de broker/consumidor/cola.
+- `/mercado` pasó a Vue con filtros, selección masiva, detalle de fuentes, histórico SVG, polling terminal y ocho bandas accesibles; React conserva compatibilidad temporal.
+- Se retiraron puntualmente dos mensajes obsoletos de Redis, se rotó e invalidó la credencial local expuesta y se incorporó un rotador que también actualiza `DB_URL` sin imprimir secretos.
+
+## 2026-07-21 — Publicación segura y cierre de conocimiento agéntico
+
+- Se documentó la publicación de 327 archivos en `dev`, separados en cuatro commits de plataforma, backend, frontend y documentación.
+- SQLite de tests conserva `sqlite+aiosqlite:///:memory:` con `StaticPool`; se eliminó la interpretación Windows de la URI nombrada como archivo físico y el gate consolidado aprobó 39/39 pruebas Python.
+- El smoke E2E de Compras usa un encabezado semántico y una espera explícita para absorber la compilación lazy inicial de Vite sin relajar la ruta ni el rol esperado.
+- La skill `git-commit-push` exige auditoría de secretos redactada, clasificación contextual de locks, verificación del remoto, aprobación informada cuando corresponda y comparación de SHA tras el push.
+- Se agregó `docs/RETROSPECTIVE_REPOSITORY_PUBLICATION_20260721.md` con tareas, incidentes, soluciones y mejoras derivadas exclusivamente de esta sesión.
+
+## 2026-07-20 — Migración de Stock a Vue preparada para smoke
+
+- Se incorporaron vistas Vue para Stock y Faltantes con filtros persistidos en URL, búsqueda cancelable, paginación, permisos por rol y descargas mediante blobs.
+- El stock manual acepta dos decimales, usa control optimista con `expected_stock`, bloquea la fila y registra `manual_adjustment` en ledger junto con auditoría atómica.
+- Faltantes acepta cantidades decimales, bloquea el producto y registra saldo/delta independientes; la UI advierte y confirma saldos negativos.
+- `GET /stock/export.csv` y `GET /stock/export.pdf` quedaron operativos; XLSX, CSV y PDF comparten consulta, filtros y reglas de precio/categoría/SKU. PDF usa ReportLab sin dependencia nueva.
+- Productos Vue incorpora enriquecimiento masivo, completar precios faltantes, generación de catálogo e histórico/descarga de catálogos.
+- El módulo permanece `legacy/pending`: React sigue atendiendo producción hasta activar Productos/Catálogos Vue y completar smoke visual por rol.
+- Validación: 65/65 Vitest, 12/12 pytest funcionales y contrato CSRF aislado, typecheck y builds Vue/React aprobados. El rerun conjunto expuso una URI SQLite interpretada como archivo físico en Windows; el incidente no pertenecía al endpoint y quedó corregido el 2026-07-21.
+
+## 2026-07-20 — Recuperación operativa del batch canónico
+
+- DB y Redis conservan bindings loopback mediante `host_access` sin retirar el aislamiento de la red `backend`.
+- Los jobs canónicos `FAILED` sin filas procesadas se reencolan idempotentemente con la misma clave y bloqueo transaccional.
+- Vue ofrece **Reintentar lote** para fallos de infraestructura previos al procesamiento.
+- Se agregaron regresiones de red Compose y reencolado batch; aprobaron suites focales backend y typecheck Vue.
+- Las operaciones Compose del panel se ejecutan mediante `asyncio.to_thread`; los fallos revierten la sesión antes de persistir `ServiceLog`.
+- El worker `catalog` emite eventos NDJSON por actor, job e ítem con duración y resultado; `state.json` referencia logs de procesos reutilizados.
+- `start-dev.ps1 -WithCatalogWorker` inicia/verifica Redis+Dramatiq y reconcilia DB cuando Compose figura activo sin puerto host.
+- El inicio administrativo de `catalog_worker` verifica Redis y lo inicia mediante Compose cuando falta.
+- El worker local deja de usar pipes sin lector: persiste stdout/stderr en `logs/worker_catalog.log`; el launcher advierte si compite con Dramatiq Docker.
+- Se crearon la skill canónica `diagnose-local-services`, su adaptador y controles adicionales en `create-service`.
+- Se agregó `docs/RETROSPECTIVE_CANONICAL_BATCH_OPERATIONS_20260720.md`.
+
+## 2026-07-20 — Retrospectiva de taxonomía, tags y QA agéntico
+
+- Se documentaron entregas, fallos, soluciones y límites verificables de la convivencia entre taxonomía plana y tags.
+- Testing formaliza el montaje con Vuetify real, los polyfills JSDOM y la distinción entre rerun focal y suite consolidada.
+- La skill Vue exige buscar consumidores antes de cambiar contratos, revisar el impacto de auto-imports y ejecutar smoke autenticado con navegador cuando esté disponible.
+- La skill de migraciones clasifica `alembic check` por objetos del cambio y exige head y objetos concretos en la prueba PostgreSQL limpia.
+- Se corrigieron referencias heredadas que aún presentaban categoría/subcategoría como jerarquía funcional.
+
+## 2026-07-18 — Taxonomía plana y tags en Productos Vue
+
+- Categoría y subcategoría pasan a ser clasificaciones planas e independientes mediante `categories.kind`; `parent_id` permanece como compatibilidad temporal.
+- Productos internos incorporan `subcategory_id`; los canónicos requieren ambos tipos y exportan `Categoría > Subcategoría`.
+- Vue recupera creación escribible de ambas taxonomías y gestión de tags individual, masiva y por fila del wizard.
+- El batch persiste `tag_names`, combina tags comunes/particulares e inserta tags y relaciones idempotentes en la transacción canónica.
+- `/catalog/search` busca por tags con AND entre términos; las tres tools MCP de Productos devuelven `tags`.
+- Alembic agrega unicidad normalizada por tipo/nombre y aborta ante colisiones sin fusionar datos.
+- El alta inline normaliza los valores `Decimal` del audit para que una falla de serialización no deje la sesión en rollback pendiente.
+
+## 2026-07-18 — Finalización del panel administrativo Vue
+
+- Servicios Vue incorpora previsualización y limpieza de logs físicos con retención, eliminación de carpetas completas `logs/dev/<ejecución>` y protección de ejecuciones activas e historiales auditables.
+- Workers diferencia el borrado de `ServiceLog` en PostgreSQL; Imágenes limpia conjuntamente `ImageJobLog`, NDJSON y snapshots.
+- `cleanup_logs.py`, `clean_all_logs.ps1`, `clear_logs.py` y `clear_backend_log.py` se alinean con la estructura vigente de `start-dev.ps1`; se retiró la afirmación incorrecta de que `docker logs --tail 0` trunca Docker.
+- Se activaron en Vue Drive Sync, Scheduler, Conocimiento, Imágenes administrativas, Diagnóstico de catálogos, Dashboard técnico y Chat Inbox.
+- Las revisiones `20260718_admin_operations_v1` y `20260718_admin_jsonb_v2` incorporan ejecuciones y elementos de Drive, configuración/historial del Scheduler, tareas RAG, eventos de Catálogos, feedback de Chat y versiones/evaluaciones de prompts con metadatos JSONB.
+- Todas las mutaciones administrativas aplican sesión, rol y CSRF; Drive autentica el WebSocket antes de aceptar conexiones.
+- Catálogos elimina la purga automática y expone logs persistentes descargables en NDJSON/CSV.
+- Chat incorpora asignación, tags, acciones masivas, clasificación, métricas y promoción reversible de prompts con aprobación admin.
+- Se documentó operación, errores, smoke y rollback en `docs/ADMIN_VUE_OPERATIONS.md`.
+
+## 2026-07-18 — QA de Productos y conocimiento agéntico
+
+- Se documentó el cierre técnico del catálogo Vue, alta masiva canónica y creación inline de categorías.
+- Las guías distinguen `GET /catalog/next-seq` heredado de `POST /canonical-products/sku-preview`; ambos son no reservantes.
+- Testing documenta la sintaxis focal de Vitest y la necesidad de ejecutar `vue-tsc` para opciones discriminadas de componentes.
+- QA frontend incorpora preflight de Chrome, alcance de la validación HTTP y auditoría npm bajo entornos restringidos.
+- El workflow vuelve a identificar `start-dev.ps1` y Vue 5176 como inicio canónico, diferenciándolo del launcher React heredado.
+- Se agregó la skill canónica `vue-module-migration` y su adaptador temporal para estandarizar futuros cortes React → Vue.
+- Se agregó `docs/RETROSPECTIVE_PRODUCTS_20260718.md`.
+
+## 2026-07-17 — QA de Compras, sesión y Proveedores
+
+- El marker `no_auth_override` deja de desactivar CSRF y representa el ciclo real de autenticación.
+- La regresión de sesión valida login, `/auth/me` y una mutación protegida.
+- Los mocks iAVaL se alinearon con `AIRouter.run_async`.
+- Se documentaron la carrera de procesos pytest paralelos, la deuda de `TestClient` y los prerrequisitos locales de OCR.
+- Se agregó `docs/RETROSPECTIVE_PURCHASES_20260717.md` como registro técnico de la entrega.
+
+## 2026-07-16 — Compras Vue e ingesta transaccional Santa Planta
+
+- Compras crea productos y ofertas faltantes durante la confirmación, nunca durante el borrador.
+- Confirmación y rollback registran movimientos `purchase`/`purchase_rollback` en `stock_ledger`.
+- Se agregaron snapshots documentales, hash SHA-256, costo bruto/neto, bonificación e historial por producto.
+- El importador admite PDF, JPG y PNG, deduplica idempotentemente por remito o hash y conserva el original.
+- Vue incorpora listado, importación, revisión, confirmación, impacto e historial básico de productos.
+- Migración: `20260716_purchase_ingestion_v2`.
+- Se corrigió la cookie de autenticación: el navegador recibe el SID crudo y el servidor conserva/verifica sólo su hash, evitando 403 falsos tras iniciar sesión.
+- Compras reemplaza el ID manual por un selector buscable y habilita alta rápida; `/proveedores` queda activo en Vue con búsqueda y creación básica.
+
 ## [Unreleased]
+### Added
+- MCP real mediante SDK oficial, Streamable HTTP en `/mcp`, descubrimiento dinámico y cliente central.
+- Seguridad MCP compartida con JWT Bearer, issuer/audience por servidor, rotación por `kid`, revocación JTI, rate limiting Redis y auditoría seudonimizada.
+- Bootstrap Python 3.14.6, modos MCP en `start-dev.ps1`, detención segura y quality gate local/CI manual.
+- Skills canónicas descubribles bajo `.agents/skills/`.
+- Dependencias `mcp>=1.27,<2` y `PyJWT>=2.8,<3`, documentadas para API y servidores MCP.
+- Locks reproducibles con hashes, SBOM CycloneDX y auditoría local con Ruff, Bandit y `pip-audit`.
+
+### Changed
+- OpenAI usa cliente asíncrono en `generate_async` y obtiene schemas desde MCP.
+- `/invoke_tool` queda deprecado durante la ventana de compatibilidad.
+- Los puertos Docker quedan ligados a loopback; los contenedores MCP son read-only, sin capabilities y sin privilegios adicionales.
+- El workflow manual usa permisos mínimos y GitHub Actions fijadas a commits inmutables.
+- Las sesiones de chat persisten identificadores hasheados y las salidas de tools externas se tratan como datos no confiables y acotados.
+
+### Security
+- Se retiraron `python-jose/ecdsa` y `PyPDF2` al detectarse vulnerabilidades; JWT usa PyJWT y PDF usa `pypdf`.
+- Web Search limita destinos, redirects, tiempos, tamaño y consultas con material sensible.
+- El bypass de roles por headers queda disponible únicamente bajo entorno de tests.
+
 ### Added
 - **Estilización de nombres de productos canónicos** (Title Case):
   - Función `stylize_product_name()` en `db/text_utils.py` convierte nombres en mayúsculas a formato legible.

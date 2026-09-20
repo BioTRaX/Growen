@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 # NG-HEADER: Nombre de archivo: services_admin.py
 # NG-HEADER: Ubicación: services/routers/services_admin.py
 # NG-HEADER: Descripción: Endpoints de administración de servicios (start/stop/status/logs/deps) y health de herramientas.
@@ -10,14 +8,20 @@ from __future__ import annotations
 Security: admin/colaborador only for mutating actions.
 """
 
+from __future__ import annotations
+
 import os
+import asyncio
+import json
+from pathlib import Path
 import socket
+import sys
 import time
 import uuid
 import math
 from collections import Counter
 from typing import Any, Dict, List, Optional
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -31,7 +35,7 @@ from services.orchestrator import start_service as _start, stop_service as _stop
 from agent_core.config import settings
 import shutil
 import subprocess
-from services.integrations.notion_client import NotionWrapper, load_notion_settings  # type: ignore
+from services.logging.log_cleanup import build_cleanup_plan, execute_cleanup_plan
 
 
 router = APIRouter(prefix="/admin/services", tags=["admin","services"])
@@ -48,11 +52,61 @@ KNOWN_SERVICES = [
     "drive_sync_worker",  # Worker de sincronización Drive
     "telegram_polling_worker",  # Worker de Long Polling para Telegram Bot
     "catalog_worker",  # Worker de creación batch de productos canónicos
+    "enrichment_worker",  # Worker dedicado de contenido canónico Enrich v2
+    "catalog_audit_worker",  # Worker dedicado del auditor autónomo de catálogo
 ]
+
+
+@router.get("/logs/cleanup-preview", dependencies=[Depends(require_roles("admin"))])
+async def preview_physical_log_cleanup(keep_days: int = Query(7, ge=0, le=3650)) -> Dict[str, Any]:
+    """Previsualiza la limpieza física sin modificar archivos."""
+    return build_cleanup_plan(keep_days=keep_days)
+
+
+@router.post("/logs/cleanup", dependencies=[Depends(require_roles("admin")), Depends(require_csrf)])
+async def clean_physical_logs(keep_days: int = Query(7, ge=0, le=3650)) -> Dict[str, Any]:
+    """Elimina logs físicos antiguos y directorios completos de ejecuciones finalizadas."""
+    plan = build_cleanup_plan(keep_days=keep_days)
+    return {"plan": plan, "result": execute_cleanup_plan(plan)}
 
 
 def _cid() -> str:
     return uuid.uuid4().hex
+
+
+def _summarize_service_error(detail: Optional[str]) -> Optional[str]:
+    """Prioriza la causa operativa sin perder el detalle completo en ServiceLog."""
+    lines = [line.strip() for line in (detail or "").splitlines() if line.strip()]
+    if not lines:
+        return None
+    causal = next(
+        (
+            line
+            for line in reversed(lines)
+            if "error response from daemon:" in line.lower() or line.lower().startswith("error")
+        ),
+        lines[-1],
+    )
+    return causal[:500]
+
+
+def _service_runtime_payload(row: Service) -> Dict[str, Any]:
+    meta = row.meta if isinstance(row.meta, dict) else {}
+    return {
+        "runtime_mode": meta.get("runtime_mode"),
+        "pid": meta.get("pid"),
+        "runtime_root": meta.get("runtime_root"),
+        "detail": meta.get("runtime_detail"),
+        "can_stop": bool(meta.get("managed")),
+    }
+
+
+def _merge_runtime_meta(row: Service, *, detail: Optional[str], pid: Optional[int], meta: Optional[Dict[str, Any]]) -> None:
+    current = dict(row.meta) if isinstance(row.meta, dict) else {}
+    current.update(meta or {})
+    current["pid"] = pid
+    current["runtime_detail"] = detail
+    row.meta = current
 
 
 async def _ensure_row(db: AsyncSession, name: str) -> Service:
@@ -63,6 +117,39 @@ async def _ensure_row(db: AsyncSession, name: str) -> Service:
     db.add(row)
     await db.flush()
     return row
+
+
+async def _record_operation_failure(
+    db: AsyncSession,
+    *,
+    service: str,
+    action: str,
+    correlation_id: str,
+    error: Exception,
+) -> None:
+    """Registra un fallo sin reemplazar la excepción original por una sesión abortada."""
+    try:
+        await db.rollback()
+    except Exception:
+        pass
+    try:
+        db.add(ServiceLog(
+            service=service,
+            correlation_id=correlation_id,
+            action=action,
+            host=socket.gethostname(),
+            pid=None,
+            duration_ms=None,
+            ok=False,
+            level="ERROR",
+            error=str(error)[:500],
+        ))
+        await db.commit()
+    except Exception:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 @router.get("", dependencies=[Depends(require_roles("admin", "colaborador"))])
@@ -76,6 +163,25 @@ async def list_services(db: AsyncSession = Depends(get_session)) -> Dict[str, An
         await _ensure_row(db, name)
     await db.commit()
     rows = (await db.execute(select(Service))).scalars().all()
+
+    # Estos runtimes pueden iniciarse fuera del panel. Reconciliarlos en cada
+    # listado evita contradecir el proceso real o un worktree competidor.
+    for runtime_name in ("market_worker", "catalog_audit_worker"):
+        runtime_row = next((row for row in rows if row.name == runtime_name), None)
+        if runtime_row is None:
+            continue
+        live = await asyncio.to_thread(_status, runtime_name)
+        runtime_row.status = live.status
+        _merge_runtime_meta(runtime_row, detail=live.detail, pid=live.pid, meta=live.meta)
+        if live.status == "running":
+            runtime_row.started_at = runtime_row.started_at or datetime.utcnow()
+            runtime_row.last_error = None
+        elif live.status in {"stopped", "failed"}:
+            runtime_row.started_at = None
+        elif live.status == "degraded":
+            runtime_row.last_error = _summarize_service_error(live.detail)
+    await db.commit()
+
     items = [
         {
             "id": r.id,
@@ -87,6 +193,7 @@ async def list_services(db: AsyncSession = Depends(get_session)) -> Dict[str, An
             "uptime_s": (int((datetime.utcnow() - r.started_at).total_seconds()) if (r.status == "running" and r.started_at) else (r.uptime_s or 0)),
             "start_ms": (r.meta or {}).get("last_start_ms") if isinstance(r.meta, dict) else None,
             "last_error": r.last_error,
+            **_service_runtime_payload(r),
         }
         for r in rows
     ]
@@ -114,18 +221,21 @@ async def status(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str
     if name not in KNOWN_SERVICES:
         raise HTTPException(status_code=404, detail="Servicio desconocido")
     row = await _ensure_row(db, name)
-    st = _status(name)
+    st = await asyncio.to_thread(_status, name)
     row.status = st.status
-    # If stopped, store final uptime and clear started_at
-    if st.status != "running":
+    _merge_runtime_meta(row, detail=st.detail, pid=st.pid, meta=st.meta)
+    # Sólo los estados terminales cierran el uptime. Un runtime degradado o en
+    # arranque sigue teniendo un proceso observable.
+    if st.status in {"stopped", "failed"}:
         if row.started_at:
             try:
                 row.uptime_s = int((datetime.utcnow() - row.started_at).total_seconds())
             except Exception:
                 pass
         row.started_at = None
+    row.last_error = _summarize_service_error(st.detail) if st.status in {"degraded", "failed"} else None
     await db.commit()
-    return {"name": name, "status": st.status, "detail": st.detail}
+    return {"name": name, "status": st.status, "detail": st.detail, **_service_runtime_payload(row)}
 
 
 @router.get("/pdf_import/metrics", dependencies=[Depends(require_roles("admin", "colaborador"))])
@@ -363,11 +473,12 @@ async def start(name: str, mode: Optional[str] = Query(None, description="Modo d
     cid = _cid()
     t0 = time.perf_counter()
     try:
-        st = _start(name, correlation_id=cid, mode=mode)
+        st = await asyncio.to_thread(_start, name, correlation_id=cid, mode=mode)
         dur = int((time.perf_counter() - t0) * 1000)
         row.status = st.status
+        _merge_runtime_meta(row, detail=st.detail, pid=st.pid, meta=st.meta)
         if st.ok:
-            row.started_at = datetime.utcnow()
+            row.started_at = row.started_at or datetime.utcnow()
             row.uptime_s = 0
             # persist last start duration in meta
             meta = (row.meta or {}) if isinstance(row.meta, dict) else {}
@@ -375,14 +486,19 @@ async def start(name: str, mode: Optional[str] = Query(None, description="Modo d
             row.meta = meta
             row.last_error = None
         else:
-            row.last_error = (st.detail or "")[:500]
-        db.add(ServiceLog(service=name, correlation_id=cid, action="start", host=socket.gethostname(), pid=None, duration_ms=dur, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
+            row.last_error = _summarize_service_error(st.detail)
+        db.add(ServiceLog(service=name, correlation_id=cid, action="start", host=socket.gethostname(), pid=st.pid, duration_ms=dur, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
         await db.commit()
-        return {"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid, "detail": st.detail}
+        return {"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid, "detail": st.detail, **_service_runtime_payload(row)}
     except Exception as e:
-        db.add(ServiceLog(service=name, correlation_id=cid, action="start", host=socket.gethostname(), pid=None, duration_ms=None, ok=False, level="ERROR", error=str(e)))
-        await db.commit()
-        raise HTTPException(status_code=500, detail=str(e))
+        await _record_operation_failure(
+            db,
+            service=name,
+            action="start",
+            correlation_id=cid,
+            error=e,
+        )
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/{name}/stop", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
@@ -393,20 +509,33 @@ async def stop(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, 
     await _ensure_row(db, name)
     cid = _cid()
     t0 = time.perf_counter()
-    st = _stop(name, correlation_id=cid)
-    dur = int((time.perf_counter() - t0) * 1000)
-    # update persisted uptime and clear started_at
-    row = await _ensure_row(db, name)
-    if row.started_at:
-        try:
-            row.uptime_s = int((datetime.utcnow() - row.started_at).total_seconds())
-        except Exception:
-            pass
-    row.started_at = None
-    row.status = st.status
-    db.add(ServiceLog(service=name, correlation_id=cid, action="stop", host=socket.gethostname(), pid=None, duration_ms=dur, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
-    await db.commit()
-    return {"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid, "detail": st.detail}
+    try:
+        st = await asyncio.to_thread(_stop, name, correlation_id=cid)
+        dur = int((time.perf_counter() - t0) * 1000)
+        # Cerrar uptime sólo cuando la detención fue efectiva o terminal.
+        row = await _ensure_row(db, name)
+        if st.status in {"stopped", "failed"} and row.started_at:
+            try:
+                row.uptime_s = int((datetime.utcnow() - row.started_at).total_seconds())
+            except Exception:
+                pass
+        if st.status in {"stopped", "failed"}:
+            row.started_at = None
+        row.status = st.status
+        _merge_runtime_meta(row, detail=st.detail, pid=st.pid, meta=st.meta)
+        row.last_error = None if st.ok else _summarize_service_error(st.detail)
+        db.add(ServiceLog(service=name, correlation_id=cid, action="stop", host=socket.gethostname(), pid=st.pid, duration_ms=dur, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
+        await db.commit()
+        return {"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid, "detail": st.detail, **_service_runtime_payload(row)}
+    except Exception as e:
+        await _record_operation_failure(
+            db,
+            service=name,
+            action="stop",
+            correlation_id=cid,
+            error=e,
+        )
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/panic-stop", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
@@ -415,9 +544,19 @@ async def panic_stop(db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
     out: List[Dict[str, Any]] = []
     for name in KNOWN_SERVICES:
         cid = _cid()
-        st = _stop(name, correlation_id=cid)
-        db.add(ServiceLog(service=name, correlation_id=cid, action="stop", host=socket.gethostname(), pid=None, duration_ms=None, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
-        out.append({"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid})
+        try:
+            st = await asyncio.to_thread(_stop, name, correlation_id=cid)
+            db.add(ServiceLog(service=name, correlation_id=cid, action="stop", host=socket.gethostname(), pid=None, duration_ms=None, ok=st.ok, level=("INFO" if st.ok else "ERROR"), error=(None if st.ok else st.detail), payload={"detail": st.detail}))
+            out.append({"name": name, "status": st.status, "ok": st.ok, "correlation_id": cid})
+        except Exception as exc:
+            await _record_operation_failure(
+                db,
+                service=name,
+                action="stop",
+                correlation_id=cid,
+                error=exc,
+            )
+            out.append({"name": name, "status": "failed", "ok": False, "correlation_id": cid})
     await db.commit()
     return {"stopped": out}
 
@@ -484,10 +623,10 @@ async def stream_logs(name: str, db: AsyncSession = Depends(get_session), last_i
 
 @router.delete("/{name}/logs", dependencies=[Depends(require_roles("admin", "colaborador")), Depends(require_csrf)])
 async def delete_service_logs(name: str, db: AsyncSession = Depends(get_session)) -> Dict[str, Any]:
-    """Elimina todos los logs (ServiceLog) de un servicio y archivos de log físicos si aplica.
-    
-    Solo se permite cuando el servicio está detenido para evitar conflictos.
-    Para telegram_polling_worker, también elimina el archivo worker_telegram_polling.log.
+    """Elimina el historial ``ServiceLog`` de un servicio detenido.
+
+    Los archivos físicos y las carpetas de ``start-dev.ps1`` se administran por
+    separado mediante ``/admin/services/logs/cleanup``.
     """
     if name not in KNOWN_SERVICES:
         raise HTTPException(status_code=404, detail="Servicio desconocido")
@@ -502,54 +641,22 @@ async def delete_service_logs(name: str, db: AsyncSession = Depends(get_session)
     
     # Eliminar todos los ServiceLog del servicio
     from sqlalchemy import delete
-    from pathlib import Path
-    cid = _cid()
-    file_deleted = False
-    file_error = None
-    
     try:
         result = await db.execute(delete(ServiceLog).where(ServiceLog.service == name))
         deleted_count = result.rowcount or 0
         await db.commit()
-        
-        # Eliminar archivo físico de log si es telegram_polling_worker
-        if name == "telegram_polling_worker":
-            try:
-                log_file_path = Path(__file__).resolve().parent.parent / "logs" / "worker_telegram_polling.log"
-                if log_file_path.exists():
-                    # Intentar eliminar el archivo
-                    try:
-                        log_file_path.unlink()
-                        file_deleted = True
-                    except PermissionError:
-                        # Si el archivo está abierto, intentar truncarlo
-                        try:
-                            with open(log_file_path, 'w', encoding='utf-8') as f:
-                                f.truncate(0)
-                            file_deleted = True
-                        except Exception as truncate_err:
-                            file_error = f"No se pudo eliminar/truncar archivo: {truncate_err}"
-                    except Exception as file_err:
-                        file_error = f"Error eliminando archivo: {file_err}"
-            except Exception as e:
-                file_error = f"Error accediendo archivo: {e}"
         
         # No registrar log de eliminación ya que acabamos de eliminar todos los logs
         # (y 'delete_logs' no está en la lista de acciones permitidas del constraint)
         # Si necesitamos auditoría, se puede agregar a otra tabla o crear migración para extender el constraint
         
         message = f"Se eliminaron {deleted_count} logs del servicio {name}"
-        if name == "telegram_polling_worker":
-            if file_deleted:
-                message += " y se eliminó el archivo de log físico"
-            elif file_error:
-                message += f" (advertencia: {file_error})"
-        
         return {
             "name": name,
             "deleted_count": deleted_count,
             "ok": True,
-            "message": message
+            "message": message,
+            "scope": "database",
         }
     except Exception as e:
         await db.rollback()
@@ -611,18 +718,22 @@ async def deps_check(name: str) -> Dict[str, Any]:
         ]) or _find_tool("gswin32c", []) or _find_tool("gs", [])
         
         if not tesseract:
-            ok = False; missing.append("tesseract")
+            ok = False
+            missing.append("tesseract")
         if not qpdf:
-            ok = False; missing.append("qpdf")
+            ok = False
+            missing.append("qpdf")
         if not gs:
-            ok = False; missing.append("ghostscript")
+            ok = False
+            missing.append("ghostscript")
         if not ok:
             hints.append("Instala Tesseract/QPDF/Ghostscript en el host/imagen")
     elif name == "image_processing":
         try:
             __import__("PIL")
         except Exception:
-            ok = False; missing.append("Pillow")
+            ok = False
+            missing.append("Pillow")
         # Optional helpers
         try:
             __import__("rembg")
@@ -641,12 +752,12 @@ async def deps_check(name: str) -> Dict[str, Any]:
             hints.append("Configurar TELEGRAM_ENABLED=1 en .env para habilitar")
         # Verificar dependencias Python
         try:
-            import httpx
+            import httpx as _httpx  # noqa: F401
         except ImportError:
             ok = False
             missing.append("httpx")
             hints.append("pip install httpx")
-    elif name == "catalog_worker":
+    elif name in {"catalog_worker", "enrichment_worker", "catalog_audit_worker"}:
         # Verificar que Redis esté disponible para las colas
         try:
             import redis
@@ -659,11 +770,18 @@ async def deps_check(name: str) -> Dict[str, Any]:
             hints.append(f"Verificar REDIS_URL en .env: {e}")
         # Verificar que dramatiq esté instalado
         try:
-            import dramatiq
+            import dramatiq as _dramatiq  # noqa: F401
         except ImportError:
             ok = False
             missing.append("dramatiq")
             hints.append("pip install dramatiq[redis]")
+        if name == "enrichment_worker":
+            if os.getenv("ENRICH_V2_ENABLED", "0") != "1":
+                hints.append("ENRICH_V2_ENABLED permanece apagado")
+            if not os.getenv("MCP_WEB_SEARCH_URL"):
+                ok = False
+                missing.append("MCP_WEB_SEARCH_URL")
+                hints.append("Configurar MCP_WEB_SEARCH_URL y verificar /health del servidor")
     else:
         return {"ok": False, "missing": [], "detail": ["servicio desconocido"]}
     return {"ok": ok, "missing": missing, "hints": hints}
@@ -783,12 +901,11 @@ async def tools_health() -> Dict[str, Any]:
     pw_version: Optional[str] = None
     try:
         import importlib
-        import json as _json
         importlib.import_module("playwright")
         pw_installed = True
         # Detectar navegadores instalados: usar 'python -m playwright install --dry-run' o 'playwright --version'
         try:
-            ver_proc = subprocess.run(["python", "-m", "playwright", "--version"], capture_output=True, text=True, timeout=8)
+            ver_proc = subprocess.run([sys.executable, "-m", "playwright", "--version"], capture_output=True, text=True, timeout=8)
             vout = (ver_proc.stdout or ver_proc.stderr or "").strip()
             pw_version = vout.splitlines()[0][:120] if vout else None
         except Exception:
@@ -803,7 +920,7 @@ async def tools_health() -> Dict[str, Any]:
                 "    b = p.chromium\n"
                 "    print('OK')\n"
             )
-            probe = subprocess.run(["python", "-c", code], capture_output=True, text=True, timeout=12)
+            probe = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=12)
             chromium_installed = (probe.returncode == 0) and ("OK" in (probe.stdout or ""))
         except Exception:
             chromium_installed = False
@@ -818,33 +935,7 @@ async def tools_health() -> Dict[str, Any]:
         "playwright": {"ok": pw_installed and chromium_installed, "package": pw_installed, "chromium": chromium_installed, "version": pw_version},
     }
     
-@router.get("/notion/health", dependencies=[Depends(require_roles("admin", "colaborador"))])
-async def notion_health() -> Dict[str, Any]:
-    """Health básico de Notion: flags y latencia de una consulta dummy.
-
-    Devuelve: enabled, has_sdk, has_key, has_errors_db, dry_run, latency_ms
-    """
-    nw = NotionWrapper()
-    cfg = load_notion_settings()
-    h = nw.health()
-    latency_ms = None
-    if cfg.enabled and cfg.errors_db:
-        import time as _t
-        t0 = _t.perf_counter()
-        try:
-            # Fingerprint dummy que no debería existir
-            _ = nw.query_by_fingerprint(cfg.errors_db, "__healthcheck__fingerprint__")
-            latency_ms = int((_t.perf_counter() - t0) * 1000)
-        except Exception:
-            latency_ms = None
-    return {**h, "latency_ms": latency_ms}
-
-
 # --- Métricas: Bug Reports ---
-from pathlib import Path
-import json
-
-
 def _date_key(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d")
 

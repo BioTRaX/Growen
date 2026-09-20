@@ -1,11 +1,14 @@
 # NG-HEADER: Nombre de archivo: api.py
-# NG-HEADER: UbicaciA3n: services/api.py
-# NG-HEADER: DescripciA3n: Instancia principal de FastAPI y middlewares globales.
+# NG-HEADER: Ubicación: services/api.py
+# NG-HEADER: Descripción: Instancia principal de FastAPI y middlewares globales.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-"""AplicaciA3n FastAPI principal del agente."""
+"""Aplicación FastAPI principal del agente."""
+# Los routers tardíos dependen de que logger y app ya estén construidos.
+# ruff: noqa: E402
 
 # --- Windows psycopg async fix (no-op en otros SO) ---
-import sys, asyncio
+import sys
+import asyncio
 if sys.platform.startswith("win"):
     try:
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -18,28 +21,25 @@ import warnings
 from logging.handlers import RotatingFileHandler
 import os
 import time
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, Request
 from fastapi import HTTPException as FastHTTPException
-from pydantic import BaseModel  # Added for FrontError model (logging frontend errors)
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse, RedirectResponse, FileResponse
+from starlette.responses import JSONResponse, FileResponse
 from sqlalchemy.exc import IntegrityError
-import re
 
 from agent_core.config import settings
+from services.media import get_public_media_root
 from db.session import engine, SessionLocal
 from db.base import Base
-import db.models  # ensure models are imported so metadata has all tables
-from ai.router import AIRouter
 from .routers import (
     actions,
     chat,
     ws,
-    telegram,
     catalog,
     imports,
     canonical_products,
@@ -54,24 +54,28 @@ from .routers import (
     services_admin,
     backups_admin,
     admin_chat,
+    chat_quality,
     customers,
     sales,
     reports,
     market,
     alerts,
     drive_sync,
+    external_identities,
+    enrichment,
+    catalog_audits,
+    canonical_knowledge,
+    chat_rollout,
+    meli,
 )
-from services.auth import require_csrf  # para override condicional en dev
 from services.routers import bug_report  # router para reportes de bugs
-from services.integrations.notion_errors import ErrorEvent, create_or_update_card  # type: ignore
-from services.integrations.notion_client import load_notion_settings  # type: ignore
-from services.integrations.notion_sections import upsert_report_as_child  # type: ignore
 
 raw_level = os.getenv("LOG_LEVEL", "INFO") or "INFO"
 level_name = raw_level.strip().upper()
 if level_name not in logging._nameToLevel:
     level_name = "INFO"
 logger = logging.getLogger("growen")
+_CHAT_ARCHIVE_TASK = None
 logger.setLevel(level_name)
 LOG_DIR = Path(os.getenv("LOG_DIR", str(Path(__file__).resolve().parents[1] / "logs")))
 try:
@@ -137,6 +141,14 @@ except Exception:
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """Registra cada solicitud y captura excepciones con un correlation-id."""
+    runtime_env = (os.getenv("ENV") or settings.env).strip().lower()
+    if runtime_env != "dev" and request.url.path.startswith(("/debug", "/auth/debug")):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    if runtime_env == "production":
+        host = (request.url.hostname or "").lower()
+        if host not in settings.trusted_hosts:
+            return JSONResponse(status_code=400, content={"detail": "Host no permitido"})
+
     start = time.perf_counter()
     # Correlation / request id (prefer incoming header if present)
     try:
@@ -150,6 +162,7 @@ async def log_requests(request: Request, call_next):
         request.state.correlation_id = corr
     except Exception:
         pass
+
     try:
         resp = await call_next(request)
     except (FastHTTPException, StarletteHTTPException):
@@ -161,39 +174,10 @@ async def log_requests(request: Request, call_next):
             logger.exception("EXC %s %s cid=%s (%.2fms)", request.method, request.url.path, corr, dur)
         else:
             logger.exception("EXC %s %s (%.2fms)", request.method, request.url.path, dur)
-        # Notion: registrar tarjeta de error 500 si estA habilitado (no bloquear respuesta)
-        try:
-            cfg = load_notion_settings()
-            if cfg.enabled and cfg.errors_db:
-                ev = ErrorEvent(
-                    servicio="api",
-                    entorno=os.getenv("ENV", "dev"),
-                    url=str(request.url),
-                    codigo="HTTP 500",
-                    mensaje=f"Unhandled exception en {request.method} {request.url.path}",
-                    stacktrace=None,  # el logger.exception dejA3 traza en archivo
-                    correlation_id=corr,
-                    etiquetas=["unhandled", "500"],
-                    seccion=(
-                        "Compras" if "/purchases" in request.url.path or "/compras" in request.url.path else
-                        "Stock" if "/stock" in request.url.path or "/inventario" in request.url.path else
-                        "App" if "/admin" in request.url.path else
-                        None
-                    ),
-                )
-                import asyncio
-                if cfg.mode == "sections":
-                    # En modo sections NO enviar reportes 500 a Notion desde middleware.
-                    # SA3lo dejamos el registro en logs para evitar ruido.
-                    pass
-                else:
-                    asyncio.create_task(asyncio.to_thread(create_or_update_card, ev))
-        except Exception:
-            logger.debug("No se pudo encolar tarjeta Notion para 500", exc_info=True)
         # Devolver error con tono argento, breve y claro (sin faltar el respeto)
         return JSONResponse(
             {
-                "detail": "Uy, algo se rompiA3 de nuestro lado. Tranqui: ya lo estamos mirando. Si podAs, probA de nuevo mAs tarde.",
+                "detail": "Uy, algo se rompió de nuestro lado. Ya lo estamos revisando. Probá de nuevo más tarde.",
             },
             status_code=500,
         )
@@ -220,6 +204,22 @@ async def log_requests(request: Request, call_next):
             _STARTUP_METRIC_WRITTEN = True
         except Exception:
             pass
+    security_headers = {
+        "Content-Security-Policy": (
+            "default-src 'self'; base-uri 'self'; object-src 'none'; "
+            "frame-ancestors 'none'; img-src 'self' data: blob:; "
+            "style-src 'self' 'unsafe-inline'; script-src 'self'; "
+            "connect-src 'self' wss:; form-action 'self'"
+        ),
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+        "X-Frame-Options": "DENY",
+    }
+    if runtime_env == "production":
+        security_headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    for header, value in security_headers.items():
+        resp.headers.setdefault(header, value)
     return resp
 
 # --- Exception Handlers EspecAficos ---
@@ -288,10 +288,9 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     # Sanitizar payload de errores para evitar objetos no serializables (ej. bytes)
     def _sanitize_json_for_response(obj):
         try:
-            from collections.abc import Mapping, Sequence
+            from collections.abc import Mapping
         except Exception:
             Mapping = dict  # type: ignore
-            Sequence = list  # type: ignore
 
         if isinstance(obj, (bytes, bytearray)):
             try:
@@ -314,24 +313,9 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     # Mantener contrato por defecto de FastAPI
     return JSONResponse(status_code=422, content={"detail": safe_detail})
 
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:5175",
-    "http://127.0.0.1:5175",
-    # LAN development - agregar IPs de tu red local aquí
-    "http://192.168.100.100:5175",
-]
-
-# Agregar orígenes LAN adicionales desde variable de entorno (separados por coma)
-# Ejemplo: CORS_EXTRA_ORIGINS=http://192.168.1.50:5175
-extra_origins = os.getenv("CORS_EXTRA_ORIGINS", "")
-if extra_origins:
-    origins.extend([o.strip() for o in extra_origins.split(",") if o.strip()])
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -352,19 +336,28 @@ if os.getenv("RUN_DOCTOR_ON_BOOT", "1") == "1":
     except Exception:
         logger.exception("Doctor check failed")
 app.include_router(chat.router)
-app.include_router(telegram.router)
 app.include_router(auth.router)
+if settings.env == "dev":
+    app.include_router(auth.debug_router)
+app.include_router(external_identities.router)
 app.include_router(actions.router)
 app.include_router(ws.router)
 from services.routers import catalogs as catalogs_router  # import after logger setup
 from services.routers import products_stock  # nuevo router historial stock
 from services.routers import admin_scheduler  # router admin scheduler
 from services.routers import tags  # router de tags
+app.include_router(catalogs_router.diagnostics_router)
+app.include_router(catalogs_router.static_router)
 app.include_router(catalogs_router.router)
 app.include_router(catalog.router)
 app.include_router(imports.router)
+app.include_router(catalog_audits.router)
+app.include_router(catalog_audits.legacy_router)
 app.include_router(canonical_products.canonical_router)
 app.include_router(canonical_products.equivalences_router)
+app.include_router(enrichment.router)
+app.include_router(canonical_knowledge.router)
+app.include_router(canonical_knowledge.capabilities_router)
 app.include_router(products_ex.router)
 app.include_router(tags.router, prefix="/tags", tags=["tags"])
 # images.router debe estar ANTES que products_stock.router para evitar conflictos de rutas
@@ -379,6 +372,7 @@ app.include_router(customers.router)
 app.include_router(sales.router)
 app.include_router(reports.router)
 app.include_router(market.router)
+app.include_router(meli.router)
 app.include_router(alerts.router)
 app.include_router(media.router)
 app.include_router(image_jobs.router)
@@ -389,6 +383,8 @@ from services.routers import mcp_admin  # MCP servers admin
 app.include_router(mcp_admin.router)
 app.include_router(backups_admin.router)
 app.include_router(admin_chat.router)  # Admin chat sessions
+app.include_router(chat_rollout.router)  # Control seguro de rollout Chat
+app.include_router(chat_quality.router)  # Feedback, clasificación y prompts supervisados
 app.include_router(admin_scheduler.router)  # Admin scheduler control
 from services.routers import knowledge as knowledge_admin  # Knowledge Base admin
 app.include_router(knowledge_admin.router)
@@ -399,7 +395,8 @@ try:
     app.include_router(health.legacy_router)  # type: ignore[attr-defined]
 except Exception:
     pass
-app.include_router(debug.router, tags=["debug"])
+if settings.env == "dev":
+    app.include_router(debug.router, tags=["debug"])
 app.include_router(bug_report.router)
 
 # --- Router de diagnA3stico frontend ---
@@ -472,35 +469,37 @@ async def frontend_ping_auth(request: Request):
         "correlation_hint": "Ver X-Correlation-Id en respuestas normales para trazas.",
     }
 
-SENSITIVE_PREFIXES = {"SECRET", "OPENAI", "DB_PASS", "ADMIN_PASS", "API_KEY", "KEY", "TOKEN"}
-
-def _is_safe_env_key(k: str) -> bool:
-    uk = k.upper()
-    return not any(p in uk for p in SENSITIVE_PREFIXES)
-
-@frontend_diag_router.get("/env")
-async def frontend_env():
-    """Expone variables de entorno filtradas (no sensibles) para depuraciA3n frontend.
-
-    No incluye claves que contengan prefijos potencialmente sensibles.
-    """
-    safe: dict[str, str] = {}
-    for k, v in os.environ.items():
-        if _is_safe_env_key(k) and len(v) < 500:
-            safe[k] = v
-    # Whitelist explAcita de algunas sensibles pero truncadas podrAa aAadirse mAs tarde.
-    return {"env": safe, "count": len(safe)}
-
 class FrontError(BaseModel):  # type: ignore
     """Modelo de error enviado por el ErrorBoundary.
 
     Hacemos casi todo opcional salvo message para ser tolerantes a versiones previas.
     """
-    message: str
-    stack: str | None = None
-    component_stack: str | None = None
-    user_agent: str | None = None
+    message: str = Field(min_length=1, max_length=2000)
+    stack: str | None = Field(default=None, max_length=8000)
+    component_stack: str | None = Field(default=None, max_length=4000)
+    user_agent: str | None = Field(default=None, max_length=1000)
     # Campos extras potenciales en el futuro (ignorados si no llegan)
+
+
+_FRONT_ERROR_WINDOW_SECONDS = 60
+_FRONT_ERROR_MAX_REQUESTS = 10
+_front_error_attempts: dict[str, list[float]] = {}
+
+
+def _enforce_front_error_rate_limit(request: Request) -> None:
+    """Limita el receptor diagnóstico por IP en su único entorno: desarrollo."""
+
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    recent = [
+        seen
+        for seen in _front_error_attempts.get(client_ip, [])
+        if now - seen < _FRONT_ERROR_WINDOW_SECONDS
+    ]
+    if len(recent) >= _FRONT_ERROR_MAX_REQUESTS:
+        raise FastHTTPException(status_code=429, detail="Demasiados errores de frontend")
+    recent.append(now)
+    _front_error_attempts[client_ip] = recent
 
 # --- Backup diario automático (diferido y no bloqueante) ---
 _AUTO_BACKUP_SCHEDULED = False
@@ -535,6 +534,7 @@ async def frontend_log_error(payload: FrontError, request: Request):  # type: ig
 
     Usa service_logs con action 'panic' y service 'frontend'.
     """
+    _enforce_front_error_rate_limit(request)
     try:
         from db.models import ServiceLog
         import socket
@@ -548,11 +548,11 @@ async def frontend_log_error(payload: FrontError, request: Request):  # type: ig
             ok=False,
             level="ERROR",
             error=payload.message[:8000],
-            hint=payload.component_stack,
+            hint=(payload.component_stack or "")[:4000] or None,
             payload={
                 "stack": (payload.stack or "")[:8000],
-                "ua": payload.user_agent or request.headers.get("user-agent"),
-                "path": request.headers.get("Referer"),
+                "ua": (payload.user_agent or request.headers.get("user-agent") or "")[:1000],
+                "path": (request.headers.get("Referer") or "")[:2000],
             },
         )
         # Persistimos si la DB estA disponible; si falla seguimos (best-effort)
@@ -566,15 +566,8 @@ async def frontend_log_error(payload: FrontError, request: Request):  # type: ig
         pass
     return {"status": "ok"}
 
-app.include_router(frontend_diag_router)
-
-# Override CSRF en entorno de desarrollo para simplificar tests (no requiere cookie)
-try:
-    from agent_core.config import settings as _settings
-    if _settings.env == "dev":
-        app.dependency_overrides[require_csrf] = lambda: None
-except Exception:
-    pass
+if settings.env == "dev":
+    app.include_router(frontend_diag_router)
 
 @app.on_event("startup")
 async def _init_inmemory_db():
@@ -586,13 +579,30 @@ async def _init_inmemory_db():
                 await conn.run_sync(Base.metadata.create_all)
     except Exception:
         logger.exception("No se pudo inicializar el esquema en memoria")
+
+    # Hidratar prompts activos desde PostgreSQL y restaurar el scheduler persistente.
+    try:
+        from ai.prompt_registry import ActivePrompt as _ActivePrompt, replace_active as _replace_active
+        from db.models import AIPromptVersion as _AIPromptVersion, SchedulerSetting as _SchedulerSetting
+        from services.jobs.market_scheduler import start_scheduler as _start_market_scheduler
+        from sqlalchemy import select as _select
+        async with SessionLocal() as _settings_session:  # type: ignore
+            _prompts = (await _settings_session.execute(
+                _select(_AIPromptVersion).where(_AIPromptVersion.status == "active")
+            )).scalars().all()
+            _replace_active([_ActivePrompt(p.id, p.prompt_key, p.version, p.content) for p in _prompts])
+            _scheduler_setting = await _settings_session.get(_SchedulerSetting, 1)
+            if _scheduler_setting and _scheduler_setting.enabled:
+                _start_market_scheduler(force=True)
+    except Exception:
+        logger.exception("No se pudo restaurar la configuración administrativa persistente")
     # Auto-start optional services flagged as auto_start (best-effort, non-blocking)
     try:
         from db.models import Service
         from sqlalchemy import select
         from services.orchestrator import start_service as _svc_start
         async with SessionLocal() as s:  # type: ignore
-            rows = (await s.execute(select(Service).where(Service.auto_start == True))).scalars().all()
+            rows = (await s.execute(select(Service).where(Service.auto_start.is_(True)))).scalars().all()
             for r in rows:
                 try:
                     _svc_start(r.name, correlation_id=f"boot-{int(time.time())}")
@@ -632,7 +642,6 @@ async def _init_inmemory_db():
         interval = int(os.getenv("SERVICE_HEALTH_LOG_SEC", "0") or "0")
         if interval > 0:
             async def _health_loop():
-                from sqlalchemy import select as _select
                 from services.routers.health import KNOWN_OPTIONAL_SERVICES as _SERVICES, health_service as _health_service
                 while True:
                     try:
@@ -653,6 +662,22 @@ async def _init_inmemory_db():
     except Exception:
         pass
 
+    # Archivado automático diario; la política vigente no elimina conversaciones.
+    try:
+        global _CHAT_ARCHIVE_TASK
+        from services.chat.orchestrator import archive_expired_sessions
+
+        async def _chat_archive_loop():
+            while True:
+                async with SessionLocal() as _archive_db:
+                    await archive_expired_sessions(_archive_db, settings.chat_archive_after_days)
+                await asyncio.sleep(24 * 60 * 60)
+
+        if settings.env not in {"test", "testing"}:
+            _CHAT_ARCHIVE_TASK = asyncio.create_task(_chat_archive_loop())
+    except Exception:
+        logger.exception("No se pudo iniciar el archivado automático de chat")
+
     # Programar autobackup diferido y no bloqueante
     try:
         _t = _schedule_auto_backup()  # may be coroutine
@@ -665,19 +690,48 @@ async def _init_inmemory_db():
 
 # Unificado en services.routers.health
 
+
+@app.on_event("shutdown")
+async def _stop_chat_archive_task():
+    global _CHAT_ARCHIVE_TASK
+    if _CHAT_ARCHIVE_TASK:
+        _CHAT_ARCHIVE_TASK.cancel()
+        try:
+            await _CHAT_ARCHIVE_TASK
+        except asyncio.CancelledError:
+            pass
+        _CHAT_ARCHIVE_TASK = None
+
 # --- Static frontend (built) + SPA fallback ---
 try:
     ROOT = Path(__file__).resolve().parents[1]
     FE_DIST = ROOT / "frontend" / "dist"
     INDEX_HTML = FE_DIST / "index.html"
     ASSETS_DIR = FE_DIST / "assets"
+    VUE_DIST = ROOT / "frontend-vue" / "dist"
+    VUE_INDEX_HTML = VUE_DIST / "index.html"
+    VUE_ROUTE_PREFIXES = {
+        value.strip().strip("/")
+        for value in os.getenv("FRONTEND_VUE_ROUTES", "").split(",")
+        if value.strip().strip("/")
+    }
 
     if ASSETS_DIR.exists():
         # Serve bundled assets (JS/CSS/images) from /assets
         app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
+    if VUE_DIST.exists():
+        # Vite genera referencias /vue-assets/assets/*; montar el dist completo
+        # permite conservar React y Vue sin colisiones de nombres.
+        app.mount("/vue-assets", StaticFiles(directory=str(VUE_DIST)), name="vue-assets")
+
+    def _spa_index_for(path: str) -> Path:
+        prefix = path.strip("/").split("/", 1)[0] if path.strip("/") else ""
+        if prefix in VUE_ROUTE_PREFIXES and VUE_INDEX_HTML.exists():
+            return VUE_INDEX_HTML
+        return INDEX_HTML
 
     # Static media (user/product images, attachments)
-    MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", str(ROOT / "Devs" / "Imagenes")))
+    MEDIA_ROOT = get_public_media_root()
     try:
         MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
     except Exception:
@@ -718,15 +772,17 @@ try:
             # Explicitmente dejamos pasar 404 (estas rutas deberAan matchear antes)
             blocked = (
                 full_path.startswith("assets")
+                or full_path.startswith("vue-assets")
                 or full_path.startswith("media")
                 or full_path.startswith("api")
                 or full_path.startswith("docs")
                 or full_path.startswith("redoc")
                 or full_path.startswith("openapi")
             )
-            if blocked or not INDEX_HTML.exists():
+            selected_index = _spa_index_for(full_path)
+            if blocked or not selected_index.exists():
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
-            resp = FileResponse(str(INDEX_HTML))
+            resp = FileResponse(str(selected_index))
             resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             resp.headers["Pragma"] = "no-cache"
             resp.headers["Expires"] = "0"

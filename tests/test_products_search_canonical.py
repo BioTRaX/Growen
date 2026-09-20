@@ -15,7 +15,15 @@ from fastapi.testclient import TestClient
 
 from services.api import app
 from services.auth import current_session, require_csrf, SessionData
-from db.models import Product, Supplier, SupplierProduct, ProductEquivalence, CanonicalProduct
+from db.models import (
+    CanonicalProduct,
+    CatalogAuditItem,
+    CatalogAuditRun,
+    Product,
+    ProductEquivalence,
+    Supplier,
+    SupplierProduct,
+)
 
 client = TestClient(app)
 app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
@@ -39,11 +47,29 @@ async def _seed_minimal_with_canonical():
         await s.flush()
         eq = ProductEquivalence(supplier_id=sup.id, supplier_product_id=sp.id, canonical_product_id=cp.id, source="test")
         s.add(eq)
+        audit_run = CatalogAuditRun(
+            id="run-products-search", scope="selected", mode="deterministic_only",
+            include_orphans=False, enrich_missing=False, auto_fix=False,
+            status="completed_with_issues", is_active_slot=False,
+        )
+        s.add(audit_run)
+        await s.flush()
+        audit_item = CatalogAuditItem(
+            run_id=audit_run.id, canonical_product_id=cp.id, target_key=f"canonical:{cp.id}",
+            input_hash="a" * 64, rules_version="catalog-audit-r1", feedback_version="0",
+            status="needs_review",
+        )
+        s.add(audit_item)
+        await s.flush()
+        cp.catalog_audit_status = "needs_review"
+        cp.last_catalog_audit_item_id = audit_item.id
         await s.commit()
         return {
             "product_id": p.id,
             "canonical_name": cp.name,
             "internal_name": p.title,
+            "audit_item_id": audit_item.id,
+            "audit_run_id": audit_run.id,
         }
 
 
@@ -67,3 +93,6 @@ async def test_products_search_matches_canonical_name_and_includes_fields():
     assert found.get("preferred_name") == seeded["canonical_name"], "preferred_name debe priorizar el título canónico"
     # name (interno) debe estar presente y puede diferir del canónico
     assert found.get("name") == seeded["internal_name"], "name corresponde al título interno de Product"
+    assert found.get("catalog_audit_status") == "needs_review"
+    assert found.get("catalog_audit_item_id") == seeded["audit_item_id"]
+    assert found.get("catalog_audit_run_id") == seeded["audit_run_id"]

@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 url = os.getenv('DB_URL')
-print('DB_URL:', url)
+print('Configuración de base disponible:', bool(url))
 engine = create_engine(url, future=True)
 with engine.connect() as conn:
     sp = conn.exec_driver_sql("show search_path").scalar()

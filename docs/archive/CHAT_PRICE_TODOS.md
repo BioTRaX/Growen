@@ -41,7 +41,7 @@ La fase inicial basada en `price_lookup.py` está DEPRECATED para el endpoint HT
 - [x] Test E2E (Playwright) validando la tarjeta de precio en el chat.
 
 ## Documentacion (pendiente refactor final)
-- [x] Crear/actualizar `docs/CHAT.md` describiendo intents soportados, formato de respuestas y limitaciones.
+- [x] Crear/actualizar `docs/architecture/CHAT.md` describiendo intents soportados, formato de respuestas y limitaciones.
 - [ ] Actualizar `README.md` seccion de chatbot con la nueva capacidad.
 - [ ] Anadir entrada en `CHANGELOG.md` cuando se entregue la funcionalidad.
 

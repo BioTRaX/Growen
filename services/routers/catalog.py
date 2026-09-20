@@ -7,19 +7,21 @@
 from __future__ import annotations
 
 import os
+import csv
+from decimal import Decimal
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Literal
 import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form
 from datetime import datetime as _dt
 from fastapi.responses import JSONResponse, StreamingResponse
-from io import BytesIO
+from io import BytesIO, StringIO
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
-from pydantic import BaseModel, ValidationError
-from sqlalchemy import func, select, or_, and_, update
+from pydantic import BaseModel, ValidationError, Field, field_validator
+from sqlalchemy import func, select, or_, and_, update, exists
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
@@ -37,7 +39,15 @@ from db.models import (
     ProductEquivalence,
     CanonicalProduct,
     AuditLog,
+    Purchase,
     PurchaseLine,
+    PurchaseAttachment,
+    StockLedger,
+    Tag,
+    ProductTag,
+    CanonicalEnrichmentJob,
+    CanonicalContentVersion,
+    CatalogAuditItem,
 )
 from db.session import get_session
 from db.text_utils import stylize_product_name
@@ -54,13 +64,98 @@ router = APIRouter(tags=["catalog"])
 
 # Tamaño de página por defecto para el historial de precios
 DEFAULT_PRICE_HISTORY_PAGE_SIZE = int(os.getenv("PRICE_HISTORY_PAGE_SIZE", "20"))
+
+
+@router.get("/products/{product_id}/purchase-history", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def product_purchase_history(product_id: int, session: AsyncSession = Depends(get_session)):
+    """Historial confirmado unido para todos los internos del mismo canónico."""
+    product = await session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    canonical_id = await session.scalar(
+        select(ProductEquivalence.canonical_product_id)
+        .join(SupplierProduct, SupplierProduct.id == ProductEquivalence.supplier_product_id)
+        .where(SupplierProduct.internal_product_id == product_id)
+        .limit(1)
+    )
+    linked_ids = [product_id]
+    if canonical_id:
+        linked_ids = list(
+            (
+                await session.scalars(
+                    select(SupplierProduct.internal_product_id)
+                    .join(ProductEquivalence, ProductEquivalence.supplier_product_id == SupplierProduct.id)
+                    .where(
+                        ProductEquivalence.canonical_product_id == canonical_id,
+                        SupplierProduct.internal_product_id.is_not(None),
+                    )
+                    .distinct()
+                )
+            ).all()
+        ) or linked_ids
+    rows = (
+        await session.execute(
+            select(PurchaseLine, Purchase, Supplier)
+            .join(Purchase, Purchase.id == PurchaseLine.purchase_id)
+            .join(Supplier, Supplier.id == Purchase.supplier_id)
+            .where(PurchaseLine.product_id.in_(linked_ids), Purchase.status == "CONFIRMADA")
+            .order_by(Purchase.remito_date.desc(), PurchaseLine.id.desc())
+        )
+    ).all()
+    items = []
+    for line, purchase, supplier in rows:
+        attachment = await session.scalar(
+            select(PurchaseAttachment)
+            .where(PurchaseAttachment.purchase_id == purchase.id)
+            .order_by(PurchaseAttachment.id.asc())
+        )
+        discount = float(line.line_discount or 0)
+        gross = float(line.unit_cost or 0)
+        items.append({
+            "purchase_id": purchase.id,
+            "purchase_line_id": line.id,
+            "product_id": line.product_id,
+            "date": purchase.remito_date.isoformat(),
+            "supplier": {"id": supplier.id, "name": supplier.name},
+            "remito_number": purchase.remito_number,
+            "supplier_sku": line.supplier_sku,
+            "supplier_title": line.title,
+            "quantity": int(line.qty or 0),
+            "gross_unit_cost": gross,
+            "discount_pct": discount,
+            "net_unit_cost": round(gross * (1 - discount / 100), 2),
+            "attachment_url": f"/purchases/{purchase.id}/attachments/{attachment.id}/file" if attachment else None,
+        })
+    movements = (
+        await session.execute(
+            select(StockLedger)
+            .where(
+                StockLedger.product_id.in_(linked_ids),
+                StockLedger.source_type.in_(("purchase", "purchase_rollback")),
+            )
+            .order_by(StockLedger.created_at.desc())
+        )
+    ).scalars().all()
+    return {
+        "product_id": product.id,
+        "product_name": product.title,
+        "items": items,
+        "movements": [{
+            "type": movement.source_type,
+            "product_id": movement.product_id,
+            "source_id": movement.source_id,
+            "delta": movement.delta,
+            "balance_after": movement.balance_after,
+            "created_at": movement.created_at.isoformat(),
+        } for movement in movements],
+    }
 # ------------------------------- Productos (mínimo para tests) -------------------------------
 from pydantic import BaseModel as _PydModel
 
 
 class _ProductCreate(_PydModel):
     title: str
-    initial_stock: int = 0
+    initial_stock: Decimal = Decimal("0")
     supplier_id: Optional[int] = None
     supplier_sku: Optional[str] = None
     sku: Optional[str] = None
@@ -299,7 +394,7 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
                 (desired_sku[:40] + "-" + ''.join(_r.choices(_s.ascii_uppercase + _s.digits, k=5)))[:50]
             )
             try:
-                var = Variant(product_id=prod.id, sku=attempt_variant_sku)
+                var = Variant(product_id=prod.id, sku=attempt_variant_sku, price=payload.sale_price)
                 session.add(var)
                 await session.flush()
                 if attempt_variant_sku != desired_sku:
@@ -332,11 +427,11 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
 
     # Inventario opcional
     if payload.initial_stock and payload.initial_stock > 0:
-        inv = Inventory(variant_id=var.id, stock_qty=int(payload.initial_stock))
+        inv = Inventory(variant_id=var.id, stock_qty=payload.initial_stock)
         session.add(inv)
 
     # Guardar stock agregado también en Product.stock para compatibilidad
-    prod.stock = int(payload.initial_stock or 0)
+    prod.stock = Decimal(str(payload.initial_stock or 0))
 
     # Crear SupplierProduct asociado si hay supplier_id
     if supplier is not None:
@@ -450,7 +545,7 @@ async def update_variant_sku(
 ):
     """Actualiza el SKU interno de una variante con validación de formato y unicidad.
 
-    - Regex permitida: [A-Za-z0-9._\-]{2,50}
+    - Regex permitida: [A-Za-z0-9._\\-]{2,50}
     - Unicidad global en `Variant.sku` (existe constraint de DB adicional)
     - Auditoría en `AuditLog` (action: variant.sku.update)
     """
@@ -582,6 +677,12 @@ async def catalog_search(
                 CanonicalProduct.sku_custom.ilike(w_like),
                 CanonicalProduct.ng_sku.ilike(w_like),
                 Product.description_html.ilike(w_like),
+                exists(
+                    select(1)
+                    .select_from(ProductTag)
+                    .join(Tag, Tag.id == ProductTag.tag_id)
+                    .where(ProductTag.product_id == Product.id, Tag.name.ilike(w_like))
+                ),
             ]
             and_conditions.append(or_(*or_conditions))
         
@@ -612,7 +713,6 @@ async def catalog_search(
     tags_map: dict[int, list[str]] = {}
     if product_ids:
         try:
-            from db.models import Tag, ProductTag
             tag_result = (
                 await session.execute(
                     select(ProductTag.product_id, Tag.name)
@@ -1016,6 +1116,7 @@ async def variants_lookup(
             "description": None,
             "technical_specs": None,
             "usage_instructions": None,
+            "tags": [],
         }
 
     # 2. Buscar por SKU canónico en Product (Product.canonical_sku) - preferido
@@ -1131,7 +1232,7 @@ class _ProductsDeleteReq(_PydModel):
 
 @router.delete(
     "/catalog/products",
-    dependencies=[Depends(require_csrf)],
+    dependencies=[Depends(require_csrf), Depends(require_roles("colaborador", "admin"))],
 )
 async def delete_products_guarded(payload: _ProductsDeleteReq, session: AsyncSession = Depends(get_session)):
     """Elimina productos si no tienen stock ni referencias en compras.
@@ -1462,7 +1563,7 @@ async def create_supplier(
 ):
     """Crea un nuevo proveedor validando formato y unicidad de ``slug``."""
 
-    if request.headers.get("content-type") != "application/json":
+    if not (request.headers.get("content-type") or "").lower().startswith("application/json"):
         raise HTTPException(
             status_code=415, detail="Content-Type debe ser application/json"
         )
@@ -1960,19 +2061,23 @@ def _build_category_path(cat: Category, lookup: dict[int, Category]) -> str:
     ],
 )
 async def list_categories(
+    kind: Literal["category", "subcategory"] | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> List[dict]:
     """Lista categorías con su jerarquía completa."""
 
-    result = await session.execute(select(Category))
+    stmt = select(Category)
+    if kind:
+        stmt = stmt.where(Category.kind == kind)
+    result = await session.execute(stmt.order_by(Category.name.asc()))
     cats = result.scalars().all()
-    lookup = {c.id: c for c in cats}
     return [
         {
             "id": c.id,
             "name": c.name,
             "parent_id": c.parent_id,
-            "path": _build_category_path(c, lookup),
+            "kind": c.kind,
+            "path": c.name,
         }
         for c in cats
     ]
@@ -1981,6 +2086,7 @@ async def list_categories(
 class CategoryCreate(BaseModel):
     name: str
     parent_id: int | None = None
+    kind: Literal["category", "subcategory"] | None = None
 
 
 @router.post(
@@ -1992,9 +2098,10 @@ async def create_category(payload: CategoryCreate, session: AsyncSession = Depen
 
     Respuesta incluye `id`, `name`, `parent_id` y `path` completo.
     """
-    name = (payload.name or "").strip()
+    name = " ".join((payload.name or "").strip().split())
     if not name:
         raise HTTPException(status_code=400, detail="name requerido")
+    kind = payload.kind or ("subcategory" if payload.parent_id else "category")
     # Verificar padre válido (si viene)
     if payload.parent_id:
         parent = await session.get(Category, payload.parent_id)
@@ -2002,12 +2109,12 @@ async def create_category(payload: CategoryCreate, session: AsyncSession = Depen
             raise HTTPException(status_code=400, detail="parent_id inválido")
     # Unicidad (name, parent_id)
     exists = await session.scalar(
-        select(Category).where(Category.name == name, Category.parent_id == payload.parent_id)
+        select(Category).where(Category.kind == kind, func.lower(Category.name) == name.lower())
     )
     if exists:
         raise HTTPException(status_code=409, detail="La categoría ya existe en ese nivel")
     # Crear
-    cat = Category(name=name, parent_id=payload.parent_id)
+    cat = Category(name=name, parent_id=payload.parent_id, kind=kind)
     session.add(cat)
     await session.commit()
     await session.refresh(cat)
@@ -2022,8 +2129,7 @@ async def create_category(payload: CategoryCreate, session: AsyncSession = Depen
             break
         parts.append(p.name)
         parent_id = p.parent_id
-    path = ">".join(reversed(parts))
-    return {"id": cat.id, "name": cat.name, "parent_id": cat.parent_id, "path": path}
+    return {"id": cat.id, "name": cat.name, "parent_id": cat.parent_id, "kind": cat.kind, "path": cat.name}
 
 
 @router.get(
@@ -2033,21 +2139,24 @@ async def create_category(payload: CategoryCreate, session: AsyncSession = Depen
     ],
 )
 async def search_categories(
-    q: str, session: AsyncSession = Depends(get_session)
+    q: str,
+    kind: Literal["category", "subcategory"] | None = None,
+    session: AsyncSession = Depends(get_session),
 ) -> List[dict]:
     """Busca categorías por nombre o path parcial."""
 
-    result = await session.execute(
-        select(Category).where(Category.name.ilike(f"%{q}%"))
-    )
+    stmt = select(Category).where(Category.name.ilike(f"%{q}%"))
+    if kind:
+        stmt = stmt.where(Category.kind == kind)
+    result = await session.execute(stmt.order_by(Category.name.asc()))
     cats = result.scalars().all()
-    lookup = {c.id: c for c in cats}
     return [
         {
             "id": c.id,
             "name": c.name,
             "parent_id": c.parent_id,
-            "path": _build_category_path(c, lookup),
+            "kind": c.kind,
+            "path": c.name,
         }
         for c in cats
     ]
@@ -2102,12 +2211,13 @@ async def generate_categories(
         # Crear jerarquía faltante
         parent_id = None
         for name in path.split(">"):
+            kind = "category" if parent_id is None else "subcategory"
             q = select(Category).where(
-                Category.name == name, Category.parent_id == parent_id
+                func.lower(Category.name) == name.lower(), Category.kind == kind
             )
             cat = await session.scalar(q)
             if not cat:
-                cat = Category(name=name, parent_id=parent_id)
+                cat = Category(name=name, parent_id=parent_id, kind=kind)
                 session.add(cat)
                 await session.flush()
             parent_id = cat.id
@@ -2197,6 +2307,135 @@ async def _category_path(session: AsyncSession, category_id: int | None) -> str 
         parts.append(cat.name)
         current_id = cat.parent_id
     return ">".join(reversed(parts)) if parts else None
+
+
+async def _taxonomy_path(
+    session: AsyncSession,
+    category_id: int | None,
+    subcategory_id: int | None,
+) -> str | None:
+    """Compone las dos taxonomías planas sin depender de parent_id."""
+    category = await session.get(Category, category_id) if category_id else None
+    subcategory = await session.get(Category, subcategory_id) if subcategory_id else None
+    parts = [value.name for value in (category, subcategory) if value]
+    return " > ".join(parts) if parts else None
+
+
+async def _stock_export_records(
+    session: AsyncSession,
+    *,
+    supplier_id: int | None,
+    category_id: int | None,
+    q: str | None,
+    stock: str | None,
+    created_since_days: int | None,
+    sort_by: str,
+    order: str,
+    product_type: str | None,
+) -> list[dict]:
+    """Construye el conjunto canónico compartido por las exportaciones de Stock."""
+    try:
+        sort_by_enum = ProductSortBy(sort_by)
+        order_enum = SortOrder(order)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="ordenamiento inválido") from exc
+
+    sp = SupplierProduct
+    p = Product
+    s = Supplier
+    eq = ProductEquivalence
+    cp = CanonicalProduct
+    stmt = (
+        select(sp, p, s, eq, cp)
+        .join(s, sp.supplier_id == s.id)
+        .join(p, sp.internal_product_id == p.id)
+        .outerjoin(eq, eq.supplier_product_id == sp.id)
+        .outerjoin(cp, cp.id == eq.canonical_product_id)
+        .where(or_(cp.id.is_(None), cp.catalog_audit_status != "quarantined"))
+    )
+    if supplier_id is not None:
+        stmt = stmt.where(sp.supplier_id == supplier_id)
+    if category_id is not None:
+        stmt = stmt.where(p.category_id == category_id)
+    if q:
+        stmt = stmt.where(or_(p.title.ilike(f"%{q}%"), sp.title.ilike(f"%{q}%")))
+    if stock:
+        try:
+            operator, raw_value = stock.split(":", 1)
+            value = Decimal(raw_value)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="stock inválido (use gt:0 o eq:0)") from exc
+        if operator == "gt":
+            stmt = stmt.where(p.stock > value)
+        elif operator == "eq":
+            stmt = stmt.where(p.stock == value)
+        else:
+            raise HTTPException(status_code=400, detail="stock inválido (op debe ser gt o eq)")
+    if created_since_days is not None:
+        if created_since_days < 0 or created_since_days > 365:
+            raise HTTPException(status_code=400, detail="created_since_days fuera de rango (0-365)")
+        from datetime import datetime, timedelta
+        stmt = stmt.where(p.created_at >= datetime.utcnow() - timedelta(days=created_since_days))
+    if product_type and product_type != "all":
+        stmt = stmt.where(
+            eq.canonical_product_id.is_not(None)
+            if product_type == "canonical"
+            else eq.canonical_product_id.is_(None)
+        )
+
+    sort_map = {
+        ProductSortBy.updated_at: sp.last_seen_at,
+        ProductSortBy.precio_venta: sp.current_sale_price,
+        ProductSortBy.precio_compra: sp.current_purchase_price,
+        ProductSortBy.name: p.title,
+        ProductSortBy.created_at: p.created_at,
+    }
+    sort_column = sort_map[sort_by_enum]
+    stmt = stmt.order_by(sort_column.asc() if order_enum == SortOrder.asc else sort_column.desc())
+    rows = (await session.execute(stmt)).all()
+
+    product_ids = list({product.id for _, product, *_ in rows})
+    skus_by_product: dict[int, str | None] = {}
+    if product_ids:
+        variant_rows = (
+            await session.execute(
+                select(Variant.product_id, Variant.sku)
+                .where(Variant.product_id.in_(product_ids))
+                .order_by(Variant.product_id, Variant.id)
+            )
+        ).all()
+        for product_id, sku in variant_rows:
+            skus_by_product.setdefault(product_id, sku)
+
+    records: dict[int, dict] = {}
+    for supplier_product, product, _supplier, _equivalence, canonical in rows:
+        existing = records.get(product.id)
+        canonical_price = float(canonical.sale_price) if canonical and canonical.sale_price is not None else None
+        if existing:
+            if existing["canonical_sale_price"] is None and canonical_price is not None:
+                existing["canonical_sale_price"] = canonical_price
+            continue
+        records[product.id] = {
+            "product_id": product.id,
+            "name": canonical.name if canonical and canonical.name else product.title,
+            "supplier_sale_price": float(supplier_product.current_sale_price) if supplier_product.current_sale_price is not None else None,
+            "canonical_sale_price": canonical_price,
+            "category_id": canonical.category_id if canonical and canonical.category_id else product.category_id,
+            "subcategory_id": canonical.subcategory_id if canonical and canonical.subcategory_id else product.subcategory_id,
+            "sku": (canonical.sku_custom or canonical.ng_sku) if canonical else skus_by_product.get(product.id),
+            "stock": float(product.stock or 0),
+        }
+
+    exported: list[dict] = []
+    for record in records.values():
+        exported.append({
+            "name": stylize_product_name(record["name"]),
+            "sale_price": record["canonical_sale_price"] if record["canonical_sale_price"] is not None else record["supplier_sale_price"],
+            "category": await _taxonomy_path(session, record["category_id"], record["subcategory_id"]),
+            "sku": record["sku"],
+            "stock": record["stock"],
+        })
+    return exported
 
 
 @router.get(
@@ -2315,6 +2554,19 @@ async def list_products(
     result = await session.execute(stmt)
     rows = result.all()
 
+    audit_item_ids = {
+        cp_obj.last_catalog_audit_item_id
+        for _, _, _, _, cp_obj in rows
+        if cp_obj and cp_obj.last_catalog_audit_item_id
+    }
+    audit_items_by_id: dict[int, str] = {}
+    if audit_item_ids:
+        audit_rows = (await session.execute(
+            select(CatalogAuditItem.id, CatalogAuditItem.run_id)
+            .where(CatalogAuditItem.id.in_(audit_item_ids))
+        )).all()
+        audit_items_by_id = dict(audit_rows)
+
     # Prefetch primer SKU por producto para evitar N+1
     product_ids = [p_obj.id for _, p_obj, *_ in rows]
     skus_by_product: dict[int, str | None] = {}
@@ -2393,7 +2645,7 @@ async def list_products(
 
     items = []
     for sp_obj, p_obj, s_obj, eq_obj, cp_obj in rows:
-        cat_path = await _category_path(session, p_obj.category_id)
+        cat_path = await _taxonomy_path(session, p_obj.category_id, p_obj.subcategory_id)
         # Estilizar nombre: Title Case con unidades preservadas
         raw_name = cp_obj.name if (cp_obj and getattr(cp_obj, "name", None)) else p_obj.title
         preferred_name = stylize_product_name(raw_name)
@@ -2417,6 +2669,8 @@ async def list_products(
                 "compra_minima": float(sp_obj.min_purchase_qty)
                 if sp_obj.min_purchase_qty is not None
                 else None,
+                "category_id": p_obj.category_id,
+                "subcategory_id": p_obj.subcategory_id,
                 "category_path": cat_path,
                 "stock": p_obj.stock,
                 "updated_at": sp_obj.last_seen_at.isoformat()
@@ -2426,6 +2680,9 @@ async def list_products(
                 "canonical_sale_price": float(cp_obj.sale_price) if (cp_obj and cp_obj.sale_price is not None) else None,
                 "canonical_sku": (cp_obj.sku_custom if (cp_obj and cp_obj.sku_custom) else (cp_obj.ng_sku if cp_obj else None)),
                 "canonical_name": stylize_product_name(cp_obj.name) if cp_obj else None,
+                "catalog_audit_status": cp_obj.catalog_audit_status if cp_obj else None,
+                "catalog_audit_item_id": cp_obj.last_catalog_audit_item_id if cp_obj else None,
+                "catalog_audit_run_id": audit_items_by_id.get(cp_obj.last_catalog_audit_item_id) if cp_obj else None,
                 "first_variant_sku": skus_by_product.get(p_obj.id),
                 # Etapa 1: Datos estructurados de enriquecimiento
                 "technical_specs": getattr(p_obj, 'technical_specs', None),
@@ -2469,119 +2726,17 @@ async def export_stock_xlsx(
     Respeta los mismos filtros que /products. El precio de venta prioriza el canónico si existe;
     de lo contrario usa el precio de venta del proveedor.
     """
-    # Reutilizar lógica de filtros sin paginar
-    try:
-        sort_by_enum = ProductSortBy(sort_by)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="sort_by inválido")
-
-    try:
-        order_enum = SortOrder(order)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="order inválido")
-
-    sp = SupplierProduct
-    p = Product
-    s = Supplier
-    eq = ProductEquivalence
-    cp = CanonicalProduct
-
-    stmt = (
-        select(sp, p, s, eq, cp)
-        .join(s, sp.supplier_id == s.id)
-        .join(p, sp.internal_product_id == p.id)
-        .outerjoin(eq, eq.supplier_product_id == sp.id)
-        .outerjoin(cp, cp.id == eq.canonical_product_id)
+    records = await _stock_export_records(
+        session,
+        supplier_id=supplier_id,
+        category_id=category_id,
+        q=q,
+        stock=stock,
+        created_since_days=created_since_days,
+        sort_by=sort_by,
+        order=order,
+        product_type=type,
     )
-
-    if supplier_id is not None:
-        stmt = stmt.where(sp.supplier_id == supplier_id)
-    if category_id is not None:
-        stmt = stmt.where(p.category_id == category_id)
-    if q:
-        stmt = stmt.where(or_(p.title.ilike(f"%{q}%"), sp.title.ilike(f"%{q}%")))
-    if stock:
-        try:
-            op, val = stock.split(":", 1)
-            val_i = int(val)
-        except Exception:
-            raise HTTPException(status_code=400, detail="stock inválido (use gt:0 o eq:0)")
-        if op == "gt":
-            stmt = stmt.where(p.stock > val_i)
-        elif op == "eq":
-            stmt = stmt.where(p.stock == val_i)
-        else:
-            raise HTTPException(status_code=400, detail="stock inválido (op debe ser gt o eq)")
-    if created_since_days is not None:
-        if created_since_days < 0 or created_since_days > 365:
-            raise HTTPException(status_code=400, detail="created_since_days fuera de rango (0-365)")
-        from datetime import datetime, timedelta
-        cutoff = datetime.utcnow() - timedelta(days=created_since_days)
-        stmt = stmt.where(p.created_at >= cutoff)
-
-    # Filtro por tipo (canónicos|proveedor|todos)
-    if type and type != "all":
-        if type == "canonical":
-            stmt = stmt.where(eq.canonical_product_id.is_not(None))
-        elif type == "supplier":
-            stmt = stmt.where(eq.canonical_product_id.is_(None))
-
-    sort_map = {
-        ProductSortBy.updated_at: sp.last_seen_at,
-        ProductSortBy.precio_venta: sp.current_sale_price,
-        ProductSortBy.precio_compra: sp.current_purchase_price,
-        ProductSortBy.name: p.title,
-        ProductSortBy.created_at: p.created_at,
-    }
-    sort_col = sort_map[sort_by_enum]
-    sort_col = sort_col.asc() if order_enum == SortOrder.asc else sort_col.desc()
-    stmt = stmt.order_by(sort_col)
-
-    result = await session.execute(stmt)
-    rows = result.all()
-
-    # Agregar helper para obtener el primer SKU de cada producto sin consultas N+1
-    product_ids = list({p_obj.id for _, p_obj, *_ in rows})
-    skus_by_product: dict[int, str | None] = {}
-    if product_ids:
-        vs = (
-            await session.execute(
-                select(Variant.product_id, Variant.sku)
-                .where(Variant.product_id.in_(product_ids))
-                .order_by(Variant.product_id.asc(), Variant.id.asc())
-            )
-        ).all()
-        for pid, sku in vs:
-            if pid not in skus_by_product:
-                skus_by_product[pid] = sku
-
-    # Armar un mapa por producto tomando el primer row encontrado
-    by_product: dict[int, dict] = {}
-    for sp_obj, p_obj, s_obj, eq_obj, cp_obj in rows:
-        if p_obj.id in by_product:
-            # Si no hay precio canónico aún y esta fila sí tiene, actualizar
-            if by_product[p_obj.id]["canonical_sale_price"] is None and (cp_obj and cp_obj.sale_price is not None):
-                by_product[p_obj.id]["canonical_sale_price"] = float(cp_obj.sale_price)
-            continue
-        # Calcular campos canónicos si existen
-        canonical_name = cp_obj.name if cp_obj and getattr(cp_obj, "name", None) else None
-        canonical_sku = None
-        if cp_obj:
-            canonical_sku = cp_obj.sku_custom or cp_obj.ng_sku
-        canonical_cat_id = getattr(cp_obj, "category_id", None) if cp_obj else None
-        canonical_subcat_id = getattr(cp_obj, "subcategory_id", None) if cp_obj else None
-
-        by_product[p_obj.id] = {
-            "product_id": p_obj.id,
-            "name": p_obj.title,
-            "category_id": p_obj.category_id,
-            "supplier_sale_price": float(sp_obj.current_sale_price) if sp_obj.current_sale_price is not None else None,
-            "canonical_sale_price": float(cp_obj.sale_price) if (cp_obj and cp_obj.sale_price is not None) else None,
-            "canonical_name": canonical_name,
-            "canonical_sku": canonical_sku,
-            "canonical_category_id": canonical_cat_id,
-            "canonical_subcategory_id": canonical_subcat_id,
-        }
 
     # Crear workbook
     wb = Workbook()
@@ -2601,23 +2756,11 @@ async def export_stock_xlsx(
     max_name_len = 0
     max_cat_len = 0
     max_sku_len = 0
-    for pid, rec in by_product.items():
-        # Preferir datos canónicos si están disponibles
-        # Nombre: estilizado con Title Case
-        name = stylize_product_name(rec.get("canonical_name") or rec["name"])
-        # Categoría: priorizar subcategoría canónica si existe; luego categoría canónica; si no, categoría del producto interno
-        can_subcat_id = rec.get("canonical_subcategory_id")
-        can_cat_id = rec.get("canonical_category_id")
-        if can_subcat_id:
-            cat_path = await _category_path(session, can_subcat_id)
-        elif can_cat_id:
-            cat_path = await _category_path(session, can_cat_id)
-        else:
-            cat_path = await _category_path(session, rec["category_id"])  # puede ser None
-        # Precio
-        precio = rec["canonical_sale_price"] if rec["canonical_sale_price"] is not None else rec["supplier_sale_price"]
-        # SKU
-        sku = rec.get("canonical_sku") or skus_by_product.get(pid)
+    for rec in records:
+        name = rec["name"]
+        cat_path = rec["category"]
+        precio = rec["sale_price"]
+        sku = rec["sku"]
         ws.append([
             name,
             float(precio) if precio is not None else None,
@@ -2657,6 +2800,111 @@ async def export_stock_xlsx(
     if cid:
         headers["X-Correlation-Id"] = cid
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
+
+
+@router.get(
+    "/stock/export.csv",
+    dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))],
+)
+async def export_stock_csv(
+    supplier_id: Optional[int] = None,
+    category_id: Optional[int] = None,
+    q: Optional[str] = None,
+    stock: Optional[str] = None,
+    created_since_days: Optional[int] = None,
+    sort_by: str = "updated_at",
+    order: str = "desc",
+    type: Optional[str] = Query(None, pattern="^(all|canonical|supplier)$"),
+    session: AsyncSession = Depends(get_session),
+):
+    records = await _stock_export_records(
+        session,
+        supplier_id=supplier_id,
+        category_id=category_id,
+        q=q,
+        stock=stock,
+        created_since_days=created_since_days,
+        sort_by=sort_by,
+        order=order,
+        product_type=type,
+    )
+    output = StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(["NOMBRE DE PRODUCTO", "PRECIO DE VENTA", "CATEGORIA", "SKU PROPIO"])
+    for record in records:
+        writer.writerow([record["name"], record["sale_price"], record["category"] or "", record["sku"] or ""])
+    content = output.getvalue().encode("utf-8-sig")
+    return StreamingResponse(
+        iter([content]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="stock.csv"'},
+    )
+
+
+@router.get(
+    "/stock/export.pdf",
+    dependencies=[Depends(require_roles("cliente", "proveedor", "colaborador", "admin"))],
+)
+async def export_stock_pdf(
+    supplier_id: Optional[int] = None,
+    category_id: Optional[int] = None,
+    q: Optional[str] = None,
+    stock: Optional[str] = None,
+    created_since_days: Optional[int] = None,
+    sort_by: str = "updated_at",
+    order: str = "desc",
+    type: Optional[str] = Query(None, pattern="^(all|canonical|supplier)$"),
+    session: AsyncSession = Depends(get_session),
+):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    records = await _stock_export_records(
+        session,
+        supplier_id=supplier_id,
+        category_id=category_id,
+        q=q,
+        stock=stock,
+        created_since_days=created_since_days,
+        sort_by=sort_by,
+        order=order,
+        product_type=type,
+    )
+    buffer = BytesIO()
+    document = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=12 * mm, rightMargin=12 * mm, topMargin=12 * mm, bottomMargin=12 * mm)
+    styles = getSampleStyleSheet()
+    data = [["NOMBRE DE PRODUCTO", "PRECIO DE VENTA", "CATEGORIA", "SKU PROPIO"]]
+    for record in records:
+        price = "" if record["sale_price"] is None else f"$ {record['sale_price']:.2f}"
+        data.append([
+            Paragraph(str(record["name"]), styles["BodyText"]),
+            price,
+            Paragraph(str(record["category"] or ""), styles["BodyText"]),
+            str(record["sku"] or ""),
+        ])
+    table = Table(data, repeatRows=1, colWidths=[100 * mm, 35 * mm, 85 * mm, 45 * mm])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#333333")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#BBBBBB")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (1, 1), (1, -1), "RIGHT"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F4F4F4")]),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    document.build([Paragraph("Stock", styles["Title"]), Spacer(1, 5 * mm), table])
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'inline; filename="stock.pdf"'},
+    )
 
 
 @router.get(
@@ -2802,6 +3050,7 @@ async def export_stock_tiendanegocio_xlsx(
             "width_cm": float(p_obj.width_cm) if p_obj.width_cm is not None else None,
             "depth_cm": float(p_obj.depth_cm) if p_obj.depth_cm is not None else None,
             "category_id": p_obj.category_id,
+            "subcategory_id": p_obj.subcategory_id,
             "supplier_sale_price": float(sp_obj.current_sale_price) if sp_obj.current_sale_price is not None else None,
             "canonical_sale_price": float(cp_obj.sale_price) if (cp_obj and cp_obj.sale_price is not None) else None,
             "canonical_name": (cp_obj.name if (cp_obj and getattr(cp_obj, "name", None)) else None),
@@ -2864,12 +3113,11 @@ async def export_stock_tiendanegocio_xlsx(
         # Categoría jerárquica
         can_subcat_id = rec.get("canonical_subcategory_id")
         can_cat_id = rec.get("canonical_category_id")
-        if can_subcat_id:
-            cat_path = await _category_path(session, can_subcat_id)
-        elif can_cat_id:
-            cat_path = await _category_path(session, can_cat_id)
-        else:
-            cat_path = await _category_path(session, rec.get("category_id"))
+        cat_path = await _taxonomy_path(
+            session,
+            can_cat_id or rec.get("category_id"),
+            can_subcat_id or rec.get("subcategory_id"),
+        )
 
         ws.append([
             sku,
@@ -2904,13 +3152,27 @@ async def export_stock_tiendanegocio_xlsx(
 
 
 class StockUpdate(BaseModel):
-    stock: int
+    stock: Decimal
+    expected_stock: Optional[Decimal] = None
+
+    @field_validator("stock", "expected_stock")
+    @classmethod
+    def validate_stock_precision(cls, value: Decimal | None) -> Decimal | None:
+        if value is None:
+            return None
+        if value.as_tuple().exponent < -2:
+            raise ValueError("stock admite como máximo dos decimales")
+        if value < 0 or value > Decimal("1000000000"):
+            raise ValueError("stock fuera de rango")
+        return value.quantize(Decimal("0.01"))
 
 
 class ProductCreate(BaseModel):
     title: str
     category_id: Optional[int] = None
-    initial_stock: int = 0
+    subcategory_id: Optional[int] = None
+    tag_names: List[str] = Field(default_factory=list)
+    initial_stock: Decimal = Decimal("0")
     status: Optional[str] = None
     # Campos para creación de categoría en línea
     new_category_name: Optional[str] = None
@@ -2966,6 +3228,7 @@ async def create_product(
         raise HTTPException(status_code=400, detail=str(e))
 
     final_category_id = payload.category_id
+    final_subcategory_id = payload.subcategory_id
     created_category_id = None
 
     # Lógica de creación de categoría en línea
@@ -2977,32 +3240,46 @@ async def create_product(
         # Validar que el padre exista, si se proveyó
         if payload.new_category_parent_id:
             parent_cat = await session.get(Category, payload.new_category_parent_id)
-            if not parent_cat:
+            if not parent_cat or parent_cat.kind != "category":
                 raise HTTPException(status_code=400, detail="La categoría padre seleccionada no existe")
 
         # Buscar si ya existe una categoría con el mismo nombre y padre
+        legacy_kind = "subcategory" if payload.new_category_parent_id else "category"
         existing_cat = await session.scalar(
             select(Category).where(
-                Category.name == cat_name,
-                Category.parent_id == payload.new_category_parent_id
+                Category.kind == legacy_kind,
+                func.lower(Category.name) == cat_name.lower(),
             )
         )
 
         if existing_cat:
-            final_category_id = existing_cat.id
+            if legacy_kind == "subcategory":
+                final_category_id = payload.new_category_parent_id
+                final_subcategory_id = existing_cat.id
+            else:
+                final_category_id = existing_cat.id
         else:
             # Crear la nueva categoría
-            new_cat = Category(name=cat_name, parent_id=payload.new_category_parent_id)
+            new_cat = Category(name=cat_name, parent_id=payload.new_category_parent_id, kind=legacy_kind)
             session.add(new_cat)
             await session.flush() # Flush para obtener el ID
-            final_category_id = new_cat.id
+            if legacy_kind == "subcategory":
+                final_category_id = payload.new_category_parent_id
+                final_subcategory_id = new_cat.id
+            else:
+                final_category_id = new_cat.id
             created_category_id = new_cat.id
     
     # Validar categoría si se provee y no se creó una nueva
     if final_category_id is not None and not created_category_id:
         cat = await session.get(Category, final_category_id)
-        if not cat:
+        if not cat or cat.kind != "category":
             raise HTTPException(status_code=400, detail="category_id inválido")
+
+    if final_subcategory_id is not None:
+        subcategory = await session.get(Category, final_subcategory_id)
+        if not subcategory or subcategory.kind != "subcategory":
+            raise HTTPException(status_code=400, detail="subcategory_id inválido")
 
     sku_root = _gen_sku_root(payload.title)
     slug = _slugify(payload.title)
@@ -3015,11 +3292,18 @@ async def create_product(
         sku_root=sku_root,
         title=payload.title,
         category_id=final_category_id,
+        subcategory_id=final_subcategory_id,
         status=payload.status or "active",
         slug=slug,
         stock=initial_stock,
     )
     session.add(prod)
+    await session.flush()
+    if payload.tag_names:
+        from db.models import ProductTag
+        from services.routers.tags import get_or_create_tags
+        for tag in await get_or_create_tags(session, payload.tag_names):
+            session.add(ProductTag(product_id=prod.id, tag_id=tag.id))
     await session.commit()
     await session.refresh(prod)
     supplier_product_id = None
@@ -3137,9 +3421,11 @@ async def create_product(
         meta_log = {
             "title": prod.title,
             "category_id": prod.category_id,
+            "subcategory_id": prod.subcategory_id,
+            "tag_names": payload.tag_names,
             "created_category_id": created_category_id,
-            "initial_stock_requested": payload.initial_stock,
-            "initial_stock_final": initial_stock,
+            "initial_stock_requested": float(payload.initial_stock),
+            "initial_stock_final": float(initial_stock),
             "initial_stock_forced_zero": force_zero,
             "auto_link": bool(payload.supplier_id and payload.supplier_sku),
             "supplier_id": payload.supplier_id,
@@ -3181,7 +3467,8 @@ async def create_product(
         )
         await session.commit()
     except Exception:
-        pass
+        await session.rollback()
+        await session.refresh(prod)
     return {
         "id": prod.id,
         "title": prod.title,
@@ -3189,6 +3476,7 @@ async def create_product(
         "slug": prod.slug,
         "stock": prod.stock,
         "category_id": prod.category_id,
+        "subcategory_id": prod.subcategory_id,
         "status": prod.status,
         "supplier_product_id": supplier_product_id,
         "canonical_product_id": canonical_product_id,
@@ -3206,30 +3494,40 @@ async def update_product_stock(
     request: Request = None,
     sess: SessionData = Depends(current_session),
 ) -> dict:
-    if payload.stock < 0 or payload.stock > 1_000_000_000:
-        raise HTTPException(status_code=400, detail="stock fuera de rango")
-    prod = await session.get(Product, product_id)
+    prod = await session.scalar(
+        select(Product).where(Product.id == product_id).with_for_update()
+    )
     if not prod:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
-    old = int(prod.stock or 0)
-    prod.stock = payload.stock
-    await session.commit()
-    # audit
-    try:
-        session.add(
-            AuditLog(
-                action="product_stock_update",
-                table="products",
-                entity_id=product_id,
-                meta={"old": old, "new": prod.stock},
-                user_id=sess.user.id if sess and sess.user else None,
-                ip=(request.client.host if request and request.client else None),
-            )
+    old = Decimal(str(prod.stock or 0)).quantize(Decimal("0.01"))
+    if payload.expected_stock is not None and payload.expected_stock != old:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "El stock cambió desde la última lectura",
+                "current_stock": float(old),
+            },
         )
-        await session.commit()
-    except Exception:
-        pass
-    return {"product_id": product_id, "stock": prod.stock}
+    prod.stock = payload.stock
+    delta = payload.stock - old
+    session.add(StockLedger(
+        product_id=product_id,
+        source_type="manual_adjustment",
+        source_id=product_id,
+        delta=delta,
+        balance_after=payload.stock,
+        meta={"old": float(old), "new": float(payload.stock), "user_id": sess.user.id if sess and sess.user else None},
+    ))
+    session.add(AuditLog(
+        action="product_stock_update",
+        table="products",
+        entity_id=product_id,
+        meta={"old": float(old), "new": float(payload.stock), "delta": float(delta)},
+        user_id=sess.user.id if sess and sess.user else None,
+        ip=(request.client.host if request and request.client else None),
+    ))
+    await session.commit()
+    return {"product_id": product_id, "stock": float(payload.stock)}
 
 
 # ------------------------------ Producto por id ------------------------------
@@ -3243,130 +3541,151 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
     prod = await session.get(Product, product_id)
     if not prod:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
-    imgs = (
-        await session.execute(
-            select(Image)
-            .where(Image.product_id == product_id, Image.active == True)
-            .order_by(Image.sort_order.asc().nulls_last(), Image.id.asc())
-        )
-    ).scalars().all()
-    
-    # Obtener versiones derivadas para imágenes HEIC/HEIF (los navegadores no soportan HEIC nativamente)
+    canonical_id = await session.scalar(
+        select(ProductEquivalence.canonical_product_id)
+        .join(SupplierProduct, SupplierProduct.id == ProductEquivalence.supplier_product_id)
+        .where(SupplierProduct.internal_product_id == product_id)
+        .order_by(ProductEquivalence.id.asc())
+        .limit(1)
+    )
+    cp = await session.get(CanonicalProduct, canonical_id) if canonical_id else None
+    linked_products = [prod]
+    if cp:
+        linked_products = list(
+            (
+                await session.scalars(
+                    select(Product)
+                    .join(SupplierProduct, SupplierProduct.internal_product_id == Product.id)
+                    .join(ProductEquivalence, ProductEquivalence.supplier_product_id == SupplierProduct.id)
+                    .where(ProductEquivalence.canonical_product_id == cp.id)
+                    .distinct()
+                    .order_by(Product.id.asc())
+                )
+            ).all()
+        ) or [prod]
+    linked_ids = list(dict.fromkeys(item.id for item in linked_products))
+    imgs = list(
+        (
+            await session.scalars(
+                select(Image)
+                .where(Image.product_id.in_(linked_ids), Image.active == True)
+                .order_by(Image.is_primary.desc(), Image.sort_order.asc().nulls_last(), Image.id.asc())
+            )
+        ).all()
+    )
     from db.models import ImageVersion
-    img_ids = [im.id for im in imgs]
-    versions = {}
-    if img_ids:
+    versions: dict[int, dict] = {}
+    if imgs:
         version_rows = (
-            await session.execute(
-                select(ImageVersion)
-                .where(
-                    ImageVersion.image_id.in_(img_ids),
-                    ImageVersion.kind.in_(["full", "card", "thumb"])
+            await session.scalars(
+                select(ImageVersion).where(
+                    ImageVersion.image_id.in_([image.id for image in imgs]),
+                    ImageVersion.kind.in_(["full", "card", "thumb"]),
                 )
             )
-        ).scalars().all()
-        for v in version_rows:
-            if v.image_id not in versions:
-                versions[v.image_id] = {}
-            versions[v.image_id][v.kind] = v
-    # Resolver canónico (si existe) a partir de equivalencias del/los SupplierProduct asociados a este producto interno
-    canonical_id = None
-    canonical_sale = None
-    canonical_sku = None
-    canonical_name = None
-    try:
-        sp_rows = (await session.execute(
-            select(ProductEquivalence.canonical_product_id)
-            .join(SupplierProduct, SupplierProduct.id == ProductEquivalence.supplier_product_id)
-            .where(SupplierProduct.internal_product_id == product_id)
-            .limit(1)
-        )).scalars().all()
-        if sp_rows:
-            canonical_id = sp_rows[0]
-            if canonical_id:
-                cp = await session.get(CanonicalProduct, canonical_id)
-                if cp and cp.sale_price is not None:
-                    canonical_sale = float(cp.sale_price)
-                if cp:
-                    canonical_sku = cp.sku_custom or cp.ng_sku
-                    canonical_name = stylize_product_name(cp.name)
-    except Exception:
-        pass
-    cat_path = await _category_path(session, prod.category_id)
-    # Convertir numéricos Decimal -> float para JSON
-    weight_kg = float(prod.weight_kg) if getattr(prod, "weight_kg", None) is not None else None
-    height_cm = float(prod.height_cm) if getattr(prod, "height_cm", None) is not None else None
-    width_cm = float(prod.width_cm) if getattr(prod, "width_cm", None) is not None else None
-    depth_cm = float(prod.depth_cm) if getattr(prod, "depth_cm", None) is not None else None
-    market_price_reference = (
-        float(prod.market_price_reference) if getattr(prod, "market_price_reference", None) is not None else None
+        ).all()
+        for version in version_rows:
+            versions.setdefault(version.image_id, {})[version.kind] = version
+    cat_path = await _taxonomy_path(session, prod.category_id, prod.subcategory_id)
+    canonical_sale = float(cp.sale_price) if cp and cp.sale_price is not None else None
+    supplier_sale_value = await session.scalar(
+        select(SupplierProduct.current_sale_price)
+        .where(
+            SupplierProduct.internal_product_id.in_(linked_ids),
+            SupplierProduct.current_sale_price.is_not(None),
+        )
+        .order_by(SupplierProduct.last_seen_at.desc().nulls_last())
+        .limit(1)
     )
-    # Título preferido para UI: title_canonical (si existe) o canonical_name; si no, product.title
-    # Aplicar estilización Title Case
-    preferred_title = None
-    try:
-        preferred_title = stylize_product_name(getattr(prod, "title_canonical", None) or None)
-    except Exception:
-        preferred_title = None
-    if not (preferred_title or "").strip():
-        preferred_title = canonical_name or stylize_product_name(prod.title)
-
-    # Obtener precio de venta del proveedor como fallback
-    supplier_sale_price = None
-    try:
-        sp_row = (await session.execute(
-            select(SupplierProduct.current_sale_price)
-            .where(SupplierProduct.internal_product_id == product_id)
-            .where(SupplierProduct.current_sale_price.is_not(None))
-            .order_by(SupplierProduct.last_seen_at.desc().nulls_last())
-            .limit(1)
-        )).scalar_one_or_none()
-        if sp_row is not None:
-            supplier_sale_price = float(sp_row)
-    except Exception:
-        pass # No bloquear si falla
-
-    # Precio de venta final: priorizar canónico, luego proveedor
-    sale_price = canonical_sale if canonical_sale is not None else supplier_sale_price
-
-    # Obtener tags del producto
-    from db.models import Tag, ProductTag
+    supplier_sale_price = float(supplier_sale_value) if supplier_sale_value is not None else None
     tag_rows = (
         await session.execute(
             select(Tag.id, Tag.name)
             .join(ProductTag, ProductTag.tag_id == Tag.id)
-            .where(ProductTag.product_id == product_id)
+            .where(ProductTag.product_id.in_(linked_ids))
+            .distinct()
             .order_by(Tag.name.asc())
         )
     ).all()
     tags = [{"id": tag_id, "name": tag_name} for tag_id, tag_name in tag_rows]
+    supplier_rows = (
+        await session.execute(
+            select(SupplierProduct, Supplier)
+            .join(Supplier, Supplier.id == SupplierProduct.supplier_id)
+            .where(SupplierProduct.internal_product_id.in_(linked_ids))
+            .order_by(SupplierProduct.internal_product_id.asc(), Supplier.name.asc())
+        )
+    ).all()
+    suppliers_by_product: dict[int, list[dict]] = {item_id: [] for item_id in linked_ids}
+    for supplier_product, supplier in supplier_rows:
+        suppliers_by_product.setdefault(supplier_product.internal_product_id, []).append(
+            {
+                "supplier_id": supplier.id,
+                "supplier_name": supplier.name,
+                "supplier_product_id": supplier_product.supplier_product_id,
+                "purchase_price": float(supplier_product.current_purchase_price)
+                if supplier_product.current_purchase_price is not None
+                else None,
+                "sale_price": float(supplier_product.current_sale_price)
+                if supplier_product.current_sale_price is not None
+                else None,
+            }
+        )
+    latest_job = (
+        await session.scalar(
+            select(CanonicalEnrichmentJob)
+            .where(CanonicalEnrichmentJob.canonical_product_id == cp.id)
+            .order_by(CanonicalEnrichmentJob.created_at.desc())
+            .limit(1)
+        )
+        if cp
+        else None
+    )
+    content_source = cp or prod
+    stock_total = sum(float(item.stock or 0) for item in linked_products)
 
     return {
         "id": prod.id,
         "title": stylize_product_name(prod.title),
-        "preferred_title": preferred_title,
+        "preferred_title": stylize_product_name(cp.name if cp else prod.title),
         "slug": prod.slug,
-        "stock": prod.stock,
+        "stock": float(prod.stock or 0),
+        "stock_total": stock_total,
         "sku_root": prod.sku_root,
         "category_path": cat_path,
-        "description_html": prod.description_html,
-        "enrichment_sources_url": getattr(prod, "enrichment_sources_url", None),
-        "last_enriched_at": (getattr(prod, "last_enriched_at", None).isoformat() if getattr(prod, "last_enriched_at", None) else None),
-        "enriched_by": getattr(prod, "enriched_by", None),
-        "weight_kg": weight_kg,
-        "height_cm": height_cm,
-        "width_cm": width_cm,
-        "depth_cm": depth_cm,
-        "market_price_reference": market_price_reference,
+        "category_id": prod.category_id,
+        "subcategory_id": prod.subcategory_id,
+        "description_html": content_source.description_html,
+        "enrichment_sources_url": None if cp else getattr(prod, "enrichment_sources_url", None),
+        "last_enriched_at": content_source.last_enriched_at.isoformat()
+        if getattr(content_source, "last_enriched_at", None)
+        else None,
+        "enriched_by": getattr(content_source, "enriched_by", None),
+        "weight_kg": float(content_source.weight_kg) if content_source.weight_kg is not None else None,
+        "height_cm": float(content_source.height_cm) if content_source.height_cm is not None else None,
+        "width_cm": float(content_source.width_cm) if content_source.width_cm is not None else None,
+        "depth_cm": float(content_source.depth_cm) if content_source.depth_cm is not None else None,
+        "technical_specs": content_source.technical_specs or {},
+        "usage_instructions": content_source.usage_instructions or {},
         "canonical_product_id": canonical_id,
         "canonical_sale_price": canonical_sale,
         "supplier_sale_price": supplier_sale_price,
-        "sale_price": sale_price,
-        "canonical_sku": canonical_sku,
-        "canonical_name": canonical_name,
+        "sale_price": canonical_sale if canonical_sale is not None else supplier_sale_price,
+        "canonical_sku": (cp.sku_custom or cp.ng_sku) if cp else None,
+        "canonical_name": stylize_product_name(cp.name) if cp else None,
+        "canonical_status": "ready" if cp else "canonical_required",
+        "content_revision": cp.content_revision if cp else None,
+        "enrichment": {
+            "job_id": latest_job.id,
+            "status": latest_job.status,
+            "stage": latest_job.stage,
+            "applied_fields": latest_job.applied_fields or [],
+            "error": latest_job.error_message,
+        } if latest_job else None,
         "images": [
             {
                 "id": im.id,
+                "product_id": im.product_id,
                 "url": _get_image_url_for_browser(im, versions.get(im.id, {})),
                 "alt_text": im.alt_text,
                 "title_text": im.title_text,
@@ -3377,6 +3696,18 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
             for im in imgs
         ],
         "tags": tags,
+        "linked_inventory": [
+            {
+                "product_id": item.id,
+                "original_name": stylize_product_name(item.title),
+                "sku_root": item.sku_root,
+                "stock": float(item.stock or 0),
+                "suppliers": suppliers_by_product.get(item.id, []),
+                "product_url": f"/productos/{item.id}",
+                "stock_url": f"/stock?product_id={item.id}",
+            }
+            for item in linked_products
+        ],
     }
 
 
@@ -3414,13 +3745,10 @@ async def list_product_variants(product_id: int, session: AsyncSession = Depends
 
 
 class ProductUpdate(BaseModel):
-    description_html: str | None = None
+    title: str | None = None
     category_id: int | None = None
-    weight_kg: float | None = None
-    height_cm: float | None = None
-    width_cm: float | None = None
-    depth_cm: float | None = None
-    market_price_reference: float | None = None
+    subcategory_id: int | None = None
+    description_html: str | None = None
 
 
 class ProductsDeleteRequest(BaseModel):
@@ -3441,45 +3769,33 @@ async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncS
     prod = await session.get(Product, product_id)
     if not prod:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
-    data = payload.model_dump(exclude_none=True)
+    data = payload.model_dump(exclude_unset=True)
     old_desc = getattr(prod, "description_html", None)
     old_cat = getattr(prod, "category_id", None)
-    if "description_html" in data:
-        prod.description_html = data["description_html"]
+    old_subcat = getattr(prod, "subcategory_id", None)
+    if "title" in data:
+        t = (data["title"] or "").strip()
+        if not t:
+            raise HTTPException(status_code=422, detail={"code": "invalid_title", "message": "El título no puede estar vacío"})
+        prod.title = t
     if "category_id" in data:
         # Validar existencia (permitir None para desasociar)
         if data["category_id"] is not None:
             cat = await session.get(Category, int(data["category_id"]))
-            if not cat:
+            if not cat or cat.kind != "category":
                 raise HTTPException(status_code=400, detail="category_id inválido")
         prod.category_id = int(data["category_id"]) if data["category_id"] is not None else None
-    # Validaciones y asignaciones de campos técnicos
-    def _nonneg_or_none(val, name: str):
-        if val is None:
-            return None
-        try:
-            f = float(val)
-        except Exception:
-            raise HTTPException(status_code=400, detail=f"{name} debe ser numérico")
-        if f < 0:
-            raise HTTPException(status_code=400, detail=f"{name} no puede ser negativo")
-        return f
-
-    if "weight_kg" in data:
-        v = _nonneg_or_none(data["weight_kg"], "weight_kg")
-        prod.weight_kg = v
-    if "height_cm" in data:
-        v = _nonneg_or_none(data["height_cm"], "height_cm")
-        prod.height_cm = v
-    if "width_cm" in data:
-        v = _nonneg_or_none(data["width_cm"], "width_cm")
-        prod.width_cm = v
-    if "depth_cm" in data:
-        v = _nonneg_or_none(data["depth_cm"], "depth_cm")
-        prod.depth_cm = v
-    if "market_price_reference" in data:
-        v = _nonneg_or_none(data["market_price_reference"], "market_price_reference")
-        prod.market_price_reference = v
+    if "subcategory_id" in data:
+        if data["subcategory_id"] is not None:
+            subcategory = await session.get(Category, int(data["subcategory_id"]))
+            if not subcategory or subcategory.kind != "subcategory":
+                raise HTTPException(status_code=400, detail="subcategory_id inválido")
+        prod.subcategory_id = int(data["subcategory_id"]) if data["subcategory_id"] is not None else None
+    if "description_html" in data:
+        desc_clean = data["description_html"]
+        if isinstance(desc_clean, str):
+            desc_clean = desc_clean.strip() or None
+        prod.description_html = desc_clean
     await session.commit()
     # audit description change
     try:
@@ -3493,6 +3809,7 @@ async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncS
                     "desc_len_old": (len(old_desc or "") if old_desc is not None else None),
                     "desc_len_new": (len(prod.description_html or "") if prod.description_html is not None else None),
                     **({"category_old": old_cat, "category_new": prod.category_id} if "category_id" in data else {}),
+                    **({"subcategory_old": old_subcat, "subcategory_new": prod.subcategory_id} if "subcategory_id" in data else {}),
                 },
                 user_id=sess.user.id if sess and sess.user else None,
                 ip=(request.client.host if request and request.client else None),
@@ -3501,7 +3818,7 @@ async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncS
         await session.commit()
     except Exception:
         pass
-    return {"status": "ok"}
+    return {"status": "ok", "description_html": prod.description_html}
 
 
 @router.post(
@@ -3527,68 +3844,44 @@ async def enrich_multiple_products(
         raise HTTPException(status_code=400, detail="ids requerido")
     if len(ids) > 20:
         raise HTTPException(status_code=400, detail="Máximo 20 productos por lote")
+    from services.routers.enrichment import (
+        create_enrichment_job,
+        dispatch_enrichment_job,
+        resolve_canonical_id,
+    )
 
-    enriched = 0
-    skipped = 0
-    errors: list[int] = []
+    batch_id = hashlib.sha256(
+        f"{sess.user.id if sess and sess.user else None}:{','.join(map(str, ids))}".encode("utf-8")
+    ).hexdigest()[:32]
+    jobs: list[dict] = []
+    skipped_ids: list[int] = []
+    seen_canonical: set[int] = set()
     for pid in ids:
-        prod = await session.get(Product, pid)
-        if not prod:
-            skipped += 1
+        canonical_id = await resolve_canonical_id(session, pid)
+        if canonical_id is None:
+            skipped_ids.append(pid)
             continue
-
-        # Chequear si ya está en proceso de enriquecimiento
-        if getattr(prod, 'is_enriching', False):
-            errors.append(pid)
+        if canonical_id in seen_canonical:
             continue
-
-        title_ok = bool((prod.title or '').strip())
-        if not title_ok:
-            skipped += 1
-            continue
-        already = bool((prod.enrichment_sources_url or '').strip()) or bool((prod.description_html or '').strip())
-        if already and not payload.force:
-            skipped += 1
-            continue
-        try:
-            # reusar la lógica existente
-            await enrich_product(pid, session=session, request=request, sess=sess, force=bool(payload.force))
-            enriched += 1
-        except HTTPException as e:
-            # Si el error es 409 (conflicto), significa que el bloqueo se activó entre el chequeo y la ejecución
-            if e.status_code == 409:
-                skipped += 1
-            errors.append(pid)
-            continue
-        except Exception:
-            errors.append(pid)
-            # continuar con el siguiente sin abortar lote
-            continue
-
-    # Audit resumen de lote
-    try:
-        session.add(
-            AuditLog(
-                action="bulk_enrich",
-                table="products",
-                entity_id=None,
-                meta={
-                    "requested": len(ids),
-                    "enriched": enriched,
-                    "skipped": skipped,
-                    "errors": errors,
-                    "ids": ids,
-                },
-                user_id=sess.user.id if sess and sess.user else None,
-                ip=(request.client.host if request and request.client else None),
-            )
+        seen_canonical.add(canonical_id)
+        job, created = await create_enrichment_job(
+            session,
+            canonical_id=canonical_id,
+            requested_product_id=pid,
+            client_request_id=f"legacy-batch:{batch_id}:{canonical_id}",
+            scope="full",
+            requested_by_user_id=sess.user.id if sess and sess.user else None,
+            batch_id=batch_id,
         )
-        await session.commit()
-    except Exception:
-        pass
-
-    return {"enriched": enriched, "skipped": skipped, "errors": errors}
-
+        if created:
+            await dispatch_enrichment_job(job, session)
+        jobs.append({"product_id": pid, "canonical_product_id": canonical_id, "job_id": job.id})
+    return {
+        "status": "queued",
+        "batch_id": batch_id,
+        "jobs": jobs,
+        "skipped": [{"product_id": item, "reason": "canonical_required"} for item in skipped_ids],
+    }
 
 @router.get(
     "/debug/enrich/{product_id}",
@@ -3648,7 +3941,6 @@ async def debug_enrich_product(
         "\"Alto CM\": number|null, "
         "\"Ancho CM\": number|null, "
         "\"Profundidad CM\": number|null, "
-        "\"Valor de mercado estimado\": string|null, "
         "\"Fuentes\": object|null  "
         "}"
     )
@@ -3662,33 +3954,18 @@ async def debug_enrich_product(
         "- Si no estás seguro de un valor numérico, usa null.\n"
         "- No inventes datos técnicos; prioriza precisión.\n"
         "- La 'Descripción para Nice Grow' debe ser breve (2-4 oraciones), clara y orientada a clientes.\n"
-        "- Incluir un breve 'Análisis de Mercado (AR$)' resumido dentro de 'Valor de mercado estimado' cuando sea aplicable.\n"
+        "- No generar ni estimar precios: Mercado es la única autoridad monetaria.\n"
         "- Si dispones de fuentes o referencias, incluye un objeto 'Fuentes' con claves descriptivas y valores URL (http/https)."
     )
 
-    # Contexto MCP (productos) y salud de web-search
-    extra_context = None
+    # Salud y resultados de MCP Web Search. MCP Products no participa de Enrich.
     web_health = "disabled"
     web_query = None
     web_hits = 0
     web_search_results = None
     try:
-        fv = (
-            await session.execute(
-                select(Variant.sku).where(Variant.product_id == product_id).order_by(Variant.id.asc()).limit(1)
-            )
-        ).scalar_one_or_none()
         role = getattr(getattr(sess, 'user', None), 'role', 'colaborador') or 'colaborador'
         provider = OpenAIProvider()
-        if fv:
-            ctx = await provider.call_mcp_tool(tool_name="get_product_info", parameters={"sku": str(fv), "user_role": role})
-            if isinstance(ctx, dict) and ctx:
-                extra_context = ctx
-                try:
-                    import json as _json
-                    prompt += "\n\nContexto interno (MCP):\n" + _json.dumps(extra_context, ensure_ascii=False)
-                except Exception:
-                    pass
         # Web-search si está habilitado
         import os as _os
         use_web = (_os.getenv("AI_USE_WEB_SEARCH", "0").lower() in {"1", "true", "yes"}) and settings.ai_allow_external
@@ -3697,7 +3974,7 @@ async def debug_enrich_product(
             try:
                 import httpx as _httpx
                 mcp_url = get_mcp_web_search_url()
-                health_url = mcp_url.replace("/invoke_tool", "/health")
+                health_url = mcp_url.rsplit("/mcp", 1)[0] + "/health"
                 async with _httpx.AsyncClient(timeout=2.0) as _cli:
                     _h = await _cli.get(health_url)
                     web_health = "ok" if _h.status_code == 200 else f"bad_status_{_h.status_code}"
@@ -3706,7 +3983,14 @@ async def debug_enrich_product(
             if web_health == "ok":
                 web_query = title
                 try:
-                    wres = await provider.call_mcp_web_tool(tool_name="search_web", parameters={"query": web_query, "user_role": role, "max_results": int(_os.getenv("AI_WEB_SEARCH_MAX_RESULTS", "3"))})
+                    wres = await provider.call_mcp_web_tool(
+                        tool_name="search_web",
+                        parameters={
+                            "query": web_query,
+                            "max_results": int(_os.getenv("AI_WEB_SEARCH_MAX_RESULTS", "3")),
+                        },
+                        user_role=role,
+                    )
                     if isinstance(wres, dict) and wres:
                         items = wres.get("items") or []
                         if isinstance(items, list):
@@ -3785,529 +4069,35 @@ async def enrich_product(
     prod = await session.get(Product, product_id)
     if not prod:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
-
-    print(f"ENTERING ENRICH: {product_id}, is_enriching: {getattr(prod, 'is_enriching', 'NOT_FOUND')}") # DEBUG
-
-    if getattr(prod, 'is_enriching', False):
-        print(f"CONFLICT DETECTED: {product_id}") # DEBUG
-        raise HTTPException(status_code=409, detail="El producto ya está siendo enriquecido. Intente de nuevo en unos momentos.")
-
-    # --- Inicio: Lógica de selección de título para enriquecimiento ---
-    # Prioridad:
-    # 1. Título del producto canónico (buscado vía ProductEquivalence).
-    # 2. Fallback: Título del producto de proveedor (`product.title`).
-    title = ""
-    used_canonical_title = False
-    canonical_product_id = None
-    import logging as _logging
-    logger = _logging.getLogger("growen")
-
-    try:
-        # Buscar el ID del canónico a través de la tabla de equivalencia, como en get_product
-        sp_equiv_rows = (await session.execute(
-            select(ProductEquivalence.canonical_product_id)
-            .join(SupplierProduct, SupplierProduct.id == ProductEquivalence.supplier_product_id)
-            .where(SupplierProduct.internal_product_id == product_id)
-            .limit(1)
-        )).scalars().all()
-
-        if sp_equiv_rows:
-            canonical_product_id = sp_equiv_rows[0]
-            if canonical_product_id:
-                cp = await session.get(CanonicalProduct, canonical_product_id)
-                if cp and (cp.name or "").strip():
-                    title = cp.name.strip()
-                    used_canonical_title = True
-    except Exception as e:
-        logger.warning({
-            "event": "enrich.choose_title.error",
-            "product_id": product_id,
-            "reason": "Error al buscar producto canónico",
-            "error": str(e),
-        })
-
-    # Fallback al título del producto si no se encontró un título canónico válido
-    if not title:
-        title = (prod.title or "").strip()
-
-    logger.info({
-        "event": "enrich.choose_title",
-        "product_id": product_id,
-        "title_selected": title,
-        "used_canonical_title": used_canonical_title,
-        "canonical_product_id_found": canonical_product_id,
-        "fallback_to_product_title": not used_canonical_title,
-    })
-    # --- Fin: Lógica de selección de título ---
-
-    if not title:
-        raise HTTPException(status_code=400, detail="El producto no tiene título definido")
-
-    # Adquirir el bloqueo de forma atómica a nivel DB para evitar carreras entre requests
-    upd = (
-        update(Product)
-        .where(Product.id == product_id, Product.is_enriching == False)  # noqa: E712
-        .values(is_enriching=True)
+    from services.routers.enrichment import (
+        create_enrichment_job,
+        dispatch_enrichment_job,
+        resolve_canonical_id,
     )
-    res = await session.execute(upd)
-    await session.commit()
-    if res.rowcount == 0:
-        # Otro proceso ganó el lock
-        raise HTTPException(status_code=409, detail="El producto ya está siendo enriquecido. Intente de nuevo en unos momentos.")
 
-    generated_fields = []
-    txt_url = None
-
-    try:
-        # Intento opcional de obtener datos internos vía MCP (SKU de la primera variante)
-        extra_context = None
-        web_search_results = None
-        web_hits = 0
-        web_query = None
-        
-        # Obtener datos internos del producto (no bloquea búsqueda web)
-        try:
-            fv = (await session.execute(select(Variant.sku).where(Variant.product_id == product_id).order_by(Variant.id.asc()).limit(1))).scalar_one_or_none()
-            if fv:
-                role = getattr(getattr(sess, 'user', None), 'role', 'colaborador') or 'colaborador'
-                provider = OpenAIProvider()
-                res = await provider.call_mcp_tool(tool_name="get_product_info", parameters={"sku": str(fv), "user_role": role})
-                if isinstance(res, dict) and res:
-                    extra_context = res
-        except Exception as e:
-            logger.warning({
-                "event": "enrich.mcp_products.failed",
-                "product_id": product_id,
-                "error": str(e),
-                "message": "Failed to fetch internal product context. Continuing with web search.",
-            })
-        
-        # ========== BÚSQUEDA WEB OBLIGATORIA ==========
-        # La búsqueda web es SIEMPRE necesaria según especificaciones del usuario
-        import os as _os, json as _json
-        use_web = (_os.getenv("AI_USE_WEB_SEARCH", "0").lower() in {"1", "true", "yes"}) and settings.ai_allow_external
-        
-        if not use_web:
-            logger.error({
-                "event": "enrich.web_search.disabled",
-                "product_id": product_id,
-                "AI_USE_WEB_SEARCH": _os.getenv("AI_USE_WEB_SEARCH", "0"),
-                "AI_ALLOW_EXTERNAL": settings.ai_allow_external,
-            })
-            raise HTTPException(
-                status_code=500,
-                detail="La búsqueda web es obligatoria para el enriquecimiento pero está deshabilitada. Verificar AI_USE_WEB_SEARCH y AI_ALLOW_EXTERNAL."
-            )
-        
-        logger.info({"event": "enrich.web_search.start", "product_id": product_id})
-        
-        # Health check del servicio MCP Web Search
-        import httpx as _httpx
-        mcp_url = get_mcp_web_search_url()
-        health_url = mcp_url.replace("/invoke_tool", "/health")
-        web_health = "unknown"
-        
-        try:
-            async with _httpx.AsyncClient(timeout=5.0) as _cli:
-                _h = await _cli.get(health_url)
-                if _h.status_code == 200:
-                    web_health = "ok"
-                else:
-                    web_health = f"bad_status_{_h.status_code}"
-        except Exception as e:
-            web_health = "unhealthy"
-            logger.error({
-                "event": "enrich.web_search.health_check_failed",
-                "product_id": product_id,
-                "mcp_url": health_url,
-                "error": str(e),
-            })
-        
-        logger.info({
-            "event": "enrich.web_search.health_check_result",
-            "product_id": product_id,
-            "status": web_health,
-        })
-        
-        if web_health != "ok":
-            raise HTTPException(
-                status_code=502,
-                detail=f"El servicio de búsqueda web no está disponible (status: {web_health}). No se puede enriquecer sin búsqueda web."
-            )
-        
-        # Ejecutar búsqueda web OBLIGATORIA
-        web_query = title
-        role = getattr(getattr(sess, 'user', None), 'role', 'colaborador') or 'colaborador'
-        provider = OpenAIProvider()
-        
-        try:
-            wres = await provider.call_mcp_web_tool(
-                tool_name="search_web",
-                parameters={
-                    "query": web_query,
-                    "user_role": role,
-                    "max_results": int(_os.getenv("AI_WEB_SEARCH_MAX_RESULTS", "5"))
-                }
-            )
-            if isinstance(wres, dict) and wres:
-                items = wres.get("items") or []
-                if isinstance(items, list):
-                    web_hits = len(items)
-                web_search_results = wres
-                logger.info({
-                    "event": "enrich.web_search.success",
-                    "product_id": product_id,
-                    "query": web_query,
-                    "hits": web_hits,
-                    "with_sources": bool(items),
-                })
-            else:
-                raise ValueError("Web search returned empty or invalid response")
-        except Exception as e:
-            logger.error({
-                "event": "enrich.web_search.execution_failed",
-                "product_id": product_id,
-                "query": web_query,
-                "error": str(e),
-            })
-            raise HTTPException(
-                status_code=502,
-                detail=f"Error al ejecutar búsqueda web: {str(e)}"
-            )
-
-        # Prompt de enriquecimiento con instrucciones detalladas del usuario
-        schema_hint = (
-            "{"
-            "\"Título del Producto\": string, "
-            "\"Descripción para Nice Grow\": string, "
-            "\"Peso KG\": number|null, "
-            "\"Alto CM\": number|null, "
-            "\"Ancho CM\": number|null, "
-            "\"Profundidad CM\": number|null, "
-            "\"Valor de mercado estimado\": string|null, "
-            "\"Fuentes\": object  "
-            "}"
+    canonical_product_id = await resolve_canonical_id(session, product_id)
+    if canonical_product_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "canonical_required", "message": "Debe crear o asignar un canónico"},
         )
-        
-        from datetime import datetime as _dt, timedelta as _td
-        fecha_actual = _dt.now().strftime("%Y-%m-%d")
-        fecha_limite_precios = (_dt.now() - _td(days=120)).strftime("%Y-%m-%d")
-        
-        prompt = (
-            f"Eres GrowMaster, un experto asistente de marketing especializado en productos para jardinería y cultivo en Argentina.\n\n"
-            f"FECHA ACTUAL: {fecha_actual}\n"
-            f"PRODUCTO A ENRIQUECER: {title}\n\n"
-            "========== INSTRUCCIONES OBLIGATORIAS ==========\n\n"
-            "### Tarea 1: Investigación y Verificación de Datos\n\n"
-            "Búsqueda Exhaustiva: Realiza una búsqueda en internet utilizando el título del producto proporcionado. "
-            "Tu búsqueda debe centrarse en encontrar fuentes de Argentina.\n\n"
-            "Jerarquía de Fuentes (Regla de Oro): Debes priorizar las fuentes de información en el siguiente orden estricto de veracidad:\n\n"
-            "- Prioridad #1: El sitio web oficial del fabricante del producto.\n"
-            "- Prioridad #2: Publicaciones en marketplaces importantes de Argentina (ej. Mercado Libre).\n"
-            "- Prioridad #3: Páginas de otros grow shops o vendedores online de Argentina.\n\n"
-            "Resolución de Conflictos: Si encuentras datos contradictorios entre diferentes fuentes (ej. dimensiones, composición), "
-            "siempre deberás usar la información de la fuente con la prioridad más alta (el fabricante es la verdad absoluta). "
-            "No menciones la existencia de la discrepancia, simplemente presenta el dato correcto.\n\n"
-            "### Tarea 2: Generación de Contenido\n\n"
-            "Basado en la información recopilada, genera:\n\n"
-            "**Descripción del producto:**\n"
-            "- Máximo 500 palabras.\n"
-            "- Tono y Estilo: Utiliza un lenguaje amigable, informal y directo con \"voseo\" argentino. "
-            "El objetivo es conectar con el cultivador. Inspírate en este ejemplo de tono: "
-            "\"con este Fertilizante tus plantas van a ser la envidia de los claveles de tu vecina, rico en NPK en las siguientes proporciones 15-5-40, ideal para el estado vegetativo\".\n"
-            "- Contenido: La descripción debe ser atractiva, resaltar los beneficios clave para el cultivador y explicar para qué sirve el producto de manera clara.\n"
-            "- ESTRUCTURA OBLIGATORIA DE LA DESCRIPCIÓN:\n"
-            "  1. Párrafo principal: Beneficios y características del producto (3-5 oraciones)\n"
-            "  2. Párrafo secundario: Modo de uso, aplicación, recomendaciones (2-4 oraciones)\n"
-            "  3. Cierre con 5 keywords: DEBES terminar la descripción con EXACTAMENTE 5 palabras clave separadas por comas.\n"
-            "     - NO uses prefijos como 'Keywords:', 'Palabras clave:', 'SEO:', etc.\n"
-            "     - Simplemente agrega un espacio después del último punto de tu texto y lista las 5 palabras separadas por comas.\n"
-            "     - Ejemplo: '...ideal para cultivos en interior. fertilizante líquido, bloom estimulador, floración cannabis, top crop argentina, abono floración'\n\n"
-            "**Datos Técnicos (Opcional):**\n"
-            "Si encuentras esta información durante tu investigación, complétala. Si no la encuentras, usa null:\n"
-            "- Peso KG: [Valor numérico o null]\n"
-            "- Alto CM: [Valor numérico o null]\n"
-            "- Ancho CM: [Valor numérico o null]\n"
-            "- Profundidad CM: [Valor numérico o null]\n\n"
-            "**Análisis de Mercado (AR$):**\n"
-            "- Busca precios del producto en Pesos Argentinos (AR$) de fuentes argentinas.\n"
-            f"- Filtro de Actualidad: Solo considera precios de fuentes con una antigüedad máxima de 4 meses (posteriores a {fecha_limite_precios}).\n"
-            "- Presentación del Precio:\n"
-            "  * Si encuentras un solo precio válido: \"Valor de mercado estimado: $[Precio] ARS\"\n"
-            "  * Si encuentras múltiples precios válidos: \"Valor de mercado estimado: $[Precio Mínimo] a $[Precio Máximo] ARS\"\n"
-            "  * Advertencia de Desactualización: Si la única fuente de precio disponible tiene más de 4 meses de antigüedad, "
-            "debes incluirla pero con esta advertencia OBLIGATORIA: \"ADVERTENCIA: Precio con más de 4 meses de antigüedad, probablemente desactualizado.\"\n\n"
-            "**Fuentes (OBLIGATORIO):**\n"
-            "- Debes incluir TODAS las fuentes consultadas en un objeto donde:\n"
-            "  * La clave es una descripción corta de la fuente (ej: \"Sitio oficial fabricante\", \"Mercado Libre\", \"Grow Shop ABC\")\n"
-            "  * El valor es la URL completa (http/https)\n"
-            "- Indica claramente cuáles son del fabricante (prioridad #1) vs marketplaces (prioridad #2) vs grow shops (prioridad #3)\n\n"
-            "========== FORMATO DE RESPUESTA ==========\n\n"
-            "Responde ÚNICAMENTE en JSON válido (sin texto extra, sin markdown, sin ```). "
-            f"Completa el siguiente esquema:\n\n{schema_hint}\n\n"
-            "RECORDATORIO CRÍTICO: La 'Descripción para Nice Grow' DEBE terminar con las 5 palabras clave separadas por comas (sin prefijos como 'Keywords:').\n"
-            "El campo 'Fuentes' es OBLIGATORIO y debe contener al menos las URLs de donde obtuviste la información.\n"
-        )
-        
-        if extra_context:
-            try:
-                import json as _json
-                prompt += "\n\n========== CONTEXTO INTERNO (MCP Productos) ==========\n" + _json.dumps(extra_context, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
-        
-        if web_search_results:
-            try:
-                import json as _json
-                prompt += "\n\n========== RESULTADOS DE BÚSQUEDA WEB (MCP Web Search) ==========\n" + _json.dumps(web_search_results, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
-
-        router_ai = AIRouter(settings)
-        raw = await router_ai.run_async(Task.REASONING.value, prompt)
-        
-        # Normalizar respuesta posible con prefijo y/o fences
-        text = raw.strip()
-        
-        # Log para debugging: ver primeros 300 caracteres de la respuesta cruda
-        logger.debug({
-            "event": "enrich.raw_response",
-            "product_id": product_id,
-            "preview": text[:300],
-            "has_encoding_markers": any(char in text for char in ['├', '┬', '®', '¡'])
-        })
-        
-        # Fix encoding issues: ensure UTF-8 correctness
-        # Sometimes OpenAI returns text with encoding issues
-        try:
-            # Try to encode as latin-1 and decode as utf-8 if it looks corrupted
-            if '├' in text or '┬' in text:
-                text = text.encode('latin-1').decode('utf-8')
-                logger.info({
-                    "event": "enrich.encoding_fixed_pre_parse",
-                    "product_id": product_id,
-                    "message": "Applied latin-1 to UTF-8 conversion to raw response"
-                })
-        except Exception as e:
-            logger.warning({
-                "event": "enrich.encoding_fix_failed_pre_parse",
-                "product_id": product_id,
-                "error": str(e)
-            })
-        
-        if text.startswith("openai:") or text.startswith("ollama:"):
-            text = text.split(":", 1)[1].strip()
-        if text.startswith("```"):
-            text = text.strip("`\n ")
-            if text.lower().startswith("json"):
-                text = text[4:].strip()
-
-        import json
-        try:
-            data = json.loads(text)
-        except Exception:
-            _logging.getLogger("growen").warning({
-                "event": "enrich.error",
-                "product_id": product_id,
-                "reason": "invalid_json",
-                "preview": text[:200],
-            })
-            raise HTTPException(status_code=502, detail="Respuesta de IA inválida (no JSON)")
-
-        desc_key = "Descripción para Nice Grow"
-        if desc_key not in data or not isinstance(data.get(desc_key), str) or not data.get(desc_key).strip():
-            _logging.getLogger("growen").warning({
-                "event": "enrich.error",
-                "product_id": product_id,
-                "reason": "missing_description",
-            })
-            raise HTTPException(status_code=502, detail="Respuesta de IA inválida (falta descripción)")
-        
-        # Validar que las Fuentes estén presentes (OBLIGATORIO según especificaciones)
-        if "Fuentes" not in data or not isinstance(data.get("Fuentes"), dict) or not data.get("Fuentes"):
-            _logging.getLogger("growen").warning({
-                "event": "enrich.error",
-                "product_id": product_id,
-                "reason": "missing_sources",
-                "response_keys": list(data.keys()),
-            })
-            raise HTTPException(status_code=502, detail="Respuesta de IA inválida (falta campo 'Fuentes' obligatorio)")
-
-        old_desc = getattr(prod, "description_html", None) or ""
-        had_enrichment = bool((prod.enrichment_sources_url or '').strip()) or bool((old_desc or '').strip())
-        
-        # Obtener descripción y corregir encoding UTF-8 si es necesario
-        description = data.get(desc_key).strip()
-        
-        # Fix encoding issues: sometimes OpenAI returns text with latin-1 encoding interpreted as UTF-8
-        try:
-            if any(char in description for char in ['├', '┬', '®', '¡', '¢', '£', '▒', '│', '┤', '╡']):
-                description = description.encode('latin-1').decode('utf-8')
-        except Exception as e:
-            # If conversion fails, keep original
-            logger.warning({
-                "event": "enrich.encoding_fix_failed",
-                "product_id": product_id,
-                "error": str(e),
-            })
-        
-        prod.description_html = description
-
-        # Mapear campos técnicos si vienen en la respuesta
-        def _to_float_or_none(x):
-            if x is None:
-                return None
-            if isinstance(x, (int, float)):
-                return float(x)
-            if isinstance(x, str):
-                # extraer primer número en el string (e.g., "$ 12.345,67" o "12.3 cm")
-                import re
-                s = x.replace(".", "").replace(",", ".") if "," in x and x.count(",") == 1 and x.count(".") > 1 else x
-                m = re.search(r"-?\d+(?:[\.,]\d+)?", s)
-                if m:
-                    try:
-                        return float(m.group(0).replace(",", "."))
-                    except Exception:
-                        return None
-            return None
-
-        generated_fields = ["description_html"]
-        # Claves del JSON de IA
-        kg = _to_float_or_none(data.get("Peso KG"))
-        alto = _to_float_or_none(data.get("Alto CM"))
-        ancho = _to_float_or_none(data.get("Ancho CM"))
-        prof = _to_float_or_none(data.get("Profundidad CM"))
-        mref = _to_float_or_none(data.get("Valor de mercado estimado"))
-        try:
-            if kg is not None and kg >= 0:
-                prod.weight_kg = kg
-                generated_fields.append("weight_kg")
-            if alto is not None and alto >= 0:
-                prod.height_cm = alto
-                generated_fields.append("height_cm")
-            if ancho is not None and ancho >= 0:
-                prod.width_cm = ancho
-                generated_fields.append("width_cm")
-            if prof is not None and prof >= 0:
-                prod.depth_cm = prof
-                generated_fields.append("depth_cm")
-            if mref is not None and mref >= 0:
-                prod.market_price_reference = mref
-                generated_fields.append("market_price_reference")
-        except Exception:
-            pass
-
-        # Manejar fuentes -> generar .txt en MEDIA_ROOT/enrichment_logs y asociar URL pública /media/...
-        sources = None
-        try:
-            # aceptar 'Fuentes' como dict o list de strings
-            if isinstance(data.get("Fuentes"), dict):
-                sources = data.get("Fuentes")
-            elif isinstance(data.get("Fuentes"), list):
-                # convertir a dict numerado
-                lst = [str(x) for x in data.get("Fuentes")]
-                sources = {f"item_{i+1}": url for i, url in enumerate(lst)}
-        except Exception:
-            sources = None
-
-        # Construcción de archivo si hay fuentes
-        txt_url = None
-        try:
-            if sources:
-                ROOT = Path(__file__).resolve().parents[2]  # services/routers -> services -> ROOT
-                media_root = Path(os.getenv("MEDIA_ROOT", str(ROOT / "Devs" / "Imagenes")))
-                # Si viene force y existe un archivo previo, eliminarlo
-                if force and getattr(prod, "enrichment_sources_url", None):
-                    prev_url = str(prod.enrichment_sources_url)
-                    if prev_url.startswith("/media/"):
-                        rel = prev_url[len("/media/"):]
-                        prev_path = media_root / rel
-                        try:
-                            if prev_path.exists():
-                                prev_path.unlink()
-                        except Exception:
-                            pass
-                target_dir = media_root / "enrichment_logs"
-                target_dir.mkdir(parents=True, exist_ok=True)
-                from datetime import datetime as _dt
-                ts = _dt.utcnow().strftime("%Y%m%dT%H%M%SZ")
-                fname = f"product_{product_id}_enrichment_{ts}.txt"
-                fpath = target_dir / fname
-                lines = [
-                    "FUENTES CONSULTADAS - Enriquecimiento IA",
-                    "",
-                    f"Producto: {title}",
-                    f"Fecha: {ts}",
-                    f"Responsable: {sess.user.id if (sess and sess.user) else 'automático'}",
-                    "",
-                ]
-                for k, v in (sources or {}).items():
-                    lines.append(f"--- {k}:")
-                    lines.append(str(v))
-                    lines.append("")
-                fpath.write_text("\n".join(lines), encoding="utf-8")
-                # URL pública
-                txt_url = f"/media/enrichment_logs/{fname}"
-                # Persistir en producto
-                if hasattr(prod, "enrichment_sources_url"):
-                    prod.enrichment_sources_url = txt_url
-            # setear metadatos de trazabilidad de enriquecimiento
-            try:
-                if hasattr(prod, "last_enriched_at"):
-                    prod.last_enriched_at = _dt.utcnow()
-                if hasattr(prod, "enriched_by"):
-                    prod.enriched_by = (sess.user.id if sess and getattr(sess, 'user', None) else None)
-            except Exception:
-                pass
-        except Exception:
-            # No bloquear si falla escritura
-            pass
-
-        # Audit (antes del commit final)
-        prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-        session.add(
-            AuditLog(
-                action=("reenrich" if (force or had_enrichment) else "enrich"),
-                table="products",
-                entity_id=product_id,
-                meta={
-                    "fields_generated": generated_fields,
-                    "desc_len_old": len(old_desc or ""),
-                    "desc_len_new": len(prod.description_html or ""),
-                    "num_sources": (len(sources) if sources else 0),
-                    "source_file": txt_url,
-                    "prompt_hash": prompt_hash,
-                    "web_search_query": web_query,
-                    "web_search_hits": web_hits,
-                    "used_canonical_title": used_canonical_title,
-                },
-                user_id=sess.user.id if sess and sess.user else None,
-                ip=(request.client.host if request and request.client else None),
-            )
-        )
-
-        # Logging final de resultado visible en consola
-        _logging.getLogger("growen").info({
-            "event": "enrich.done",
-            "product_id": product_id,
-            "used_canonical_title": used_canonical_title,
-            "sources": bool(sources),
-            "source_file": txt_url,
-            "web_search_hits": web_hits,
-        })
-        
-        # Commit principal con todos los datos y el log de auditoría
-        await session.commit()
-
-    finally:
-        # Liberar el bloqueo
-        prod_to_unlock = await session.get(Product, product_id)
-        if prod_to_unlock:
-            prod_to_unlock.is_enriching = False
-            await session.commit()
-
-    return {"status": "ok", "updated": True, "fields": generated_fields, "sources_url": txt_url}
-
+    job, created = await create_enrichment_job(
+        session,
+        canonical_id=canonical_product_id,
+        requested_product_id=product_id,
+        client_request_id=None if force else f"legacy-product:{product_id}",
+        scope="full",
+        requested_by_user_id=sess.user.id if sess and sess.user else None,
+    )
+    if created:
+        await dispatch_enrichment_job(job, session)
+    return {
+        "status": job.status,
+        "updated": False,
+        "job_id": job.id,
+        "canonical_product_id": canonical_product_id,
+        "status_url": f"/canonical-products/{canonical_product_id}/enrichment-jobs/{job.id}",
+    }
 
 @router.delete(
     "/products/{product_id}/enrichment",
@@ -4328,70 +4118,62 @@ async def delete_product_enrichment(
     prod = await session.get(Product, product_id)
     if not prod:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
+    from services.routers.enrichment import canonical_snapshot, resolve_canonical_id
 
-    # Borrar archivo de fuentes si existe
-    file_deleted = False
-    prev_url = getattr(prod, "enrichment_sources_url", None)
-    try:
-        if prev_url and isinstance(prev_url, str) and prev_url.startswith("/media/"):
-            ROOT = Path(__file__).resolve().parents[2]
-            media_root = Path(os.getenv("MEDIA_ROOT", str(ROOT / "Devs" / "Imagenes")))
-            rel = prev_url[len("/media/"):]
-            fpath = media_root / rel
-            if fpath.exists():
-                fpath.unlink()
-                file_deleted = True
-    except Exception:
-        file_deleted = False
-
-    # Limpiar campos enriquecidos
-    cleared_fields = []
-    if hasattr(prod, "description_html") and prod.description_html:
-        prod.description_html = None
-        cleared_fields.append("description_html")
-    for fld in ["weight_kg", "height_cm", "width_cm", "depth_cm", "market_price_reference"]:
-        if hasattr(prod, fld) and getattr(prod, fld) is not None:
-            setattr(prod, fld, None)
-            cleared_fields.append(fld)
-    if hasattr(prod, "enrichment_sources_url") and prod.enrichment_sources_url:
-        prod.enrichment_sources_url = None
-        cleared_fields.append("enrichment_sources_url")
-    # limpiar metadatos de enriquecimiento
-    try:
-        if hasattr(prod, "last_enriched_at") and getattr(prod, "last_enriched_at", None) is not None:
-            prod.last_enriched_at = None
-            cleared_fields.append("last_enriched_at")
-        if hasattr(prod, "enriched_by") and getattr(prod, "enriched_by", None) is not None:
-            prod.enriched_by = None
-            cleared_fields.append("enriched_by")
-    except Exception:
-        pass
-
-    await session.commit()
-
-    # Audit
-    try:
-        session.add(
-            AuditLog(
-                action="delete_enrichment",
-                table="products",
-                entity_id=product_id,
-                meta={
-                    "product_title": getattr(prod, "title", None),
-                    "file_deleted": file_deleted,
-                    "prev_sources_url": prev_url,
-                    "cleared_fields": cleared_fields,
-                },
-                user_id=sess.user.id if sess and sess.user else None,
-                ip=(request.client.host if request and request.client else None),
-            )
+    canonical_id = await resolve_canonical_id(session, product_id)
+    if canonical_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "canonical_required", "message": "El producto no tiene canónico"},
         )
-        await session.commit()
-    except Exception:
-        pass
-
-    return {"status": "ok", "deleted": True}
-
+    canonical = await session.get(CanonicalProduct, canonical_id, with_for_update=True)
+    if not canonical:
+        raise HTTPException(status_code=404, detail="Producto canónico no encontrado")
+    previous_snapshot = canonical_snapshot(canonical)
+    cleared_fields = [
+        field
+        for field, value in previous_snapshot.items()
+        if value not in (None, {}, [])
+    ]
+    session.add(
+        CanonicalContentVersion(
+            canonical_product_id=canonical.id,
+            origin="legacy_delete_adapter",
+            origin_product_id=product_id,
+            revision=canonical.content_revision,
+            snapshot_json=previous_snapshot,
+            is_applied=False,
+            created_by_user_id=sess.user.id if sess and sess.user else None,
+        )
+    )
+    canonical.description_html = None
+    canonical.weight_kg = None
+    canonical.height_cm = None
+    canonical.width_cm = None
+    canonical.depth_cm = None
+    canonical.technical_specs = {}
+    canonical.usage_instructions = {}
+    canonical.content_revision += 1
+    canonical.last_enriched_at = None
+    canonical.enriched_by = None
+    session.add(
+        AuditLog(
+            action="delete_canonical_enrichment",
+            table="canonical_products",
+            entity_id=canonical.id,
+            meta={"requested_product_id": product_id, "fields": cleared_fields},
+            user_id=sess.user.id if sess and sess.user else None,
+            ip=(request.client.host if request and request.client else None),
+        )
+    )
+    await session.commit()
+    return {
+        "status": "ok",
+        "canonical_product_id": canonical.id,
+        "content_revision": canonical.content_revision,
+        "cleared_fields": cleared_fields,
+        "file_deleted": False,
+    }
 
 @router.get(
     "/products/{product_id}/audit-logs",

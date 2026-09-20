@@ -29,13 +29,26 @@ def product_with_source(admin_client: TestClient):
     Usa la misma DB que la API (memoria compartida) para que los tests funcionen.
     El módulo Market trabaja con CanonicalProduct, no con Product.
     """
-    # Crear producto canónico vía API (endpoint específico para canónicos)
+    category_resp = admin_client.post(
+        "/categories",
+        json={"name": "Mercado Validación", "kind": "category"},
+    )
+    assert category_resp.status_code in [200, 201], category_resp.text
+    subcategory_resp = admin_client.post(
+        "/categories",
+        json={"name": "Mercado Validación Sub", "kind": "subcategory"},
+    )
+    assert subcategory_resp.status_code in [200, 201], subcategory_resp.text
+
+    # Crear producto canónico vía API con la taxonomía actualmente obligatoria.
     create_resp = admin_client.post(
         "/canonical-products",
         json={
             "name": "Producto Validación Market",
             "sale_price": 1000.00,
             "market_price_reference": 950.00,
+            "category_id": category_resp.json()["id"],
+            "subcategory_id": subcategory_resp.json()["id"],
         }
     )
     assert create_resp.status_code in [200, 201], f"Error creando producto canónico: {create_resp.text}"

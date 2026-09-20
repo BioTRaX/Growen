@@ -1,0 +1,28 @@
+# NG-HEADER: Nombre de archivo: Dockerfile.telegram-worker
+# NG-HEADER: Ubicación: infra/Dockerfile.telegram-worker
+# NG-HEADER: Descripción: Imagen multi-stage no-root para polling Telegram.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+FROM python:3.14.6-slim-bookworm AS builder
+
+ENV VENV_PATH=/opt/venv PIP_NO_CACHE_DIR=1
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential gcc libffi-dev \
+ && rm -rf /var/lib/apt/lists/*
+RUN python -m venv "$VENV_PATH" \
+ && "$VENV_PATH/bin/pip" install --upgrade pip setuptools wheel
+WORKDIR /app
+COPY requirements-api-lock.txt ./
+RUN "$VENV_PATH/bin/pip" install --require-hashes -r requirements-api-lock.txt
+
+FROM python:3.14.6-slim-bookworm AS runtime
+ENV PYTHONUNBUFFERED=1 VENV_PATH=/opt/venv PATH=/opt/venv/bin:$PATH
+RUN addgroup --system app && adduser --system --ingroup app --home /app app
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+COPY . .
+RUN mkdir -p /app/logs && chown -R app:app /app
+USER app
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+ CMD python -c "import json,pathlib,sys; p=pathlib.Path('/app/logs/telegram_health.json'); d=json.loads(p.read_text()) if p.exists() else {}; sys.exit(0 if d.get('status') in {'running','degraded'} else 1)"
+
+CMD ["python", "workers/telegram_polling.py"]

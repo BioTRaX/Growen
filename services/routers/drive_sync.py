@@ -11,12 +11,18 @@ import json
 import logging
 import os
 import uuid
+from datetime import datetime
 from typing import Dict, Set, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Query
 from pydantic import BaseModel
+from sqlalchemy import desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from services.auth import require_roles, require_csrf
+from db.models import DriveSyncItem, DriveSyncRun
+from db.session import SessionLocal, get_session
+from services.auth import SessionData, require_roles, require_csrf, require_websocket_roles
 from services.jobs.drive_sync import sync_drive_images_task, PROGRESS_CHANNEL
 from services.integrations.drive import GoogleDriveSync
 
@@ -40,6 +46,49 @@ class SyncStatusResponse(BaseModel):
     sync_id: Optional[str] = None
 
 
+class RetryRunRequest(BaseModel):
+    item_ids: list[int] | None = None
+
+
+def _user_id(session: SessionData) -> int | None:
+    if session.user:
+        return session.user.id
+    value = getattr(session, "user_id", None)
+    return int(value) if value is not None else None
+
+
+def _run_payload(run: DriveSyncRun, include_items: bool = False) -> dict:
+    payload = {
+        "id": run.id,
+        "parent_run_id": run.parent_run_id,
+        "source_folder_id": run.source_folder_id,
+        "status": run.status,
+        "total_items": run.total_items,
+        "processed_items": run.processed_items,
+        "success_count": run.success_count,
+        "error_count": run.error_count,
+        "skipped_count": run.skipped_count,
+        "current_filename": run.current_filename,
+        "error_message": run.error_message,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+    }
+    if include_items:
+        payload["items"] = [
+            {
+                "id": item.id,
+                "position": item.position,
+                "filename": item.filename,
+                "sku": item.sku,
+                "status": item.status,
+                "error_message": item.error_message,
+            }
+            for item in run.items
+        ]
+    return payload
+
+
 async def broadcast_progress(data: dict) -> None:
     """Envía progreso a todas las conexiones WebSocket activas."""
     if not _active_connections:
@@ -48,6 +97,9 @@ async def broadcast_progress(data: dict) -> None:
 
     message = json.dumps({
         "type": "drive_sync_progress",
+        "event_id": uuid.uuid4().hex,
+        "resource_id": data.get("sync_id") or data.get("resource_id"),
+        "timestamp": datetime.utcnow().isoformat(),
         **data,
     })
 
@@ -109,7 +161,7 @@ async def subscribe_to_progress(sync_id: str) -> None:
                             await _process_progress_message(data)
                             
                             # Si el estado es completed o error, terminar suscripción
-                            if data.get('status') in ('completed', 'error'):
+                            if data.get('status') in ('completed', 'error', 'cancelled'):
                                 logger.info(f"Sincronización {sync_id} finalizada con estado {data.get('status')}, cerrando suscripción")
                                 global _current_sync_id
                                 _sync_in_progress = False
@@ -174,7 +226,7 @@ async def _poll_redis_progress(sync_id: str, redis_url: str) -> None:
                     if data.get('sync_id') == sync_id:
                         await _process_progress_message(data)
                         
-                        if data.get('status') in ('completed', 'error'):
+                        if data.get('status') in ('completed', 'error', 'cancelled'):
                             logger.info(f"Sincronización {sync_id} finalizada con estado: {data.get('status')}")
                             # Limpiar estado global
                             _sync_in_progress = False
@@ -207,18 +259,19 @@ async def _process_progress_message(data: dict) -> None:
     Args:
         data: Datos de progreso (sin sync_id, ya filtrado).
     """
-    # Remover sync_id del payload antes de enviar a WebSocket
-    progress_data = {k: v for k, v in data.items() if k != 'sync_id'}
+    progress_data = dict(data)
     await broadcast_progress(progress_data)
 
 
 @router.post(
     "/start",
-    dependencies=[Depends(require_roles("admin")), Depends(require_csrf)],
+    dependencies=[Depends(require_csrf)],
     response_model=SyncStatusResponse,
 )
 async def start_drive_sync(
-    source_folder_id: Optional[str] = Query(None, description="ID de carpeta de origen (opcional). Si no se proporciona, se usa DRIVE_SOURCE_FOLDER_ID del entorno. Permite procesar desde otras carpetas como 'Errores_SKU'.")
+    source_folder_id: Optional[str] = Query(None, description="ID de carpeta de origen (opcional). Si no se proporciona, se usa DRIVE_SOURCE_FOLDER_ID del entorno. Permite procesar desde otras carpetas como 'Errores_SKU'."),
+    session_data: SessionData = Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_session),
 ) -> SyncStatusResponse:
     """Inicia la sincronización de imágenes desde Google Drive.
 
@@ -240,6 +293,15 @@ async def start_drive_sync(
     sync_id = str(uuid.uuid4())
     _current_sync_id = sync_id
     _sync_in_progress = True
+    db.add(
+        DriveSyncRun(
+            id=sync_id,
+            source_folder_id=source_folder_id,
+            status="queued",
+            initiated_by_user_id=_user_id(session_data),
+        )
+    )
+    await db.commit()
 
     # Encolar tarea en Dramatiq
     try:
@@ -248,6 +310,12 @@ async def start_drive_sync(
     except Exception as e:
         _sync_in_progress = False
         _current_sync_id = None
+        run = await db.get(DriveSyncRun, sync_id)
+        if run:
+            run.status = "failed"
+            run.error_message = str(e)[:2000]
+            run.completed_at = datetime.utcnow()
+            await db.commit()
         logger.error(f"Error encolando sincronización Drive: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -322,19 +390,111 @@ async def get_errors_folder_id() -> dict:
     dependencies=[Depends(require_roles("admin"))],
     response_model=SyncStatusResponse,
 )
-async def get_sync_status() -> SyncStatusResponse:
+async def get_sync_status(db: AsyncSession = Depends(get_session)) -> SyncStatusResponse:
     """Obtiene el estado actual de la sincronización."""
-    if _sync_in_progress:
+    active = await db.scalar(
+        select(DriveSyncRun)
+        .where(DriveSyncRun.status.in_(["queued", "running", "cancel_requested"]))
+        .order_by(desc(DriveSyncRun.created_at))
+        .limit(1)
+    )
+    if active:
         return SyncStatusResponse(
-            status="running",
+            status=active.status,
             message="Sincronización en progreso",
-            sync_id=_current_sync_id,
+            sync_id=active.id,
         )
     return SyncStatusResponse(
         status="idle",
         message="No hay sincronización en progreso",
         sync_id=None,
     )
+
+
+@router.get("/runs", dependencies=[Depends(require_roles("admin"))])
+async def list_sync_runs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: str | None = Query(None),
+    db: AsyncSession = Depends(get_session),
+) -> dict:
+    filters = [DriveSyncRun.status == status] if status else []
+    total = await db.scalar(select(func.count()).select_from(DriveSyncRun).where(*filters)) or 0
+    result = await db.scalars(
+        select(DriveSyncRun)
+        .where(*filters)
+        .order_by(desc(DriveSyncRun.created_at))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return {"items": [_run_payload(run) for run in result], "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/runs/{run_id}", dependencies=[Depends(require_roles("admin"))])
+async def get_sync_run(run_id: str, db: AsyncSession = Depends(get_session)) -> dict:
+    result = await db.execute(
+        select(DriveSyncRun).where(DriveSyncRun.id == run_id).options(selectinload(DriveSyncRun.items))
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Ejecución no encontrada")
+    return _run_payload(run, include_items=True)
+
+
+@router.post(
+    "/runs/{run_id}/cancel",
+    dependencies=[Depends(require_roles("admin")), Depends(require_csrf)],
+)
+async def cancel_sync_run(run_id: str, db: AsyncSession = Depends(get_session)) -> dict:
+    run = await db.get(DriveSyncRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Ejecución no encontrada")
+    if run.status not in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="La ejecución ya no puede cancelarse")
+    run.status = "cancel_requested"
+    run.cancel_requested_at = datetime.utcnow()
+    await db.commit()
+    return {"id": run.id, "status": run.status}
+
+
+@router.post(
+    "/runs/{run_id}/retry",
+    dependencies=[Depends(require_csrf)],
+)
+async def retry_sync_run(
+    run_id: str,
+    payload: RetryRunRequest,
+    session_data: SessionData = Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_session),
+) -> dict:
+    parent = await db.get(DriveSyncRun, run_id)
+    if not parent:
+        raise HTTPException(status_code=404, detail="Ejecución no encontrada")
+    query = select(DriveSyncItem).where(
+        DriveSyncItem.run_id == run_id,
+        DriveSyncItem.status.in_(["failed", "skipped"]),
+    )
+    if payload.item_ids:
+        query = query.where(DriveSyncItem.id.in_(payload.item_ids))
+    items = list(await db.scalars(query))
+    if not items:
+        raise HTTPException(status_code=409, detail="No hay elementos fallidos seleccionados")
+    folder = await get_errors_folder_id()
+    child_id = uuid.uuid4().hex
+    child = DriveSyncRun(
+        id=child_id,
+        parent_run_id=run_id,
+        source_folder_id=folder["folder_id"],
+        status="queued",
+        initiated_by_user_id=_user_id(session_data),
+        total_items=len(items),
+    )
+    db.add(child)
+    await db.commit()
+    sync_drive_images_task.send(child_id, source_folder_id=folder["folder_id"], include_filenames=[item.filename for item in items])
+    subscription_task = asyncio.create_task(subscribe_to_progress(child_id))
+    _redis_subscriptions[child_id] = subscription_task
+    return {"id": child_id, "parent_run_id": run_id, "status": "queued", "items": len(items)}
 
 
 @router.websocket("/ws")
@@ -347,6 +507,11 @@ async def websocket_sync_status(websocket: WebSocket):
     - SKU siendo procesado
     - Mensajes de estado
     """
+    async with SessionLocal() as db:
+        try:
+            await require_websocket_roles(websocket, db, "admin")
+        except HTTPException:
+            return
     await websocket.accept()
     _active_connections.add(websocket)
     logger.info(f"Cliente conectado al WebSocket de sincronización. Total conexiones: {len(_active_connections)}")

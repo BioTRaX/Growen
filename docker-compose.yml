@@ -20,6 +20,11 @@ services:
       - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
+      # Docker Engine no publica puertos de contenedores conectados solo a una
+      # red internal. Esta red conserva el acceso local 127.0.0.1:5433.
+      - host_access
   api:
     build:
       context: .
@@ -34,21 +39,43 @@ services:
       DB_USER: ${POSTGRES_USER:-growen}
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_HOST: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-4096}
+      AI_MODE: ${AI_MODE:-ollama}
+      AI_ALLOW_EXTERNAL: ${AI_ALLOW_EXTERNAL:-false}
+      OPENAI_API_KEY_FILE: ${OPENAI_API_KEY_FILE_DOCKER:-}
+      RAG_EMBEDDING_PROVIDER: ${RAG_EMBEDDING_PROVIDER:-ollama}
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-qwen3-embedding:4b}
+      RAG_EMBEDDING_DIMENSIONS: ${RAG_EMBEDDING_DIMENSIONS:-1536}
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/growen/telegram_bot_token
+      TELEGRAM_IDENTITY_ENCRYPTION_KEY_FILE: /run/secrets/growen/telegram_identity_encryption_key
+      TELEGRAM_IDENTITY_HMAC_KEY_FILE: /run/secrets/growen/telegram_identity_hmac_key
       PGCONNECT_TIMEOUT: ${PGCONNECT_TIMEOUT:-5}
       # Enriquecimiento IA con búsqueda web (MCP)
-      AI_USE_WEB_SEARCH: "1"
-      MCP_WEB_SEARCH_URL: "http://mcp_web_search:8002/invoke_tool"
+      AI_USE_WEB_SEARCH: "0"
+      MCP_PRODUCTS_URL: "http://mcp_products:8100/mcp"
+      MCP_WEB_SEARCH_URL: "http://mcp_web_search:8002/mcp"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       - db
+      - redis
     command: ["/app/infra/wait-for.sh", "db:5432", "uvicorn", "services.api:app", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     volumes:
       # Consolidar logs del backend en la carpeta del host
       - ./logs:/app/logs
       # Carpeta de documentos de conocimiento para RAG
       - ./Conocimientos:/app/Conocimientos
+      - type: bind
+        source: ${GROWEN_SECRET_DIR:-../growen-secrets}
+        target: /run/secrets/growen
+        read_only: true
     # Configurar logging de Docker para escribir en logs/
     logging:
       driver: "json-file"
@@ -56,15 +83,28 @@ services:
         max-size: "10m"
         max-file: "3"
         tag: "{{.Name}}"
+    networks:
+      - backend
+      - egress
+      - host_access
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   frontend:
+    container_name: growen-frontend
+    image: growen/frontend:${FRONTEND_IMAGE_TAG:-current}
     build:
-      context: frontend
-      dockerfile: ../infra/Dockerfile.frontend
+      context: .
+      dockerfile: infra/Dockerfile.frontend
+    environment:
+      NGINX_CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-25m}
     ports:
-      - "5173:80"
+      - "127.0.0.1:5173:80"
     depends_on:
       - api
     restart: unless-stopped
+    networks:
+      - backend
+      - host_access
   pdf_import:
     image: alpine:3.19
     command: ["sh","-c","sleep infinity"]
@@ -86,6 +126,93 @@ services:
       - redis_data:/data
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
+    networks:
+      - backend
+      # Requerida por la API y los workers ejecutados localmente.
+      - host_access
+  telegram_worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.telegram-worker
+    container_name: growen-telegram-worker
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      CHAT_RATE_LIMIT_BACKEND: redis
+      TELEGRAM_RATE_LIMIT_REDIS_PREFIX: ${TELEGRAM_RATE_LIMIT_REDIS_PREFIX:-growen:telegram:rate}
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/growen/telegram_bot_token
+      TELEGRAM_IDENTITY_ENCRYPTION_KEY_FILE: /run/secrets/growen/telegram_identity_encryption_key
+      TELEGRAM_IDENTITY_HMAC_KEY_FILE: /run/secrets/growen/telegram_identity_hmac_key
+      TELEGRAM_CANARY_USER_ID_FILE: /run/secrets/growen/telegram_canary_user_id
+      OLLAMA_HOST: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-4096}
+      AI_MODE: ollama
+      AI_ALLOW_EXTERNAL: "false"
+      OPENAI_API_KEY_FILE: ${OPENAI_API_KEY_FILE_DOCKER:-}
+      RAG_EMBEDDING_PROVIDER: ollama
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-qwen3-embedding:4b}
+      RAG_EMBEDDING_DIMENSIONS: "1536"
+    depends_on:
+      - db
+      - redis
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+      - type: bind
+        source: ${GROWEN_SECRET_DIR:-../growen-secrets}
+        target: /run/secrets/growen
+        read_only: true
+    restart: unless-stopped
+    profiles: ["telegram"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+      - egress
+      - host_access
+  chat_rollout_controller:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.telegram-worker
+    container_name: growen-chat-rollout
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      CHAT_ROLLOUT_INTERVAL_SECONDS: ${CHAT_ROLLOUT_INTERVAL_SECONDS:-300}
+      TELEGRAM_POLLING_QUEUE_SIZE: ${TELEGRAM_POLLING_QUEUE_SIZE:-100}
+    depends_on:
+      - db
+    command: ["python", "workers/chat_rollout.py"]
+    restart: unless-stopped
+    profiles: ["telegram"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - ./logs:/app/logs:ro
+    networks:
+      - backend
   dramatiq:
     build:
       context: .
@@ -102,6 +229,12 @@ services:
       DB_NAME: ${POSTGRES_DB:-growen}
       REDIS_URL: redis://redis:6379/0
       GOOGLE_APPLICATION_CREDENTIALS: /app/certs/growen-drive.json
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: ""
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_PUBLIC_BOT_ENABLED: "0"
+      TELEGRAM_ROLE_LINKING_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN_FILE: ""
     depends_on:
       - db
       - redis
@@ -129,6 +262,222 @@ services:
         max-size: "10m"
         max-file: "3"
         tag: "{{.Name}}"
+    networks:
+      - backend
+      - egress
+  market_worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.market-worker
+    container_name: growen-market-worker
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      MARKET_HEARTBEAT_ENABLED: "1"
+      MARKET_CONCURRENCY: ${MARKET_CONCURRENCY:-4}
+      MARKET_PRICE_FRESHNESS_DAYS: ${MARKET_PRICE_FRESHNESS_DAYS:-7}
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: ""
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_PUBLIC_BOT_ENABLED: "0"
+      TELEGRAM_ROLE_LINKING_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN_FILE: ""
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    profiles: ["optional"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{.Name}}"
+    networks:
+      - backend
+      - egress
+  enrichment_worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.dramatiq
+    container_name: growen-enrichment-worker
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      MCP_WEB_SEARCH_URL: ${ENRICH_MCP_WEB_SEARCH_URL:-http://mcp_web_search:8002/mcp}
+      OLLAMA_HOST: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-4096}
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: /run/secrets/growen/openai_api_key
+      ENRICHMENT_HEARTBEAT_ENABLED: "1"
+      ENRICHMENT_HEARTBEAT_TTL_SECONDS: ${ENRICHMENT_HEARTBEAT_TTL_SECONDS:-60}
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_PUBLIC_BOT_ENABLED: "0"
+      TELEGRAM_ROLE_LINKING_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN_FILE: ""
+    depends_on:
+      - db
+      - redis
+      - mcp_web_search
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "localhost:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+      - type: bind
+        source: ${OPENAI_API_KEY_FILE:-../growen-secrets/openai_api_key}
+        target: /run/secrets/growen/openai_api_key
+        read_only: true
+    restart: unless-stopped
+    profiles: ["optional"]
+    command:
+      - python
+      - -m
+      - dramatiq
+      - services.jobs.enrichment_jobs
+      - --processes
+      - "1"
+      - --threads
+      - "${ENRICHMENT_CONCURRENCY:-2}"
+      - --queues
+      - enrichment
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{.Name}}"
+    networks:
+      - backend
+      - egress
+      - host_access
+  catalog_audit_worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.dramatiq
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      CATALOG_AUDIT_OLLAMA_URL: ${OLLAMA_HOST_DOCKER:-http://host.docker.internal:11434}
+      CATALOG_AUDIT_OLLAMA_MODEL: ${CATALOG_AUDIT_OLLAMA_MODEL:-llama3.1:8b}
+      CATALOG_AUDIT_HEARTBEAT_TTL_SECONDS: ${CATALOG_AUDIT_HEARTBEAT_TTL_SECONDS:-60}
+      CATALOG_AUDIT_HEARTBEAT_ENABLED: "1"
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: ""
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_PUBLIC_BOT_ENABLED: "0"
+      TELEGRAM_ROLE_LINKING_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN_FILE: ""
+    depends_on:
+      - db
+      - redis
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    profiles: ["optional"]
+    command:
+      - python
+      - -m
+      - dramatiq
+      - services.jobs.catalog_audit_jobs
+      - --processes
+      - "1"
+      - --threads
+      - "1"
+      - --queues
+      - catalog_audit
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{.Name}}"
+    networks:
+      - backend
+      - host_access
+  knowledge_worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.dramatiq
+    container_name: growen-knowledge-worker
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      MCP_WEB_SEARCH_URL: ${KNOWLEDGE_MCP_WEB_SEARCH_URL:-http://mcp_web_search:8002/mcp}
+      KNOWLEDGE_HEARTBEAT_ENABLED: "1"
+      KNOWLEDGE_HEARTBEAT_TTL_SECONDS: ${KNOWLEDGE_HEARTBEAT_TTL_SECONDS:-60}
+      MEDIA_ROOT: /app/media
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: /run/secrets/growen/openai_api_key
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_PUBLIC_BOT_ENABLED: "0"
+      TELEGRAM_ROLE_LINKING_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN_FILE: ""
+    depends_on:
+      - db
+      - redis
+      - mcp_web_search
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "localhost:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+      - ./Devs/Imagenes:/app/media
+      - type: bind
+        source: ${OPENAI_API_KEY_FILE:-../growen-secrets/openai_api_key}
+        target: /run/secrets/growen/openai_api_key
+        read_only: true
+    restart: unless-stopped
+    profiles: ["optional"]
+    command:
+      - python
+      - -m
+      - dramatiq
+      - services.jobs.knowledge_jobs
+      - --processes
+      - "1"
+      - --threads
+      - "${KNOWLEDGE_CONCURRENCY:-1}"
+      - --queues
+      - canonical_knowledge
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{.Name}}"
+    networks:
+      - backend
+      - egress
   scheduler:
     image: alpine:3.19
     command: ["sh","-c","sleep infinity"]
@@ -148,18 +497,50 @@ services:
     container_name: growen-mcp-products
     depends_on:
       - api
+      - redis
     environment:
-      # Cuando la API corre LOCAL (fuera de Docker), el MCP debe usar host.docker.internal
-      # para acceder al puerto 8000 del host. Si la API corre en Docker, usar http://api:8000
-      API_BASE_URL: ${API_BASE_URL:-http://host.docker.internal:8000}
+      # En Compose, Products consume siempre la API por el nombre de servicio.
+      # start-dev.ps1 configura 127.0.0.1 cuando ambos procesos corren locales.
+      API_BASE_URL: http://api:8000
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      INTERNAL_SERVICE_NAME: mcp-products
       # Seguridad JWT (debe coincidir con el backend que genera los tokens)
-      MCP_SECRET_KEY: ${MCP_SECRET_KEY}
+      MCP_SECRET_KEY: ${MCP_PRODUCTS_SECRET_KEY}
+      MCP_SECRET_KEY_PREVIOUS: ${MCP_PRODUCTS_SECRET_KEY_PREVIOUS:-}
+      MCP_JWT_KEY_ID: ${MCP_PRODUCTS_KEY_ID:-products-v1}
+      MCP_JWT_PREVIOUS_KEY_ID: ${MCP_PRODUCTS_PREVIOUS_KEY_ID:-}
+      MCP_JWT_AUDIENCE: ${MCP_PRODUCTS_JWT_AUDIENCE:-growen-mcp-products}
       MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-60}
+      MCP_RATE_LIMIT_BACKEND: redis
+      MCP_TOKEN_REVOCATION_BACKEND: redis
+      MCP_RATE_LIMIT_REDIS_URL: redis://redis:6379/0
+      MCP_JWT_MAX_TTL_SECONDS: ${MCP_JWT_MAX_TTL_SECONDS:-600}
+      MCP_JWT_ISSUER: ${MCP_JWT_ISSUER:-growen-api}
+      MCP_PROTOCOL_VERSION: ${MCP_PROTOCOL_VERSION:-2025-11-25}
+      MCP_LEGACY_RPC_ENABLED: ${MCP_LEGACY_RPC_ENABLED:-0}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
+      WEB_FETCH_ENABLED: ${WEB_FETCH_ENABLED:-1}
+      WEB_FETCH_MAX_HTML_BYTES: ${WEB_FETCH_MAX_HTML_BYTES:-2000000}
+      WEB_FETCH_MAX_PDF_BYTES: ${WEB_FETCH_MAX_PDF_BYTES:-10000000}
+      WEB_FETCH_MAX_TEXT_CHARS: ${WEB_FETCH_MAX_TEXT_CHARS:-50000}
+      WEB_FETCH_TIMEOUT_SECONDS: ${WEB_FETCH_TIMEOUT_SECONDS:-12}
+      WEB_FETCH_MAX_REDIRECTS: ${WEB_FETCH_MAX_REDIRECTS:-3}
+      WEB_FETCH_CACHE_TTL_SECONDS: ${WEB_FETCH_CACHE_TTL_SECONDS:-86400}
+      WEB_FETCH_ALLOWED_MIME: ${WEB_FETCH_ALLOWED_MIME:-text/html,application/pdf}
       LOG_LEVEL: info
     ports:
-      - "8100:8100"
+      - "127.0.0.1:8100:8100"
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
   mcp_web_search:
     build:
       context: .
@@ -167,11 +548,246 @@ services:
     container_name: growen-mcp-web-search
     depends_on:
       - api
+      - redis
     environment:
       LOG_LEVEL: info
+      MCP_SECRET_KEY: ${MCP_WEB_SEARCH_SECRET_KEY}
+      MCP_SECRET_KEY_PREVIOUS: ${MCP_WEB_SEARCH_SECRET_KEY_PREVIOUS:-}
+      MCP_JWT_KEY_ID: ${MCP_WEB_SEARCH_KEY_ID:-web-search-v1}
+      MCP_JWT_PREVIOUS_KEY_ID: ${MCP_WEB_SEARCH_PREVIOUS_KEY_ID:-}
+      MCP_JWT_AUDIENCE: ${MCP_WEB_SEARCH_JWT_AUDIENCE:-growen-mcp-web-search}
+      MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-60}
+      MCP_RATE_LIMIT_BACKEND: redis
+      MCP_TOKEN_REVOCATION_BACKEND: redis
+      MCP_RATE_LIMIT_REDIS_URL: redis://redis:6379/0
+      MCP_JWT_MAX_TTL_SECONDS: ${MCP_JWT_MAX_TTL_SECONDS:-600}
+      MCP_JWT_ISSUER: ${MCP_JWT_ISSUER:-growen-api}
+      MCP_PROTOCOL_VERSION: ${MCP_PROTOCOL_VERSION:-2025-11-25}
+      MCP_LEGACY_RPC_ENABLED: ${MCP_LEGACY_RPC_ENABLED:-0}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
     ports:
-      - "8102:8002"
+      - "127.0.0.1:8102:8002"
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+      - egress
+  siyuan:
+    image: b3log/siyuan:v3.8.1
+    container_name: growen-siyuan
+    command: ["serve", "--workspace=/siyuan/workspace/"]
+    profiles: ["siyuan"]
+    environment:
+      TZ: ${TZ:-America/Argentina/Buenos_Aires}
+      SIYUAN_ACCESS_AUTH_CODE: ${SIYUAN_ACCESS_AUTH_CODE:-}
+    ports:
+      - "127.0.0.1:6806:6806"
+    volumes:
+      - type: bind
+        source: ${SIYUAN_WORKSPACE_DIR:-../growen-siyuan/workspace}
+        target: /siyuan/workspace
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:6806/api/system/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+    # La imagen oficial ejecuta un chown inicial del workspace como root y
+    # luego aplica sus propios privilegios; no se fuerza user/cap_drop aquí.
+    networks:
+      - backend
+      - host_access
+  mcp_siyuan:
+    build:
+      context: .
+      dockerfile: mcp_servers/siyuan_server/Dockerfile
+    container_name: growen-mcp-siyuan
+    profiles: ["siyuan"]
+    depends_on:
+      siyuan:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      SIYUAN_BASE_URL: http://siyuan:6806
+      SIYUAN_API_TOKEN_FILE: /run/secrets/growen/siyuan_api_token
+      SIYUAN_NOTEBOOK_NAME: ${SIYUAN_NOTEBOOK_NAME:-Nice Grow}
+      SIYUAN_NOTEBOOK_ID: ${SIYUAN_NOTEBOOK_ID:-}
+      SIYUAN_ALLOWED_PATH_PREFIX: ${SIYUAN_ALLOWED_PATH_PREFIX:-/Growen}
+      SIYUAN_PRIVATE_PATH_PREFIXES: ${SIYUAN_PRIVATE_PATH_PREFIXES:-/Negocio,/Operación}
+      SIYUAN_TIMEOUT_SECONDS: ${SIYUAN_TIMEOUT_SECONDS:-10}
+      MCP_SIYUAN_SECRET_KEY_FILE: /run/secrets/growen/mcp_siyuan_secret_key
+      MCP_JWT_KEY_ID: ${MCP_SIYUAN_KEY_ID:-siyuan-v1}
+      MCP_JWT_AUDIENCE: ${MCP_SIYUAN_JWT_AUDIENCE:-growen-mcp-siyuan}
+      MCP_JWT_ISSUER: ${MCP_JWT_ISSUER:-growen-api}
+      MCP_JWT_MAX_TTL_SECONDS: ${MCP_JWT_MAX_TTL_SECONDS:-600}
+      MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-60}
+      MCP_RATE_LIMIT_BACKEND: redis
+      MCP_TOKEN_REVOCATION_BACKEND: redis
+      MCP_RATE_LIMIT_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "127.0.0.1:8104:8104"
+    volumes:
+      - type: bind
+        source: ${GROWEN_SECRET_DIR:-../growen-secrets}
+        target: /run/secrets/growen
+        read_only: true
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+      - host_access
+  meli_webhook_gateway:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.meli-worker
+    image: growen/meli-sync:${MELI_IMAGE_TAG:-current}
+    profiles: ["meli"]
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      MELI_APP_ID_FILE: /run/secrets/growen/meli_app_id
+      MELI_CLIENT_SECRET_FILE: /run/secrets/growen/meli_client_secret
+      MELI_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/growen/meli_token_encryption_key
+      MELI_REDIRECT_URI: ${MELI_REDIRECT_URI:-}
+      MELI_ALLOWED_TOPICS: ${MELI_ALLOWED_TOPICS:-items,orders_v2,questions,messages}
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: ""
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_BOT_TOKEN_FILE: ""
+      PGAPPNAME: growen-meli-gateway
+    command: ["/app/infra/wait-for.sh", "db:5432", "uvicorn", "services.meli.app:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log"]
+    depends_on:
+      - db
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - type: bind
+        source: ${GROWEN_SECRET_DIR:-../growen-secrets}
+        target: /run/secrets/growen
+        read_only: true
+    networks:
+      - backend
+      - egress
+      - meli_ingress
+  meli_sync_worker:
+    image: growen/meli-sync:${MELI_IMAGE_TAG:-current}
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.meli-worker
+    profiles: ["meli"]
+    env_file: .env
+    environment:
+      DB_URL: ""
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-growen}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-growen}
+      REDIS_URL: redis://redis:6379/0
+      MELI_APP_ID_FILE: /run/secrets/growen/meli_app_id
+      MELI_CLIENT_SECRET_FILE: /run/secrets/growen/meli_client_secret
+      MELI_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/growen/meli_token_encryption_key
+      MELI_REDIRECT_URI: ${MELI_REDIRECT_URI:-}
+      OPENAI_API_KEY: ""
+      OPENAI_API_KEY_FILE: ""
+      TELEGRAM_ENABLED: "0"
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_BOT_TOKEN_FILE: ""
+      PGAPPNAME: growen-meli-worker
+    command: ["/app/infra/wait-for.sh", "db:5432", "dramatiq", "workers.meli_sync", "--queues", "meli_sync", "--processes", "1", "--threads", "${MELI_WORKER_THREADS:-4}"]
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/meli_worker_health.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - type: bind
+        source: ${GROWEN_SECRET_DIR:-../growen-secrets}
+        target: /run/secrets/growen
+        read_only: true
+    networks:
+      - backend
+      - egress
+  meli_cloudflared:
+    image: cloudflare/cloudflared:2026.8.3
+    profiles: ["meli"]
+    command: ["tunnel", "--no-autoupdate", "--loglevel", "info", "run", "--token-file", "/run/secrets/growen/cloudflare_meli_tunnel_token"]
+    depends_on:
+      - meli_webhook_gateway
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - type: bind
+        source: ${CLOUDFLARE_MELI_TUNNEL_TOKEN_FILE:-../growen-secrets/cloudflare_meli_tunnel_token}
+        target: /run/secrets/growen/cloudflare_meli_tunnel_token
+        read_only: true
+    networks:
+      - meli_ingress
+      - cloudflare_egress
 volumes:
   pgdata:
+    name: ${COMPOSE_PGDATA_VOLUME:-growen_dev_pgdata}
   redis_data:
+    name: ${COMPOSE_REDIS_DATA_VOLUME:-growen_dev_redis_data}
+networks:
+  backend:
+    name: ${COMPOSE_BACKEND_NETWORK:-growen_dev_backend}
+    internal: true
+  # Puente exclusivo para bindings loopback de infraestructura local.
+  # Los puertos de cada servicio continúan limitados a 127.0.0.1.
+  host_access:
+    name: ${COMPOSE_HOST_ACCESS_NETWORK:-growen_dev_host_access}
+    driver: bridge
+  egress:
+    name: ${COMPOSE_EGRESS_NETWORK:-growen_dev_egress}
+    driver: bridge
+  meli_ingress:
+    name: ${COMPOSE_MELI_INGRESS_NETWORK:-growen_dev_meli_ingress}
+    internal: true
+  cloudflare_egress:
+    name: ${COMPOSE_CLOUDFLARE_EGRESS_NETWORK:-growen_dev_cloudflare_egress}
+    driver: bridge

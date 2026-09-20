@@ -10,6 +10,7 @@ regalos y ventas pendientes que afectan el inventario.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -19,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import Product, StockShortage, StockLedger, User
 from db.session import get_session
-from services.auth import require_roles, current_session, SessionData
+from services.auth import require_roles, require_csrf, current_session, SessionData
 
 router = APIRouter(tags=["stock_shortages"])
 
@@ -29,7 +30,7 @@ router = APIRouter(tags=["stock_shortages"])
 class CreateShortageRequest(BaseModel):
     """Payload para crear un nuevo reporte de faltante."""
     product_id: int = Field(..., description="ID del producto afectado")
-    quantity: int = Field(..., gt=0, description="Cantidad a descontar (siempre positivo)")
+    quantity: Decimal = Field(..., gt=0, max_digits=14, decimal_places=2, description="Cantidad a descontar (siempre positiva)")
     reason: str = Field(..., pattern="^(GIFT|PENDING_SALE|UNKNOWN)$", description="Motivo del faltante")
     observation: Optional[str] = Field(None, max_length=1000, description="Observación opcional")
 
@@ -39,7 +40,7 @@ class ShortageResponse(BaseModel):
     id: int
     product_id: int
     product_title: str
-    quantity: int
+    quantity: Decimal
     reason: str
     status: str
     observation: Optional[str]
@@ -50,14 +51,17 @@ class ShortageResponse(BaseModel):
 class ShortageStatsResponse(BaseModel):
     """Estadísticas de faltantes."""
     total_items: int
-    total_quantity: int
+    total_quantity: Decimal
     by_reason: dict[str, int]
     this_month: int
 
 
 # --- Endpoints ---
 
-@router.post("/shortages", dependencies=[Depends(require_roles("colaborador", "admin"))])
+@router.post(
+    "/shortages",
+    dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)],
+)
 async def create_shortage(
     payload: CreateShortageRequest,
     db: AsyncSession = Depends(get_session),
@@ -71,18 +75,20 @@ async def create_shortage(
     pero se devuelve un warning en la respuesta.
     """
     # Validar producto existe
-    product = await db.get(Product, payload.product_id)
+    product = await db.scalar(
+        select(Product).where(Product.id == payload.product_id).with_for_update()
+    )
     if not product:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
     
     # Calcular nuevo stock (puede ser negativo)
-    old_stock = product.stock or 0
+    old_stock = Decimal(str(product.stock or 0)).quantize(Decimal("0.01"))
     new_stock = old_stock - payload.quantity
     
     # Crear registro de faltante
     shortage = StockShortage(
         product_id=payload.product_id,
-        user_id=sess.user_id if sess else None,
+        user_id=sess.user.id if sess and sess.user else None,
         quantity=payload.quantity,
         reason=payload.reason,
         status="OPEN",
@@ -112,9 +118,9 @@ async def create_shortage(
         "id": shortage.id,
         "product_id": payload.product_id,
         "product_title": product.title,
-        "quantity": payload.quantity,
+        "quantity": float(payload.quantity),
         "reason": payload.reason,
-        "new_stock": new_stock,
+        "new_stock": float(new_stock),
     }
     
     if new_stock < 0:
@@ -193,7 +199,7 @@ async def list_shortages(
             "id": r.id,
             "product_id": r.product_id,
             "product_title": products.get(r.product_id, ""),
-            "quantity": r.quantity,
+            "quantity": float(r.quantity),
             "reason": r.reason,
             "status": r.status,
             "observation": r.observation,
@@ -242,7 +248,7 @@ async def shortages_stats(
     
     return {
         "total_items": total_items,
-        "total_quantity": int(total_quantity),
+        "total_quantity": float(total_quantity),
         "by_reason": by_reason,
         "this_month": this_month,
     }

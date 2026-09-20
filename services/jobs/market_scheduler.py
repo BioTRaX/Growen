@@ -23,17 +23,20 @@ from __future__ import annotations
 
 import os
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional, List
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
-from db.models import CanonicalProduct, MarketSource
-from workers.market_scraping import refresh_market_prices_task
+from db.models import CanonicalProduct, MarketSource, SchedulerRun, SchedulerSetting
+from workers.market_scraping import process_market_item_task
+from services.market.jobs import create_update_job
+from services.market.pricing import cleanup_market_history
 from agent_core.config import settings
 
 # Configuración de logging
@@ -166,18 +169,48 @@ async def schedule_market_updates() -> None:
     start_time = datetime.utcnow()
     logger.info("[MARKET SCHEDULER] Iniciando job de actualización automática de precios")
     
+    run_id = uuid.uuid4().hex
+    lock_connection = None
     try:
+        if engine.dialect.name == "postgresql":
+            lock_connection = await engine.connect()
+            lock_acquired = bool(
+                await lock_connection.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": 72419031})
+            )
+            if not lock_acquired:
+                logger.info("[MARKET SCHEDULER] Otra réplica posee el liderazgo; se omite la ejecución")
+                return
         async with SessionLocal() as session:
+            await cleanup_market_history(session)
+            setting = await session.get(SchedulerSetting, 1)
+            run = SchedulerRun(
+                id=run_id,
+                trigger="automatic",
+                status="running",
+                started_at=start_time,
+                config_snapshot={
+                    "start_hour": setting.start_hour if setting else SCHEDULER_START_HOUR,
+                    "interval_hours": setting.interval_hours if setting else SCHEDULER_INTERVAL_HOURS,
+                    "update_frequency_days": setting.update_frequency_days if setting else UPDATE_FREQUENCY_DAYS,
+                    "max_products_per_run": setting.max_products_per_run if setting else MAX_PRODUCTS_PER_RUN,
+                },
+            )
+            session.add(run)
+            await session.commit()
             # 1. Obtener productos candidatos
             product_ids = await get_products_needing_update(
                 session,
-                max_products=MAX_PRODUCTS_PER_RUN,
-                days_threshold=UPDATE_FREQUENCY_DAYS,
-                prioritize_mandatory=PRIORITIZE_MANDATORY
+                max_products=setting.max_products_per_run if setting else MAX_PRODUCTS_PER_RUN,
+                days_threshold=setting.update_frequency_days if setting else UPDATE_FREQUENCY_DAYS,
+                prioritize_mandatory=setting.prioritize_mandatory if setting else PRIORITIZE_MANDATORY,
             )
             
             if not product_ids:
                 logger.info("[MARKET SCHEDULER] No hay productos pendientes de actualización")
+                run.status = "completed"
+                run.completed_at = datetime.utcnow()
+                run.duration_seconds = 0
+                await session.commit()
                 return
             
             logger.info(
@@ -205,18 +238,18 @@ async def schedule_market_updates() -> None:
             enqueued_count = 0
             failed_count = 0
             
-            for product_id in product_ids:
-                try:
-                    # Enviar tarea a cola de Dramatiq
-                    refresh_market_prices_task.send(product_id)
-                    enqueued_count += 1
-                    logger.debug(f"[MARKET SCHEDULER] Tarea encolada: producto {product_id}")
-                except Exception as e:
+            market_job = await create_update_job(session, product_ids, trigger="scheduler", correlation_id=run_id)
+            for item in market_job.items:
+                if item.item_id is None:
                     failed_count += 1
-                    logger.error(
-                        f"[MARKET SCHEDULER] Error al encolar producto {product_id}: {e}",
-                        exc_info=True
-                    )
+                    continue
+                if not item.deduplicated:
+                    process_market_item_task.send(item.item_id)
+                    enqueued_count += 1
+                logger.debug(
+                    "[MARKET SCHEDULER] Item producto=%s job=%s deduplicated=%s",
+                    item.product_id, item.job_id, item.deduplicated,
+                )
             
             # 4. Registrar métricas finales
             duration = (datetime.utcnow() - start_time).total_seconds()
@@ -234,17 +267,38 @@ async def schedule_market_updates() -> None:
             # 5. Métricas por configuración
             logger.info(
                 f"[MARKET SCHEDULER] Configuración actual: "
-                f"UPDATE_FREQUENCY_DAYS={UPDATE_FREQUENCY_DAYS}, "
-                f"MAX_PRODUCTS_PER_RUN={MAX_PRODUCTS_PER_RUN}, "
-                f"PRIORITIZE_MANDATORY={PRIORITIZE_MANDATORY}"
+                f"UPDATE_FREQUENCY_DAYS={setting.update_frequency_days if setting else UPDATE_FREQUENCY_DAYS}, "
+                f"MAX_PRODUCTS_PER_RUN={setting.max_products_per_run if setting else MAX_PRODUCTS_PER_RUN}, "
+                f"PRIORITIZE_MANDATORY={setting.prioritize_mandatory if setting else PRIORITIZE_MANDATORY}"
             )
+            run.status = "completed" if failed_count == 0 else "partial"
+            run.products_enqueued = enqueued_count
+            run.sources_total = total_sources
+            run.duration_seconds = duration
+            run.completed_at = datetime.utcnow()
+            await session.commit()
             
     except Exception as e:
         logger.error(
             f"[MARKET SCHEDULER] Error crítico en job de actualización: {e}",
             exc_info=True
         )
+        async with SessionLocal() as session:
+            run = await session.get(SchedulerRun, run_id)
+            if run:
+                run.status = "failed"
+                run.error_message = str(e)[:2000]
+                run.completed_at = datetime.utcnow()
+                await session.commit()
         raise
+    finally:
+        _is_running_job = False
+        if lock_connection is not None:
+            try:
+                await lock_connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": 72419031})
+            finally:
+                await lock_connection.close()
+        _is_running_job = False
 
 
 def get_is_working() -> bool:
@@ -262,6 +316,10 @@ async def get_scheduler_status() -> dict:
         Diccionario con métricas del scheduler
     """
     async with SessionLocal() as session:
+        setting = await session.get(SchedulerSetting, 1)
+        effective_days = setting.update_frequency_days if setting else UPDATE_FREQUENCY_DAYS
+        effective_max = setting.max_products_per_run if setting else MAX_PRODUCTS_PER_RUN
+        effective_priority = setting.prioritize_mandatory if setting else PRIORITIZE_MANDATORY
         # Total de productos con fuentes de mercado
         total_products_query = (
             select(func.count(CanonicalProduct.id.distinct()))
@@ -278,7 +336,7 @@ async def get_scheduler_status() -> dict:
         never_updated = await session.scalar(never_updated_query) or 0
         
         # Productos desactualizados (> UPDATE_FREQUENCY_DAYS)
-        threshold_date = datetime.utcnow() - timedelta(days=UPDATE_FREQUENCY_DAYS)
+        threshold_date = datetime.utcnow() - timedelta(days=effective_days)
         outdated_query = (
             select(func.count(CanonicalProduct.id.distinct()))
             .join(MarketSource, CanonicalProduct.id == MarketSource.product_id)
@@ -294,13 +352,13 @@ async def get_scheduler_status() -> dict:
         total_sources = await session.scalar(total_sources_query) or 0
         
         return {
-            "scheduler_enabled": SCHEDULER_ENABLED,
+            "scheduler_enabled": setting.enabled if setting else SCHEDULER_ENABLED,
             "cron_schedule": CRON_SCHEDULE,
-            "start_hour": SCHEDULER_START_HOUR,
-            "interval_hours": SCHEDULER_INTERVAL_HOURS,
-            "update_frequency_days": UPDATE_FREQUENCY_DAYS,
-            "max_products_per_run": MAX_PRODUCTS_PER_RUN,
-            "prioritize_mandatory": PRIORITIZE_MANDATORY,
+            "start_hour": setting.start_hour if setting else SCHEDULER_START_HOUR,
+            "interval_hours": setting.interval_hours if setting else SCHEDULER_INTERVAL_HOURS,
+            "update_frequency_days": effective_days,
+            "max_products_per_run": effective_max,
+            "prioritize_mandatory": effective_priority,
             "is_working": get_is_working(),
             "stats": {
                 "total_products_with_sources": total_products,
@@ -451,7 +509,12 @@ def update_scheduler_config(start_hour: str, interval_hours: int) -> None:
         logger.info(f"[MARKET SCHEDULER] Configuración actualizada: {start_hour} GMT-3, cada {interval_hours}h")
 
 
-def start_scheduler(start_hour: Optional[str] = None, interval_hours: Optional[int] = None) -> None:
+def start_scheduler(
+    start_hour: Optional[str] = None,
+    interval_hours: Optional[int] = None,
+    *,
+    force: bool = False,
+) -> None:
     """
     Inicia el scheduler si está habilitado por configuración.
     
@@ -461,7 +524,7 @@ def start_scheduler(start_hour: Optional[str] = None, interval_hours: Optional[i
         start_hour: Hora de inicio (override). Si None, usa SCHEDULER_START_HOUR
         interval_hours: Intervalo en horas (override). Si None, usa SCHEDULER_INTERVAL_HOURS
     """
-    if not SCHEDULER_ENABLED:
+    if not SCHEDULER_ENABLED and not force:
         logger.info("[MARKET SCHEDULER] Scheduler deshabilitado por configuración (MARKET_SCHEDULER_ENABLED=false)")
         return
     
@@ -518,11 +581,12 @@ async def run_manual_update(
     start_time = datetime.utcnow()
     
     async with SessionLocal() as session:
+        setting = await session.get(SchedulerSetting, 1)
         product_ids = await get_products_needing_update(
             session,
-            max_products=max_products or MAX_PRODUCTS_PER_RUN,
-            days_threshold=days_threshold or UPDATE_FREQUENCY_DAYS,
-            prioritize_mandatory=PRIORITIZE_MANDATORY
+            max_products=max_products or (setting.max_products_per_run if setting else MAX_PRODUCTS_PER_RUN),
+            days_threshold=days_threshold or (setting.update_frequency_days if setting else UPDATE_FREQUENCY_DAYS),
+            prioritize_mandatory=setting.prioritize_mandatory if setting else PRIORITIZE_MANDATORY,
         )
         
         if not product_ids:
@@ -540,13 +604,12 @@ async def run_manual_update(
         )
         sources_total = await session.scalar(sources_query) or 0
         
+        persistent = await create_update_job(session, product_ids, trigger="scheduler_manual")
         enqueued = 0
-        for product_id in product_ids:
-            try:
-                refresh_market_prices_task.send(product_id)
+        for item in persistent.items:
+            if item.item_id is not None and not item.deduplicated:
+                process_market_item_task.send(item.item_id)
                 enqueued += 1
-            except Exception as e:
-                logger.error(f"Error al encolar producto {product_id}: {e}")
         
         duration = (datetime.utcnow() - start_time).total_seconds()
         

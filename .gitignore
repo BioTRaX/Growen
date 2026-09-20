@@ -1,4 +1,4 @@
-﻿# =========================
+# =========================
 # Growen - .gitignore
 # =========================
 
@@ -13,6 +13,9 @@ __pycache__/
 .Python
 *.egg
 *.egg-info/
+
+# Estado runtime de coordinación entre agentes (locks efímeros, no versionar)
+.agents/state/
 dist/
 build/
 .eggs/
@@ -21,15 +24,29 @@ pip-wheel-metadata/
 # Archivos de configuración local
 .env
 .env.*
-!.env.example
+!.env.dev
+!.env.prod.example
+.envrc
+.direnv/
+*.local.env
+config.local.*
+credentials.local.*
+secrets.local.*
 
 # Credenciales y llaves
 *.pem
 *.key
 *.crt
 *.pfx
+*.p12
+*.jks
+*.keystore
+*.secret
+*.secrets
 # Carpeta de certificados y credenciales
 certs/
+credentials/
+secrets/
 
 # Logs y temporales
 *.log
@@ -67,9 +84,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
-frontend/dist/
-frontend/.vite/
-frontend/tsconfig.tsbuildinfo
+frontend-vue/dist/
+frontend-vue/.vite/
+frontend-vue/test-results/
+frontend-vue/playwright-report/
+*.tsbuildinfo
 
 # Docker
 docker-compose.override.yml
@@ -82,10 +101,11 @@ data/*
 *.xlsx
 *.json
 !data/README.md
-!frontend/package.json
-!frontend/package-lock.json
-!frontend/tsconfig.json
-!frontend/.env.development
+!frontend-vue/package.json
+!frontend-vue/package-lock.json
+!frontend-vue/tsconfig.json
+!frontend-vue/config/modules.json
+!docs/rag/corpus-manifest.v1.json
 
 # Backups
 backup/
@@ -99,6 +119,23 @@ scripts/pg_migrate_15_to_17.ps1
 scripts/*.local.ps1
 
 # Media (archivos subidos y derivados)
+backup/
+backups/
+*.bak
+*.old
+*.orig
+
+# Scripts locales con credenciales o parámetros sensibles (usar *.example.ps1)
+scripts/pg_migrate_15_to_17.ps1
+scripts/*.local.ps1
+scratch/
+infra/cloudflare/*.json.local
+**/cloudflare_meli_tunnel_token
+**/meli_app_id
+**/meli_client_secret
+**/meli_token_encryption_key
+
+# Media (archivos subidos y derivados)
 Imagenes/
 Productos/
 
@@ -107,3 +144,8 @@ Devs/
 
 # Carpeta de conocimientos (documentos PDF que no deben estar en el repositorio)
 Conocimientos/
+
+# Widgets locales de SiYuan
+siyuan-widgets/*
+!siyuan-widgets/crono/
+!siyuan-widgets/crono/**

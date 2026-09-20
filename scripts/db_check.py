@@ -7,7 +7,7 @@ from agent_core.config import settings
 from sqlalchemy import create_engine, text, inspect
 
 url = settings.db_url
-print("DB_URL:", url)
+print("Configuración de base disponible:", bool(url))
 engine = create_engine(url, future=True)
 with engine.connect() as conn:
     # Basic schema info

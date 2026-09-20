@@ -8,9 +8,13 @@
 .github
 .gitignore
 
-# Frontend (tiene su propio build)
-frontend
+# Frontends (se compilan en la imagen dual; se excluyen solo artefactos locales)
 node_modules
+**/node_modules
+frontend/dist
+frontend-vue/dist
+frontend-vue/test-results
+frontend-vue/playwright-report
 
 # Entornos locales Python
 .venv
@@ -99,6 +103,13 @@ scripts/*.local.ps1
 !package.json
 !package-lock.json
 !tsconfig.json
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/tsconfig.json
+!frontend-vue/package.json
+!frontend-vue/package-lock.json
+!frontend-vue/tsconfig.json
+!frontend-vue/config/modules.json
 
 # Docker específico
 docker-compose.override.yml

@@ -1,4 +1,7 @@
-from __future__ import annotations
+# NG-HEADER: Nombre de archivo: orchestrator.py
+# NG-HEADER: Ubicación: services/orchestrator.py
+# NG-HEADER: Descripción: Orquesta servicios locales y Docker con dependencias verificables.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
 
 """Lightweight orchestrator for service containers (dev) with lazy fallback.
 
@@ -7,11 +10,17 @@ docker-compose.yml. If Docker is unavailable, falls back to a simple in-process
 "lazy" registry so the API can simulate start/stop/status for UI flows.
 """
 
+from __future__ import annotations
+
 import os
+import json
+import socket
 import shutil
 import subprocess
+import time
 import psutil
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -34,6 +43,8 @@ _DRIVE_SYNC_WORKER_PROC: Optional[subprocess.Popen] = None  # Track drive_sync_w
 _DRIVE_SYNC_WORKER_MODE: Optional[str] = None  # Track mode: 'docker' or 'local'
 _TELEGRAM_POLLING_WORKER_PROC: Optional[subprocess.Popen] = None  # Track telegram_polling_worker process
 _CATALOG_WORKER_PROC: Optional[subprocess.Popen] = None  # Track catalog_worker process
+_ENRICHMENT_WORKER_PROC: Optional[subprocess.Popen] = None  # Track enrichment_worker process
+_CATALOG_AUDIT_WORKER_PROC: Optional[subprocess.Popen] = None  # Track catalog_audit_worker process
 
 
 def _has_docker() -> bool:
@@ -46,17 +57,20 @@ def _has_docker() -> bool:
       - Cannot connect to the Docker daemon
 
     To avoid surfacing these failures to the UI, proactively check engine
-    health via `docker info` with a short timeout. If it fails, behave as if
+    health via `docker info` with a bounded timeout. Docker Desktop on Windows
+    can legitimately need several seconds to answer even when containers are
+    healthy, so the timeout is configurable and defaults to eight seconds. If it fails, behave as if
     Docker isn't available and fall back to the lazy in-process registry.
     """
     if not (shutil.which("docker") and COMPOSE_FILE.exists()):
         return False
     try:
+        timeout_s = max(1.0, float(os.getenv("DOCKER_PROBE_TIMEOUT_S", "8")))
         proc = subprocess.run(
             ["docker", "info", "-f", "{{.ServerVersion}}"],
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=timeout_s,
         )
         if proc.returncode != 0:
             return False
@@ -66,9 +80,247 @@ def _has_docker() -> bool:
 
 
 def _compose(args: list[str]) -> subprocess.CompletedProcess:
-    env = os.environ.copy()
     cmd = ["docker", "compose", "-f", str(COMPOSE_FILE), *args]
     return subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+
+def _tcp_port_open(host: str, port: int, timeout: float = 0.75) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _ensure_local_redis(timeout_s: float = 15.0) -> tuple[bool, str]:
+    """Garantiza el broker host requerido antes de iniciar un worker local."""
+    if _tcp_port_open("127.0.0.1", 6379):
+        return True, "Redis ya disponible en 127.0.0.1:6379"
+    if not _has_docker():
+        return False, "Redis no está disponible y Docker no puede iniciarlo"
+
+    proc = _compose(["--profile", "optional", "up", "-d", "redis"])
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "docker compose falló").strip()
+        return False, f"No se pudo iniciar Redis: {detail[:300]}"
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _tcp_port_open("127.0.0.1", 6379):
+            return True, "Redis iniciado mediante Docker Compose"
+        time.sleep(0.25)
+    return False, "Redis inició en Compose pero no publicó 127.0.0.1:6379"
+
+
+def _start_process_with_log(command: list[str], log_name: str) -> tuple[subprocess.Popen, Path]:
+    """Inicia un proceso sin pipes huérfanos y conserva stdout/stderr en un archivo."""
+    log_path = ROOT / "logs" / log_name
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_stream = log_path.open("a", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(ROOT),
+            stdout=log_stream,
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
+        )
+    finally:
+        log_stream.close()
+    return process, log_path
+
+
+def _resolved_runtime_root(value: object) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        return str(Path(str(value)).resolve())
+    except (OSError, RuntimeError, ValueError):
+        return str(value)
+
+
+def _is_catalog_audit_process(command: object) -> bool:
+    if not isinstance(command, (list, tuple)):
+        return False
+    parts = [str(part).lower() for part in command]
+    normalized = " ".join(parts)
+    queue_matches = any(
+        part == "--queues=catalog_audit"
+        or (part == "--queues" and index + 1 < len(parts) and parts[index + 1] == "catalog_audit")
+        for index, part in enumerate(parts)
+    )
+    return (
+        "dramatiq" in normalized
+        and "services.jobs.catalog_audit_jobs" in normalized
+        and queue_matches
+    )
+
+
+def _catalog_audit_heartbeat_status() -> tuple[bool, str]:
+    """Valida que el consumidor detectado también publique un heartbeat vigente."""
+    client = None
+    try:
+        import redis
+
+        client = redis.from_url(
+            os.getenv("REDIS_URL") or "redis://127.0.0.1:6379/0",
+            socket_connect_timeout=0.5,
+            socket_timeout=0.5,
+        )
+        raw = client.get("growen:catalog_audit_worker:heartbeat")
+        if not raw:
+            return False, "heartbeat ausente"
+        payload = json.loads(raw)
+        if payload.get("queue") != "catalog_audit":
+            return False, "heartbeat con cola inválida"
+        timestamp = payload.get("timestamp")
+        if not timestamp:
+            return False, "heartbeat sin timestamp"
+        heartbeat_epoch = datetime.fromisoformat(timestamp).timestamp()
+        ttl = max(int(os.getenv("CATALOG_AUDIT_HEARTBEAT_TTL_SECONDS", "60")), 15)
+        age_seconds = max(0.0, time.time() - heartbeat_epoch)
+        if age_seconds > ttl * 1.5:
+            return False, f"heartbeat vencido ({age_seconds:.1f}s)"
+        return True, f"heartbeat vigente ({age_seconds:.1f}s)"
+    except Exception as exc:
+        return False, f"heartbeat no verificable: {type(exc).__name__}"
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
+def _catalog_audit_process_groups() -> list[dict[str, Any]]:
+    """Agrupa el master y los hijos Dramatiq como un único consumidor."""
+    observed: dict[int, dict[str, Any]] = {}
+    try:
+        processes = psutil.process_iter(["pid", "ppid", "cmdline", "cwd", "create_time"])
+        for process in processes:
+            try:
+                info = process.info
+                if not _is_catalog_audit_process(info.get("cmdline")):
+                    continue
+                pid = int(info["pid"])
+                observed[pid] = {
+                    "pid": pid,
+                    "ppid": int(info.get("ppid") or 0),
+                    "runtime_root": _resolved_runtime_root(info.get("cwd")),
+                    "create_time": info.get("create_time"),
+                }
+            except (KeyError, TypeError, ValueError, psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception:
+        return []
+
+    root_pids = sorted(pid for pid, info in observed.items() if info["ppid"] not in observed)
+    groups: list[dict[str, Any]] = []
+    for root_pid in root_pids:
+        member_pids: list[int] = []
+        for pid in observed:
+            current = pid
+            visited: set[int] = set()
+            while current in observed and current not in visited:
+                visited.add(current)
+                if current == root_pid:
+                    member_pids.append(pid)
+                    break
+                current = observed[current]["ppid"]
+        root = observed[root_pid]
+        groups.append(
+            {
+                "pid": root_pid,
+                "process_pids": sorted(member_pids),
+                "runtime_root": root["runtime_root"],
+                "create_time": root["create_time"],
+            }
+        )
+    return groups
+
+
+def _catalog_audit_runtime_status() -> ServiceStatus:
+    groups = _catalog_audit_process_groups()
+    current_root = _resolved_runtime_root(ROOT)
+    all_pids = sorted(pid for group in groups for pid in group["process_pids"])
+    if len(groups) > 1:
+        return ServiceStatus(
+            name="catalog_audit_worker",
+            status="degraded",
+            ok=False,
+            detail=f"Se detectaron {len(groups)} consumidores catalog_audit; resolver antes de continuar",
+            meta={"runtime_mode": "local", "runtime_root": None, "process_pids": all_pids, "managed": False, "degraded_reason": "multiple_roots"},
+        )
+    if len(groups) == 1:
+        group = groups[0]
+        meta = {
+            "runtime_mode": "local",
+            "runtime_root": group["runtime_root"],
+            "process_pids": group["process_pids"],
+            "managed": False,
+        }
+        if os.path.normcase(group["runtime_root"] or "") != os.path.normcase(current_root or ""):
+            return ServiceStatus(
+                name="catalog_audit_worker",
+                status="degraded",
+                ok=False,
+                detail=f"El consumidor activo pertenece a otro worktree: {group['runtime_root'] or 'desconocido'}",
+                pid=group["pid"],
+                meta=meta,
+            )
+        heartbeat_ok, heartbeat_detail = _catalog_audit_heartbeat_status()
+        meta["managed"] = True
+        meta["heartbeat_detail"] = heartbeat_detail
+        if not heartbeat_ok:
+            meta["degraded_reason"] = "heartbeat_unhealthy"
+            return ServiceStatus(
+                name="catalog_audit_worker",
+                status="degraded",
+                ok=False,
+                detail=f"Proceso local detectado, pero {heartbeat_detail}",
+                pid=group["pid"],
+                meta=meta,
+            )
+        return ServiceStatus(
+            name="catalog_audit_worker",
+            status="running",
+            ok=True,
+            detail=f"Running PID {group['pid']}; {heartbeat_detail}",
+            pid=group["pid"],
+            meta=meta,
+        )
+
+    if _CATALOG_AUDIT_WORKER_PROC is not None and _CATALOG_AUDIT_WORKER_PROC.poll() is None:
+        pid = _CATALOG_AUDIT_WORKER_PROC.pid
+        heartbeat_ok, heartbeat_detail = _catalog_audit_heartbeat_status()
+        return ServiceStatus(
+            name="catalog_audit_worker",
+            status="running" if heartbeat_ok else "starting",
+            ok=heartbeat_ok,
+            detail=f"Running PID {pid}; {heartbeat_detail}",
+            pid=pid,
+            meta={"runtime_mode": "local", "runtime_root": current_root, "process_pids": [pid], "heartbeat_detail": heartbeat_detail, "managed": True},
+        )
+    return ServiceStatus(
+        name="catalog_audit_worker",
+        status="stopped",
+        ok=True,
+        detail="Not running",
+        meta={"runtime_mode": "none", "runtime_root": None, "process_pids": [], "managed": False},
+    )
+
+
+def _terminate_process_tree(pid: int) -> None:
+    root = psutil.Process(pid)
+    processes = [*root.children(recursive=True), root]
+    for process in processes:
+        try:
+            process.terminate()
+        except psutil.NoSuchProcess:
+            continue
+    _, alive = psutil.wait_procs(processes, timeout=5)
+    if alive:
+        raise TimeoutError(f"No finalizaron los PID: {', '.join(str(process.pid) for process in alive)}")
 
 
 def start_service(name: str, correlation_id: str, mode: Optional[str] = None) -> ServiceStatus:
@@ -79,7 +331,7 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
         correlation_id: ID de correlación para logging
         mode: Modo de ejecución ('docker' o 'local'), solo aplica a drive_sync_worker
     """
-    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC
+    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC, _ENRICHMENT_WORKER_PROC, _CATALOG_AUDIT_WORKER_PROC
     
     # Manejo especial para drive_sync_worker (puede ser Docker o Local)
     if name == "drive_sync_worker":
@@ -121,11 +373,20 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
             except Exception as e:
                 return ServiceStatus(name=name, status="failed", ok=False, detail=str(e))
     
-    # Manejo especial para market_worker (proceso local, no Docker)
+    # Worker Mercado: contenedor dedicado con Chromium.
     if name == "market_worker":
         current = status_service(name)
         if current.status == "running":
             return ServiceStatus(name=name, status="running", ok=True, detail="noop: already running")
+        if not _has_docker():
+            return ServiceStatus(name=name, status="failed", ok=False, detail="Docker no disponible")
+        redis_ok, redis_detail = _ensure_local_redis()
+        if not redis_ok:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=redis_detail)
+        proc = _compose(["--profile", "optional", "up", "-d", "--build", "--no-deps", "market_worker"])
+        ok = proc.returncode == 0
+        detail = (proc.stdout or proc.stderr or "docker compose sin salida").strip()
+        return ServiceStatus(name=name, status="running" if ok else "failed", ok=ok, detail=detail[-1000:])
         
         script_path = ROOT / "scripts" / "start_worker_market.cmd"
         if not script_path.exists():
@@ -136,8 +397,8 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
             _MARKET_WORKER_PROC = subprocess.Popen(
                 [str(script_path)],
                 cwd=str(ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
             )
             return ServiceStatus(name=name, status="running", ok=True, detail=f"Started with PID {_MARKET_WORKER_PROC.pid}")
@@ -172,21 +433,87 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
         current = status_service(name)
         if current.status == "running":
             return ServiceStatus(name=name, status="running", ok=True, detail="noop: already running")
+
+        redis_ok, redis_detail = _ensure_local_redis()
+        if not redis_ok:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=redis_detail)
         
         script_path = ROOT / "scripts" / "start_worker_catalog.cmd"
         if not script_path.exists():
             return ServiceStatus(name=name, status="failed", ok=False, detail="Script not found")
         
         try:
-            # Ejecutar el script en background
-            _CATALOG_WORKER_PROC = subprocess.Popen(
+            _CATALOG_WORKER_PROC, log_path = _start_process_with_log(
                 [str(script_path)],
-                cwd=str(ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
+                "worker_catalog.log",
             )
-            return ServiceStatus(name=name, status="running", ok=True, detail=f"Started with PID {_CATALOG_WORKER_PROC.pid}")
+            return ServiceStatus(
+                name=name,
+                status="running",
+                ok=True,
+                detail=f"{redis_detail}; worker iniciado con PID {_CATALOG_WORKER_PROC.pid}; log: {log_path}",
+            )
+        except Exception as e:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=str(e))
+
+    # Manejo especial para enrichment_worker (proceso local, no Docker)
+    if name == "enrichment_worker":
+        current = status_service(name)
+        if current.status == "running":
+            return ServiceStatus(name=name, status="running", ok=True, detail="noop: already running")
+
+        redis_ok, redis_detail = _ensure_local_redis()
+        if not redis_ok:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=redis_detail)
+
+        script_path = ROOT / "scripts" / "start_worker_enrichment.cmd"
+        if not script_path.exists():
+            return ServiceStatus(name=name, status="failed", ok=False, detail="Script not found")
+
+        try:
+            _ENRICHMENT_WORKER_PROC, log_path = _start_process_with_log(
+                [str(script_path)],
+                "worker_enrichment.log",
+            )
+            return ServiceStatus(
+                name=name,
+                status="running",
+                ok=True,
+                detail=f"{redis_detail}; worker iniciado con PID {_ENRICHMENT_WORKER_PROC.pid}; log: {log_path}",
+            )
+        except Exception as e:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=str(e))
+
+    if name == "catalog_audit_worker":
+        current = _catalog_audit_runtime_status()
+        if current.status == "running":
+            current.detail = f"noop: already running PID {current.pid}"
+            return current
+        if current.status == "degraded":
+            return current
+
+        redis_ok, redis_detail = _ensure_local_redis()
+        if not redis_ok:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=redis_detail)
+
+        script_path = ROOT / "scripts" / "start_worker_catalog_audit.cmd"
+        if not script_path.exists():
+            return ServiceStatus(name=name, status="failed", ok=False, detail="Script not found")
+        try:
+            _CATALOG_AUDIT_WORKER_PROC, log_path = _start_process_with_log(
+                [str(script_path)],
+                "worker_catalog_audit.log",
+            )
+            pid = _CATALOG_AUDIT_WORKER_PROC.pid
+            runtime_root = _resolved_runtime_root(ROOT)
+            return ServiceStatus(
+                name=name,
+                status="running",
+                ok=True,
+                detail=f"{redis_detail}; worker iniciado con PID {pid}; log: {log_path}",
+                pid=pid,
+                meta={"runtime_mode": "local", "runtime_root": runtime_root, "process_pids": [pid], "managed": True},
+            )
         except Exception as e:
             return ServiceStatus(name=name, status="failed", ok=False, detail=str(e))
     
@@ -209,7 +536,7 @@ def start_service(name: str, correlation_id: str, mode: Optional[str] = None) ->
 
 
 def stop_service(name: str, correlation_id: str) -> ServiceStatus:
-    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC
+    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC, _ENRICHMENT_WORKER_PROC, _CATALOG_AUDIT_WORKER_PROC
     
     # Manejo especial para drive_sync_worker
     if name == "drive_sync_worker":
@@ -259,6 +586,15 @@ def stop_service(name: str, correlation_id: str) -> ServiceStatus:
     
     # Manejo especial para market_worker
     if name == "market_worker":
+        if _has_docker():
+            proc = _compose(["--profile", "optional", "stop", "market_worker"])
+            ok = proc.returncode == 0
+            return ServiceStatus(
+                name=name,
+                status="stopped" if ok else "failed",
+                ok=ok,
+                detail=(proc.stdout or proc.stderr or "docker compose sin salida").strip()[-1000:],
+            )
         if _MARKET_WORKER_PROC is None or _MARKET_WORKER_PROC.poll() is not None:
             # Proceso no existe o ya terminó
             # Buscar por nombre de proceso como fallback
@@ -346,6 +682,52 @@ def stop_service(name: str, correlation_id: str) -> ServiceStatus:
         except Exception as e:
             _CATALOG_WORKER_PROC = None
             return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Force terminated: {e}")
+
+    if name == "enrichment_worker":
+        if _ENRICHMENT_WORKER_PROC is None or _ENRICHMENT_WORKER_PROC.poll() is not None:
+            try:
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    try:
+                        cmdline = proc.info.get('cmdline', [])
+                        if cmdline and 'dramatiq' in ' '.join(cmdline).lower() and 'enrichment' in ' '.join(cmdline).lower():
+                            proc.terminate()
+                            proc.wait(timeout=5)
+                            return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Terminated PID {proc.info['pid']}")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                return ServiceStatus(name=name, status="stopped", ok=True, detail="Process not found (already stopped)")
+            except Exception as e:
+                return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Error finding process: {e}")
+
+        try:
+            _ENRICHMENT_WORKER_PROC.terminate()
+            _ENRICHMENT_WORKER_PROC.wait(timeout=5)
+            pid = _ENRICHMENT_WORKER_PROC.pid
+            _ENRICHMENT_WORKER_PROC = None
+            return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Terminated PID {pid}")
+        except Exception as e:
+            _ENRICHMENT_WORKER_PROC = None
+            return ServiceStatus(name=name, status="stopped", ok=True, detail=f"Force terminated: {e}")
+
+    if name == "catalog_audit_worker":
+        current = _catalog_audit_runtime_status()
+        if current.status == "degraded" and not bool((current.meta or {}).get("managed")):
+            return current
+        if current.status == "stopped" or current.pid is None:
+            _CATALOG_AUDIT_WORKER_PROC = None
+            return current
+        try:
+            _terminate_process_tree(current.pid)
+            _CATALOG_AUDIT_WORKER_PROC = None
+            return ServiceStatus(
+                name=name,
+                status="stopped",
+                ok=True,
+                detail=f"Terminated process tree PID {current.pid}",
+                meta={"runtime_mode": "none", "runtime_root": None, "process_pids": [], "managed": False},
+            )
+        except Exception as e:
+            return ServiceStatus(name=name, status="failed", ok=False, detail=str(e), pid=current.pid, meta=current.meta)
     
     # Lógica original para servicios Docker
     if _has_docker():
@@ -358,7 +740,7 @@ def stop_service(name: str, correlation_id: str) -> ServiceStatus:
 
 
 def status_service(name: str) -> ServiceStatus:
-    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC
+    global _MARKET_WORKER_PROC, _DRIVE_SYNC_WORKER_PROC, _DRIVE_SYNC_WORKER_MODE, _TELEGRAM_POLLING_WORKER_PROC, _CATALOG_WORKER_PROC, _ENRICHMENT_WORKER_PROC, _CATALOG_AUDIT_WORKER_PROC
     
     # Manejo especial para drive_sync_worker
     if name == "drive_sync_worker":
@@ -418,6 +800,22 @@ def status_service(name: str) -> ServiceStatus:
     
     # Manejo especial para market_worker
     if name == "market_worker":
+        if _has_docker():
+            proc = _compose(["--profile", "optional", "ps", "market_worker"])
+            output = (proc.stdout or proc.stderr or "").lower()
+            running = proc.returncode == 0 and any(token in output for token in ("running", "up", "healthy"))
+            if "unhealthy" in output:
+                status = "degraded"
+            elif any(token in output for token in ("starting", "restarting")):
+                status = "starting"
+            else:
+                status = "running" if running else "stopped"
+            return ServiceStatus(
+                name=name,
+                status=status,
+                ok=status not in {"degraded"},
+                detail=(proc.stdout or proc.stderr or "Not running").strip()[-1000:],
+            )
         # Verificar proceso global primero
         if _MARKET_WORKER_PROC is not None and _MARKET_WORKER_PROC.poll() is None:
             return ServiceStatus(name=name, status="running", ok=True, detail=f"Running PID {_MARKET_WORKER_PROC.pid}")
@@ -475,6 +873,39 @@ def status_service(name: str) -> ServiceStatus:
             pass
         
         return ServiceStatus(name=name, status="stopped", ok=True, detail="Not running")
+
+    # Manejo especial para enrichment_worker
+    if name == "enrichment_worker":
+        if _ENRICHMENT_WORKER_PROC is not None and _ENRICHMENT_WORKER_PROC.poll() is None:
+            return ServiceStatus(
+                name=name,
+                status="running",
+                ok=True,
+                pid=_ENRICHMENT_WORKER_PROC.pid,
+                detail=f"Running PID {_ENRICHMENT_WORKER_PROC.pid}",
+            )
+
+        try:
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+                try:
+                    cmdline = proc.info.get('cmdline', [])
+                    if cmdline and 'dramatiq' in ' '.join(cmdline).lower() and 'enrichment' in ' '.join(cmdline).lower():
+                        return ServiceStatus(
+                            name=name,
+                            status="running",
+                            ok=True,
+                            pid=proc.info['pid'],
+                            detail=f"Running PID {proc.info['pid']}",
+                        )
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception:
+            pass
+
+        return ServiceStatus(name=name, status="stopped", ok=True, detail="Not running")
+
+    if name == "catalog_audit_worker":
+        return _catalog_audit_runtime_status()
     
     # Lógica original para servicios Docker
     if _has_docker():

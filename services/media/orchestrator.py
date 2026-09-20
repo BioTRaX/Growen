@@ -13,7 +13,6 @@ from db.models import Product, Image, ImageVersion, ImageReview, ImageJobLog
 from services.media import get_media_root
 from services.media.downloader import download_product_image, DownloadError
 from services.media.processor import to_square_webp_set
-from services.scrapers.santaplanta import search_by_title, extract_product_image
 from services.scrapers.fallback import search_image_urls_bing
 from services.images.crawler import crawl_best_images
 from services.logging.ctx_logger import make_correlation_id, log_event

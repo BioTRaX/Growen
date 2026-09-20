@@ -142,8 +142,8 @@ async def test_update_sale_price_success(client_collab: AsyncClient, db: AsyncSe
 
 
 @pytest.mark.asyncio
-async def test_update_sale_price_uses_custom_sku_as_name(client_collab: AsyncClient, db: AsyncSession):
-    """Test: Usa sku_custom en el response si existe"""
+async def test_update_sale_price_uses_canonical_product_name(client_collab: AsyncClient, db: AsyncSession):
+    """La respuesta separa el nombre canónico del SKU personalizado."""
     product = CanonicalProduct(
         name="Producto Original",
         ng_sku="TEST002",
@@ -162,7 +162,7 @@ async def test_update_sale_price_uses_custom_sku_as_name(client_collab: AsyncCli
     
     assert resp.status_code == 200
     data = resp.json()
-    assert data["product_name"] == "SKU-CUSTOM-002"
+    assert data["product_name"] == "Producto Original"
 
 
 @pytest.mark.asyncio
@@ -349,7 +349,7 @@ async def test_update_market_reference_zero_allowed(client_collab: AsyncClient, 
     assert data["market_price_reference"] == 0.00
     
     await db.refresh(product)
-    assert product.market_price_reference == Decimal("0.00")
+    assert product.market_price_reference is None
 
 
 @pytest.mark.asyncio
@@ -487,7 +487,7 @@ async def test_update_market_reference_updates_timestamp(client_collab: AsyncCli
 # ==================== Tests POST /market/products/{id}/refresh-market ====================
 
 @pytest.mark.asyncio
-@patch("workers.market_scraping.refresh_market_prices_task")
+@patch("workers.market_scraping.process_market_item_task")
 async def test_refresh_market_success(mock_task, client_collab: AsyncClient, db: AsyncSession):
     """Test: Encola tarea de scraping exitosamente"""
     # Setup
@@ -511,17 +511,18 @@ async def test_refresh_market_success(mock_task, client_collab: AsyncClient, db:
     # Assert response
     assert resp.status_code == 202  # Accepted, no OK
     data = resp.json()
-    assert data["status"] == "processing"  # Status real del endpoint
+    assert data["status"] == "queued"
     assert data["product_id"] == product.id
-    assert data["job_id"] == "test-job-abc123"
-    assert "iniciada" in data["message"].lower()
+    assert data["job_id"] == data["market_job_id"]
+    assert data["item_id"] is not None
+    assert "encolada" in data["message"].lower()
     
     # Assert tarea llamada
-    mock_task.send.assert_called_once_with(product.id)
+    mock_task.send.assert_called_once_with(data["item_id"])
 
 
 @pytest.mark.asyncio
-@patch("workers.market_scraping.refresh_market_prices_task")
+@patch("workers.market_scraping.process_market_item_task")
 async def test_refresh_market_not_found(mock_task, client_collab: AsyncClient, db: AsyncSession):
     """Test: 404 cuando el producto no existe"""
     resp = await client_collab.post("/market/products/999999/refresh-market")
@@ -535,7 +536,7 @@ async def test_refresh_market_not_found(mock_task, client_collab: AsyncClient, d
 
 
 @pytest.mark.asyncio
-@patch("workers.market_scraping.refresh_market_prices_task")
+@patch("workers.market_scraping.process_market_item_task")
 async def test_refresh_market_forbidden_user(mock_task, client_no_perms: AsyncClient, db: AsyncSession):
     """Test: 403 cuando el usuario no tiene permisos"""
     product = CanonicalProduct(
@@ -555,7 +556,7 @@ async def test_refresh_market_forbidden_user(mock_task, client_no_perms: AsyncCl
 
 
 @pytest.mark.asyncio
-@patch("workers.market_scraping.refresh_market_prices_task")
+@patch("workers.market_scraping.process_market_item_task")
 async def test_refresh_market_worker_error(mock_task, client_collab: AsyncClient, db: AsyncSession):
     """Test: 500 cuando falla el encolado del worker"""
     product = CanonicalProduct(
@@ -577,7 +578,7 @@ async def test_refresh_market_worker_error(mock_task, client_collab: AsyncClient
 
 
 @pytest.mark.asyncio
-@patch("workers.market_scraping.refresh_market_prices_task")
+@patch("workers.market_scraping.process_market_item_task")
 async def test_refresh_market_with_sources(
     mock_task,
     client_collab: AsyncClient,
@@ -601,9 +602,10 @@ async def test_refresh_market_with_sources(
     assert resp.status_code == 202
     data = resp.json()
     assert data["product_id"] == product.id
-    assert data["job_id"] == "job-with-sources-123"
+    assert data["job_id"] == data["market_job_id"]
+    assert data["item_id"] is not None
     
-    mock_task.send.assert_called_once_with(product.id)
+    mock_task.send.assert_called_once_with(data["item_id"])
 
 
 # ==================== Tests de Casos Edge ====================

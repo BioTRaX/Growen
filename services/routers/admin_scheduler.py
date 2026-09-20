@@ -14,11 +14,18 @@ Endpoints:
 - POST /admin/scheduler/run-now - Ejecutar actualización inmediata
 """
 
+import os
+import uuid
+from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from services.auth import require_roles, SessionData
+from db.models import SchedulerRun, SchedulerSetting
+from db.session import get_session
+from services.auth import require_csrf, require_roles, SessionData
 from services.jobs.market_scheduler import (
     get_scheduler_status,
     start_scheduler,
@@ -26,8 +33,8 @@ from services.jobs.market_scheduler import (
     run_manual_update,
     update_scheduler_config,
     get_is_working,
-    scheduler,
 )
+from services.jobs import market_scheduler as market_scheduler_job
 
 router = APIRouter(prefix="/admin/scheduler", tags=["Admin - Scheduler"])
 
@@ -42,6 +49,7 @@ class SchedulerStatusResponse(BaseModel):
     working: bool = Field(description="Si está ejecutando una tarea ahora mismo")
     cron_schedule: str = Field(description="Expresión cron de la programación")
     start_hour: str = Field(description="Hora de inicio (HH:MM en GMT-3)")
+    timezone: str = Field(description="Zona horaria IANA")
     interval_hours: int = Field(description="Intervalo entre ejecuciones (horas)")
     next_run_time: Optional[str] = Field(None, description="Próxima ejecución programada (ISO)")
     update_frequency_days: int = Field(description="Frecuencia de actualización en días")
@@ -65,13 +73,41 @@ class RunManualResponse(BaseModel):
     products_enqueued: int
     sources_total: int
     duration_seconds: float
+    run_id: str
+
+
+def _user_id(session: SessionData) -> int | None:
+    if session.user:
+        return session.user.id
+    value = getattr(session, "user_id", None)
+    return int(value) if value is not None else None
+
+
+async def _settings(db: AsyncSession) -> SchedulerSetting:
+    setting = await db.get(SchedulerSetting, 1)
+    if setting:
+        return setting
+    setting = SchedulerSetting(
+        id=1,
+        enabled=os.getenv("MARKET_SCHEDULER_ENABLED", "false").lower() == "true",
+        start_hour=os.getenv("MARKET_SCHEDULER_START_HOUR", "02:00"),
+        interval_hours=int(os.getenv("MARKET_SCHEDULER_INTERVAL_HOURS", "24")),
+        update_frequency_days=int(os.getenv("MARKET_UPDATE_FREQUENCY_DAYS", "2")),
+        max_products_per_run=int(os.getenv("MARKET_MAX_PRODUCTS_PER_RUN", "50")),
+        prioritize_mandatory=os.getenv("MARKET_PRIORITIZE_MANDATORY", "true").lower() == "true",
+    )
+    db.add(setting)
+    await db.commit()
+    await db.refresh(setting)
+    return setting
 
 
 # ==================== ENDPOINTS ====================
 
 @router.get("/status", response_model=SchedulerStatusResponse)
 async def get_status(
-    _session: SessionData = Depends(require_roles(["admin"]))
+    _session: SessionData = Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_session),
 ):
     """
     Obtiene el estado actual del scheduler y estadísticas de productos.
@@ -80,11 +116,13 @@ async def get_status(
     """
     # Obtener estadísticas del scheduler
     status_data = await get_scheduler_status()
+    setting = await _settings(db)
     
     # Verificar si scheduler está corriendo
     running = False
     next_run = None
     
+    scheduler = market_scheduler_job.scheduler
     if scheduler is not None and scheduler.running:
         running = True
         job = scheduler.get_job("market_price_update")
@@ -93,22 +131,24 @@ async def get_status(
     
     return SchedulerStatusResponse(
         running=running,
-        enabled=status_data["scheduler_enabled"],
+        enabled=setting.enabled,
         working=status_data.get("is_working", False),
         cron_schedule=status_data["cron_schedule"],
-        start_hour=status_data.get("start_hour", "02:00"),
-        interval_hours=status_data.get("interval_hours", 24),
+        start_hour=setting.start_hour,
+        timezone=setting.timezone,
+        interval_hours=setting.interval_hours,
         next_run_time=next_run,
-        update_frequency_days=status_data["update_frequency_days"],
-        max_products_per_run=status_data["max_products_per_run"],
-        prioritize_mandatory=status_data["prioritize_mandatory"],
+        update_frequency_days=setting.update_frequency_days,
+        max_products_per_run=setting.max_products_per_run,
+        prioritize_mandatory=setting.prioritize_mandatory,
         stats=status_data["stats"],
     )
 
 
-@router.post("/start")
+@router.post("/start", dependencies=[Depends(require_csrf)])
 async def start(
-    _session: SessionData = Depends(require_roles(["admin"]))
+    session_data: SessionData = Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_session),
 ):
     """
     Inicia el scheduler automático de actualización de precios.
@@ -119,10 +159,16 @@ async def start(
     (MARKET_SCHEDULER_ENABLED=true) para poder iniciarse.
     """
     try:
-        start_scheduler()
+        setting = await _settings(db)
+        setting.enabled = True
+        setting.updated_by_user_id = _user_id(session_data)
+        setting.updated_at = datetime.utcnow()
+        await db.commit()
+        start_scheduler(setting.start_hour, setting.interval_hours, force=True)
         
         # Obtener info del próximo run
         next_run = None
+        scheduler = market_scheduler_job.scheduler
         if scheduler and scheduler.running:
             job = scheduler.get_job("market_price_update")
             if job and job.next_run_time:
@@ -140,9 +186,10 @@ async def start(
         )
 
 
-@router.post("/stop")
+@router.post("/stop", dependencies=[Depends(require_csrf)])
 async def stop(
-    _session: SessionData = Depends(require_roles(["admin"]))
+    session_data: SessionData = Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_session),
 ):
     """
     Detiene el scheduler automático de actualización de precios.
@@ -154,6 +201,11 @@ async def stop(
     """
     try:
         stop_scheduler()
+        setting = await _settings(db)
+        setting.enabled = False
+        setting.updated_by_user_id = _user_id(session_data)
+        setting.updated_at = datetime.utcnow()
+        await db.commit()
         
         return {
             "success": True,
@@ -166,10 +218,11 @@ async def stop(
         )
 
 
-@router.post("/run-now", response_model=RunManualResponse)
+@router.post("/run-now", response_model=RunManualResponse, dependencies=[Depends(require_csrf)])
 async def run_now(
     request: RunManualRequest = RunManualRequest(),
-    _session: SessionData = Depends(require_roles(["admin"]))
+    session_data: SessionData = Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_session),
 ):
     """
     Ejecuta una actualización manual de precios de inmediato.
@@ -182,10 +235,31 @@ async def run_now(
     Las tareas se encolan en Dramatiq para procesamiento asíncrono.
     """
     try:
-        result = await run_manual_update(
-            max_products=request.max_products,
-            days_threshold=request.days_threshold,
+        setting = await _settings(db)
+        run_id = uuid.uuid4().hex
+        run = SchedulerRun(
+            id=run_id,
+            trigger="manual",
+            status="running",
+            initiated_by_user_id=_user_id(session_data),
+            started_at=datetime.utcnow(),
+            config_snapshot={
+                "max_products": request.max_products or setting.max_products_per_run,
+                "days_threshold": request.days_threshold if request.days_threshold is not None else setting.update_frequency_days,
+            },
         )
+        db.add(run)
+        await db.commit()
+        result = await run_manual_update(
+            max_products=request.max_products or setting.max_products_per_run,
+            days_threshold=request.days_threshold if request.days_threshold is not None else setting.update_frequency_days,
+        )
+        run.status = "completed"
+        run.products_enqueued = result["products_enqueued"]
+        run.sources_total = result.get("sources_total", 0)
+        run.duration_seconds = result.get("duration_seconds", 0.0)
+        run.completed_at = datetime.utcnow()
+        await db.commit()
         
         return RunManualResponse(
             success=True,
@@ -193,8 +267,14 @@ async def run_now(
             products_enqueued=result["products_enqueued"],
             sources_total=result.get("sources_total", 0),
             duration_seconds=result.get("duration_seconds", 0.0),
+            run_id=run_id,
         )
     except Exception as e:
+        if "run" in locals():
+            run.status = "failed"
+            run.error_message = str(e)[:2000]
+            run.completed_at = datetime.utcnow()
+            await db.commit()
         raise HTTPException(
             status_code=500,
             detail=f"Error al ejecutar actualización manual: {str(e)}"
@@ -206,6 +286,10 @@ class SchedulerConfigRequest(BaseModel):
     
     start_hour: str = Field(description="Hora de inicio en formato HH:MM (GMT-3, Argentina)", pattern=r"^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$")
     interval_hours: int = Field(description="Intervalo entre ejecuciones en horas", ge=1, le=24)
+    timezone: str = Field(default="America/Argentina/Buenos_Aires", min_length=3, max_length=64)
+    update_frequency_days: int = Field(default=2, ge=0, le=365)
+    max_products_per_run: int = Field(default=50, ge=1, le=500)
+    prioritize_mandatory: bool = True
 
 
 class SchedulerConfigResponse(BaseModel):
@@ -215,13 +299,18 @@ class SchedulerConfigResponse(BaseModel):
     message: str
     start_hour: str
     interval_hours: int
+    timezone: str
+    update_frequency_days: int
+    max_products_per_run: int
+    prioritize_mandatory: bool
     next_run_time: Optional[str] = None
 
 
-@router.post("/config", response_model=SchedulerConfigResponse)
+@router.post("/config", response_model=SchedulerConfigResponse, dependencies=[Depends(require_csrf)])
 async def update_config(
     request: SchedulerConfigRequest,
-    _session: SessionData = Depends(require_roles(["admin"]))
+    session_data: SessionData = Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_session),
 ):
     """
     Actualiza la configuración del scheduler (hora de inicio e intervalo).
@@ -233,9 +322,20 @@ async def update_config(
     """
     try:
         update_scheduler_config(request.start_hour, request.interval_hours)
+        setting = await _settings(db)
+        setting.start_hour = request.start_hour
+        setting.interval_hours = request.interval_hours
+        setting.timezone = request.timezone
+        setting.update_frequency_days = request.update_frequency_days
+        setting.max_products_per_run = request.max_products_per_run
+        setting.prioritize_mandatory = request.prioritize_mandatory
+        setting.updated_by_user_id = _user_id(session_data)
+        setting.updated_at = datetime.utcnow()
+        await db.commit()
         
         # Obtener próxima ejecución si está corriendo
         next_run = None
+        scheduler = market_scheduler_job.scheduler
         if scheduler and scheduler.running:
             job = scheduler.get_job("market_price_update")
             if job and job.next_run_time:
@@ -246,6 +346,10 @@ async def update_config(
             message=f"Configuración actualizada: inicio {request.start_hour} GMT-3, intervalo {request.interval_hours}h",
             start_hour=request.start_hour,
             interval_hours=request.interval_hours,
+            timezone=request.timezone,
+            update_frequency_days=request.update_frequency_days,
+            max_products_per_run=request.max_products_per_run,
+            prioritize_mandatory=request.prioritize_mandatory,
             next_run_time=next_run,
         )
     except ValueError as e:
@@ -260,9 +364,10 @@ async def update_config(
         )
 
 
-@router.post("/toggle")
+@router.post("/toggle", dependencies=[Depends(require_csrf)])
 async def toggle(
-    _session: SessionData = Depends(require_roles(["admin"]))
+    session_data: SessionData = Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_session),
 ):
     """
     Alterna el estado del scheduler (inicia si está detenido, detiene si está corriendo).
@@ -270,15 +375,25 @@ async def toggle(
     **Requiere rol**: admin
     """
     try:
+        scheduler = market_scheduler_job.scheduler
         if scheduler is not None and scheduler.running:
             stop_scheduler()
+            setting = await _settings(db)
+            setting.enabled = False
+            setting.updated_by_user_id = _user_id(session_data)
+            await db.commit()
             return {
                 "success": True,
                 "message": "Scheduler detenido",
                 "running": False,
             }
         else:
-            start_scheduler()
+            setting = await _settings(db)
+            setting.enabled = True
+            setting.updated_by_user_id = _user_id(session_data)
+            await db.commit()
+            start_scheduler(setting.start_hour, setting.interval_hours, force=True)
+            scheduler = market_scheduler_job.scheduler
             next_run = None
             if scheduler and scheduler.running:
                 job = scheduler.get_job("market_price_update")
@@ -295,3 +410,38 @@ async def toggle(
             status_code=500,
             detail=f"Error al alternar scheduler: {str(e)}"
         )
+
+
+@router.get("/runs")
+async def list_runs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    _session: SessionData = Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_session),
+) -> dict:
+    total = await db.scalar(select(func.count()).select_from(SchedulerRun)) or 0
+    runs = await db.scalars(
+        select(SchedulerRun)
+        .order_by(desc(SchedulerRun.created_at))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return {
+        "items": [
+            {
+                "id": run.id,
+                "trigger": run.trigger,
+                "status": run.status,
+                "products_enqueued": run.products_enqueued,
+                "sources_total": run.sources_total,
+                "duration_seconds": float(run.duration_seconds) if run.duration_seconds is not None else None,
+                "error_message": run.error_message,
+                "created_at": run.created_at.isoformat() if run.created_at else None,
+                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            }
+            for run in runs
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }

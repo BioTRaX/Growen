@@ -1,212 +1,228 @@
 #!/usr/bin/env python
 # NG-HEADER: Nombre de archivo: test_canonical_batch.py
 # NG-HEADER: Ubicación: tests/test_canonical_batch.py
-# NG-HEADER: Descripción: Pruebas para POST /canonical-products/batch-job y worker
+# NG-HEADER: Descripción: Pruebas del alta masiva canónica persistente y parcial.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
-"""
-Tests para la funcionalidad de creación batch de productos canónicos.
-
-Incluye:
-- Test del endpoint /batch-job
-- Test del worker process_canonical_batch (ejecución síncrona)
-- Test de manejo de SKU duplicados
-"""
 import os
+import json
+
 import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, select
 
-os.environ.setdefault("DB_URL", "sqlite+aiosqlite:///:memory:")
-os.environ.setdefault("RUN_INLINE_JOBS", "1")  # Evitar Redis en tests
+os.environ.setdefault("RUN_INLINE_JOBS", "1")
 
-from fastapi.testclient import TestClient
-
+from db.models import CanonicalBatchJob, CanonicalBatchJobItem, CanonicalProduct, Category, Product, ProductTag, Supplier, SupplierProduct, Tag
 from services.api import app
-from services.auth import current_session, require_csrf, SessionData
+from services.auth import SessionData, current_session, require_csrf
 
-client = TestClient(app)
-
-# Forzar rol admin y desactivar CSRF en tests
 app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
 app.dependency_overrides[require_csrf] = lambda: None
 
 
-# ============================================================================
-# TESTS DEL ENDPOINT /batch-job
-# ============================================================================
+def test_catalog_worker_emits_structured_stdout(capsys) -> None:
+    from services.jobs.catalog_jobs import _log_catalog_event
 
-def test_batch_job_returns_202_with_job_id() -> None:
-    """POST /batch-job debe retornar 202 con job_id."""
+    _log_catalog_event("job_finished", job_id="batch-test", success_count=2, error_count=0)
+    event = json.loads(capsys.readouterr().out)
+
+    assert event["service"] == "catalog_worker"
+    assert event["event"] == "job_finished"
+    assert event["job_id"] == "batch-test"
+    assert event["success_count"] == 2
+
+
+async def _source(db, prefix: str) -> tuple[Category, Category, SupplierProduct]:
+    category = Category(name=f"{prefix}Root", parent_id=None, kind="category")
+    db.add(category)
+    await db.flush()
+    subcategory = Category(name=f"{prefix}Sub", parent_id=category.id, kind="subcategory")
+    supplier = Supplier(name=f"{prefix} Supplier", slug=f"{prefix.lower()}-supplier")
+    product = Product(sku_root=f"{prefix}-ROOT", title=f"{prefix} interno")
+    db.add_all([subcategory, supplier, product])
+    await db.flush()
+    source = SupplierProduct(
+        supplier_id=supplier.id,
+        supplier_product_id=f"{prefix}-SKU",
+        title=f"{prefix} origen",
+        internal_product_id=product.id,
+    )
+    db.add(source)
+    await db.commit()
+    return category, subcategory, source
+
+
+async def _post(payload: dict):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        return await client.post("/canonical-products/batch-job", json=payload)
+
+
+@pytest.mark.asyncio
+async def test_batch_job_persists_progress_and_result(db_session) -> None:
+    category, subcategory, source = await _source(db_session, "Bch")
+    response = await _post({
+        "client_request_id": "batch-success-1",
+        "items": [{
+            "name": "Producto Batch",
+            "brand": "Growen",
+            "category_id": category.id,
+            "subcategory_id": subcategory.id,
+            "source_product_id": source.id,
+        }],
+    })
+    assert response.status_code == 202, response.text
+    job_id = response.json()["job_id"]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        status = await client.get(f"/canonical-products/batch-jobs/{job_id}")
+    assert status.status_code == 200
+    body = status.json()
+    assert body["status"] == "COMPLETED"
+    assert body["success_count"] == 1
+    assert __import__("re").fullmatch(r"BCH_[0-9]{4}_[A-Z0-9]{3}", body["items"][0]["sku_custom"])
+
+
+@pytest.mark.asyncio
+async def test_batch_job_is_idempotent(db_session) -> None:
+    category, subcategory, source = await _source(db_session, "Idm")
     payload = {
-        "items": [
-            {"name": "Producto Batch 1"},
-            {"name": "Producto Batch 2"},
-        ]
+        "client_request_id": "same-client-request",
+        "items": [{
+            "name": "Producto único",
+            "category_id": category.id,
+            "subcategory_id": subcategory.id,
+            "source_product_id": source.id,
+        }],
     }
-    r = client.post("/canonical-products/batch-job", json=payload)
-    assert r.status_code == 202, r.text
-    data = r.json()
-    assert data.get("status") == "accepted"
-    assert "job_id" in data
-    assert data["job_id"].startswith("batch-canon-")
-    assert data.get("total_items") == 2
+    first = await _post(payload)
+    second = await _post(payload)
+    assert first.status_code == second.status_code == 202
+    assert first.json()["job_id"] == second.json()["job_id"]
+    assert await db_session.scalar(select(func.count(CanonicalProduct.id))) == 1
+    assert await db_session.scalar(select(func.count(CanonicalBatchJob.id))) == 1
 
 
-def test_batch_job_rejects_empty_items() -> None:
-    """POST /batch-job debe rechazar lista vacía."""
-    r = client.post("/canonical-products/batch-job", json={"items": []})
-    assert r.status_code == 400, r.text
-    assert "al menos un producto" in r.json().get("detail", "").lower()
+@pytest.mark.asyncio
+async def test_failed_unprocessed_batch_is_requeued_with_same_idempotency_key(db_session, monkeypatch) -> None:
+    category, subcategory, source = await _source(db_session, "Rty")
+    job = CanonicalBatchJob(
+        id="batch-canon-retry",
+        client_request_id="retry-same-request",
+        status="FAILED",
+        total_items=1,
+        error_message="Redis no disponible",
+    )
+    db_session.add(job)
+    db_session.add(CanonicalBatchJobItem(
+        job_id=job.id,
+        position=0,
+        source_product_id=source.id,
+        name="Producto recuperable",
+        category_id=category.id,
+        subcategory_id=subcategory.id,
+    ))
+    await db_session.commit()
+
+    from services.jobs.catalog_jobs import process_canonical_batch
+
+    sent: list[str] = []
+    monkeypatch.setenv("RUN_INLINE_JOBS", "0")
+    monkeypatch.setattr(process_canonical_batch, "send", sent.append)
+    response = await _post({
+        "client_request_id": "retry-same-request",
+        "items": [{
+            "name": "Producto recuperable",
+            "category_id": category.id,
+            "subcategory_id": subcategory.id,
+            "source_product_id": source.id,
+        }],
+    })
+
+    assert response.status_code == 202, response.text
+    assert response.json()["message"] == "El lote fallido fue reenviado"
+    assert sent == [job.id]
+    await db_session.refresh(job)
+    assert job.status == "QUEUED"
+    assert job.error_message is None
 
 
-def test_batch_job_rejects_over_100_items() -> None:
-    """POST /batch-job debe rechazar más de 100 items."""
-    payload = {"items": [{"name": f"Prod {i}"} for i in range(101)]}
-    r = client.post("/canonical-products/batch-job", json=payload)
-    assert r.status_code == 400, r.text
-    assert "100" in r.json().get("detail", "")
+@pytest.mark.asyncio
+async def test_invalid_taxonomy_type_is_reported_as_error(db_session) -> None:
+    category, _subcategory, source = await _source(db_session, "Bad")
+    other = Category(name="OtherRoot", parent_id=None, kind="category")
+    db_session.add(other)
+    await db_session.flush()
+    foreign_sub = Category(name="ForeignSub", parent_id=other.id, kind="category")
+    db_session.add(foreign_sub)
+    await db_session.commit()
+    response = await _post({
+        "client_request_id": "invalid-taxonomy",
+        "items": [{
+            "name": "Taxonomía inválida",
+            "category_id": category.id,
+            "subcategory_id": foreign_sub.id,
+            "source_product_id": source.id,
+        }],
+    })
+    job = await db_session.get(CanonicalBatchJob, response.json()["job_id"])
+    await db_session.refresh(job, ["items"])
+    assert job.status == "FAILED"
+    assert job.items[0].error_code == "invalid_subcategory"
 
 
-def test_batch_job_requires_auth() -> None:
-    """POST /batch-job requiere autenticación (admin o colaborador)."""
-    # Restaurar dependencia original para probar auth
-    from services.auth import current_session as original_session
-    
-    # Simular guest
+@pytest.mark.asyncio
+async def test_batch_combines_persisted_tags_without_duplicate_relations(db_session) -> None:
+    category, subcategory, source = await _source(db_session, "Tag")
+    payload = {
+        "client_request_id": "batch-tags-1",
+        "items": [{
+            "name": "Producto con tags",
+            "category_id": category.id,
+            "subcategory_id": subcategory.id,
+            "tag_names": ["Interior", " interior ", "Orgánico"],
+            "source_product_id": source.id,
+        }],
+    }
+    response = await _post(payload)
+    assert response.status_code == 202, response.text
+    assert await db_session.scalar(select(func.count(Tag.id))) == 2
+    assert await db_session.scalar(select(func.count(ProductTag.product_id))) == 2
+    job = await db_session.get(CanonicalBatchJob, response.json()["job_id"])
+    await db_session.refresh(job, ["items"])
+    assert job.items[0].tag_names == ["Interior", " interior ", "Orgánico"]
+
+
+@pytest.mark.asyncio
+async def test_one_error_does_not_cancel_valid_items(db_session) -> None:
+    category, subcategory, source = await _source(db_session, "Par")
+    supplier = await db_session.get(Supplier, source.supplier_id)
+    second = SupplierProduct(supplier_id=supplier.id, supplier_product_id="PAR-2", title="Segundo")
+    db_session.add(second)
+    await db_session.commit()
+    response = await _post({
+        "client_request_id": "partial-batch",
+        "items": [
+            {"name": "Válido", "category_id": category.id, "subcategory_id": subcategory.id, "source_product_id": source.id},
+            {"name": "", "category_id": category.id, "subcategory_id": subcategory.id, "source_product_id": second.id},
+        ],
+    })
+    job = await db_session.get(CanonicalBatchJob, response.json()["job_id"])
+    assert job.status == "PARTIAL"
+    assert job.success_count == 1 and job.error_count == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_rejects_empty_and_over_limit() -> None:
+    empty = await _post({"items": []})
+    too_many = await _post({"items": [{"name": str(i)} for i in range(101)]})
+    assert empty.status_code == 400
+    assert too_many.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_batch_requires_staff_role() -> None:
     app.dependency_overrides[current_session] = lambda: SessionData(None, None, "guest")
-    
-    r = client.post("/canonical-products/batch-job", json={"items": [{"name": "Test"}]})
-    # Debería fallar con 403 (o similar)
-    assert r.status_code in (401, 403), r.text
-    
-    # Restaurar admin
-    app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")
-
-
-# ============================================================================
-# TESTS DEL WORKER (EJECUCIÓN SÍNCRONA)
-# ============================================================================
-
-@pytest.mark.asyncio
-async def test_worker_creates_products_in_db() -> None:
-    """El worker debe crear productos en la base de datos."""
-    from services.jobs.catalog_jobs import _process_canonical_batch_async
-    from db.session import SessionLocal
-    from db.models import CanonicalProduct
-    from sqlalchemy import select
-    
-    job_id = "test-worker-001"
-    items = [
-        {"name": "Worker Test Prod 1", "category_id": None},
-        {"name": "Worker Test Prod 2", "brand": "TestBrand"},
-    ]
-    
-    # Ejecutar worker sincrónicamente
-    await _process_canonical_batch_async(job_id, items)
-    
-    # Verificar que los productos existen
-    async with SessionLocal() as db:
-        stmt = select(CanonicalProduct).where(CanonicalProduct.name.like("Worker Test Prod%"))
-        result = await db.execute(stmt)
-        products = result.scalars().all()
-        
-        assert len(products) >= 2, f"Esperados al menos 2, encontrados {len(products)}"
-        
-        # Verificar que tienen ng_sku y sku_custom
-        for p in products:
-            assert p.ng_sku is not None and p.ng_sku.startswith("NG-")
-            assert p.sku_custom is not None
-
-
-@pytest.mark.asyncio
-async def test_worker_handles_duplicate_sku_gracefully() -> None:
-    """El worker debe manejar SKUs duplicados sin explotar."""
-    from services.jobs.catalog_jobs import _process_canonical_batch_async
-    from db.session import SessionLocal
-    from db.models import CanonicalProduct
-    from sqlalchemy import select
-    
-    # Primero crear un producto con SKU específico
-    async with SessionLocal() as db:
-        existing = CanonicalProduct(
-            name="Producto Existente Dupe Test",
-            sku_custom="DUP_0001_TST",
-        )
-        db.add(existing)
-        await db.flush()
-        existing.ng_sku = f"NG-{existing.id:06d}"
-        await db.commit()
-    
-    job_id = "test-dupe-001"
-    items = [
-        # Este intentará crear con un SKU que ya existe
-        {"name": "Producto Nuevo Dupe Test", "sku_custom": "DUP_0001_TST"},
-    ]
-    
-    # No debería explotar
-    await _process_canonical_batch_async(job_id, items)
-    
-    # El producto debería haber fallado (error parcial)
-    # Verificar que el audit log registró el error
-    from db.models import AuditLog
-    async with SessionLocal() as db:
-        stmt = select(AuditLog).where(AuditLog.action == "batch_create")
-        result = await db.execute(stmt)
-        logs = result.scalars().all()
-        
-        # Debería existir al menos un audit log
-        assert len(logs) > 0
-
-
-@pytest.mark.asyncio
-async def test_worker_generates_unique_skus_in_batch() -> None:
-    """El worker debe generar SKUs únicos dentro del mismo batch."""
-    from services.jobs.catalog_jobs import _process_canonical_batch_async
-    from db.session import SessionLocal
-    from db.models import CanonicalProduct
-    from sqlalchemy import select
-    
-    job_id = "test-unique-001"
-    # Mismo nombre, sin categoría - deberían tener SKUs diferentes
-    items = [
-        {"name": "Unico Test A"},
-        {"name": "Unico Test B"},
-        {"name": "Unico Test C"},
-    ]
-    
-    await _process_canonical_batch_async(job_id, items)
-    
-    async with SessionLocal() as db:
-        stmt = select(CanonicalProduct).where(CanonicalProduct.name.like("Unico Test%"))
-        result = await db.execute(stmt)
-        products = result.scalars().all()
-        
-        skus = [p.sku_custom for p in products if p.sku_custom]
-        # Todos los SKUs deberían ser únicos
-        assert len(skus) == len(set(skus)), f"SKUs duplicados detectados: {skus}"
-
-
-# ============================================================================
-# TESTS DE INTEGRACIÓN COMPLETA
-# ============================================================================
-
-def test_batch_job_with_categories() -> None:
-    """Batch con categorías genera SKUs con prefijo de categoría."""
-    # Crear categoría primero
-    r = client.post("/categories", json={"name": "BatchTestCat"})
-    if r.status_code == 200:
-        cat = r.json()
-    else:
-        lr = client.get("/categories")
-        cats = lr.json()
-        cat = next((c for c in cats if c.get("name") == "BatchTestCat"), None)
-        if not cat:
-            pytest.skip("No se pudo crear/obtener categoría de prueba")
-    
-    payload = {
-        "items": [
-            {"name": "Prod Cat 1", "category_id": cat["id"]},
-            {"name": "Prod Cat 2", "category_id": cat["id"]},
-        ]
-    }
-    r = client.post("/canonical-products/batch-job", json=payload)
-    assert r.status_code == 202, r.text
-    assert r.json()["total_items"] == 2
+    try:
+        response = await _post({"items": [{"name": "Sin permiso"}]})
+        assert response.status_code in (401, 403)
+    finally:
+        app.dependency_overrides[current_session] = lambda: SessionData(None, None, "admin")

@@ -27,6 +27,7 @@ from workers.scraping.static_scraper import (
     extract_price_mercadolibre,
     extract_price_amazon,
     extract_price_generic,
+    extract_price_structured_data,
     PriceNotFoundError,
     NetworkError,
 )
@@ -315,6 +316,27 @@ class TestExtractPriceGeneric:
         price_text = extract_price_generic(soup)
         
         assert price_text is None
+
+    def test_prefers_product_json_ld_over_unrelated_carousel_prices(self):
+        html = """
+        <html><body>
+          <div class="woocommerce-Price-amount">$79.750</div>
+          <script type="application/ld+json">
+          {"@context":"https://schema.org","@graph":[
+            {"@type":"Product","name":"la pota perlita 5 litros","offers":[
+              {"@type":"Offer","priceSpecification":[
+                {"@type":"UnitPriceSpecification","price":"3700","priceCurrency":"ARS"}
+              ]}
+            ]}
+          ]}
+          </script>
+          <section><p class="price">$3.700$2.960 con Transferencia</p></section>
+        </body></html>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+
+        assert extract_price_structured_data(soup) == "ARS 3700"
+        assert extract_price_generic(soup) == "ARS 3700"
 
 
 # ============================================================================

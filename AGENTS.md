@@ -1,4 +1,4 @@
--- NG-HEADER: Nombre de archivo: AGENTS.md -->
+<!-- NG-HEADER: Nombre de archivo: AGENTS.md -->
 <!-- NG-HEADER: Ubicación: AGENTS.md -->
 <!-- NG-HEADER: Descripción: Lineamientos para agentes de desarrollo -->
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
@@ -25,16 +25,48 @@ Este documento orienta a herramientas de asistencia de código (Copilot, Codex, 
 - No introducir dependencias sin documentarlas y agregarlas a los requirements/README.
  - Mantener documentación viva: actualizar `Roadmap.md`, `README.md` y docs bajo `docs/` cuando cambien comportamientos, endpoints, modelos, flujos o requisitos de entorno. Toda interacción de agentes debe verificar y actualizar estos documentos (incluyendo este Roadmap) como parte de la entrega.
 
+### Retrospectiva al cierre de sesión
+
+- Los únicos triggers directos de `retrospectiva-tecnica-sesion` son `Cerrar sesión` y `Cerremos sesión`, sin distinguir mayúsculas ni puntuación final.
+- Si existe trabajo pendiente ambiguo al recibir un trigger válido, solicitar una confirmación breve antes de cerrar.
+- Completar una tarea, pedir una retrospectiva, decir «terminamos» o declarar el final del chat no activa el cierre ni el auto-merge.
+- El cierre sigue este orden obligatorio: análisis retrospectivo, evolución agéntica, compuerta de riesgo, documentación, sincronización de la rama efímera, resolución verificable, validación, merge a `dev` y push.
+- Las evoluciones de riesgo bajo o medio se implementan y validan. Una propuesta de riesgo muy alto detiene todo el flujo hasta recibir confirmación explícita.
+
 ### Seguridad de secretos (OBLIGATORIO)
 - Nunca commits con credenciales, tokens o URLs con usuario:contraseña. Usar variables de entorno (`.env`, `env_file`) o placeholders en docs.
 - Revisar `.gitignore` antes de crear scripts con parámetros sensibles; si el script requiere credenciales locales, proveer `*.example.ps1` y agregar el real al `.gitignore`.
 - Si se detecta exposición accidental, remover inmediatamente el archivo del repo, reemplazar por versión sin secretos y comunicar para rotar las credenciales expuestas.
 
 ### Operativa de Git para agentes
-- Evitar `git add`, `commit` y `push` salvo que el usuario lo solicite explícitamente. Priorizar PRs y revisiones.
+- Antes de modificar archivos, crear desde el estado actual de `dev` una rama efímera nueva (`feat/*`, `fix/*`, `docs/*` o `chore/*`) e inventariar cambios preexistentes.
+- Está estrictamente prohibido hacer commits directos a `dev`; `dev` sólo recibe el merge final de una rama efímera validada.
+- Ejecutar todas las operaciones Git por terminal.
+- Stage, commit y push requieren una solicitud explícita o un trigger válido de cierre. Un cierre válido autoriza la integración secuencial de la sesión, pero no elimina los gates de secretos, alcance, pruebas, documentación, remoto y riesgo.
+- Resolver autónomamente conflictos textuales cuando la intención pueda demostrarse y validarse. Detenerse ante ambigüedad o riesgo muy alto; nunca usar force-push.
+
+### Concurrencia y Agent Awareness
+
+- El repositorio opera sobre un único worktree físico compartido por todos los agentes. Antes de tocar una skill compartida, un documento de gobernanza, un área de esquema (`db/models.py`, migraciones) o un refactor de alcance amplio, adquirir un lock lógico con `scripts/agent_lock.py acquire <scope> --agent <nombre> --reason <texto>` y liberarlo con `release` al terminar o durante el cierre de sesión.
+- Consultar `scripts/agent_lock.py status <scope>` antes de iniciar ese tipo de cambio si hay señales de que otro agente puede estar activo. El lock es cooperativo: no reemplaza el gate de `git-commit-push` ni bloquea el sistema de archivos, es una señal previa para evitar condiciones de carrera.
+- Antes de crear o cambiar una rama en el checkout compartido, consultar y adquirir el ámbito global `git-worktree`; conservarlo durante toda la tarea y liberarlo al finalizar. Si otro agente lo mantiene vigente, no ejecutar `git switch`, `git stash` ni modificar archivos: limitarse a diagnósticos de sólo lectura que no interfieran.
+- Renovar con `scripts/agent_lock.py renew <scope> --agent <nombre> --ttl-minutes <n>` los locks de tareas que superen la mitad de su TTL. Un lock vencido no se renueva: debe readquirirse después de verificar el estado real del ámbito.
+- La arquitectura completa, los hallazgos de la auditoría y el detalle de ámbitos recomendados están en `docs/architecture/AGENT_ORCHESTRATION.md`.
+
+### Compatibilidad con Superpowers
+- Las skills de Superpowers pueden complementar la metodología de trabajo, pero las reglas y precedencias de Growen prevalecen en todo caso.
+- Los flujos de Superpowers no pueden activar `git add`, `commit`, `push`, `merge` ni publicación automática sin la autorización explícita del usuario y sin cumplir el gate completo de seguridad.
+- Superpowers nunca confirma trabajo directamente en `dev`. Sus pasos de commit, merge o push se subordinan a la rama efímera y a `git-commit-push`.
+- Los flujos de Superpowers deberán ejecutar Python y pytest exclusivamente mediante el venv de Growen (`.venv\Scripts\python.exe`) o Docker. Quedan prohibidos `python`, `pip`, `poetry` y `pytest` del sistema.
+- Todo Markdown creado bajo `docs/superpowers/` deberá llevar NG-HEADER para permitir su indexación futura y mantener la documentación viva actualizada.
+- Las respuestas, la documentación, los commits y los PRs generados mediante Superpowers deben producirse en español, aunque el origen del material sea inglés.
+- No se deben duplicar ni forzar forks locales de las 14 skills de Superpowers; la actualización debe seguirse desde su repositorio original y adaptarse localmente con reglas de precedencia.
+- Las skills canónicas locales conservan sólo reglas, comandos y contratos específicos de Growen. La metodología general se referencia por nombre y no se copia, para evitar trabajo duplicado y consumo innecesario de tokens.
 
 ## Encabezado obligatorio (NG-HEADER)
 Agregar al inicio de cada archivo de código y documentación `.md` (excepto `README.md`). Excepciones: `*.json`, `destinatarios.json`, binarios, imágenes, PDFs y otros archivos de datos.
+
+`SKILL.md` también está exceptuado: el frontmatter YAML con `name` y `description` debe comenzar en la primera línea para que la skill sea descubrible.
 
 Formato por lenguaje:
 
@@ -105,10 +137,12 @@ Formato por lenguaje:
 - Dejar notas de migración cuando corresponda.
 - Adjuntar ejemplos mínimos de uso y pruebas cuando sea razonable.
 - Mantener consistencia de idioma en commits, PRs y documentación: español.
+- Las skills canónicas residen únicamente en `.agents/skills/`, ubicación compartida por Codex, Gemini CLI, GitHub Copilot y Antigravity. No crear adaptadores nuevos; `.agent/skills/` conserva sólo adaptadores legacy. Ver `docs/development/AGENT_SKILLS.md`.
+- La skill de Git se activa al iniciar una rama efímera, ante una solicitud explícita de stage, commit o push, o durante un cierre válido.
 
 ## Entorno de Ejecución Obligatorio (CRÍTICO)
 
-> **⚠️ REGLA OBLIGATORIA**: TODO comando Python debe ejecutarse en el **venv del proyecto** o en **Docker**. NUNCA usar el Python del sistema.
+> **⚠️ REGLA OBLIGATORIA**: TODO comando Python debe ejecutarse en el **venv Python 3.14.6+ del proyecto** o en **Docker**. NUNCA usar el Python del sistema.
 
 ### Por qué es obligatorio
 
@@ -148,7 +182,7 @@ Los workers tienen scripts de inicio que ya activan el venv. Usar siempre estos 
 
 ### Checklist antes de ejecutar Python
 
-1. ¿Estoy usando `.venv/Scripts/python.exe` o Docker?
+1. ¿Estoy usando `.venv/Scripts/python.exe` con Python 3.14.6+ o Docker?
 2. ¿Consulté `.agent/workflows/python-commands.md`?
 3. ¿El comando requiere un script de inicio específico?
 
@@ -167,16 +201,18 @@ Actualizado Entorno de Ejecución: 2026-01-24.
 2. **Testing integración**: Docker Compose completo (antes de merge)
 3. **Producción**: Docker (idéntico a testing)
 
+El inicio diario canónico es `scripts/start-dev.ps1`: levanta PostgreSQL, API, MCP Products y Vue; usar `-McpMode All` para incluir Web Search y `-WithCatalogWorker` cuando se probarán altas canónicas masivas (inicia/verifica Redis y Dramatiq).
+
 **Comandos esenciales desarrollo**:
 ```powershell
 # Infra en Docker (una vez al día)
 docker compose up -d db
 
 # API local con hot reload
-python -m uvicorn services.api:app --reload --port 8000
+.\.venv\Scripts\python.exe -m uvicorn services.api:app --reload --port 8000
 
-# Frontend local
-cd frontend && npm run dev
+# Frontend Vue local
+cd frontend-vue && npm run dev
 ```
 
 **Cuándo SÍ recompilar Docker**:
@@ -190,7 +226,7 @@ cd frontend && npm run dev
 - ❌ Debugging de features nuevas
 - ❌ Probar endpoints o UI
 
-**Documentación completa**: `docs/DEVELOPMENT_WORKFLOW.md` (setup, tips, troubleshooting, comparación velocidades)
+**Documentación completa**: `docs/development/DEVELOPMENT_WORKFLOW.md` (setup, tips, troubleshooting, comparación velocidades)
 
 ## Documentación contextual según tarea
 
@@ -200,30 +236,32 @@ Antes de realizar cualquier cambio, el agente DEBE consultar la documentación r
 
 | Tarea/Sistema | Documentos a consultar (orden de prioridad) |
 |---------------|---------------------------------------------|
-| **Base de datos / Modelos** | `docs/MIGRATIONS_NOTES.md`, `db/models.py`, `alembic/versions/` |
+| **Base de datos / Modelos** | `docs/features/MIGRATIONS_NOTES.md`, `db/models.py`, `db/migrations/versions/` |
 | **API / Endpoints** | `services/api.py`, `services/routers/*.py`, documentos específicos en `docs/API_*.md` |
-| **Workers / Jobs asíncronos** | `docs/IMAGES.md`, `docs/API_MARKET.md`, `workers/*.py`, `services/jobs/*.py` |
-| **Frontend / UI** | `frontend/src/**`, `docs/FRONTEND_DEBUG.md`, `docs/PRODUCTS_UI.md` |
-| **Autenticación / Seguridad** | `docs/SECURITY.md`, `docs/CHATBOT_ROLES.md`, `services/auth.py` |
+| **Workers / Jobs asíncronos** | `docs/features/IMAGES.md`, `docs/features/API_MARKET.md`, `workers/*.py`, `services/jobs/*.py` |
+| **Frontend / UI** | `frontend-vue/src/**`, `docs/development/FRONTEND_DEBUG.md`, `docs/features/PRODUCTS_UI.md`, `docs/architecture/FRONTEND_VUE_ARCHITECTURE.md` |
+| **Autenticación / Seguridad** | `docs/operations/SECURITY.md`, `services/auth.py` |
 | **Docker / Infraestructura** | `docker-compose.yml`, `infra/Dockerfile.*`, sección "Convenciones Docker" en este archivo |
 | **Tests** | `pytest.ini`, `tests/**`, sección correspondiente en `docs/` |
-| **Scraping / Precios de mercado** | `docs/API_MARKET.md`, `workers/market_scraping.py`, `services/jobs/market_scheduler.py` |
-| **Imágenes de productos** | `docs/IMAGES.md`, `docs/MEDIA.md`, `services/media/`, `workers/images.py` |
-| **Importación PDF** | `docs/IMPORT_PDF.md`, `docs/IMPORT_PDF_AI_NOTES.md`, `services/routers/imports.py` |
-| **Catálogos** | `docs/CATALOGS_OPERATIONS.md`, `services/routers/catalog.py` |
-| **Clientes / Ventas** | `docs/SALES.md`, `services/routers/sales.py`, `services/routers/customers.py` |
-| **Compras / Proveedores** | `docs/PURCHASES.md`, `docs/SUPPLIERS.md`, `services/routers/purchases.py` |
-| **Chat / IA** | `docs/CHAT.md`, `docs/CHATBOT_ARCHITECTURE.md`, `docs/CHAT_PERSONA.md`, `ai/` |
-| **MCP Servers** | `docs/MCP.md`, `mcp_servers/`, sección "MCP Servers" en este archivo |
+| **Scraping / Precios de mercado** | `docs/features/API_MARKET.md`, `workers/market_scraping.py`, `services/jobs/market_scheduler.py` |
+| **Imágenes de productos** | `docs/features/IMAGES.md`, `docs/features/MEDIA.md`, `services/media/`, `workers/images.py` |
+| **Importación PDF** | `docs/features/IMPORT_PDF.md`, `docs/features/IMPORT_PDF_AI_NOTES.md`, `services/routers/imports.py` |
+| **Catálogos** | `docs/features/CATALOGS_OPERATIONS.md`, `services/routers/catalog.py` |
+| **Clientes / Ventas** | `docs/features/SALES.md`, `services/routers/sales.py`, `services/routers/customers.py` |
+| **Compras / Proveedores** | `docs/features/PURCHASES.md`, `docs/features/SUPPLIERS.md`, `services/routers/purchases.py` |
+| **Chat / IA** | `docs/architecture/CHAT.md`, `docs/architecture/CHATBOT_ARCHITECTURE.md`, `ai/` |
+| **MCP Servers** | `docs/architecture/MCP.md`, `mcp_servers/`, sección "MCP Servers" en este archivo |
 
 ### Por tipo de operación
 
 | Operación | Documentos clave |
 |-----------|------------------|
-| **Migración de BD** | Leer `docs/MIGRATIONS_NOTES.md` ANTES de crear/modificar migraciones. Revisar `scripts/debug_migrations.py` |
-| **Nuevo endpoint admin** | `docs/roles-endpoints.md`, `services/routers/services_admin.py` o similar como referencia |
-| **Nuevo worker Dramatiq** | `docs/IMAGES.md` (referencia workers), `workers/market_scraping.py` (plantilla), verificar config Redis |
-| **Cambio en modelos** | `db/models.py`, luego `alembic revision --autogenerate -m "descripción"`, actualizar `docs/MIGRATIONS_NOTES.md` |
+| **Migración de BD** | Leer `docs/features/MIGRATIONS_NOTES.md` ANTES de crear/modificar migraciones. Revisar `scripts/debug_migrations.py` |
+| **Nuevo endpoint admin** | `docs/features/roles-endpoints.md`, `services/routers/services_admin.py` o similar como referencia |
+| **Nuevo worker Dramatiq** | `docs/features/IMAGES.md` (referencia workers), `workers/market_scraping.py` (plantilla), verificar config Redis |
+| **Cambio en modelos** | `db/models.py`, luego `.\.venv\Scripts\python.exe -m alembic revision --autogenerate -m "descripción"`; las revisiones viven en `db/migrations/versions/` |
+| **Cambio en sesión, cookies o CSRF** | Agregar al menos una prueba con `@pytest.mark.no_auth_override` que cubra login, `GET /auth/me` y una mutación real con `X-CSRF-Token`; los tests con overrides globales no validan el ciclo de sesión. |
+| **Enlaces y descargas en Vue (`:href`)** | Usar siempre `apiUrl(path)` de `src/services/transports` para endpoints de backend (adjuntos, PDFs, recibos). Evitar URLs directas sin prefijo `/api/` que causan captura errónea por el router SPA y redirección a `/login`. |
 | **Nuevo servicio Docker** | Revisar sección "Convenciones Docker" en este archivo, usar multi-stage builds |
 | **Problema de conexión DB** | Verificar patrón: `DB_URL = os.getenv("DB_URL") or settings.db_url` (ver corrección 2025-11-15) |
 
@@ -240,7 +278,7 @@ Antes de realizar cualquier cambio, el agente DEBE consultar la documentación r
 
 **❌ Incorrecto** (falla en Docker con Postgres):
 ```python
-DB_URL = os.getenv("DB_URL", "sqlite+aiosqlite:///./growen.db")
+DB_URL = os.getenv("DB_URL") or settings.db_url
 engine = create_async_engine(DB_URL, future=True)
 ```
 
@@ -280,7 +318,7 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 - `db_check.py`: Verificaciones básicas de conexión / latencia (si aplica) (pendiente de ampliar si se requiere).
 - `db_diag.py`: Diagnóstico más extenso (consultas adicionales o checks; revisar contenido antes de usar en producción).
 - `db_port_probe.py`: Chequea disponibilidad del puerto DB (detección rápida de servicio caído o firewall local).
-- `debug_migrations.py`: (Listado nuevamente para énfasis) No modificar sin actualizar `docs/MIGRATIONS_NOTES.md`.
+- `debug_migrations.py`: (Listado nuevamente para énfasis) No modificar sin actualizar `docs/features/MIGRATIONS_NOTES.md`.
 
 ### Administración de usuarios / seguridad básica
 - `check_admin_user.py`: Verifica que el usuario admin exista.
@@ -296,16 +334,20 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 
 ### Auditoría / Compose
 - `docker-compose-audit.ps1`: Audita `docker-compose.yml`, detecta imágenes públicas con tags desactualizados, permite actualizar versiones (con backup) y reconstruir/levantar el stack (`docker compose up --build -d`). Parámetros: `-OnlyReport`, `-SkipBuild`.
+- `provision-meli-tunnel.ps1`: provisiona idempotentemente el túnel remoto Cloudflare, sus rutas limitadas y el CNAME; lee credenciales desde archivo y soporta `-WhatIf`.
+- `deploy-swarm.ps1`: valida Swarm, imágenes, secretos externos, label stateful y render del stack antes del despliegue; soporta `-WhatIf`.
 
 ### Backend / Arranque / Entorno
+- `ollama-preflight.ps1`: valida GPU/VRAM, RAM, pagefile, disco, daemon y modelos del perfil local de Chat sin descargar ni borrar datos.
 - `run_api.cmd` / `run_frontend.cmd` / `start_stack.ps1`: Scripts de conveniencia para iniciar servicios locales.
 - `launch_backend.cmd`: Variante de arranque rápido backend (revisar duplicidad con `run_api.cmd`).
 - `start.bat` / `stop.bat`: Atajos globales de inicio/parada.
-- `start_api_noquickedit.ps1`: **Recomendado para Windows**. Inicia la API deshabilitando QuickEdit Mode de la consola, evitando que clicks accidentales en la terminal pausen el servidor. Ver `docs/DEVELOPMENT_WORKFLOW.md` sección Troubleshooting.
+- `start_api_noquickedit.ps1`: **Recomendado para Windows**. Inicia la API deshabilitando QuickEdit Mode de la consola, evitando que clicks accidentales en la terminal pausen el servidor. Ver `docs/development/DEVELOPMENT_WORKFLOW.md` sección Troubleshooting.
 
 ### Workers / Jobs Asíncronos (Dramatiq + Redis)
-- `start_worker_images.cmd`: Lanza worker de procesamiento de imágenes (cola `images`). Ver dependencias en README o `docs/IMAGES.md`.
-- `start_worker_market.cmd`: Lanza worker de scraping de precios de mercado (cola `market`). Requiere Redis. Ver `docs/API_MARKET.md`.
+- `start_worker_images.cmd`: Lanza worker de procesamiento de imágenes (cola `images`). Ver dependencias en README o `docs/features/IMAGES.md`.
+- `start_worker_market.cmd`: Lanza worker de scraping de precios de mercado (cola `market`). Requiere Redis. Ver `docs/features/API_MARKET.md`.
+- `start_worker_catalog_audit.cmd`: Lanza el auditor autónomo de catálogo (cola `catalog_audit`) con un proceso y un thread. Requiere Redis, la migración `20260913_catalog_audit_v1` y Ollama para modo completo. Ver `docs/features/CATALOG_AUDITOR.md`.
 - `start_worker_all.cmd`: Lanza worker unificado que procesa ambas colas (`images` + `market`) con 3 threads. Uso recomendado para entornos con recursos limitados.
   - Sintaxis: `start_worker_all.cmd [images|market|all]` (default: `all`)
   - Logs: `logs/worker_all.log` (modo `all`), `logs/worker_images.log` o `logs/worker_market.log` (modo específico)
@@ -317,7 +359,7 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 
 ### Parches / Migraciones de datos puntuales
 - `patch_add_identifier.py`: Agrega/normaliza identificadores en usuarios (una sola vez). Documentar si se reutiliza.
-- `patch_summary_json.py`: Ajusta/crea campo `summary_json` en jobs de import (ver `docs/IMPORT_PDF.md`).
+- `patch_summary_json.py`: Ajusta/crea campo `summary_json` en jobs de import (ver `docs/features/IMPORT_PDF.md`).
 - `upload_debug_import.py`: Carga/ensayo para importar un archivo PDF de prueba (herramienta de depuración).
 - `smoke_import_commit.py`: Prueba de flujo de importación (commit final) para garantizar que endpoints clave siguen funcionando.
 
@@ -325,7 +367,13 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 - `fix_bom.ps1`: Quita BOM en archivos que puedan romper imports o tooling.
 
 ### Servicios / Scheduler / Monitoreo
-- (Pendiente de centralizar) Scripts relacionados a `services` si se añaden: mantener aquí enumeración.
+- `meli_worker_health.py`: healthcheck interno del consumidor `meli_sync` mediante heartbeat Redis; no consulta ni imprime secretos.
+
+### SiYuan / Documentación
+- `publish_docs_to_siyuan.py`: sincroniza los Markdown versionados de raíz y `docs/` hacia `/Growen/Documentación técnica`, mantiene estado externo por hash y reanuda publicaciones parciales. La reconstrucción destructiva está limitada a esa raíz y exige `--apply --rebuild --confirm-rebuild "/Growen/Documentación técnica"`; el flujo normal no elimina huérfanos.
+- `smoke_siyuan_mcp.py`: valida lectura, creación privada, actualización con revisión y rechazo de una revisión obsoleta; ejecutarlo únicamente sobre un workspace SiYuan desechable.
+- `invoke_siyuan_task_database.py`: invoca por MCP STDIO la creación acotada de una base de tareas en un documento privado autorizado.
+- `sync-siyuan-widget.ps1`: compara hashes entre `siyuan-widgets/<nombre>` y el workspace operativo. Sin `-Apply` es sólo lectura; `-Apply` requiere autorización y copia únicamente archivos runtime `.html`, `.css`, `.js` y `.json`, sin borrar extras.
 
 ### Notas de uso para agentes
 - Antes de crear un nuevo script, validar si la funcionalidad ya existe.
@@ -333,7 +381,7 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 	1. Estar documentado en la PR.
 	2. Tener explicación breve de idempotencia.
 	3. Incluir salida clara (print) de acciones realizadas y elementos afectados.
-- Actualizar esta sección y `docs/MIGRATIONS_NOTES.md` si el script toca migraciones.
+- Actualizar esta sección y `docs/features/MIGRATIONS_NOTES.md` si el script toca migraciones.
 
 ### Scripts a revisar / mejorar (backlog sugerido)
 - Consolidar `run_api.cmd` y `launch_backend.cmd` si son redundantes.
@@ -345,7 +393,7 @@ Actualizado inventario scripts: 2025-10-07.
 
 ## Testing (pytest)
 
-**Documentación completa**: [`docs/TESTING.md`](docs/TESTING.md) - Consultar antes de ejecutar o escribir tests.
+**Documentación completa**: [`docs/development/TESTING.md`](docs/development/TESTING.md) - Consultar antes de ejecutar o escribir tests.
 
 ### Ejecución rápida (resumen)
 
@@ -360,7 +408,7 @@ pytest -q
 
 ### Si encuentras errores de tests
 
-1. **Primero**: Consultar `docs/TESTING.md` sección "Troubleshooting"
+1. **Primero**: Consultar `docs/development/TESTING.md` sección "Troubleshooting"
 2. **Errores comunes**:
    - `visit_JSONB`: Usar `JSONBCompat` en lugar de `JSONB`
    - `no such table`: Problema con fixtures de DB
@@ -371,26 +419,27 @@ pytest -q
 
 - **SQLite para tests** / **PostgreSQL para producción**
 - Usar `JSONBCompat` (no `JSONB` directo) en `db/models.py`
-- Ver `docs/TESTING.md` para tabla completa de tipos compatibles
+- Ver `docs/development/TESTING.md` para tabla completa de tipos compatibles
 
 ---
 Actualizado Testing: 2025-11-24.
 
-## MCP Servers (Nueva capa de herramientas para IA)
+## MCP Servers (herramientas interoperables para IA)
 
-Esta sección documenta lineamientos para crear y mantener microservicios bajo `mcp_servers/` orientados a exponer "tools" consumibles por agentes LLM mediante un contrato uniforme.
+Los servicios bajo `mcp_servers/` implementan Model Context Protocol real mediante el SDK oficial de Python y Streamable HTTP.
 
 ### Objetivos
-- Separar preocupaciones: cada MCP Server actúa como fachada de dominio (productos, compras, ventas, etc.).
+- Exponer `initialize`, `tools/list` y `tools/call` en el endpoint `/mcp`.
+- Separar preocupaciones: cada servidor actúa como fachada de dominio.
 - Evitar acceso directo a la base: siempre consumir la API principal (`api`) vía HTTP.
-- Control de acceso basado en roles (parámetro `user_role` en MVP; evolucionará a autenticación/verificación tokenizada).
+- Autenticar con `Authorization: Bearer <JWT>` y aplicar roles nuevamente en cada tool.
 
 ### Estructura mínima de un MCP Server
 ```
 mcp_servers/
 	<domain>_server/
 		__init__.py
-		main.py          # FastAPI/Flask app con endpoint POST /invoke_tool
+		main.py          # FastMCP/ASGI con endpoint /mcp y /health
 		tools.py         # Implementación de funciones async registradas
 		requirements.txt # Dependencias aisladas (no mezclar con raíz salvo necesidad)
 		Dockerfile       # Imagen autocontenida (usa red compartida con api)
@@ -399,35 +448,30 @@ mcp_servers/
 ```
 
 ### Convenciones de Tools
-- Firma recomendada: `async def <name>(... , user_role: str) -> dict`.
-- Validar inputs y roles temprano; lanzar `PermissionError` (subclase de `ValueError`) para mapear a 403.
+- Definir inputs y outputs tipados; no exponer `user_role` como argumento al modelo.
+- Validar token, issuer, audience, expiración, rate limit y rol antes de ejecutar.
 - Retornar dict plano serializable (sin objetos ORM ni tipos complejos).
 - Mantener TOOLS_REGISTRY en `tools.py` para despacho dinámico.
 
 ### Endpoint estándar
-- `POST /invoke_tool` recibe `{ "tool_name": str, "parameters": { ... } }`.
-- Respuesta `{ "tool_name": str, "result": { ... } }` o error HTTP:
-	- 400 validación parámetros
-	- 403 permiso insuficiente
-	- 404 tool desconocida
-	- 502 error upstream (API principal) / red
+- `/mcp`: Streamable HTTP y mensajes JSON-RPC administrados por el SDK.
+- `/health`: healthcheck operativo fuera del protocolo.
+- `/invoke_tool`: adaptador temporal deprecado; no usar en consumidores nuevos.
 
 ### Roles y Seguridad
-- MVP: confianza en parámetro `user_role` (solo para prototipo interno).
-- Próximos pasos obligatorios antes de exponer externamente:
-	- Token firmado (HMAC o JWT) con claims de rol y expiración.
-	- Lista blanca de tools por rol y rate limiting por IP/rol.
-	- Auditoría de cada invocación (`tool_name`, latencia, rol, éxito/error).
+- JWT HS256 de corta duración con `iss`, `aud`, `sub`, `role`, `iat`, `exp` y `jti`.
+- Filtrar el catálogo entregado al modelo y volver a autorizar en el servidor.
+- No registrar tokens, prompts completos ni parámetros sensibles.
 
 ### Tests
-- Unit: validación de roles y shape de respuesta (mock de red cuando sea necesario).
+- Unit: validación de roles, schemas y shape de respuesta.
 - Integración: uso de `respx` para mockear endpoints de la API principal y simular latencias y códigos de error.
-- Futuros: contract tests para garantizar estabilidad de payload al añadir campos nuevos (estrategia additive-only v1).
+- Contract tests: un cliente MCP debe inicializar, descubrir e invocar tools sobre `/mcp`.
 
 ### Documentación
 - Actualizar `Roadmap.md` al introducir nuevo MCP Server.
 - Añadir sección en README raíz cuando la capa crezca (diagrama arquitectura actualizado).
-- Anotar herramientas disponibles y roles requeridos en `docs/roles-endpoints.md` cuando salgan del estado MVP.
+- Anotar herramientas disponibles y roles requeridos en `docs/features/roles-endpoints.md` cuando salgan del estado MVP.
 
 ### Observabilidad (futuro)
 - Métricas: invocaciones por tool, latencia p50/p95, tasa de error, top SKUs consultados, cache hit ratio.
@@ -438,14 +482,14 @@ mcp_servers/
 - `mcp_servers/products_server`: tools `get_product_info` y `get_product_full_info` (roles admin|colaborador para la segunda) exponiendo datos de primer nivel de productos.
 
 ---
-Actualizado MCP Servers: 2025-10-06.
+Actualizado MCP Servers: 2026-07-14.
 
 ## Convenciones Docker (Imágenes de Servicios)
 
 Esta sección establece pautas para la construcción de imágenes Docker en el repositorio:
 
 1. Multi-stage obligatorio para servicios Python y frontend: separar `builder` (toolchain, wheel builds) de `runtime` (mínimo). Evita arrastrar compiladores a producción.
-2. Base Python: usar `python:3.13-slim-bookworm` salvo requerimiento puntual distinto. Justificar cambios de versión / distro en la PR.
+2. Base Python: usar `python:3.14.6-slim-bookworm` y actualizarla ante revisiones de seguridad 3.14 posteriores. Justificar cambios de versión / distro en la PR.
 3. Usuario no root: crear usuario del sistema (`app`) y ejecutar procesos con privilegios mínimos.
 4. Virtualenv aislado en `/opt/venv` y añadir a `PATH`. No instalar dependencias globales en system site-packages.
 5. Limpieza de capas: remover listas de APT (`rm -rf /var/lib/apt/lists/*`) y usar `--no-install-recommends`.
@@ -458,7 +502,7 @@ Esta sección establece pautas para la construcción de imágenes Docker en el r
 Próximos pasos sugeridos:
 - Introducir endpoint uniforme `/health` en todos los servicios.
 - Implementar stage opcional de tests (`FROM builder as tester`) que ejecute `pytest` antes de pasar a runtime en CI.
-- Generar métricas de tamaño comparativo antes/después de optimizaciones (documentar en `docs/PERFORMANCE.md`).
+- Generar métricas de tamaño comparativo antes/después de optimizaciones (documentar en `docs/features/PERFORMANCE.md`).
 
 Actualizado Convenciones Docker: 2025-10-09.
 

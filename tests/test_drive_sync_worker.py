@@ -322,8 +322,8 @@ class TestSyncDriveImages:
         assert result["no_sku"] == 0
         # Debe llamarse _process_image
         mock_process_image.assert_called_once()
-        # Debe moverse a Procesados
-        assert mock_drive.move_file.call_count == 1
+        # El movimiento forma parte de _process_image; al mockearla se valida su contrato.
+        assert mock_process_image.call_args.args[-1] == "folder_id"
 
     @patch("workers.drive_sync.GoogleDriveSync")
     @patch.dict(os.environ, {
@@ -370,9 +370,9 @@ class TestSyncDriveImages:
         mock_drive.service = Mock()
         
         # Simular que file1 está en raíz y file2 está en subcarpeta
-        def mock_get_file(file_id):
+        def mock_get_file(fileId=None, **_kwargs):
             mock_file = Mock()
-            if file_id == "file1":
+            if fileId == "file1":
                 mock_file.execute.return_value = {"parents": ["test_folder_id"]}
             else:  # file2
                 mock_file.execute.return_value = {"parents": ["test_folder_id", "subfolder_id"]}

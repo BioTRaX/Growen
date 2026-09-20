@@ -392,6 +392,22 @@ class TestExtractPriceFromPage:
         
         assert price_text is not None
         assert "2.999" in price_text or "2999" in price_text
+
+    @pytest.mark.asyncio
+    async def test_extract_prefers_product_json_ld_over_carousel_price(self):
+        mock_page = AsyncMock()
+        mock_page.content = AsyncMock(return_value="""
+            <html><body>
+              <div class="price">$79.750</div>
+              <script type="application/ld+json">
+              {"@context":"https://schema.org","@type":"Product","offers":{
+                "@type":"Offer","price":"3700","priceCurrency":"ARS"
+              }}
+              </script>
+            </body></html>
+        """)
+
+        assert await extract_price_from_page(mock_page, "elalquimistagrow.com") == "ARS 3700"
     
     @pytest.mark.asyncio
     async def test_extract_returns_none_when_no_price(self):
@@ -447,6 +463,7 @@ class TestScrapeDynamicPriceSync:
         
         # Verificar que se llamó asyncio.run
         mock_asyncio_run.assert_called_once()
+        mock_asyncio_run.call_args.args[0].close()
         
         # Verificar resultado
         assert price == Decimal("1250.00")
@@ -466,6 +483,7 @@ class TestScrapeDynamicPriceSync:
         
         # Verificar que se pasaron todos los parámetros a la versión async
         call_args = mock_asyncio_run.call_args[0][0]
+        call_args.close()
         # call_args es la coroutine, no podemos inspeccionar fácilmente
         # pero verificamos que se llamó
         assert mock_asyncio_run.called

@@ -20,11 +20,36 @@ class MediaConfig:
     base_url: str = "/media"
 
 
+def get_public_media_root() -> Path:
+    """Raíz montada en ``/media`` para imágenes comerciales publicables."""
+
+    project_root = Path(__file__).resolve().parents[2]
+    configured = os.getenv("PUBLIC_MEDIA_ROOT") or os.getenv("MEDIA_ROOT")
+    return Path(configured) if configured else project_root / "Devs" / "Imagenes"
+
+
+def get_private_media_root() -> Path:
+    """Raíz no montada como estática para documentos transaccionales."""
+
+    project_root = Path(__file__).resolve().parents[2]
+    configured = os.getenv("PRIVATE_MEDIA_ROOT")
+    return Path(configured) if configured else project_root / "Devs" / "PrivateMedia"
+
+
 def get_media_root() -> Path:
-    from pathlib import Path
-    import os
-    ROOT = Path(__file__).resolve().parents[2]
-    return Path(os.getenv("MEDIA_ROOT", str(ROOT / "Devs" / "Imagenes")))
+    """Alias compatible para consumidores históricos de imágenes públicas."""
+
+    return get_public_media_root()
+
+
+def resolve_private_media_path(relative_path: str) -> Path:
+    """Resuelve una ruta persistida sin permitir escapes del árbol privado."""
+
+    root = get_private_media_root().resolve()
+    candidate = (root / relative_path).resolve()
+    if candidate == root or root not in candidate.parents:
+        raise ValueError("private_media_path_outside_root")
+    return candidate
 
 
 def sha256_of_file(path: Path) -> str:
@@ -35,14 +60,18 @@ def sha256_of_file(path: Path) -> str:
     return h.hexdigest()
 
 
-async def save_upload(category: str, filename: str, file: UploadFile) -> tuple[Path, str]:
+async def _save_upload_to(
+    root: Path,
+    category: str,
+    filename: str,
+    file: UploadFile,
+) -> tuple[Path, str]:
     """Save an UploadFile under category or category/YYYY/MM and return (path, sha256).
 
     If ``category`` contains path separators (``/`` or ``\\``), it is treated as a nested path
     relative to MEDIA_ROOT and no year/month subfolders are added.
     """
     from datetime import datetime
-    root = get_media_root()
     now = datetime.utcnow()
     # If category looks like a nested path, do not add date subfolders
     if ("/" in category) or ("\\" in category):
@@ -67,3 +96,19 @@ async def save_upload(category: str, filename: str, file: UploadFile) -> tuple[P
                 break
             out.write(chunk)
     return target, sha256_of_file(target)
+
+
+async def save_upload(category: str, filename: str, file: UploadFile) -> tuple[Path, str]:
+    """Guarda contenido publicable bajo ``PUBLIC_MEDIA_ROOT``."""
+
+    return await _save_upload_to(get_public_media_root(), category, filename, file)
+
+
+async def save_private_upload(
+    category: str,
+    filename: str,
+    file: UploadFile,
+) -> tuple[Path, str]:
+    """Guarda contenido privado fuera del árbol servido por ``/media``."""
+
+    return await _save_upload_to(get_private_media_root(), category, filename, file)

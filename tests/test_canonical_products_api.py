@@ -18,24 +18,14 @@ app.dependency_overrides[current_session] = lambda: SessionData(None, None, "adm
 app.dependency_overrides[require_csrf] = lambda: None
 
 
-def test_create_canonical_without_sku_generates_one() -> None:
-    # Sin categoría ni subcategoría, debe autogenerar con prefijos por defecto
+def test_create_canonical_requires_category_and_subcategory() -> None:
     r = client.post("/canonical-products", json={"name": "Maceta plástica 1L"})
-    assert r.status_code == 200, r.text
-    data = r.json()
-    assert data.get("id") is not None
-    assert data.get("ng_sku", "").startswith("NG-")
-    # sku_custom debe existir y tener patrón XXX_####_YYY
-    sku = data.get("sku_custom")
-    assert sku is not None and len(sku) >= 10
-    assert sku.split("_")[0].isalpha() and len(sku.split("_")[0]) == 3
-    assert sku.split("_")[1].isdigit() and len(sku.split("_")[1]) == 4
-    assert sku.split("_")[2].isalpha() and len(sku.split("_")[2]) == 3
+    assert r.status_code == 422
 
 
 def test_create_canonical_with_category_sequences_increase() -> None:
     # Crear categoría raíz
-    r = client.post("/categories", json={"name": "Riego"})
+    r = client.post("/categories", json={"name": "Riego", "kind": "category"})
     if r.status_code == 200:
         cat = r.json()
     else:
@@ -44,13 +34,20 @@ def test_create_canonical_with_category_sequences_increase() -> None:
         lr = client.get("/categories")
         assert lr.status_code == 200
         cats = lr.json()
-        cat = next(c for c in cats if c.get("name") == "Riego" and c.get("parent_id") is None)
+        cat = next(c for c in cats if c.get("name") == "Riego" and c.get("kind") == "category")
+    sub_response = client.post("/categories", json={"name": "Bombas", "kind": "subcategory"})
+    if sub_response.status_code == 200:
+        sub = sub_response.json()
+    else:
+        sub = next(c for c in client.get("/categories").json() if c.get("name") == "Bombas" and c.get("kind") == "subcategory")
 
     # Crear 2 canónicos en misma categoría -> secuencias 0001 y 0002
-    r1 = client.post("/canonical-products", json={"name": "Bomba 12v", "category_id": cat["id"]})
-    r2 = client.post("/canonical-products", json={"name": "Manguera 1/2", "category_id": cat["id"]})
+    r1 = client.post("/canonical-products", json={"name": "Bomba 12v", "category_id": cat["id"], "subcategory_id": sub["id"]})
+    r2 = client.post("/canonical-products", json={"name": "Manguera 1/2", "category_id": cat["id"], "subcategory_id": sub["id"]})
     assert r1.status_code == 200 and r2.status_code == 200
     s1 = r1.json()["sku_custom"]
     s2 = r2.json()["sku_custom"]
-    assert s1.split("_")[1] == "0001"
-    assert s2.split("_")[1] == "0002"
+    n1 = int(s1.split("_")[1])
+    n2 = int(s2.split("_")[1])
+    assert n2 == n1 + 1
+    assert len(s1.split("_")[1]) == len(s2.split("_")[1]) == 4

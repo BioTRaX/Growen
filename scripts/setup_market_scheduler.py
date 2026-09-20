@@ -222,7 +222,7 @@ def main():
     print(f"  python scripts/run_market_update.py --max-products 5")
     
     print(f"\n{Colors.CYAN}# Ver documentación completa{Colors.END}")
-    print(f"  cat docs/MARKET_SCHEDULER.md")
+    print("  cat docs/features/MARKET_SCHEDULER.md")
     print(f"  cat MARKET_SCHEDULER_QUICKSTART.md")
     
     print("\n" + Colors.GREEN + Colors.BOLD + "✓ Configuración completada exitosamente" + Colors.END)

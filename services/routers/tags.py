@@ -8,7 +8,8 @@ from __future__ import annotations
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -38,6 +39,34 @@ class ProductTagsAssign(BaseModel):
 class BulkTagsAssign(BaseModel):
     product_ids: List[int]
     tag_names: List[str]
+
+
+def normalize_tag_names(values: List[str]) -> List[str]:
+    """Normaliza espacios y deduplica tags sin distinguir mayúsculas."""
+    normalized: dict[str, str] = {}
+    for value in values:
+        display = " ".join((value or "").strip().split())
+        if display:
+            normalized.setdefault(display.casefold(), display)
+    return list(normalized.values())
+
+
+async def get_or_create_tags(session: AsyncSession, names: List[str]) -> List[Tag]:
+    """Obtiene o crea tags con savepoints para tolerar altas concurrentes."""
+    result: List[Tag] = []
+    for name in normalize_tag_names(names):
+        tag = await session.scalar(select(Tag).where(func.lower(Tag.name) == name.lower()))
+        if not tag:
+            try:
+                async with session.begin_nested():
+                    tag = Tag(name=name)
+                    session.add(tag)
+                    await session.flush()
+            except IntegrityError:
+                tag = await session.scalar(select(Tag).where(func.lower(Tag.name) == name.lower()))
+        if tag and all(current.id != tag.id for current in result):
+            result.append(tag)
+    return result
 
 
 @router.get(
@@ -74,15 +103,14 @@ async def create_tag(
         raise HTTPException(status_code=400, detail="name requerido")
     
     # Buscar si ya existe
-    existing = await session.scalar(select(Tag).where(Tag.name == name))
+    existing = await session.scalar(select(Tag).where(func.lower(Tag.name) == name.lower()))
     if existing:
         return TagResponse(id=existing.id, name=existing.name)
     
     # Crear nuevo
-    tag = Tag(name=name)
-    session.add(tag)
+    tags = await get_or_create_tags(session, [name])
+    tag = tags[0]
     await session.commit()
-    await session.refresh(tag)
     return TagResponse(id=tag.id, name=tag.name)
 
 
@@ -102,19 +130,12 @@ async def assign_tags_to_product(
         raise HTTPException(status_code=404, detail="Producto no encontrado")
     
     # Normalizar nombres de tags (trim, sin duplicados)
-    tag_names = list(set([t.strip() for t in payload.tag_names if t.strip()]))
+    tag_names = normalize_tag_names(payload.tag_names)
     if not tag_names:
         raise HTTPException(status_code=400, detail="Se requiere al menos un tag")
     
     # Obtener o crear tags
-    tags_to_assign = []
-    for tag_name in tag_names:
-        tag = await session.scalar(select(Tag).where(Tag.name == tag_name))
-        if not tag:
-            tag = Tag(name=tag_name)
-            session.add(tag)
-            await session.flush()
-        tags_to_assign.append(tag)
+    tags_to_assign = await get_or_create_tags(session, tag_names)
     
     # Obtener tags actuales del producto
     existing_tags = (
@@ -190,32 +211,26 @@ async def bulk_assign_tags(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Asigna tags a múltiples productos a la vez."""
-    if not payload.product_ids:
+    product_ids = list(dict.fromkeys(payload.product_ids))
+    if not product_ids:
         raise HTTPException(status_code=400, detail="Se requiere al menos un product_id")
     if not payload.tag_names:
         raise HTTPException(status_code=400, detail="Se requiere al menos un tag")
     
     # Normalizar nombres de tags
-    tag_names = list(set([t.strip() for t in payload.tag_names if t.strip()]))
+    tag_names = normalize_tag_names(payload.tag_names)
     
     # Obtener o crear tags
-    tags_to_assign = []
-    for tag_name in tag_names:
-        tag = await session.scalar(select(Tag).where(Tag.name == tag_name))
-        if not tag:
-            tag = Tag(name=tag_name)
-            session.add(tag)
-            await session.flush()
-        tags_to_assign.append(tag)
+    tags_to_assign = await get_or_create_tags(session, tag_names)
     
     # Verificar que todos los productos existen
     products = (
         await session.execute(
-            select(Product).where(Product.id.in_(payload.product_ids))
+            select(Product).where(Product.id.in_(product_ids))
         )
     ).scalars().all()
     found_ids = {p.id for p in products}
-    missing_ids = set(payload.product_ids) - found_ids
+    missing_ids = set(product_ids) - found_ids
     if missing_ids:
         raise HTTPException(
             status_code=404,
@@ -226,7 +241,7 @@ async def bulk_assign_tags(
     existing_relations = (
         await session.execute(
             select(ProductTag).where(
-                ProductTag.product_id.in_(payload.product_ids),
+                ProductTag.product_id.in_(product_ids),
                 ProductTag.tag_id.in_([t.id for t in tags_to_assign])
             )
         )
@@ -235,7 +250,7 @@ async def bulk_assign_tags(
     
     # Crear nuevas relaciones
     new_count = 0
-    for product_id in payload.product_ids:
+    for product_id in product_ids:
         for tag in tags_to_assign:
             if (product_id, tag.id) not in existing_pairs:
                 pt = ProductTag(product_id=product_id, tag_id=tag.id)
@@ -245,7 +260,7 @@ async def bulk_assign_tags(
     await session.commit()
     
     return {
-        "product_ids": payload.product_ids,
+        "product_ids": product_ids,
         "tag_names": tag_names,
         "tags_assigned": len(tags_to_assign),
         "new_relations_created": new_count,

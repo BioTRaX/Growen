@@ -15,14 +15,17 @@ Valida:
 - Formato de respuesta
 """
 
+from decimal import Decimal
+
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import CanonicalProduct, Category, ProductEquivalence, Supplier, SupplierProduct, User, MarketSource
+from db.models import CanonicalKnowledgeAsset, CanonicalProduct, Category, ProductEquivalence, Supplier, SupplierProduct, User, MarketSource, MarketUpdateJob
 from services.api import app
+from services.market.pricing import persist_source_observation
 
 
 @pytest.mark.asyncio
@@ -280,8 +283,8 @@ async def test_market_products_requires_collab_or_admin(client_viewer: AsyncClie
 
 
 @pytest.mark.asyncio
-async def test_market_products_preferred_name_custom_sku(client_collab: AsyncClient, db: AsyncSession):
-    """Test: preferred_name usa sku_custom si existe"""
+async def test_market_products_separates_canonical_name_and_custom_sku(client_collab: AsyncClient, db: AsyncSession):
+    """El nombre canónico y el SKU personalizado ocupan campos distintos."""
     p1 = CanonicalProduct(
         name="Producto Original",
         ng_sku="NG001",
@@ -302,9 +305,9 @@ async def test_market_products_preferred_name_custom_sku(client_collab: AsyncCli
     
     assert data["total"] == 2
     
-    # p1 debe usar sku_custom como preferred_name
     item_custom = next(item for item in data["items"] if item["product_id"] == p1.id)
-    assert item_custom["preferred_name"] == "CUSTOM_SKU_001"
+    assert item_custom["preferred_name"] == "Producto Original"
+    assert item_custom["product_sku"] == "CUSTOM_SKU_001"
     
     # p2 debe usar name como preferred_name
     item_normal = next(item for item in data["items"] if item["product_id"] == p2.id)
@@ -455,7 +458,10 @@ async def test_get_product_sources_with_data(client_collab: AsyncClient, db: Asy
         url="https://www.mercadolibre.com.ar/producto",
         last_price=Decimal("1350.00"),
         last_checked_at=datetime.utcnow() - timedelta(hours=2),
-        is_mandatory=True
+        is_mandatory=True,
+        validation_status="verified",
+        ars_confirmed=True,
+        argentina_delivery_confirmed=True,
     )
     
     source2 = MarketSource(
@@ -464,7 +470,10 @@ async def test_get_product_sources_with_data(client_collab: AsyncClient, db: Asy
         url="https://www.santaplanta.com.ar/producto",
         last_price=Decimal("1420.00"),
         last_checked_at=datetime.utcnow() - timedelta(days=1),
-        is_mandatory=True
+        is_mandatory=True,
+        validation_status="verified",
+        ars_confirmed=True,
+        argentina_delivery_confirmed=True,
     )
     
     # Crear fuente adicional
@@ -474,7 +483,10 @@ async def test_get_product_sources_with_data(client_collab: AsyncClient, db: Asy
         url="https://www.ejemplo.com/producto",
         last_price=None,
         last_checked_at=None,
-        is_mandatory=False
+        is_mandatory=False,
+        validation_status="verified",
+        ars_confirmed=True,
+        argentina_delivery_confirmed=True,
     )
     
     db.add_all([source1, source2, source3])
@@ -514,7 +526,7 @@ async def test_get_product_sources_with_data(client_collab: AsyncClient, db: Asy
 
 @pytest.mark.asyncio
 async def test_get_product_sources_preferred_name(client_collab: AsyncClient, db: AsyncSession):
-    """Test: Usa sku_custom como preferred_name si existe"""
+    """El detalle usa el nombre canónico aunque exista SKU personalizado."""
     product = CanonicalProduct(
         name="Nombre Original",
         sku_custom="CUSTOM_001",
@@ -528,8 +540,7 @@ async def test_get_product_sources_preferred_name(client_collab: AsyncClient, db
     assert resp.status_code == 200
     data = resp.json()
     
-    # Debe usar sku_custom como product_name
-    assert data["product_name"] == "CUSTOM_001"
+    assert data["product_name"] == "Nombre Original"
 
 
 @pytest.mark.asyncio
@@ -548,7 +559,10 @@ async def test_get_product_sources_fields_validation(client_collab: AsyncClient,
         url="https://test.com/product",
         last_price=Decimal("100.00"),
         last_checked_at=datetime.utcnow(),
-        is_mandatory=True
+        is_mandatory=True,
+        validation_status="verified",
+        ars_confirmed=True,
+        argentina_delivery_confirmed=True,
     )
     db.add(source)
     await db.commit()
@@ -735,7 +749,7 @@ async def test_update_sale_price_from_null(client_collab: AsyncClient, db: Async
 
 @pytest.mark.asyncio
 async def test_update_sale_price_preferred_name(client_collab: AsyncClient, db: AsyncSession):
-    """Test: Usa sku_custom en respuesta si existe"""
+    """La mutación devuelve el nombre canónico aunque exista SKU personalizado."""
     from decimal import Decimal
     
     product = CanonicalProduct(
@@ -755,7 +769,7 @@ async def test_update_sale_price_preferred_name(client_collab: AsyncClient, db: 
     
     assert resp.status_code == 200
     data = resp.json()
-    assert data["product_name"] == "CUSTOM_SKU_001"
+    assert data["product_name"] == "Nombre Original"
 
 
 # ==================== Tests PATCH /products/{id}/market-reference ====================
@@ -890,7 +904,7 @@ async def test_update_market_reference_from_null(client_collab: AsyncClient, db:
 
 @pytest.mark.asyncio
 async def test_update_market_reference_preferred_name(client_collab: AsyncClient, db: AsyncSession):
-    """Test: Usa sku_custom en respuesta si existe"""
+    """La compatibilidad legacy también devuelve el nombre canónico."""
     from decimal import Decimal
     
     product = CanonicalProduct(
@@ -910,7 +924,7 @@ async def test_update_market_reference_preferred_name(client_collab: AsyncClient
     
     assert resp.status_code == 200
     data = resp.json()
-    assert data["product_name"] == "CUSTOM_SKU_002"
+    assert data["product_name"] == "Nombre Original"
 
 
 # ==================== Tests POST /products/{id}/refresh-market ====================
@@ -950,7 +964,7 @@ async def test_refresh_market_prices_success(client_collab: AsyncClient, db: Asy
     
     # Patchear la tarea del worker
     import workers.market_scraping
-    monkeypatch.setattr(workers.market_scraping.refresh_market_prices_task, 'send', mock_send)
+    monkeypatch.setattr(workers.market_scraping.process_market_item_task, 'send', mock_send)
     
     # Ejecutar endpoint
     resp = await client_collab.post(f"/market/products/{product.id}/refresh-market")
@@ -959,10 +973,11 @@ async def test_refresh_market_prices_success(client_collab: AsyncClient, db: Asy
     data = resp.json()
     
     # Validar respuesta
-    assert data["status"] == "processing"
+    assert data["status"] == "queued"
     assert data["product_id"] == product.id
     assert "actualización" in data["message"].lower()
-    assert "job_id" in data  # Puede ser None o string
+    assert data["job_id"] == data["market_job_id"]
+    assert data["item_id"] is not None
 
 
 @pytest.mark.asyncio
@@ -992,15 +1007,127 @@ async def test_refresh_market_prices_no_sources(client_collab: AsyncClient, db: 
         return MockMessage()
     
     import workers.market_scraping
-    monkeypatch.setattr(workers.market_scraping.refresh_market_prices_task, 'send', mock_send)
+    monkeypatch.setattr(workers.market_scraping.process_market_item_task, 'send', mock_send)
     
     # Ejecutar endpoint (debe aceptar aunque no tenga fuentes)
     resp = await client_collab.post(f"/market/products/{product.id}/refresh-market")
     
     assert resp.status_code == 202
     data = resp.json()
-    assert data["status"] == "processing"
+    assert data["status"] == "queued"
     assert data["product_id"] == product.id
+
+
+@pytest.mark.asyncio
+async def test_force_price_detection_enqueues_only_requested_source(
+    client_collab: AsyncClient, db: AsyncSession, monkeypatch
+):
+    product = CanonicalProduct(name="Producto detección focal")
+    db.add(product)
+    await db.flush()
+    source = MarketSource(
+        product_id=product.id,
+        source_name="Competidor en cuarentena",
+        url="https://example.com/producto",
+        is_active=False,
+        validation_status="warning",
+    )
+    db.add(source)
+    await db.commit()
+    sent: list[int] = []
+    monkeypatch.setattr("workers.market_scraping.process_market_item_task.send", sent.append)
+    monkeypatch.setattr("services.routers.market.validate_public_url", lambda _url: None)
+
+    response = await client_collab.post(f"/market/sources/{source.id}/detect-price")
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["source_id"] == source.id
+    assert sent == [payload["item_id"]]
+    job = await db.get(MarketUpdateJob, payload["job_id"])
+    assert job.config_snapshot["target_source_id"] == source.id
+    assert job.config_snapshot["force_price_detection"] is True
+
+
+@pytest.mark.asyncio
+async def test_manual_validation_without_price_remains_quarantined(
+    client_collab: AsyncClient, db: AsyncSession, monkeypatch
+):
+    product = CanonicalProduct(name="Producto sin captura")
+    db.add(product)
+    await db.flush()
+    source = MarketSource(
+        product_id=product.id,
+        source_name="Competidor pendiente",
+        url="https://example.com/pendiente",
+        is_active=False,
+        validation_status="warning",
+    )
+    db.add(source)
+    await db.commit()
+    monkeypatch.setattr("services.routers.market.validate_public_url", lambda _url: None)
+
+    response = await client_collab.post(
+        f"/market/sources/{source.id}/manual-validation",
+        json={
+            "ars_confirmed": True,
+            "argentina_delivery_confirmed": True,
+            "evidence_note": "La página informa precio en pesos y entrega nacional.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_active"] is False
+    assert response.json()["requires_price_detection"] is True
+    await db.refresh(source)
+    assert source.validation_status == "warning"
+    assert source.validation_detail["manual_validation"]["evidence_note"].startswith("La página")
+
+
+@pytest.mark.asyncio
+async def test_manual_validation_with_captured_price_activates_source_and_reference(
+    client_collab: AsyncClient, db: AsyncSession, monkeypatch
+):
+    product = CanonicalProduct(name="Producto validado")
+    db.add(product)
+    await db.flush()
+    source = MarketSource(
+        product_id=product.id,
+        source_name="Competidor validable",
+        url="https://example.com/validado",
+        currency="ARS",
+        is_active=False,
+        validation_status="warning",
+    )
+    db.add(source)
+    await db.flush()
+    await persist_source_observation(
+        db,
+        product_id=product.id,
+        source=source,
+        price=Decimal("3700.00"),
+        capture_method="static",
+    )
+    await db.commit()
+    monkeypatch.setattr("services.routers.market.validate_public_url", lambda _url: None)
+
+    response = await client_collab.post(
+        f"/market/sources/{source.id}/manual-validation",
+        json={
+            "ars_confirmed": True,
+            "argentina_delivery_confirmed": True,
+            "evidence_note": "Validación visual: precio ARS y envío a Argentina.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_active"] is True
+    assert response.json()["market_price_reference"] == 3700.0
+    await db.refresh(source)
+    await db.refresh(product)
+    assert source.asset.status == "confirmed"
+    assert source.validation_status == "verified"
+    assert product.market_price_reference == Decimal("3700.00")
 
 
 # ==================== Tests POST /products/{id}/sources ====================
@@ -1184,11 +1311,8 @@ async def test_add_source_with_currency_and_type(client_collab: AsyncClient, db:
         }
     )
     
-    assert resp.status_code == 201
-    data = resp.json()
-    assert data["currency"] == "USD"
-    assert data["source_type"] == "dynamic"
-    assert data["is_mandatory"] is True
+    assert resp.status_code == 422
+    assert "ARS" in resp.json()["detail"][0]["msg"]
 
 
 @pytest.mark.asyncio
@@ -1241,11 +1365,17 @@ async def test_delete_source_success(client_collab: AsyncClient, db: AsyncSessio
     assert resp.status_code == 204
     assert resp.content == b""  # No content
     
-    # Verificar que se eliminó de DB
-    query = select(MarketSource).where(MarketSource.id == source_id)
+    # La compatibilidad DELETE archiva el activo y conserva perfil/histórico.
+    query = (
+        select(MarketSource.is_active, CanonicalKnowledgeAsset.status)
+        .join(CanonicalKnowledgeAsset, CanonicalKnowledgeAsset.id == MarketSource.asset_id)
+        .where(MarketSource.id == source_id)
+    )
     result = await db.execute(query)
-    deleted_source = result.scalar_one_or_none()
-    assert deleted_source is None
+    deleted_source = result.one_or_none()
+    assert deleted_source is not None
+    assert deleted_source.is_active is False
+    assert deleted_source.status == "archived"
 
 
 @pytest.mark.asyncio
@@ -1291,8 +1421,11 @@ async def test_delete_source_updates_product_prices(client_collab: AsyncClient, 
     resp = await client_collab.delete(f"/market/sources/{source1.id}")
     assert resp.status_code == 204
     
-    # Verificar que la segunda fuente sigue existiendo
-    query = select(MarketSource).where(MarketSource.product_id == product.id)
+    # El perfil archivado se conserva; sólo la segunda fuente sigue operativa.
+    query = select(MarketSource).where(
+        MarketSource.product_id == product.id,
+        MarketSource.is_active.is_(True),
+    )
     result = await db.execute(query)
     remaining_sources = result.scalars().all()
     assert len(remaining_sources) == 1

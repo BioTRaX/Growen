@@ -545,6 +545,13 @@ class KnowledgeService:
                 "chunks_count": chunks_by_source.get(s.id, 0),
                 "created_at": s.created_at.isoformat() if s.created_at else None,
                 "meta_json": s.meta_json,
+                "role_scope": s.role_scope,
+                "channel_scope": s.channel_scope,
+                "visibility": s.visibility,
+                "content_version": s.content_version,
+                "status": s.status,
+                "indexed_at": s.indexed_at.isoformat() if s.indexed_at else None,
+                "expires_at": s.expires_at.isoformat() if s.expires_at else None,
             }
             for s in sources
         ]

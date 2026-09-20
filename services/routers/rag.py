@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.session import get_session
 from services.rag.search import get_rag_search_service
+from ai.embeddings import get_embedding_service
+from services.auth import require_csrf, require_roles
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,7 @@ class RAGSearchResult(BaseModel):
     similarity: float = Field(..., description="Score de similitud (0-1)")
     chunk_index: int = Field(..., description="Índice del fragmento en el documento")
     source_id: int = Field(..., description="ID de la fuente en la DB")
+    citation: dict[str, Any] = Field(..., description="Cita verificable y versionada")
 
 
 class RAGSearchResponse(BaseModel):
@@ -61,7 +64,11 @@ class RAGSearchResponse(BaseModel):
 router = APIRouter(prefix="/api/v1/rag", tags=["RAG"])
 
 
-@router.post("/search", response_model=RAGSearchResponse)
+@router.post(
+    "/search",
+    response_model=RAGSearchResponse,
+    dependencies=[Depends(require_roles("admin")), Depends(require_csrf)],
+)
 async def search_knowledge(
     request: RAGSearchRequest,
     session: AsyncSession = Depends(get_session),
@@ -69,7 +76,7 @@ async def search_knowledge(
     """
     Búsqueda semántica en la base de conocimientos.
     
-    Utiliza embeddings de OpenAI y pgvector para encontrar fragmentos de texto
+    Utiliza embeddings locales Ollama y pgvector para encontrar fragmentos de texto
     relevantes basados en similitud coseno.
     
     **Parámetros:**
@@ -127,15 +134,17 @@ async def rag_health() -> dict[str, Any]:
     Verifica que el servicio de embeddings esté configurado correctamente.
     """
     try:
-        from ai.embeddings import get_embedding_service
         service = get_embedding_service()
+        health = await service.health()
         return {
-            "status": "ok",
-            "embedding_model": service.DEFAULT_MODEL,
-            "embedding_dimensions": service.EMBEDDING_DIMENSIONS,
+            "status": health["status"],
+            "embedding_provider": health.get("provider", "ollama"),
+            "embedding_model": health.get("model", service.DEFAULT_MODEL),
+            "embedding_dimensions": health.get("dimensions", service.EMBEDDING_DIMENSIONS),
+            **({"code": health["code"]} if health.get("code") else {}),
         }
-    except Exception as e:
+    except Exception:
         return {
             "status": "error",
-            "detail": str(e),
+            "code": "rag_embedding_configuration_invalid",
         }

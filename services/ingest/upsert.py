@@ -118,8 +118,8 @@ async def _generate_sku_async(
     
     # Fallback: error (no se generan más SKUs no canónicos)
     raise ValueError(
-        f"No se puede generar SKU: falta 'sku' canónico o 'category_name'. "
-        f"Formato requerido: XXX_####_YYY (ej: FLO_0001_FER)"
+        "No se puede generar SKU: falta 'sku' canónico o 'category_name'. "
+        "Formato requerido: XXX_####_YYY (ej: FLO_0001_FER)"
     )
 
 
@@ -142,7 +142,7 @@ def _generate_sku(row: dict[str, Any], supplier_name: str) -> str:
         return f"EAN-{barcode}".upper()
     # DEPRECADO: SUP-xxx no es formato canónico
     base = f"{supplier_name}-{row.get('title','')}-{row.get('variant_value','')}"
-    return "SUP-" + hashlib.sha1(base.encode()).hexdigest()[:8].upper()
+    return "SUP-" + hashlib.sha1(base.encode(), usedforsecurity=False).hexdigest()[:8].upper()
 
 
 async def upsert_supplier_rows(
@@ -191,7 +191,7 @@ async def upsert_supplier_rows(
         # NOTA: supplier_product_id es el SKU del proveedor, no el SKU interno canónico
         if not sku:
             # DEPRECADO: Este formato no es canónico, pero se mantiene para compatibilidad
-            sku = "SP-" + hashlib.sha1(spid.encode()).hexdigest()[:8].upper()
+            sku = "SP-" + hashlib.sha1(spid.encode(), usedforsecurity=False).hexdigest()[:8].upper()
         title = row.get("title", "")
         purchase_price = row.get("purchase_price")
         sale_price = row.get("sale_price")

@@ -6,15 +6,12 @@
 
 from __future__ import annotations
 
-import os
 import logging
 import re
 from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse, parse_qs, unquote
 
-import httpx
-
-from agent_core.detect_mcp_url import get_mcp_web_search_url
+from agent_core.mcp_client import mcp_client_manager
 
 # Usar logger principal para visibilidad en logs
 logger = logging.getLogger("growen")
@@ -299,46 +296,17 @@ async def call_mcp_web_search(
     Returns:
         Respuesta del MCP con items o error
     """
-    # Detectar automáticamente la URL correcta según el contexto (Docker vs local)
-    mcp_url = get_mcp_web_search_url()
-    
-    logger.info(f"[discovery] Usando MCP URL: {mcp_url}")
-    
-    payload = {
-        "tool_name": "search_web",
-        "parameters": {
-            "query": query,
-            "user_role": user_role,
-            "max_results": max_results,
-        }
-    }
-    
-    try:
-        logger.info(f"[discovery] Llamando MCP Web Search: query='{query}' max_results={max_results}")
-        
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(mcp_url, json=payload)
-            
-            if resp.status_code != 200:
-                logger.error(
-                    f"[discovery] MCP Web Search respondió status={resp.status_code} "
-                    f"detail={resp.text[:200]}"
-                )
-                return {"error": "mcp_call_failed", "status": resp.status_code}
-            
-            result = resp.json().get("result", {})
-            
-            items = result.get("items", [])
-            logger.info(f"[discovery] MCP Web Search retornó {len(items)} resultados")
-            
-            return result
-            
-    except httpx.RequestError as e:
-        logger.error(f"[discovery] Error de red llamando MCP Web Search: {e}")
-        return {"error": "network_failure"}
-    except Exception as e:
-        logger.exception(f"[discovery] Error inesperado llamando MCP Web Search: {e}")
-        return {"error": "internal_failure"}
+    logger.info(f"[discovery] Llamando MCP Web Search autenticado: query='{query}' max_results={max_results}")
+    result = await mcp_client_manager.call_tool(
+        "search_web",
+        {"query": query, "max_results": max_results},
+        role=user_role,
+        server_name="web_search",
+        channel="web",
+    )
+    items = result.get("items", []) if isinstance(result, dict) else []
+    logger.info("[discovery] MCP Web Search retornó %s resultados", len(items))
+    return result if isinstance(result, dict) else {"error": "tool_invalid_result"}
 
 
 async def discover_price_sources(
@@ -384,7 +352,7 @@ async def discover_price_sources(
     mcp_result = await call_mcp_web_search(query, max_results, user_role)
     
     # Verificar errores del MCP
-    if "error" in mcp_result:
+    if mcp_result.get("error"):
         return {
             "success": False,
             "query": query,

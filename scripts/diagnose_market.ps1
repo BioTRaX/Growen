@@ -1,98 +1,73 @@
 # NG-HEADER: Nombre de archivo: diagnose_market.ps1
 # NG-HEADER: Ubicación: scripts/diagnose_market.ps1
-# NG-HEADER: Descripción: Script de diagnóstico para sistema de actualización de precios de mercado
+# NG-HEADER: Descripción: Diagnóstico read-only del broker, consumidor y logs del worker Mercado.
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 
-Write-Host "=== Diagnóstico de Market Scraping ===" -ForegroundColor Cyan
-Write-Host ""
+$projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
+$logPath = Join-Path $projectRoot "logs\worker_market.log"
 
-# 1. Verificar Redis
-Write-Host "[1/5] Verificando Redis..." -ForegroundColor Yellow
-$redisRunning = docker ps --filter "name=redis" --format "{{.Names}}: {{.Status}}" 2>$null
-if ($redisRunning) {
-    Write-Host "  OK $redisRunning" -ForegroundColor Green
-} else {
-    Write-Host "  X Redis NO esta corriendo" -ForegroundColor Red
-    Write-Host "  -> Ejecuta: docker compose up -d redis" -ForegroundColor Gray
-}
-Write-Host ""
-
-# 2. Verificar Worker
-Write-Host "[2/5] Verificando Worker..." -ForegroundColor Yellow
-$workerFound = $false
-Get-Process python -ErrorAction SilentlyContinue | ForEach-Object {
-    $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
-    if ($cmd -like "*market_scraping*" -or $cmd -like "*worker_market*") {
-        Write-Host "  OK Worker CORRIENDO (PID: $($_.Id))" -ForegroundColor Green
-        $workerFound = $true
-    }
-}
-if (-not $workerFound) {
-    Write-Host "  X Worker NO esta corriendo" -ForegroundColor Red
-    Write-Host "  -> Ejecuta: .\scripts\start_worker_market.cmd" -ForegroundColor Gray
-}
-Write-Host ""
-
-# 3. Verificar Cola Redis
-Write-Host "[3/5] Verificando cola de mensajes..." -ForegroundColor Yellow
+Push-Location $projectRoot
 try {
-    $queueLength = docker exec growen-redis redis-cli LLEN "dramatiq:market.DQ" 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  Mensajes en cola 'market': $queueLength" -ForegroundColor Cyan
-        if ([int]$queueLength -gt 0) {
-            Write-Host "  ! Hay tareas pendientes sin procesar" -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "  X No se pudo conectar a Redis" -ForegroundColor Red
-    }
-} catch {
-    Write-Host "  X Error al consultar Redis: $($_.Exception.Message)" -ForegroundColor Red
-}
-Write-Host ""
+    Write-Host "=== Diagnóstico de Market Scraping ===" -ForegroundColor Cyan
 
-# 4. Logs recientes del worker
-Write-Host "[4/5] Últimos logs del worker..." -ForegroundColor Yellow
-$logPath = "logs\worker_market.log"
-if (Test-Path $logPath) {
-    Write-Host "  Archivo: $logPath" -ForegroundColor Gray
-    $lastLines = Get-Content $logPath -Tail 5 -ErrorAction SilentlyContinue
-    if ($lastLines) {
-        $lastLines | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+    Write-Host "`n[1/5] Redis" -ForegroundColor Yellow
+    $redisStatus = docker compose ps redis --format json 2>$null
+    $redisRunning = $LASTEXITCODE -eq 0 -and $redisStatus
+    if ($redisRunning) {
+        Write-Host "  OK Redis figura activo en Compose" -ForegroundColor Green
     } else {
-        Write-Host "  (vacío)" -ForegroundColor Gray
+        Write-Host "  ERROR Redis no está activo o Docker no responde" -ForegroundColor Red
     }
-} else {
-    Write-Host "  X No hay logs de worker (nunca se inicio)" -ForegroundColor Red
-}
-Write-Host ""
 
-# 5. Variable REDIS_URL
-Write-Host "[5/5] Verificando REDIS_URL..." -ForegroundColor Yellow
-try {
-    $redisUrl = python -c "import os; print(os.getenv('REDIS_URL', 'NO_CONFIGURADA'))" 2>$null
-    if ($redisUrl -eq "NO_CONFIGURADA") {
-        Write-Host "  ! REDIS_URL no configurada (usando default)" -ForegroundColor Yellow
-        Write-Host "  -> Default: redis://localhost:6379/0" -ForegroundColor Gray
+    Write-Host "`n[2/5] Consumidor market" -ForegroundColor Yellow
+    $workerPids = @()
+    if (Test-Path $pythonExe) {
+        $workerPids = @(& $pythonExe -c "import os, psutil; excluded={os.getpid(), *(p.pid for p in psutil.Process().parents())}; print('\n'.join(str(p.info['pid']) for p in psutil.process_iter(['pid','cmdline']) if p.info['pid'] not in excluded and 'dramatiq' in ' '.join(p.info.get('cmdline') or []).lower() and 'market_scraping' in ' '.join(p.info.get('cmdline') or []).lower()))" 2>$null) | Where-Object { $_ }
+    }
+    if ($workerPids.Count -gt 0) {
+        Write-Host "  OK Worker activo (PID: $($workerPids -join ', '))" -ForegroundColor Green
     } else {
-        Write-Host "  OK REDIS_URL: $redisUrl" -ForegroundColor Green
+        Write-Host "  ERROR No hay consumidor de la cola market" -ForegroundColor Red
     }
-} catch {
-    Write-Host "  X Error al verificar variable: $($_.Exception.Message)" -ForegroundColor Red
-}
-Write-Host ""
 
-# Resumen y recomendaciones
-Write-Host "=== Resumen ===" -ForegroundColor Cyan
-if (-not $redisRunning) {
-    Write-Host "CRITICO: Redis no esta corriendo" -ForegroundColor Red
-    Write-Host "   1. docker compose up -d redis" -ForegroundColor White
+    Write-Host "`n[3/5] Colas Dramatiq" -ForegroundColor Yellow
+    $ready = 0
+    $delayed = 0
+    if ($redisRunning) {
+        $readyValue = docker compose exec -T redis redis-cli LLEN "dramatiq:market" 2>$null
+        if ($LASTEXITCODE -eq 0) { $ready = [int]$readyValue }
+        $delayedValue = docker compose exec -T redis redis-cli ZCARD "dramatiq:market.DQ" 2>$null
+        if ($LASTEXITCODE -eq 0) { $delayed = [int]$delayedValue }
+    }
+    Write-Host "  Listos: $ready | diferidos: $delayed" -ForegroundColor Cyan
+    if (($ready + $delayed) -gt 0 -and $workerPids.Count -eq 0) {
+        Write-Host "  ERROR Hay trabajos sin consumidor" -ForegroundColor Red
+    }
+
+    Write-Host "`n[4/5] Log" -ForegroundColor Yellow
+    if (Test-Path $logPath) {
+        Get-Item $logPath | Select-Object FullName, Length, LastWriteTime
+        Get-Content $logPath -Tail 10
+    } else {
+        Write-Host "  INFO El worker todavía no generó su log" -ForegroundColor Gray
+    }
+
+    Write-Host "`n[5/5] Configuración" -ForegroundColor Yellow
+    if ($env:REDIS_URL) {
+        Write-Host "  OK REDIS_URL está definida (valor oculto)" -ForegroundColor Green
+    } else {
+        Write-Host "  INFO Se usará el default local seguro 127.0.0.1:6379" -ForegroundColor Gray
+    }
+
+    Write-Host "`n=== Resultado ===" -ForegroundColor Cyan
+    if ($redisRunning -and $workerPids.Count -gt 0) {
+        Write-Host "OPERATIVO: broker y consumidor market activos" -ForegroundColor Green
+        exit 0
+    }
+
+    Write-Host "NO OPERATIVO: iniciar Redis y luego .\scripts\start_worker_market.cmd" -ForegroundColor Red
+    exit 1
+} finally {
+    Pop-Location
 }
-if (-not $workerFound) {
-    Write-Host "CRITICO: Worker no esta corriendo" -ForegroundColor Red
-    Write-Host "   2. .\scripts\start_worker_market.cmd" -ForegroundColor White
-}
-if ($redisRunning -and $workerFound) {
-    Write-Host "OK Sistema OPERATIVO: Redis y Worker estan corriendo" -ForegroundColor Green
-    Write-Host "   Los precios deberian actualizarse correctamente" -ForegroundColor Gray
-}
-Write-Host ""

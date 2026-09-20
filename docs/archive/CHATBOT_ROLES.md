@@ -46,5 +46,5 @@ Notas:
 - [ ] Rol admin validado mediante SSO/MFA y tokens OIDC.
 - [ ] Colaboradores no pueden acceder a `/chatbot/repo/*` ni a endpoints de auditoría.
 - [ ] RAG etiqueta correctamente cada chunk con `role_scope`.
-- [ ] Documentación actualizada (`README.md`, `Roadmap.md`, `docs/roles-endpoints.md`).
+- [ ] Documentación actualizada (`README.md`, `Roadmap.md`, `docs/features/roles-endpoints.md`).
 - [ ] Tests automatizados cubren escenarios de acceso y auditoría.

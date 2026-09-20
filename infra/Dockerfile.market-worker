@@ -1,0 +1,45 @@
+# NG-HEADER: Nombre de archivo: Dockerfile.market-worker
+# NG-HEADER: Ubicación: infra/Dockerfile.market-worker
+# NG-HEADER: Descripción: Imagen multi-stage no-root para el worker Mercado con Chromium.
+# NG-HEADER: Lineamientos: Ver AGENTS.md
+
+FROM python:3.14.6-slim-bookworm AS builder
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    VENV_PATH=/opt/venv
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN python -m venv "$VENV_PATH" && "$VENV_PATH/bin/pip" install --upgrade pip setuptools wheel
+
+WORKDIR /app
+COPY requirements-market-worker-lock.txt ./
+RUN "$VENV_PATH/bin/pip" install --require-hashes -r requirements-market-worker-lock.txt
+
+FROM python:3.14.6-slim-bookworm AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    VENV_PATH=/opt/venv \
+    PATH=/opt/venv/bin:$PATH \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    MARKET_HEARTBEAT_ENABLED=1 \
+    MARKET_CONCURRENCY=4
+
+COPY --from=builder /opt/venv /opt/venv
+RUN python -m playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/* /root/.cache
+
+RUN addgroup --system app && adduser --system --ingroup app --home /app app \
+    && mkdir -p /app /ms-playwright \
+    && chown -R app:app /app /ms-playwright
+WORKDIR /app
+COPY . .
+RUN chown -R app:app /app
+USER app
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD python scripts/market_worker_health.py
+
+CMD ["sh", "-c", "exec python -m dramatiq workers.market_scraping --processes 1 --threads \"${MARKET_CONCURRENCY:-4}\" --queues market"]

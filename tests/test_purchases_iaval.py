@@ -39,8 +39,8 @@ def test_iaval_preview_and_apply_with_mock(monkeypatch):
     sid = _make_supplier("Proveedor iAVaL")
     pid = _create_draft_with_pdf(sid)
 
-    # Mock de AIRouter.run para devolver una propuesta simple y válida
-    def fake_run(task: str, prompt: str):  # noqa: ARG001
+    # Mock del contrato async vigente de AIRouter.
+    async def fake_run(self, task: str, prompt: str, **_kwargs):  # noqa: ARG001
         return (
             '{"header": {"remito_number": "R-TEST-OK", "remito_date": "2025-09-02", "vat_rate": 21},'
             ' "lines": [{"index": 0, "fields": {"qty": 2, "unit_cost": 10.5, "line_discount": 0, "supplier_sku": "SKU-1", "title": "Item 1"}}],'
@@ -48,7 +48,7 @@ def test_iaval_preview_and_apply_with_mock(monkeypatch):
         )
 
     import services.routers.purchases as pr
-    monkeypatch.setattr(pr.AIRouter, "run", staticmethod(lambda *_args, **_kwargs: fake_run("", "")))
+    monkeypatch.setattr(pr.AIRouter, "run_async", fake_run)
 
     # Previo: añadir una línea vacía para que el índice 0 exista
     r = client.put(f"/purchases/{pid}", json={"lines": [{"title": "", "supplier_sku": "", "qty": 1, "unit_cost": 0, "line_discount": 0}]})
@@ -110,13 +110,13 @@ def test_iaval_preview_with_eml_attachment(monkeypatch):
     pid2 = rr.json()["purchase_id"]
 
     # Mock IA para respuesta determinista
-    def fake_run(task: str, prompt: str):  # noqa: ARG001
+    async def fake_run(self, task: str, prompt: str, **_kwargs):  # noqa: ARG001
         return (
             '{"header": {"remito_number": "R-EML-OK"}, "lines": [], "confidence": 0.7, "comments": ["desde eml"]}'
         )
 
     import services.routers.purchases as pr
-    monkeypatch.setattr(pr.AIRouter, "run", staticmethod(lambda *_args, **_kwargs: fake_run("", "")))
+    monkeypatch.setattr(pr.AIRouter, "run_async", fake_run)
 
     r = client.post(f"/purchases/{pid2}/iaval/preview")
     assert r.status_code == 200

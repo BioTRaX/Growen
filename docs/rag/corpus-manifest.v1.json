@@ -1,0 +1,128 @@
+{
+  "manifest_version": 1,
+  "sources": [
+    {
+      "id": "synthetic-public-v1",
+      "kind": "synthetic",
+      "filename": "synthetic/publico-v1.md",
+      "content": "SYN_PUBLIC_7F3A La disponibilidad pública se comunica como disponible, limitada o sin disponibilidad; nunca revela SKU ni stock exacto.",
+      "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"],
+      "channels": ["web", "websocket", "telegram"],
+      "visibility": "public",
+      "status": "active",
+      "version": 1
+    },
+    {
+      "id": "synthetic-client-v1",
+      "kind": "synthetic",
+      "filename": "synthetic/cliente-v1.md",
+      "content": "SYN_CLIENT_2B91 La guía exclusiva de cliente explica el seguimiento sintético de una consulta comercial.",
+      "roles": ["cliente"],
+      "channels": ["web", "websocket", "telegram"],
+      "visibility": "customer",
+      "status": "active",
+      "version": 1
+    },
+    {
+      "id": "synthetic-supplier-v1",
+      "kind": "synthetic",
+      "filename": "synthetic/proveedor-v1.md",
+      "content": "SYN_SUPPLIER_4D82 El contexto sintético del proveedor sólo describe su propia operación y no datos de terceros.",
+      "roles": ["proveedor"],
+      "channels": ["web", "websocket", "telegram"],
+      "visibility": "supplier",
+      "status": "active",
+      "version": 1
+    },
+    {
+      "id": "synthetic-operator-v1",
+      "kind": "synthetic",
+      "filename": "synthetic/operativo-v1.md",
+      "content": "SYN_OPERATOR_8C14 La operación interna sintética permite consultar SKU y stock exacto a colaboradores.",
+      "roles": ["colaborador", "admin"],
+      "channels": ["web", "websocket"],
+      "visibility": "internal",
+      "status": "active",
+      "version": 1
+    },
+    {
+      "id": "synthetic-admin-v1",
+      "kind": "synthetic",
+      "filename": "synthetic/admin-v1.md",
+      "content": "SYN_ADMIN_6A20 La fuente administrativa sintética sólo puede recuperarse por admin en web.",
+      "roles": ["admin"],
+      "channels": ["web"],
+      "visibility": "admin",
+      "status": "active",
+      "version": 1
+    },
+    {
+      "id": "synthetic-stale-v1",
+      "kind": "synthetic",
+      "filename": "synthetic/centinela-stale.md",
+      "content": "SYN_STALE_LEAK_91AA Este centinela jamás debe recuperarse.",
+      "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"],
+      "channels": ["web", "websocket", "telegram"],
+      "visibility": "public",
+      "status": "stale",
+      "version": 1
+    },
+    {
+      "id": "synthetic-disabled-v1",
+      "kind": "synthetic",
+      "filename": "synthetic/centinela-disabled.md",
+      "content": "SYN_DISABLED_LEAK_22BB Este centinela jamás debe recuperarse.",
+      "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"],
+      "channels": ["web", "websocket", "telegram"],
+      "visibility": "public",
+      "status": "disabled",
+      "version": 1
+    },
+    {
+      "id": "synthetic-expired-v1",
+      "kind": "synthetic",
+      "filename": "synthetic/centinela-expired.md",
+      "content": "SYN_EXPIRED_LEAK_33CC Este centinela jamás debe recuperarse.",
+      "roles": ["guest", "cliente", "proveedor", "colaborador", "admin"],
+      "channels": ["web", "websocket", "telegram"],
+      "visibility": "public",
+      "status": "active",
+      "expired": true,
+      "version": 1
+    },
+    {
+      "id": "curated-api-products-v1",
+      "kind": "curated",
+      "filename": "docs/API_PRODUCTS.md",
+      "path": "docs/API_PRODUCTS.md",
+      "roles": ["colaborador", "admin"],
+      "channels": ["web", "websocket"],
+      "visibility": "internal",
+      "status": "active",
+      "version": 1
+    },
+    {
+      "id": "curated-products-ui-v1",
+      "kind": "curated",
+      "filename": "docs/PRODUCTS_UI.md",
+      "path": "docs/PRODUCTS_UI.md",
+      "roles": ["colaborador", "admin"],
+      "channels": ["web", "websocket"],
+      "visibility": "internal",
+      "status": "active",
+      "version": 1
+    }
+  ],
+  "evaluations": [
+    {"query": "SYN_PUBLIC_7F3A", "role": "guest", "channel": "telegram", "expected": "synthetic-public-v1", "intent": "catalog_public"},
+    {"query": "SYN_CLIENT_2B91", "role": "cliente", "channel": "websocket", "expected": "synthetic-client-v1", "intent": "customer"},
+    {"query": "SYN_SUPPLIER_4D82", "role": "proveedor", "channel": "telegram", "expected": "synthetic-supplier-v1", "intent": "supplier"},
+    {"query": "SYN_OPERATOR_8C14", "role": "colaborador", "channel": "web", "expected": "synthetic-operator-v1", "intent": "operations"},
+    {"query": "SYN_ADMIN_6A20", "role": "admin", "channel": "web", "expected": "synthetic-admin-v1", "intent": "administration"},
+    {"query": "SYN_ADMIN_6A20", "role": "admin", "channel": "telegram", "expected": null, "forbidden": ["synthetic-admin-v1"], "intent": "scope_guard"},
+    {"query": "SYN_STALE_LEAK_91AA SYN_DISABLED_LEAK_22BB SYN_EXPIRED_LEAK_33CC", "role": "admin", "channel": "web", "expected": null, "forbidden": ["synthetic-stale-v1", "synthetic-disabled-v1", "synthetic-expired-v1"], "intent": "sentinel"},
+    {"query": "Hola, ¿estás funcionando?", "role": "guest", "channel": "websocket", "expected": null, "forbidden": ["synthetic-public-v1", "synthetic-client-v1", "synthetic-supplier-v1", "synthetic-operator-v1", "synthetic-admin-v1", "curated-api-products-v1", "curated-products-ui-v1"], "min_similarity": 0.5, "intent": "irrelevant_smalltalk"},
+    {"query": "API de productos endpoints catálogo", "role": "colaborador", "channel": "web", "expected": "curated-api-products-v1", "intent": "curated_api"},
+    {"query": "interfaz de productos Vue", "role": "colaborador", "channel": "websocket", "expected": "curated-products-ui-v1", "intent": "curated_ui"}
+  ]
+}

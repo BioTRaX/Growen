@@ -6,23 +6,42 @@ from __future__ import annotations
 
 from typing import Optional
 from datetime import datetime
+import logging
+import os
 import time
 from decimal import Decimal
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, cast, Float
+from sqlalchemy.orm import selectinload
 
 from db.session import get_session
 from db.models import Customer, Sale, SaleLine, SalePayment, SaleAttachment, Product, AuditLog, Return, ReturnLine
-from db.models import StockLedger, SalesChannel
+from db.models import StockLedger, SalesChannel, StockReservation, SupplierProduct
 from services.auth import require_roles, require_csrf, current_session, SessionData
-from services.media import save_upload, get_media_root
-from fastapi.responses import HTMLResponse
-from fastapi.responses import StreamingResponse
+from services.media import (
+    get_private_media_root,
+    resolve_private_media_path,
+    save_private_upload,
+)
+from services.sales.domain import (
+    account_balance,
+    add_account_entry,
+    expire_reservations,
+    get_product_cost_price,
+    money,
+    quantity,
+    recalculate_sale_totals,
+    reservation_expiry,
+)
+from services.sales.schemas import SaleQuoteRequest
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from sqlalchemy import desc
 
 router = APIRouter(prefix="/sales", tags=["sales"])
+logger = logging.getLogger(__name__)
 
 # --- Cache simple in-memory para reportes agregados ---
 # Nota: proceso single-worker; si se despliega multi-proceso o distribuido conviene backend compartido (Redis).
@@ -149,45 +168,13 @@ async def delete_channel(channel_id: int, db: AsyncSession = Depends(get_session
 
 
 def _recalc_totals(db_sale: Sale, lines: list[SaleLine]) -> None:
-    subtotal = Decimal("0")
-    for l in lines:
-        unit = Decimal(str(l.unit_price))
-        qty = Decimal(str(l.qty))
-        disc = Decimal(str(l.line_discount or 0))
-        line_subtotal = (unit * qty)
-        line_total = (line_subtotal * (Decimal("1") - disc/Decimal("100")))
-        l.subtotal = line_subtotal.quantize(Decimal("0.01"))
-        l.tax = Decimal("0")  # IVA futuro
-        l.total = line_total.quantize(Decimal("0.01"))
-        subtotal += l.total
-    db_sale.subtotal = subtotal.quantize(Decimal("0.01"))
-    db_sale.tax = Decimal("0")  # preparado futuro IVA
-    # Descuento global (discount_percent o discount_amount)
-    discount_percent = Decimal(str(db_sale.discount_percent or 0))
-    discount_amount = Decimal(str(db_sale.discount_amount or 0))
-    if discount_amount and discount_percent:
-        # Si ambos están presentes, priorizar monto explícito
-        discount_percent = Decimal("0")
-    if discount_percent:
-        discount_amount = (subtotal * discount_percent/Decimal("100")).quantize(Decimal("0.01"))
-        db_sale.discount_amount = discount_amount
-    db_sale.total_amount = (subtotal - discount_amount).quantize(Decimal("0.01"))
-    if db_sale.total_amount < 0:
-        db_sale.total_amount = Decimal("0")
-    # payment_status si hay pagos existentes
-    paid = Decimal(str(db_sale.paid_total or 0))
-    if paid == 0:
-        db_sale.payment_status = "PENDIENTE"
-    elif paid < db_sale.total_amount:
-        db_sale.payment_status = "PARCIAL"
-    else:
-        db_sale.payment_status = "PAGADA"
+    recalculate_sale_totals(db_sale, lines)
 
 
 """Rate limiting simple (in-memory). Nota: mono-proceso; usar Redis en despliegues multi.
 _RL_BUCKET almacena timestamps por llave (usuario o IP)."""
 _RL_BUCKET: dict[str, list[float]] = {}
-_RL_MAX = 30  # max requests ventana
+_RL_MAX = max(1, int(os.getenv("SALES_RATE_LIMIT_PER_MINUTE", "30")))
 _RL_WINDOW = 60  # segundos
 
 def _rl_check(key: str):
@@ -204,6 +191,27 @@ def _rl_check(key: str):
     return True, None
 
 
+async def _rl_check_configured(key: str) -> tuple[bool, int | None]:
+    if os.getenv("SALES_RATE_LIMIT_BACKEND", "memory").strip().lower() != "redis":
+        return _rl_check(key)
+    try:
+        import redis.asyncio as aioredis
+
+        now = int(time.time())
+        redis_key = f"growen:sales:rate:{key}:{now // 60}"
+        client = aioredis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+        try:
+            count = await client.incr(redis_key)
+            if count == 1:
+                await client.expire(redis_key, 61)
+        finally:
+            await client.aclose()
+        return count <= _RL_MAX, max(1, 60 - (now % 60))
+    except Exception as exc:
+        logger.error("Rate limit Redis no disponible: %s", exc)
+        raise HTTPException(status_code=503, detail={"code": "rate_limit_unavailable"}) from exc
+
+
 def _normalize_payment_method(m: Optional[str]) -> str:
     """Normaliza métodos de pago libres a enumeración soportada.
 
@@ -217,8 +225,73 @@ def _normalize_payment_method(m: Optional[str]) -> str:
     return m if m in allowed else "otro"
 
 
-@router.post("", dependencies=[Depends(require_roles("colaborador", "admin"))])
-async def create_sale(payload: dict, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session), request: Request = None):
+@router.post("/quote", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def quote_sale(payload: SaleQuoteRequest, db: AsyncSession = Depends(get_session)):
+    """Calcula una venta sin persistirla; comparte exactamente las reglas del guardado."""
+    sale = Sale(
+        discount_percent=payload.discount_percent,
+        discount_amount=payload.discount_amount,
+        additional_costs=[cost.model_dump(mode="json") for cost in payload.additional_costs],
+        tax=payload.tax,
+        subtotal=Decimal("0"),
+        total_amount=Decimal("0"),
+        paid_total=Decimal("0"),
+    )
+    is_collab = bool(payload.is_collaborator)
+    if not is_collab and payload.customer_id:
+        cust = await db.get(Customer, payload.customer_id)
+        if cust and cust.kind == "colaborador":
+            is_collab = True
+    lines: list[SaleLine] = []
+    for item in payload.items:
+        product = await db.scalar(
+            select(Product).options(selectinload(Product.variants)).where(Product.id == item.product_id)
+        )
+        if not product:
+            raise HTTPException(status_code=404, detail=f"Producto {item.product_id} no encontrado")
+        unit_price = item.unit_price
+        if unit_price is None and is_collab:
+            cost_price, _ = await get_product_cost_price(db, item.product_id)
+            if cost_price is None or cost_price <= 0:
+                raise HTTPException(status_code=422, detail=f"Producto {item.product_id} no tiene precio de costo registrado")
+            unit_price = cost_price
+        elif unit_price is None:
+            v_price = (product.variants[0].price or product.variants[0].promo_price) if product.variants else None
+            unit_price = Decimal(str(v_price)) if v_price is not None else Decimal("0")
+        if unit_price <= 0:
+            raise HTTPException(status_code=422, detail=f"Producto {item.product_id} no tiene precio de venta")
+        lines.append(
+            SaleLine(
+                product_id=item.product_id,
+                qty=item.qty,
+                unit_price=unit_price,
+                line_discount=item.line_discount,
+            )
+        )
+    totals = recalculate_sale_totals(sale, lines)
+    return {
+        **{key: float(value) for key, value in totals.items()},
+        "lines": [
+            {
+                "product_id": line.product_id,
+                "qty": float(line.qty),
+                "unit_price": float(line.unit_price),
+                "subtotal": float(line.subtotal or 0),
+                "total": float(line.total or 0),
+            }
+            for line in lines
+        ],
+    }
+
+
+@router.post("", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
+async def create_sale(
+    payload: dict,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+    request: Request = None,
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key", max_length=128),
+):
     """Crea una venta en BORRADOR (por defecto) sin afectar stock hasta confirmar.
 
     payload:
@@ -240,7 +313,7 @@ async def create_sale(payload: dict, db: AsyncSession = Depends(get_session), se
                 elif request.client:
                     key = f"ip:{request.client.host}"
             # Bucket global módulo
-            ok, retry = _rl_check(key)
+            ok, retry = await _rl_check_configured(key)
             if not ok:
                 raise HTTPException(status_code=429, detail={"code": "rate_limited", "retry_in": retry})
             # Bucket alternativo ligado a la app (por si en tests se aísla el módulo)
@@ -266,6 +339,15 @@ async def create_sale(payload: dict, db: AsyncSession = Depends(get_session), se
         pass
 
     t0 = time.perf_counter()
+    if idempotency_key:
+        existing = await db.scalar(select(Sale).where(Sale.idempotency_key == idempotency_key))
+        if existing:
+            return {
+                "sale_id": existing.id,
+                "status": existing.status,
+                "total": float(existing.total_amount or 0),
+                "idempotent_replay": True,
+            }
     customer_payload = payload.get("customer") or {}
     items = payload.get("items") or []
     payments = payload.get("payments") or []
@@ -298,7 +380,7 @@ async def create_sale(payload: dict, db: AsyncSession = Depends(get_session), se
                 raise HTTPException(status_code=400, detail=f"additional_costs[{i}].amount inválido")
 
     # Cliente
-    customer_id: Optional[int] = customer_payload.get("id") if isinstance(customer_payload, dict) else None
+    customer_id: Optional[int] = (customer_payload.get("id") if isinstance(customer_payload, dict) else None) or payload.get("customer_id")
     customer_obj: Optional[Customer] = None
     if customer_id:
         customer_obj = await db.get(Customer, int(customer_id))
@@ -322,6 +404,7 @@ async def create_sale(payload: dict, db: AsyncSession = Depends(get_session), se
         sale_date=datetime.fromisoformat(payload.get("sale_date")) if payload.get("sale_date") else datetime.utcnow(),
         sale_kind=sale_kind,
         additional_costs=additional_costs,
+        idempotency_key=idempotency_key,
         note=(payload.get("note") or None),
         created_by=sess.user_id if getattr(sess, "user_id", None) else None,
         discount_percent=(payload.get("discount_percent") or 0),
@@ -335,15 +418,25 @@ async def create_sale(payload: dict, db: AsyncSession = Depends(get_session), se
     items = payload.get("items") or []
     payments = payload.get("payments") or []
     created_lines: list[SaleLine] = []
+    is_collab = bool(customer_obj and customer_obj.kind == "colaborador") or bool(payload.get("is_collaborator"))
     for it in items:
         pid = int(it.get("product_id"))
-        qty = Decimal(str(it.get("qty")))
-        if qty <= 0:
-            raise HTTPException(status_code=400, detail="qty debe ser > 0")
-        prod = await db.get(Product, pid)
+        qty = quantity(it.get("qty"))
+        prod = await db.scalar(
+            select(Product).options(selectinload(Product.variants)).where(Product.id == pid)
+        )
         if not prod:
             raise HTTPException(status_code=400, detail=f"Producto {pid} no encontrado")
-        unit_price = Decimal(str(it.get("unit_price") or 0)) or Decimal(str(prod.variants[0].price if prod.variants else 0))
+        raw_price = it.get("unit_price")
+        unit_price = Decimal(str(raw_price)) if raw_price is not None and str(raw_price).strip() != "" and Decimal(str(raw_price)) > 0 else Decimal("0")
+        cost_price, cost_sp_id = await get_product_cost_price(db, pid)
+        if is_collab and unit_price <= 0:
+            if cost_price is None or cost_price <= 0:
+                raise HTTPException(status_code=422, detail=f"Producto {pid} no tiene precio de costo registrado")
+            unit_price = cost_price
+        elif unit_price <= 0:
+            v_price = (prod.variants[0].price or prod.variants[0].promo_price) if prod.variants else None
+            unit_price = Decimal(str(v_price)) if v_price is not None else Decimal("0")
         if unit_price <= 0:
             raise HTTPException(status_code=400, detail="unit_price debe ser > 0")
         line_discount = Decimal(str(it.get("line_discount") or 0))
@@ -355,6 +448,8 @@ async def create_sale(payload: dict, db: AsyncSession = Depends(get_session), se
             qty=qty,
             unit_price=unit_price,
             line_discount=line_discount,
+            unit_cost_snapshot=cost_price,
+            cost_supplier_product_id=cost_sp_id,
         )
         db.add(sl)
         created_lines.append(sl)
@@ -377,6 +472,21 @@ async def create_sale(payload: dict, db: AsyncSession = Depends(get_session), se
     sale.paid_total = paid_total
 
     await db.flush()
+    initial_payments = (
+        await db.execute(select(SalePayment).where(SalePayment.sale_id == sale.id))
+    ).scalars().all()
+    for payment in initial_payments:
+        await add_account_entry(
+            db,
+            customer_id=sale.customer_id,
+            entry_type="PAYMENT",
+            amount=-money(payment.amount),
+            source_type="payment",
+            source_id=payment.id,
+            user_id=getattr(sess, "user_id", None),
+            correlation_id=getattr(sess, "session_id", None),
+            note=payment.reference,
+        )
     lines_full = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
     _recalc_totals(sale, lines_full)
 
@@ -385,14 +495,33 @@ async def create_sale(payload: dict, db: AsyncSession = Depends(get_session), se
         missing = []
         for l in lines_full:
             prod = await db.get(Product, l.product_id)
-            if int(prod.stock or 0) < int(l.qty):
-                missing.append({"product_id": prod.id, "needed": int(l.qty), "have": int(prod.stock or 0)})
+            if Decimal(str(prod.stock or 0)) < Decimal(str(l.qty)):
+                missing.append({"product_id": prod.id, "needed": float(l.qty), "have": float(prod.stock or 0)})
         if missing:
             raise HTTPException(status_code=400, detail={"error": "stock_insuficiente", "items": missing})
         for l in lines_full:
             prod = await db.get(Product, l.product_id)
-            prod.stock = int(prod.stock or 0) - int(l.qty)
+            before = Decimal(str(prod.stock or 0))
+            prod.stock = before - Decimal(str(l.qty))
+            db.add(StockLedger(
+                product_id=prod.id,
+                source_type="sale",
+                source_id=sale.id,
+                delta=-Decimal(str(l.qty)),
+                balance_after=prod.stock,
+                meta={"sale_line_id": l.id, "immediate": True},
+            ))
         sale.status = "CONFIRMADA"
+        await add_account_entry(
+            db,
+            customer_id=sale.customer_id,
+            entry_type="SALE_CHARGE",
+            amount=money(sale.total_amount),
+            source_type="sale",
+            source_id=sale.id,
+            user_id=getattr(sess, "user_id", None),
+            correlation_id=getattr(sess, "session_id", None),
+        )
         _report_cache_invalidate()
         _audit(db, "sale_confirm", "sales", sale.id, {"immediate": True}, sess, request)
     else:
@@ -428,10 +557,22 @@ async def sale_lines_ops(sale_id: int, payload: dict, db: AsyncSession = Depends
         raise HTTPException(status_code=404, detail="Venta no encontrada")
     if sale.status != "BORRADOR":
         raise HTTPException(status_code=400, detail="Sólo editable en BORRADOR")
+    await expire_reservations(db, sale.id)
+    active_reservation = await db.scalar(
+        select(StockReservation.id).where(
+            StockReservation.sale_id == sale.id,
+            StockReservation.status == "ACTIVE",
+            StockReservation.expires_at > datetime.utcnow(),
+        ).limit(1)
+    )
+    if active_reservation:
+        raise HTTPException(status_code=409, detail={"code": "sale_reserved", "message": "Liberar la reserva antes de editar"})
     ops = payload.get("ops") or []
     if not ops:
         raise HTTPException(status_code=400, detail="ops requerido")
     audit_ops: list[dict] = []
+    sale_cust = await db.get(Customer, sale.customer_id) if sale.customer_id else None
+    is_collab = bool(sale_cust and sale_cust.kind == "colaborador")
     from decimal import Decimal as _D
     for op in ops:
         kind = (op.get("op") or "").lower()
@@ -440,13 +581,22 @@ async def sale_lines_ops(sale_id: int, payload: dict, db: AsyncSession = Depends
             qty = op.get("qty")
             if pid is None or qty is None:
                 raise HTTPException(status_code=400, detail="product_id y qty requeridos")
-            qty_d = _D(str(qty))
-            if qty_d <= 0:
-                raise HTTPException(status_code=400, detail="qty debe ser > 0")
-            prod = await db.get(Product, int(pid))
+            qty_d = quantity(qty)
+            prod = await db.scalar(
+                select(Product).options(selectinload(Product.variants)).where(Product.id == int(pid))
+            )
             if not prod:
                 raise HTTPException(status_code=400, detail="Producto no encontrado")
-            unit_price = _D(str(op.get("unit_price") or 0)) or _D(str(prod.variants[0].price if prod.variants else 0))
+            raw_price = op.get("unit_price")
+            unit_price = _D(str(raw_price)) if raw_price is not None and str(raw_price).strip() != "" and _D(str(raw_price)) > 0 else _D("0")
+            cost_price, cost_sp_id = await get_product_cost_price(db, prod.id)
+            if is_collab and unit_price <= 0:
+                if cost_price is None or cost_price <= 0:
+                    raise HTTPException(status_code=422, detail=f"Producto {prod.id} no tiene precio de costo registrado")
+                unit_price = cost_price
+            elif unit_price <= 0:
+                v_price = (prod.variants[0].price or prod.variants[0].promo_price) if prod.variants else None
+                unit_price = _D(str(v_price)) if v_price is not None else _D("0")
             if unit_price <= 0:
                 raise HTTPException(status_code=400, detail="unit_price debe ser > 0")
             line_discount = _D(str(op.get("line_discount") or 0))
@@ -458,6 +608,8 @@ async def sale_lines_ops(sale_id: int, payload: dict, db: AsyncSession = Depends
                 qty=qty_d,
                 unit_price=unit_price,
                 line_discount=line_discount,
+                unit_cost_snapshot=cost_price,
+                cost_supplier_product_id=cost_sp_id,
             )
             db.add(sl)
             await db.flush()
@@ -471,9 +623,7 @@ async def sale_lines_ops(sale_id: int, payload: dict, db: AsyncSession = Depends
                 raise HTTPException(status_code=404, detail="Línea no encontrada")
             changed = []
             if "qty" in op:
-                qv = _D(str(op.get("qty") or 0))
-                if qv <= 0:
-                    raise HTTPException(status_code=400, detail="qty debe ser > 0")
+                qv = quantity(op.get("qty"))
                 line.qty = qv; changed.append("qty")
             if "unit_price" in op:
                 up = _D(str(op.get("unit_price") or 0))
@@ -533,6 +683,12 @@ async def patch_sale(sale_id: int, payload: dict, db: AsyncSession = Depends(get
     if "note" in payload:
         sale.note = (payload.get("note") or None)
         changed.append("note")
+    if "sale_kind" in payload:
+        sale_kind = str(payload.get("sale_kind") or "").upper()
+        if sale_kind not in ("MOSTRADOR", "PEDIDO"):
+            raise HTTPException(status_code=422, detail="sale_kind inválido")
+        sale.sale_kind = sale_kind
+        changed.append("sale_kind")
     if "customer_id" in payload:
         cid = payload.get("customer_id")
         if cid is not None:
@@ -580,9 +736,13 @@ async def patch_sale(sale_id: int, payload: dict, db: AsyncSession = Depends(get
 @router.get("", dependencies=[Depends(require_roles("colaborador", "admin"))])
 async def list_sales(
     status: Optional[str] = Query(None),
+    payment_status: Optional[str] = Query(None),
     customer_id: Optional[int] = Query(None),
+    channel_id: Optional[int] = Query(None),
     dt_from: Optional[str] = Query(None),
     dt_to: Optional[str] = Query(None),
+    is_collaborator: Optional[bool] = Query(None, description="Filtrar ventas de colaboradores (True) o clientes (False)"),
+    customer_kind: Optional[str] = Query(None, description="Filtrar por tipo de cliente (colaborador, cf, ri, minorista, mayorista)"),
     page: int = 1,
     page_size: int = 50,
     db: AsyncSession = Depends(get_session),
@@ -592,8 +752,20 @@ async def list_sales(
     stmt = select(Sale).order_by(Sale.id.desc())
     if status:
         stmt = stmt.where(Sale.status == status)
+    if payment_status:
+        stmt = stmt.where(Sale.payment_status == payment_status)
     if customer_id:
         stmt = stmt.where(Sale.customer_id == int(customer_id))
+    if channel_id:
+        stmt = stmt.where(Sale.channel_id == int(channel_id))
+    if is_collaborator is True:
+        stmt = stmt.join(Customer, Sale.customer_id == Customer.id).where(Customer.kind == "colaborador")
+    elif is_collaborator is False:
+        stmt = stmt.outerjoin(Customer, Sale.customer_id == Customer.id).where(
+            or_(Customer.kind != "colaborador", Sale.customer_id.is_(None), Customer.kind.is_(None))
+        )
+    if customer_kind:
+        stmt = stmt.join(Customer, Sale.customer_id == Customer.id).where(Customer.kind == customer_kind.lower())
     from datetime import datetime as _dt
     if dt_from:
         try:
@@ -609,8 +781,30 @@ async def list_sales(
             pass
     total = await db.scalar(select(func.count()).select_from(stmt.subquery()))
     rows = (await db.execute(stmt.limit(page_size).offset((page-1)*page_size))).scalars().all()
+    customer_ids = {row.customer_id for row in rows if row.customer_id is not None}
+    channel_ids = {row.channel_id for row in rows if row.channel_id is not None}
+    customer_rows = (await db.execute(select(Customer.id, Customer.name, Customer.kind).where(Customer.id.in_(customer_ids)))).all() if customer_ids else []
+    customer_info = {row[0]: {"name": row[1], "kind": row[2]} for row in customer_rows}
+    channel_names = dict((await db.execute(select(SalesChannel.id, SalesChannel.name).where(SalesChannel.id.in_(channel_ids)))).all()) if channel_ids else {}
     def _row(s: Sale):
-        return {"id": s.id, "status": s.status, "sale_date": s.sale_date.isoformat(), "customer_id": s.customer_id, "total": float(s.total_amount or 0), "paid_total": float(s.paid_total or 0)}
+        c_data = customer_info.get(s.customer_id, {})
+        c_kind = c_data.get("kind")
+        return {
+            "id": s.id,
+            "status": s.status,
+            "sale_date": s.sale_date.isoformat(),
+            "sale_kind": s.sale_kind,
+            "customer_id": s.customer_id,
+            "customer_name": c_data.get("name"),
+            "customer_kind": c_kind,
+            "is_collaborator": (c_kind == "colaborador"),
+            "channel_id": s.channel_id,
+            "channel_name": channel_names.get(s.channel_id),
+            "payment_status": s.payment_status,
+            "total": float(s.total_amount or 0),
+            "paid_total": float(s.paid_total or 0),
+            "balance": float(max(Decimal("0"), Decimal(str(s.total_amount or 0)) - Decimal(str(s.paid_total or 0)))),
+        }
     return {"items": [_row(s) for s in rows], "total": int(total or 0), "page": page, "pages": ((int(total or 0) + page_size - 1)//page_size) if total else 0}
 
 
@@ -634,6 +828,18 @@ async def list_products_for_sales(
     )
     products = (await db.execute(stmt)).scalars().all()
     
+    await expire_reservations(db)
+    reserved_rows = (
+        await db.execute(
+            select(StockReservation.product_id, func.sum(StockReservation.qty))
+            .where(
+                StockReservation.status == "ACTIVE",
+                StockReservation.expires_at > datetime.utcnow(),
+            )
+            .group_by(StockReservation.product_id)
+        )
+    ).all()
+    reserved_by_product = {product_id: Decimal(str(qty or 0)) for product_id, qty in reserved_rows}
     items = []
     for p in products:
         price = None
@@ -668,10 +874,106 @@ async def list_products_for_sales(
             "id": p.id,
             "title": p.title,
             "sku": p.sku_root,
-            "stock": p.stock or 0,
+            "stock": float(Decimal(str(p.stock or 0)) - reserved_by_product.get(p.id, Decimal("0"))),
+            "physical_stock": float(p.stock or 0),
             "price": price,
         })
     return {"items": items, "total": len(items)}
+
+
+@router.post("/{sale_id}/reserve", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
+async def reserve_sale(
+    sale_id: int,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+    request: Request = None,
+):
+    sale = await db.scalar(select(Sale).where(Sale.id == sale_id).with_for_update())
+    if not sale:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    if sale.status != "BORRADOR" or sale.sale_kind != "PEDIDO":
+        raise HTTPException(status_code=409, detail="Sólo se reservan pedidos en borrador")
+    await expire_reservations(db, sale.id)
+    existing = (
+        await db.execute(
+            select(StockReservation).where(
+                StockReservation.sale_id == sale.id,
+                StockReservation.status == "ACTIVE",
+                StockReservation.expires_at > datetime.utcnow(),
+            )
+        )
+    ).scalars().all()
+    if existing:
+        return {
+            "sale_id": sale.id,
+            "status": "ACTIVE",
+            "expires_at": min(row.expires_at for row in existing).isoformat(),
+            "lines": len(existing),
+            "already": True,
+        }
+    lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
+    if not lines:
+        raise HTTPException(status_code=422, detail="La venta no tiene líneas")
+    expiry = reservation_expiry()
+    missing = []
+    for line in lines:
+        product = await db.scalar(select(Product).where(Product.id == line.product_id).with_for_update())
+        reserved = await db.scalar(
+            select(func.coalesce(func.sum(StockReservation.qty), 0)).where(
+                StockReservation.product_id == line.product_id,
+                StockReservation.status == "ACTIVE",
+                StockReservation.expires_at > datetime.utcnow(),
+            )
+        ) or 0
+        available = Decimal(str(product.stock or 0)) - Decimal(str(reserved or 0)) if product else Decimal("0")
+        if available < Decimal(str(line.qty)):
+            missing.append({"product_id": line.product_id, "needed": float(line.qty), "have": float(available)})
+    if missing:
+        raise HTTPException(status_code=409, detail={"error": "stock_insuficiente", "items": missing})
+    customer = await db.get(Customer, sale.customer_id) if sale.customer_id else None
+    if customer and customer.credit_limit is not None:
+        projected = await account_balance(db, customer.id) + money(sale.total_amount)
+        if projected > Decimal(str(customer.credit_limit)):
+            raise HTTPException(status_code=409, detail={"code": "credit_limit_exceeded", "projected": float(projected)})
+    for line in lines:
+        db.add(StockReservation(
+            sale_id=sale.id,
+            sale_line_id=line.id,
+            product_id=line.product_id,
+            qty=line.qty,
+            expires_at=expiry,
+        ))
+    _audit(db, "sale_reserve", "sales", sale.id, {"expires_at": expiry.isoformat()}, sess, request)
+    await db.commit()
+    return {"sale_id": sale.id, "status": "ACTIVE", "expires_at": expiry.isoformat(), "lines": len(lines)}
+
+
+@router.post("/{sale_id}/release-reservation", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
+async def release_sale_reservation(
+    sale_id: int,
+    db: AsyncSession = Depends(get_session),
+    sess: SessionData = Depends(current_session),
+    request: Request = None,
+):
+    sale = await db.scalar(select(Sale).where(Sale.id == sale_id).with_for_update())
+    if not sale:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    await expire_reservations(db, sale.id)
+    rows = (
+        await db.execute(
+            select(StockReservation).where(
+                StockReservation.sale_id == sale.id,
+                StockReservation.status == "ACTIVE",
+            )
+        )
+    ).scalars().all()
+    now = datetime.utcnow()
+    for row in rows:
+        row.status = "RELEASED"
+        row.released_at = now
+    _audit(db, "sale_reservation_release", "sales", sale.id, {"lines": len(rows)}, sess, request)
+    await db.commit()
+    return {"sale_id": sale.id, "status": "RELEASED", "lines": len(rows)}
 
 
 @router.get("/{sale_id}", dependencies=[Depends(require_roles("colaborador", "admin"))])
@@ -679,20 +981,82 @@ async def get_sale_detail(sale_id: int, db: AsyncSession = Depends(get_session))
     s = await db.get(Sale, sale_id)
     if not s:
         raise HTTPException(status_code=404, detail="Venta no encontrada")
-    lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == s.id))).scalars().all()
+    line_rows = (
+        await db.execute(
+            select(SaleLine, Product.title, Product.sku_root)
+            .join(Product, Product.id == SaleLine.product_id)
+            .where(SaleLine.sale_id == s.id)
+            .order_by(SaleLine.id)
+        )
+    ).all()
     pays = (await db.execute(select(SalePayment).where(SalePayment.sale_id == s.id))).scalars().all()
+    attachments = (await db.execute(select(SaleAttachment).where(SaleAttachment.sale_id == s.id))).scalars().all()
+    returns = (await db.execute(select(Return).where(Return.sale_id == s.id).order_by(Return.id))).scalars().all()
+    customer_name = await db.scalar(select(Customer.name).where(Customer.id == s.customer_id)) if s.customer_id else None
+    channel_name = await db.scalar(select(SalesChannel.name).where(SalesChannel.id == s.channel_id)) if s.channel_id else None
+    await expire_reservations(db, s.id)
+    reservations = (
+        await db.execute(select(StockReservation).where(StockReservation.sale_id == s.id).order_by(StockReservation.id))
+    ).scalars().all()
     return {
         "id": s.id,
         "status": s.status,
         "sale_date": s.sale_date.isoformat(),
         "customer_id": s.customer_id,
+        "customer_name": customer_name,
         "channel_id": s.channel_id,
+        "channel_name": channel_name,
+        "sale_kind": s.sale_kind,
         "additional_costs": s.additional_costs,
+        "additional_cost_total": float(s.additional_cost_total or 0),
+        "subtotal": float(s.subtotal or 0),
+        "discount_amount": float(s.discount_amount or 0),
+        "tax": float(s.tax or 0),
         "total": float(s.total_amount or 0),
         "paid_total": float(s.paid_total or 0),
         "payment_status": s.payment_status,
-        "lines": [{"id": l.id, "product_id": l.product_id, "qty": float(l.qty), "unit_price": float(l.unit_price), "line_discount": float(l.line_discount or 0)} for l in lines],
+        "lines": [
+            {
+                "id": line.id,
+                "product_id": line.product_id,
+                "product_name": line.title_snapshot or product_title,
+                "sku": line.sku_snapshot or sku,
+                "qty": float(line.qty),
+                "unit_price": float(line.unit_price),
+                "line_discount": float(line.line_discount or 0),
+                "subtotal": float(line.subtotal or 0),
+                "total": float(line.total or 0),
+                "unit_cost_snapshot": float(line.unit_cost_snapshot) if line.unit_cost_snapshot is not None else None,
+            }
+            for line, product_title, sku in line_rows
+        ],
         "payments": [{"id": p.id, "method": p.method, "amount": float(p.amount), "reference": p.reference, "paid_at": (p.paid_at.isoformat() if p.paid_at else None)} for p in pays],
+        "attachments": [
+            {
+                "id": item.id,
+                "filename": item.filename,
+                "mime": item.mime,
+                "size": item.size,
+                "download_url": f"/sales/{s.id}/attachments/{item.id}/file",
+            }
+            for item in attachments
+        ],
+        "returns": [
+            {"id": item.id, "status": item.status, "reason": item.reason, "total": float(item.total_amount), "created_at": item.created_at.isoformat()}
+            for item in returns
+        ],
+        "reservations": [
+            {"id": item.id, "line_id": item.sale_line_id, "qty": float(item.qty), "status": item.status, "expires_at": item.expires_at.isoformat()}
+            for item in reservations
+        ],
+        "allowed_actions": {
+            "edit": s.status == "BORRADOR" and not any(item.status == "ACTIVE" for item in reservations),
+            "reserve": s.status == "BORRADOR" and s.sale_kind == "PEDIDO",
+            "confirm": s.status == "BORRADOR",
+            "deliver": s.status == "CONFIRMADA",
+            "annul": s.status in ("CONFIRMADA", "ENTREGADA"),
+            "return": s.status in ("CONFIRMADA", "ENTREGADA"),
+        },
     }
 
 
@@ -770,26 +1134,73 @@ async def list_sale_payments(sale_id: int, db: AsyncSession = Depends(get_sessio
 
 @router.post("/{sale_id}/annul", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
 async def annul_sale(sale_id: int, reason: str = Query(...), db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session), request: Request = None):
-    s = await db.get(Sale, sale_id)
+    s = await db.scalar(select(Sale).where(Sale.id == sale_id).with_for_update())
     if not s:
         raise HTTPException(status_code=404, detail="Venta no encontrada")
     if s.status == "ANULADA":
         return {"status": s.status, "already": True}
     if s.status not in ("CONFIRMADA", "ENTREGADA"):
         raise HTTPException(status_code=400, detail="Solo se puede anular CONFIRMADA/ENTREGADA")
-    # Reponer stock por líneas
-    lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == s.id))).scalars().all()
+    # Reponer únicamente el saldo no devuelto de cada línea. La venta queda
+    # bloqueada durante el cálculo para serializar anulaciones/devoluciones.
+    lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == s.id).order_by(SaleLine.id))).scalars().all()
+    returned_rows = (
+        await db.execute(
+            select(ReturnLine.sale_line_id, func.coalesce(func.sum(ReturnLine.qty), 0))
+            .join(Return, Return.id == ReturnLine.return_id)
+            .where(Return.sale_id == s.id)
+            .group_by(ReturnLine.sale_line_id)
+        )
+    ).all()
+    returned_by_line = {int(line_id): Decimal(str(total)) for line_id, total in returned_rows}
+    product_ids = sorted({line.product_id for line in lines if line.product_id is not None})
+    locked_products = (
+        await db.execute(
+            select(Product).where(Product.id.in_(product_ids)).order_by(Product.id).with_for_update()
+        )
+    ).scalars().all() if product_ids else []
+    products = {product.id: product for product in locked_products}
     deltas: list[dict] = []
     for l in lines:
-        prod = await db.get(Product, l.product_id)
+        prod = products.get(l.product_id)
         if not prod:
             continue
-        before = int(prod.stock or 0)
-        prod.stock = before + int(l.qty)
-        deltas.append({"product_id": prod.id, "delta": int(l.qty), "new": int(prod.stock)})
+        sold_qty = Decimal(str(l.qty or 0))
+        returned_qty = returned_by_line.get(l.id, Decimal("0"))
+        qty = sold_qty - returned_qty
+        if qty < 0:
+            raise HTTPException(status_code=409, detail={"code": "return_balance_invalid", "sale_line_id": l.id})
+        if qty == 0:
+            continue
+        before = Decimal(str(prod.stock or 0))
+        prod.stock = before + qty
+        deltas.append({"product_id": prod.id, "sale_line_id": l.id, "delta": float(qty), "new": float(prod.stock)})
+        db.add(StockLedger(
+            product_id=prod.id,
+            source_type="annul",
+            source_id=s.id,
+            delta=qty,
+            balance_after=prod.stock,
+            meta={"sale_line_id": l.id, "sold": float(sold_qty), "returned": float(returned_qty)},
+        ))
     s.status = "ANULADA"
+    returned_amount = await db.scalar(
+        select(func.coalesce(func.sum(Return.total_amount), 0)).where(Return.sale_id == s.id)
+    ) or 0
+    remaining_credit = max(money(s.total_amount) - money(returned_amount), Decimal("0.00"))
+    await add_account_entry(
+        db,
+        customer_id=s.customer_id,
+        entry_type="ANNUL_CREDIT",
+        amount=-remaining_credit,
+        source_type="annul",
+        source_id=s.id,
+        user_id=getattr(sess, "user_id", None),
+        correlation_id=getattr(sess, "session_id", None),
+        note=reason,
+    )
     # Audit log con deltas de stock
-    _audit(db, "sale_annul", "sales", s.id, {"reason": reason, "stock_deltas": deltas, "elapsed_ms": 0}, sess, request)
+    _audit(db, "sale_annul", "sales", s.id, {"reason": reason, "stock_deltas": deltas, "returned_amount": float(money(returned_amount)), "credit_amount": float(remaining_credit), "elapsed_ms": 0}, sess, request)
     _report_cache_invalidate()  # anulación afecta métricas agregadas
     await db.commit()
     return {"status": s.status, "restored": deltas}
@@ -799,17 +1210,28 @@ async def annul_sale(sale_id: int, reason: str = Query(...), db: AsyncSession = 
 
 @router.post("/{sale_id}/confirm", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
 async def confirm_sale(sale_id: int, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session), request: Request = None):
-    s = await db.get(Sale, sale_id)
     t0 = time.perf_counter()
+    s = await db.scalar(select(Sale).where(Sale.id == sale_id).with_for_update())
     if not s:
         raise HTTPException(status_code=404, detail="Venta no encontrada")
     if s.status == "ANULADA":
         raise HTTPException(status_code=400, detail="Venta anulada")
     if s.status in ("CONFIRMADA", "ENTREGADA"):
         return {"status": s.status, "already": True}
-    # Cargar líneas y recalcular para asegurar integridad de subtotal/total antes de confirmar
     lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == s.id))).scalars().all()
+    if not lines:
+        raise HTTPException(status_code=422, detail="La venta no tiene líneas")
     _recalc_totals(s, lines)
+    remaining_discount = money(s.discount_amount)
+    for index, line in enumerate(lines):
+        if index == len(lines) - 1:
+            allocated = remaining_discount
+        elif Decimal(str(s.subtotal or 0)) > 0:
+            allocated = money(Decimal(str(s.discount_amount or 0)) * Decimal(str(line.total or 0)) / Decimal(str(s.subtotal)))
+            remaining_discount -= allocated
+        else:
+            allocated = Decimal("0.00")
+        line.global_discount_allocated = allocated
     # Clamp de descuento global si discount_amount excede subtotal
     try:
         from decimal import Decimal as _D
@@ -828,46 +1250,114 @@ async def confirm_sale(sale_id: int, db: AsyncSession = Depends(get_session), se
     sin_vincular = [l.id for l in lines if (l.state or '').upper() == 'SIN_VINCULAR']
     if sin_vincular:
         raise HTTPException(status_code=409, detail={"code": "lineas_sin_vincular", "lines": sin_vincular})
-    # Validar stock por líneas tras recalcular
+    await expire_reservations(db, s.id)
+    active_reservations = (
+        await db.execute(
+            select(StockReservation).where(
+                StockReservation.sale_id == s.id,
+                StockReservation.status == "ACTIVE",
+                StockReservation.expires_at > datetime.utcnow(),
+            )
+        )
+    ).scalars().all()
+    reservations_by_line = {row.sale_line_id: row for row in active_reservations}
+
+    quantity_by_product: dict[int, Decimal] = {}
+    for line in lines:
+        quantity_by_product[line.product_id] = quantity_by_product.get(line.product_id, Decimal("0")) + Decimal(str(line.qty))
+    product_ids = sorted(quantity_by_product)
+    locked_products = (
+        await db.execute(
+            select(Product).where(Product.id.in_(product_ids)).order_by(Product.id).with_for_update()
+        )
+    ).scalars().all()
+    products = {product.id: product for product in locked_products}
+    reserved_rows = (
+        await db.execute(
+            select(StockReservation.product_id, func.coalesce(func.sum(StockReservation.qty), 0))
+            .where(
+                StockReservation.product_id.in_(product_ids),
+                StockReservation.status == "ACTIVE",
+                StockReservation.expires_at > datetime.utcnow(),
+                StockReservation.sale_id != s.id,
+            )
+            .group_by(StockReservation.product_id)
+        )
+    ).all()
+    reserved_by_product = {product_id: Decimal(str(total)) for product_id, total in reserved_rows}
     missing = []
-    for l in lines:
-        p = await db.get(Product, l.product_id)
-        if not p:
-            missing.append({"product_id": l.product_id, "reason": "no existe"})
+    for product_id, needed in quantity_by_product.items():
+        product = products.get(product_id)
+        if not product:
+            missing.append({"product_id": product_id, "reason": "no existe"})
             continue
-        if int(p.stock or 0) < int(l.qty):
-            missing.append({"product_id": p.id, "needed": int(l.qty), "have": int(p.stock or 0)})
-    if missing:
-        raise HTTPException(status_code=400, detail={"error": "stock_insuficiente", "items": missing})
-    # Afectar stock y poblar snapshots
+        available = Decimal(str(product.stock or 0)) - reserved_by_product.get(product_id, Decimal("0"))
+        if available < needed:
+            missing.append({"product_id": product_id, "needed": float(needed), "have": float(available)})
+    allow_negative_stock = os.getenv("SALES_ALLOW_NEGATIVE_STOCK", "false").lower() in ("1", "true", "yes")
+    if missing and not allow_negative_stock:
+        raise HTTPException(status_code=409, detail={"error": "stock_insuficiente", "items": missing})
+
+    credit_customer = await db.get(Customer, s.customer_id) if s.customer_id else None
+    if credit_customer and credit_customer.credit_limit is not None:
+        current_balance = await account_balance(db, s.customer_id)
+        projected = current_balance + money(s.total_amount)
+        enforce_limit = os.getenv("SALES_CREDIT_LIMIT_ENFORCED", "true").lower() in ("1", "true", "yes")
+        if enforce_limit and projected > Decimal(str(credit_customer.credit_limit)):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "credit_limit_exceeded", "projected": float(projected)},
+            )
+
     deltas = []
-    ledger_rows: list[dict] = []
     for l in lines:
-        p = await db.get(Product, l.product_id)
-        before = int(p.stock or 0)
-        p.stock = before - int(l.qty)
-        # Poblar snapshots si vacías
+        p = products[l.product_id]
+        before = Decimal(str(p.stock or 0))
+        qty = Decimal(str(l.qty))
+        p.stock = before - qty
         if not l.title_snapshot:
             l.title_snapshot = p.title
         if not l.sku_snapshot:
-            # Evitar lazy-load de variants dentro de TestClient sync; usar sku_root directamente
             l.sku_snapshot = p.sku_root
-        deltas.append({"product_id": p.id, "delta": -int(l.qty), "new": int(p.stock)})
-        # Registrar ledger (delta negativo) via ORM (errores no bloquean confirmación, se auditan en caso futuro)
-        try:
-            db.add(StockLedger(
-                product_id=p.id,
-                source_type='sale',
-                source_id=s.id,
-                delta=-int(l.qty),
-                balance_after=int(p.stock),
-                meta={'sale_line_id': l.id}
-            ))
-        except Exception:
-            pass
+        if l.unit_cost_snapshot is None:
+            cost_row = await db.execute(
+                select(SupplierProduct.id, SupplierProduct.current_purchase_price)
+                .where(
+                    SupplierProduct.internal_product_id == p.id,
+                    SupplierProduct.current_purchase_price.is_not(None),
+                )
+                .order_by(SupplierProduct.last_seen_at.desc().nulls_last(), SupplierProduct.id.desc())
+                .limit(1)
+            )
+            cost = cost_row.first()
+            if cost:
+                l.cost_supplier_product_id = cost[0]
+                l.unit_cost_snapshot = cost[1]
+        deltas.append({"product_id": p.id, "delta": -float(qty), "new": float(p.stock)})
+        db.add(StockLedger(
+            product_id=p.id,
+            source_type="sale",
+            source_id=s.id,
+            delta=-qty,
+            balance_after=p.stock,
+            meta={"sale_line_id": l.id},
+        ))
+        reservation = reservations_by_line.get(l.id)
+        if reservation:
+            reservation.status = "CONSUMED"
+            reservation.released_at = datetime.utcnow()
     s.status = "CONFIRMADA"
+    await add_account_entry(
+        db,
+        customer_id=s.customer_id,
+        entry_type="SALE_CHARGE",
+        amount=money(s.total_amount),
+        source_type="sale",
+        source_id=s.id,
+        user_id=getattr(sess, "user_id", None),
+        correlation_id=getattr(sess, "session_id", None),
+    )
     _audit(db, "sale_confirm", "sales", s.id, {"stock_deltas": deltas, "elapsed_ms": round((time.perf_counter()-t0)*1000,2)}, sess, request)
-    # Invalidate report cache (ventas afectan reportes)
     _report_cache_invalidate()
     await db.commit()
     return {"status": s.status}
@@ -1190,6 +1680,17 @@ async def add_payment(sale_id: int, payload: dict, db: AsyncSession = Depends(ge
     p = SalePayment(sale_id=s.id, method=method, amount=amount, reference=reference)
     db.add(p)
     await db.flush()  # obtener p.id
+    await add_account_entry(
+        db,
+        customer_id=s.customer_id,
+        entry_type="PAYMENT",
+        amount=-money(amount),
+        source_type="payment",
+        source_id=p.id,
+        user_id=getattr(sess, "user_id", None),
+        correlation_id=getattr(sess, "session_id", None),
+        note=reference,
+    )
     total_paid = prev_paid + amount
     s.paid_total = total_paid
     if total_paid == 0:
@@ -1340,8 +1841,33 @@ async def upload_sale_attachment(sale_id: int, file: UploadFile = File(...), db:
     sale = await db.get(Sale, sale_id)
     if not sale:
         raise HTTPException(status_code=404, detail="Venta no encontrada")
-    path, sha256 = await save_upload("sales", file.filename, file)
-    rel = str(path.relative_to(get_media_root()))
+    allowed = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+    declared_mime = (file.content_type or "").lower()
+    extension_by_mime = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+    suffix = Path(file.filename or "").suffix.lower()
+    if declared_mime not in allowed or (declared_mime == "image/jpeg" and suffix not in {".jpg", ".jpeg"}) or (declared_mime != "image/jpeg" and suffix != extension_by_mime.get(declared_mime)):
+        raise HTTPException(status_code=415, detail="Tipo de adjunto no permitido")
+    max_bytes = max(1, int(os.getenv("SALES_ATTACHMENTS_MAX_MB", "10"))) * 1024 * 1024
+    if getattr(file, "size", None) is not None and file.size > max_bytes:
+        raise HTTPException(status_code=413, detail="El adjunto supera el tamaño máximo")
+    count = await db.scalar(select(func.count(SaleAttachment.id)).where(SaleAttachment.sale_id == sale_id)) or 0
+    if count >= 5:
+        raise HTTPException(status_code=409, detail="La venta ya tiene el máximo de cinco adjuntos")
+    path, sha256 = await save_private_upload("sales", file.filename, file)
+    signature = path.read_bytes()[:16]
+    detected_mime = (
+        "application/pdf" if signature.startswith(b"%PDF-") else
+        "image/jpeg" if signature.startswith(b"\xff\xd8\xff") else
+        "image/png" if signature.startswith(b"\x89PNG\r\n\x1a\n") else
+        "image/webp" if signature.startswith(b"RIFF") and signature[8:12] == b"WEBP" else None
+    )
+    if detected_mime != declared_mime:
+        path.unlink(missing_ok=True)
+        raise HTTPException(status_code=415, detail="El contenido real no coincide con el tipo de archivo")
+    if path.stat().st_size > max_bytes:
+        path.unlink(missing_ok=True)
+        raise HTTPException(status_code=413, detail="El adjunto supera el tamaño máximo")
+    rel = str(path.relative_to(get_private_media_root()))
     att = SaleAttachment(
         sale_id=sale_id,
         filename=file.filename,
@@ -1352,7 +1878,74 @@ async def upload_sale_attachment(sale_id: int, file: UploadFile = File(...), db:
     db.add(att)
     await db.commit()
     await db.refresh(att)
-    return {"attachment_id": att.id, "path": att.path}
+    return {
+        "attachment_id": att.id,
+        "download_url": f"/sales/{sale_id}/attachments/{att.id}/file",
+    }
+
+
+@router.get("/{sale_id}/attachments", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def list_sale_attachments(sale_id: int, db: AsyncSession = Depends(get_session)):
+    if not await db.get(Sale, sale_id):
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    rows = (
+        await db.execute(
+            select(SaleAttachment).where(SaleAttachment.sale_id == sale_id).order_by(SaleAttachment.id)
+        )
+    ).scalars().all()
+    return {
+        "items": [
+            {
+                "id": row.id,
+                "filename": row.filename,
+                "mime": row.mime,
+                "size": row.size,
+                "download_url": f"/sales/{sale_id}/attachments/{row.id}/file",
+            }
+            for row in rows
+        ]
+    }
+
+
+@router.get(
+    "/{sale_id}/attachments/{attachment_id}/file",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+)
+async def download_sale_attachment(
+    sale_id: int,
+    attachment_id: int,
+    db: AsyncSession = Depends(get_session),
+):
+    attachment = await db.get(SaleAttachment, attachment_id)
+    if not attachment or attachment.sale_id != sale_id:
+        raise HTTPException(status_code=404, detail="Adjunto no encontrado")
+    try:
+        path = resolve_private_media_path(attachment.path)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Adjunto no encontrado")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Adjunto no encontrado")
+    return FileResponse(
+        str(path),
+        media_type=attachment.mime or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{Path(attachment.filename).name}"'},
+    )
+
+
+@router.delete("/{sale_id}/attachments/{attachment_id}", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
+async def delete_sale_attachment(sale_id: int, attachment_id: int, db: AsyncSession = Depends(get_session)):
+    attachment = await db.get(SaleAttachment, attachment_id)
+    if not attachment or attachment.sale_id != sale_id:
+        raise HTTPException(status_code=404, detail="Adjunto no encontrado")
+    try:
+        path = resolve_private_media_path(attachment.path)
+    except (OSError, ValueError):
+        path = None
+    if path and path.is_file():
+        path.unlink(missing_ok=True)
+    await db.delete(attachment)
+    await db.commit()
+    return {"status": "deleted", "id": attachment_id}
 
 
 # --- Devoluciones (Returns) ---
@@ -1372,7 +1965,7 @@ async def create_return(sale_id: int, payload: dict, db: AsyncSession = Depends(
       - Guarda Return + ReturnLines + AuditLog return_create
     """
     t0 = time.perf_counter()
-    sale = await db.get(Sale, sale_id)
+    sale = await db.scalar(select(Sale).where(Sale.id == sale_id).with_for_update())
     if not sale:
         raise HTTPException(status_code=404, detail="Venta no encontrada")
     if sale.status not in ("CONFIRMADA", "ENTREGADA"):
@@ -1388,7 +1981,11 @@ async def create_return(sale_id: int, payload: dict, db: AsyncSession = Depends(
     line_ids = [int(it.get("sale_line_id")) for it in items if it.get("sale_line_id") is not None]
     if not line_ids:
         raise HTTPException(status_code=400, detail="Cada item debe incluir sale_line_id")
-    q_lines = (await db.execute(select(SaleLine).where(SaleLine.id.in_(line_ids)))).scalars().all()
+    q_lines = (
+        await db.execute(
+            select(SaleLine).where(SaleLine.id.in_(line_ids)).order_by(SaleLine.id).with_for_update()
+        )
+    ).scalars().all()
     lines_map = {l.id: l for l in q_lines if l.sale_id == sale.id}
     if len(lines_map) != len(line_ids):
         raise HTTPException(status_code=400, detail="Alguna sale_line no pertenece a la venta")
@@ -1412,14 +2009,20 @@ async def create_return(sale_id: int, payload: dict, db: AsyncSession = Depends(
     db.add(ret)
     await db.flush()
 
+    product_ids = sorted({line.product_id for line in lines_map.values() if line.product_id is not None})
+    locked_products = (
+        await db.execute(
+            select(Product).where(Product.id.in_(product_ids)).order_by(Product.id).with_for_update()
+        )
+    ).scalars().all() if product_ids else []
+    products = {product.id: product for product in locked_products}
+
     total_amount = Decimal("0")
     stock_deltas: list[dict] = []
     for it in items:
         sl_id = int(it.get("sale_line_id"))
         line = lines_map[sl_id]
-        qty_req = Decimal(str(it.get("qty")))
-        if qty_req <= 0:
-            raise HTTPException(status_code=400, detail=f"qty inválida en línea {sl_id}")
+        qty_req = quantity(it.get("qty"))
         prev_ret = returned_map.get(sl_id, Decimal("0"))
         saldo = Decimal(str(line.qty)) - prev_ret
         if qty_req > saldo:
@@ -1436,25 +2039,32 @@ async def create_return(sale_id: int, payload: dict, db: AsyncSession = Depends(
         )
         db.add(rl)
         # Incrementar stock
-        prod = await db.get(Product, line.product_id)
+        prod = products.get(line.product_id)
         if prod:
-            before = int(prod.stock or 0)
-            prod.stock = before + int(qty_req)
-            stock_deltas.append({"product_id": prod.id, "delta": int(qty_req), "new": int(prod.stock)})
-            # Ledger delta positivo via ORM
-            try:
-                db.add(StockLedger(
-                    product_id=prod.id,
-                    source_type='return',
-                    source_id=ret.id,
-                    delta=int(qty_req),
-                    balance_after=int(prod.stock),
-                    meta={'sale_line_id': sl_id}
-                ))
-            except Exception:
-                pass
+            before = Decimal(str(prod.stock or 0))
+            prod.stock = before + qty_req
+            stock_deltas.append({"product_id": prod.id, "delta": float(qty_req), "new": float(prod.stock)})
+            db.add(StockLedger(
+                product_id=prod.id,
+                source_type="return",
+                source_id=ret.id,
+                delta=qty_req,
+                balance_after=prod.stock,
+                meta={"sale_line_id": sl_id},
+            ))
 
     ret.total_amount = total_amount
+    await add_account_entry(
+        db,
+        customer_id=sale.customer_id,
+        entry_type="RETURN_CREDIT",
+        amount=-money(total_amount),
+        source_type="return",
+        source_id=ret.id,
+        user_id=getattr(sess, "user_id", None),
+        correlation_id=getattr(sess, "session_id", None),
+        note=reason,
+    )
     _audit(db, "return_create", "returns", ret.id, {
         "sale_id": sale.id,
         "lines": len(items),
@@ -1920,161 +2530,6 @@ async def get_receipt(sale_id: int, db: AsyncSession = Depends(get_session)):
     return "".join(html)
 
 
-@router.post("/{sale_id}/attachments", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
-async def upload_sale_attachment(sale_id: int, file: UploadFile = File(...), db: AsyncSession = Depends(get_session)):
-    sale = await db.get(Sale, sale_id)
-    if not sale:
-        raise HTTPException(status_code=404, detail="Venta no encontrada")
-    path, sha256 = await save_upload("sales", file.filename, file)
-    rel = str(path.relative_to(get_media_root()))
-    att = SaleAttachment(
-        sale_id=sale_id,
-        filename=file.filename,
-        mime=file.content_type or None,
-        size=path.stat().st_size,
-        path=rel,
-    )
-    db.add(att)
-    await db.commit()
-    await db.refresh(att)
-    return {"attachment_id": att.id, "path": att.path}
-
-
-# --- Devoluciones (Returns) ---
-
-@router.post("/{sale_id}/returns", dependencies=[Depends(require_roles("colaborador", "admin")), Depends(require_csrf)])
-async def create_return(sale_id: int, payload: dict, db: AsyncSession = Depends(get_session), sess: SessionData = Depends(current_session), request: Request = None):
-    """Registra una devolución parcial o total de una venta CONFIRMADA/ENTREGADA.
-
-    payload:
-      - reason (opcional)
-      - items: lista de { sale_line_id: int, qty: number }
-    Validaciones:
-      - Venta debe estar CONFIRMADA o ENTREGADA
-      - qty > 0 y no excede saldo (vendido - devuelto previo) de la línea
-    Efectos:
-      - Incrementa stock de productos devueltos
-      - Guarda Return + ReturnLines + AuditLog return_create
-    """
-    t0 = time.perf_counter()
-    sale = await db.get(Sale, sale_id)
-    if not sale:
-        raise HTTPException(status_code=404, detail="Venta no encontrada")
-    if sale.status not in ("CONFIRMADA", "ENTREGADA"):
-        raise HTTPException(status_code=400, detail="Sólo se permiten devoluciones de ventas CONFIRMADA/ENTREGADA")
-    if sale.status == "ANULADA":  # por si cambia flujo futuro
-        raise HTTPException(status_code=400, detail="Venta anulada")
-    items = payload.get("items") or []
-    if not items:
-        raise HTTPException(status_code=400, detail="items requerido")
-    reason = (payload.get("reason") or None)
-
-    # Pre-cargar líneas de venta involucradas
-    line_ids = [int(it.get("sale_line_id")) for it in items if it.get("sale_line_id") is not None]
-    if not line_ids:
-        raise HTTPException(status_code=400, detail="Cada item debe incluir sale_line_id")
-    q_lines = (await db.execute(select(SaleLine).where(SaleLine.id.in_(line_ids)))).scalars().all()
-    lines_map = {l.id: l for l in q_lines if l.sale_id == sale.id}
-    if len(lines_map) != len(line_ids):
-        raise HTTPException(status_code=400, detail="Alguna sale_line no pertenece a la venta")
-
-    # Calcular ya devuelto por línea
-    # SELECT sale_line_id, COALESCE(SUM(qty),0) FROM return_lines rl JOIN returns r ON rl.return_id=r.id WHERE r.sale_id=:sale_id GROUP BY sale_line_id
-    returned_map: dict[int, Decimal] = {}
-    from sqlalchemy import join
-    rl_alias = ReturnLine
-    r_alias = Return
-    rows = (await db.execute(
-        select(rl_alias.sale_line_id, func.coalesce(func.sum(rl_alias.qty), 0)).select_from(
-            join(rl_alias, r_alias, rl_alias.return_id == r_alias.id)
-        ).where(r_alias.sale_id == sale_id).group_by(rl_alias.sale_line_id)
-    )).all()
-    for sl_id, qty_sum in rows:
-        if sl_id is not None:
-            returned_map[int(sl_id)] = Decimal(str(qty_sum))
-
-    ret = Return(sale_id=sale.id, status="REGISTRADA", reason=reason, created_by=getattr(sess, "user_id", None), correlation_id=getattr(sess, "session_id", None))
-    db.add(ret)
-    await db.flush()
-
-    total_amount = Decimal("0")
-    stock_deltas: list[dict] = []
-    for it in items:
-        sl_id = int(it.get("sale_line_id"))
-        line = lines_map[sl_id]
-        qty_req = Decimal(str(it.get("qty")))
-        if qty_req <= 0:
-            raise HTTPException(status_code=400, detail=f"qty inválida en línea {sl_id}")
-        prev_ret = returned_map.get(sl_id, Decimal("0"))
-        saldo = Decimal(str(line.qty)) - prev_ret
-        if qty_req > saldo:
-            raise HTTPException(status_code=400, detail=f"qty excede saldo disponible (vendido {line.qty} ya devuelto {prev_ret}) en línea {sl_id}")
-        line_total_unit = Decimal(str(line.unit_price)) * qty_req * (Decimal("1") - Decimal(str(line.line_discount or 0))/Decimal("100"))
-        total_amount += line_total_unit
-        rl = ReturnLine(
-            return_id=ret.id,
-            sale_line_id=sl_id,
-            product_id=line.product_id,
-            qty=qty_req,
-            unit_price=line.unit_price,
-            subtotal=line_total_unit,
-        )
-        db.add(rl)
-        # Incrementar stock
-        prod = await db.get(Product, line.product_id)
-        if prod:
-            before = int(prod.stock or 0)
-            prod.stock = before + int(qty_req)
-            stock_deltas.append({"product_id": prod.id, "delta": int(qty_req), "new": int(prod.stock)})
-            # Ledger delta positivo via ORM
-            try:
-                db.add(StockLedger(
-                    product_id=prod.id,
-                    source_type='return',
-                    source_id=ret.id,
-                    delta=int(qty_req),
-                    balance_after=int(prod.stock),
-                    meta={'sale_line_id': sl_id}
-                ))
-            except Exception:
-                pass
-
-    ret.total_amount = total_amount
-    _audit(db, "return_create", "returns", ret.id, {
-        "sale_id": sale.id,
-        "lines": len(items),
-        "total": float(total_amount),
-        "stock_deltas": stock_deltas,
-        "elapsed_ms": round((time.perf_counter()-t0)*1000,2),
-    }, sess, request)
-    # Invalidate report cache (devoluciones afectan reportes)
-    _report_cache_invalidate()
-    await db.commit()
-    return {"return_id": ret.id, "total": float(total_amount), "lines": len(items)}
-
-
-@router.get("/{sale_id}/returns", dependencies=[Depends(require_roles("colaborador", "admin"))])
-async def list_returns(sale_id: int, db: AsyncSession = Depends(get_session)):
-    sale = await db.get(Sale, sale_id)
-    if not sale:
-        raise HTTPException(status_code=404, detail="Venta no encontrada")
-    rets = (await db.execute(select(Return).where(Return.sale_id == sale_id).order_by(Return.id.asc()))).scalars().all()
-    result = []
-    for r in rets:
-        lines = (await db.execute(select(ReturnLine).where(ReturnLine.return_id == r.id))).scalars().all()
-        result.append({
-            "id": r.id,
-            "status": r.status,
-            "reason": r.reason,
-            "total": float(r.total_amount or 0),
-            "created_at": r.created_at.isoformat(),
-            "lines": [
-                {"id": l.id, "sale_line_id": l.sale_line_id, "product_id": l.product_id, "qty": float(l.qty), "unit_price": float(l.unit_price), "subtotal": float(l.subtotal or 0)} for l in lines
-            ]
-        })
-    return {"items": result, "total": len(result)}
-
-
 # --- Export CSV ventas ---
 
 @router.get("/export", dependencies=[Depends(require_roles("colaborador", "admin"))])
@@ -2124,7 +2579,7 @@ async def catalog_search(q: str = Query(..., min_length=1), limit: int = Query(1
     like = f"%{term}%"
     # Estrategia: priorizar productos con stock > 0 y término en título o canonical_sku (fallback a sku_root).
     # Buscar primero por canonical_sku, luego por sku_root como fallback temporal
-    stmt = select(Product).where(
+    stmt = select(Product).options(selectinload(Product.variants)).where(
         or_(
             Product.title.ilike(like),
             Product.canonical_sku.ilike(like),
@@ -2152,13 +2607,328 @@ async def catalog_search(q: str = Query(..., min_length=1), limit: int = Query(1
         if p.variants:
             v = p.variants[0]
             price = float(v.promo_price or v.price or 0)
+        cost_price, _ = await get_product_cost_price(db, p.id)
         items.append({
             "product_id": p.id,
             "canonical": True,  # Placeholder (futuro: distinguir canónico)
             "title": p.title,
             "sku": p.canonical_sku or p.sku_root,  # Priorizar canonical_sku
             "price": price,
+            "cost_price": float(cost_price) if cost_price is not None else None,
             "stock": p.stock,
             "score": s,
         })
     return {"query": term, "items": items, "count": len(items)}
+
+
+@router.get("/reports/margin", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def sales_margin_report(
+    dt_from: datetime | None = None,
+    dt_to: datetime | None = None,
+    channel_id: int | None = None,
+    db: AsyncSession = Depends(get_session),
+):
+    stmt = (
+        select(SaleLine)
+        .join(Sale, Sale.id == SaleLine.sale_id)
+        .where(Sale.status.in_(["CONFIRMADA", "ENTREGADA"]))
+    )
+    if dt_from:
+        stmt = stmt.where(Sale.sale_date >= dt_from)
+    if dt_to:
+        stmt = stmt.where(Sale.sale_date <= dt_to)
+    if channel_id:
+        stmt = stmt.where(Sale.channel_id == channel_id)
+    lines = (await db.execute(stmt)).scalars().all()
+    revenue = Decimal("0")
+    cost = Decimal("0")
+    covered_revenue = Decimal("0")
+    for line in lines:
+        line_revenue = Decimal(str(line.total or 0)) - Decimal(str(line.global_discount_allocated or 0))
+        revenue += line_revenue
+        if line.unit_cost_snapshot is not None:
+            cost += Decimal(str(line.unit_cost_snapshot)) * Decimal(str(line.qty))
+            covered_revenue += line_revenue
+    margin = revenue - cost
+    return {
+        "revenue": float(money(revenue)),
+        "cost": float(money(cost)),
+        "margin": float(money(margin)),
+        "margin_percent": float(money((margin / revenue * 100) if revenue else 0)),
+        "cost_coverage_percent": float(money((covered_revenue / revenue * 100) if revenue else 0)),
+        "lines": len(lines),
+    }
+
+
+@router.get("/reports/channels", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def sales_channels_report(db: AsyncSession = Depends(get_session)):
+    rows = (
+        await db.execute(
+            select(
+                Sale.channel_id,
+                SalesChannel.name,
+                func.count(Sale.id),
+                func.coalesce(func.sum(Sale.total_amount), 0),
+            )
+            .outerjoin(SalesChannel, SalesChannel.id == Sale.channel_id)
+            .where(Sale.status.in_(["CONFIRMADA", "ENTREGADA"]))
+            .group_by(Sale.channel_id, SalesChannel.name)
+            .order_by(func.sum(Sale.total_amount).desc())
+        )
+    ).all()
+    return {
+        "items": [
+            {"channel_id": channel_id, "channel_name": name or "Sin canal", "sales_count": count, "total": float(total)}
+            for channel_id, name, count, total in rows
+        ]
+    }
+
+
+@router.get("/dashboard/purchases-summary", dependencies=[Depends(require_roles("colaborador", "admin"))])
+async def sales_purchases_summary(
+    dt_from: Optional[str] = Query(None, description="Fecha/hora ISO inicio (sale_date)"),
+    dt_to: Optional[str] = Query(None, description="Fecha/hora ISO fin (inclusive)"),
+    status: Optional[str] = Query(None, description="Filtrar por estado específico"),
+    db: AsyncSession = Depends(get_session),
+):
+    """Resumen analítico comparativo de compras de colaboradores (a costo) vs compras de clientes."""
+    from datetime import datetime as _dt, time as _time
+    d_from: _dt | None = None
+    d_to: _dt | None = None
+    if dt_from:
+        try:
+            d_from = _dt.fromisoformat(dt_from.replace("Z", "+00:00"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="dt_from formato inválido")
+    if dt_to:
+        try:
+            d_to = _dt.fromisoformat(dt_to.replace("Z", "+00:00"))
+            if len(dt_to.strip()) <= 10:
+                d_to = _dt.combine(d_to.date(), _time(23, 59, 59, 999999))
+        except Exception:
+            raise HTTPException(status_code=400, detail="dt_to formato inválido")
+
+    sales_filter = []
+    if status:
+        sales_filter.append(Sale.status == status.upper())
+    else:
+        sales_filter.append(Sale.status.in_(["CONFIRMADA", "ENTREGADA"]))
+    if d_from:
+        sales_filter.append(Sale.sale_date >= d_from)
+    if d_to:
+        sales_filter.append(Sale.sale_date <= d_to)
+
+    # 1. Ventas en el rango
+    stmt_sales = (
+        select(
+            Sale.id,
+            Sale.customer_id,
+            Customer.name.label("customer_name"),
+            Customer.kind.label("customer_kind"),
+            Customer.email.label("customer_email"),
+            Sale.total_amount,
+            Sale.paid_total,
+            Sale.status,
+            Sale.payment_status,
+            Sale.sale_date,
+        )
+        .outerjoin(Customer, Sale.customer_id == Customer.id)
+        .where(and_(*sales_filter))
+        .order_by(Sale.sale_date.desc(), Sale.id.desc())
+    )
+    sales_rows = (await db.execute(stmt_sales)).all()
+
+    # 2. Líneas de las ventas en el rango
+    stmt_lines = (
+        select(
+            SaleLine.sale_id,
+            SaleLine.product_id,
+            Product.title.label("product_title"),
+            SaleLine.qty,
+            SaleLine.total,
+            Customer.kind.label("customer_kind"),
+            Sale.customer_id,
+        )
+        .join(Sale, Sale.id == SaleLine.sale_id)
+        .outerjoin(Customer, Sale.customer_id == Customer.id)
+        .outerjoin(Product, Product.id == SaleLine.product_id)
+        .where(and_(*sales_filter))
+    )
+    lines_rows = (await db.execute(stmt_lines)).all()
+
+    # Separar y computar
+    collab_sales = []
+    cust_sales = []
+    for s in sales_rows:
+        if s.customer_kind == "colaborador":
+            collab_sales.append(s)
+        else:
+            cust_sales.append(s)
+
+    collab_lines = []
+    cust_lines = []
+    for l in lines_rows:
+        if l.customer_kind == "colaborador":
+            collab_lines.append(l)
+        else:
+            cust_lines.append(l)
+
+    from decimal import ROUND_HALF_UP
+    def _round_qty(v: object) -> float:
+        try:
+            return float(Decimal(str(v or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        except Exception:
+            return 0.0
+
+    def _calc_stats(sales, lines):
+        sales_count = len(sales)
+        total_amount = sum(Decimal(str(s.total_amount or 0)) for s in sales)
+        units_count = sum(Decimal(str(l.qty or 0)) for l in lines)
+        unique_buyers = len({s.customer_id for s in sales if s.customer_id is not None})
+        avg_ticket = (total_amount / sales_count) if sales_count else Decimal("0")
+
+        # Top compradores
+        buyers_map: dict[int, dict] = {}
+        for s in sales:
+            cid = s.customer_id or 0
+            if cid not in buyers_map:
+                buyers_map[cid] = {
+                    "customer_id": s.customer_id,
+                    "name": s.customer_name or "Consumidor Final",
+                    "kind": s.customer_kind,
+                    "sales_count": 0,
+                    "total_amount": Decimal("0"),
+                    "units_count": Decimal("0"),
+                }
+            buyers_map[cid]["sales_count"] += 1
+            buyers_map[cid]["total_amount"] += Decimal(str(s.total_amount or 0))
+
+        for l in lines:
+            cid = l.customer_id or 0
+            if cid in buyers_map:
+                buyers_map[cid]["units_count"] += Decimal(str(l.qty or 0))
+
+        top_buyers = sorted(buyers_map.values(), key=lambda b: (b["total_amount"], b["sales_count"]), reverse=True)[:10]
+        top_buyers_list = [
+            {
+                "customer_id": b["customer_id"],
+                "name": b["name"],
+                "kind": b["kind"],
+                "sales_count": b["sales_count"],
+                "total_amount": float(money(b["total_amount"])),
+                "units_count": _round_qty(b["units_count"]),
+            }
+            for b in top_buyers
+        ]
+
+        # Top productos
+        prods_map: dict[int, dict] = {}
+        for l in lines:
+            pid = l.product_id
+            if pid not in prods_map:
+                prods_map[pid] = {
+                    "product_id": pid,
+                    "title": l.product_title or f"Producto #{pid}",
+                    "qty": Decimal("0"),
+                    "total_amount": Decimal("0"),
+                }
+            prods_map[pid]["qty"] += Decimal(str(l.qty or 0))
+            prods_map[pid]["total_amount"] += Decimal(str(l.total or 0))
+
+        top_products = sorted(prods_map.values(), key=lambda p: (p["qty"], p["total_amount"]), reverse=True)[:10]
+        top_products_list = [
+            {
+                "product_id": p["product_id"],
+                "title": p["title"],
+                "qty": _round_qty(p["qty"]),
+                "total_amount": float(money(p["total_amount"])),
+            }
+            for p in top_products
+        ]
+
+        recent_sales_list = [
+            {
+                "id": s.id,
+                "sale_date": s.sale_date.isoformat(),
+                "customer_id": s.customer_id,
+                "customer_name": s.customer_name or "Consumidor Final",
+                "customer_kind": s.customer_kind,
+                "status": s.status,
+                "payment_status": s.payment_status,
+                "total": float(money(Decimal(str(s.total_amount or 0)))),
+                "paid_total": float(money(Decimal(str(s.paid_total or 0)))),
+            }
+            for s in sales[:15]
+        ]
+
+        return {
+            "summary": {
+                "sales_count": sales_count,
+                "total_amount": float(money(total_amount)),
+                "units_count": _round_qty(units_count),
+                "avg_ticket": float(money(avg_ticket)),
+                "unique_buyers": unique_buyers,
+            },
+            "top_buyers": top_buyers_list,
+            "top_products": top_products_list,
+            "recent_sales": recent_sales_list,
+        }
+
+    collab_data = _calc_stats(collab_sales, collab_lines)
+    cust_data = _calc_stats(cust_sales, cust_lines)
+
+    total_sales_count = collab_data["summary"]["sales_count"] + cust_data["summary"]["sales_count"]
+    total_amount = Decimal(str(collab_data["summary"]["total_amount"])) + Decimal(str(cust_data["summary"]["total_amount"]))
+    total_units = Decimal(str(collab_data["summary"]["units_count"])) + Decimal(str(cust_data["summary"]["units_count"]))
+
+    collab_amount_pct = float(money((Decimal(str(collab_data["summary"]["total_amount"])) / total_amount * 100) if total_amount else 0))
+    collab_units_pct = float(money((Decimal(str(collab_data["summary"]["units_count"])) / total_units * 100) if total_units else 0))
+
+    return {
+        "period": {
+            "dt_from": dt_from,
+            "dt_to": dt_to,
+            "status": status,
+        },
+        "summary": {
+            "collaborators": collab_data["summary"],
+            "customers": cust_data["summary"],
+            "totals": {
+                "sales_count": total_sales_count,
+                "total_amount": float(money(total_amount)),
+                "units_count": _round_qty(total_units),
+            },
+            "share": {
+                "collaborators_amount_pct": collab_amount_pct,
+                "collaborators_units_pct": collab_units_pct,
+            },
+        },
+        "collaborators": {
+            "top_buyers": collab_data["top_buyers"],
+            "top_products": collab_data["top_products"],
+            "recent_sales": collab_data["recent_sales"],
+        },
+        "customers": {
+            "top_buyers": cust_data["top_buyers"],
+            "top_products": cust_data["top_products"],
+            "recent_sales": cust_data["recent_sales"],
+        },
+    }
+
+
+def _normalize_router_routes() -> None:
+    """Retira registros duplicados legacy y prioriza rutas estáticas sobre parámetros."""
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    unique = []
+    for route in router.routes:
+        methods = tuple(sorted(getattr(route, "methods", set())))
+        key = (getattr(route, "path", ""), methods)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(route)
+    unique.sort(key=lambda route: ("{" in getattr(route, "path", ""), getattr(route, "path", "")))
+    router.routes[:] = unique
+
+
+_normalize_router_routes()

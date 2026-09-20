@@ -113,6 +113,7 @@ def detect_mime_type(content: bytes, filename: str) -> str:
 async def sync_drive_images(
     progress_callback: Optional[Callable[[dict[str, Any]], Union[None, Awaitable[None]]]] = None,
     source_folder_id: Optional[str] = None,
+    include_filenames: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Sincroniza imágenes desde Google Drive.
 
@@ -156,6 +157,7 @@ async def sync_drive_images(
         processed: int = 0,
         errors: int = 0,
         no_sku: int = 0,
+        items: list[dict] | None = None,
     ):
         """Helper para emitir progreso con estadísticas."""
         remaining = total - current if total > 0 else 0
@@ -174,6 +176,7 @@ async def sync_drive_images(
                     "errors": errors,
                     "no_sku": no_sku,
                 },
+                "items": items,
             }
             # Si el callback es async, usar await
             if asyncio.iscoroutinefunction(progress_callback):
@@ -267,6 +270,10 @@ async def sync_drive_images(
             logger.warning(f"Error al verificar padres de {file_info.get('name')}: {e}", exc_info=True)
             # En caso de error, NO incluir por seguridad (evitar procesar archivos en subcarpetas)
 
+    if include_filenames:
+        allowed_names = set(include_filenames)
+        files_in_root = [item for item in files_in_root if item.get("name") in allowed_names]
+
     total_files = len(files_in_root)
     await emit_progress(
         "processing", 
@@ -276,6 +283,7 @@ async def sync_drive_images(
         processed=0,
         errors=0,
         no_sku=0,
+        items=[{"source_file_id": item.get("id"), "filename": item.get("name", "")} for item in files_in_root],
     )
 
     if total_files == 0:

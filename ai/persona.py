@@ -297,9 +297,14 @@ def get_persona_prompt(
     Returns:
         Tuple (mode: PersonaMode, prompt: str)
     """
+    from ai.prompt_registry import resolve
+
+    def selected(mode: PersonaMode, fallback: str) -> tuple[PersonaMode, str]:
+        return mode, resolve(f"persona.{mode.lower()}", fallback)
+
     # Admin/Colaborador siempre usa ASISTENTE (sin máquina de estados)
     if user_role in ("admin", "colaborador"):
-        return ("ASISTENTE", PROMPT_ASISTENTE)
+        return selected("ASISTENTE", PROMPT_ASISTENTE)
     
     # Para clientes/guests, implementar máquina de estados
     user_text_lower = user_text.lower() if user_text else ""
@@ -342,36 +347,36 @@ def get_persona_prompt(
         # Si ya estamos en CULTIVATOR y el diagnóstico está completo, pasar a SALESMAN
         if current_mode == "CULTIVATOR" and diagnosis_complete and needs_product:
             if has_image:
-                return ("CULTIVATOR", PROMPT_CULTIVATOR_VISION)
-            return ("SALESMAN", PROMPT_SALESMAN)
+                return selected("CULTIVATOR", PROMPT_CULTIVATOR_VISION)
+            return selected("SALESMAN", PROMPT_SALESMAN)
         
         # Si ya estamos en CULTIVATOR, mantenerlo
         if current_mode == "CULTIVATOR":
             if has_image:
-                return ("CULTIVATOR", PROMPT_CULTIVATOR_VISION)
-            return ("CULTIVATOR", PROMPT_CULTIVATOR)
+                return selected("CULTIVATOR", PROMPT_CULTIVATOR_VISION)
+            return selected("CULTIVATOR", PROMPT_CULTIVATOR)
         
         # Si ya estamos en SALESMAN, mantenerlo
         if current_mode == "SALESMAN":
-            return ("SALESMAN", PROMPT_SALESMAN)
+            return selected("SALESMAN", PROMPT_SALESMAN)
     
     # Transiciones de estado
     # Si es saludo o no hay contexto claro, usar OBSERVER
     if is_greeting or (not is_diagnostic and not is_product_query):
-        return ("OBSERVER", PROMPT_OBSERVER)
+        return selected("OBSERVER", PROMPT_OBSERVER)
     
     # Si hay problema de cultivo, pasar a CULTIVATOR
     if is_diagnostic:
         if has_image:
-            return ("CULTIVATOR", PROMPT_CULTIVATOR_VISION)
-        return ("CULTIVATOR", PROMPT_CULTIVATOR)
+            return selected("CULTIVATOR", PROMPT_CULTIVATOR_VISION)
+        return selected("CULTIVATOR", PROMPT_CULTIVATOR)
     
     # Si es consulta directa de producto/precio, usar SALESMAN
     if is_product_query:
-        return ("SALESMAN", PROMPT_SALESMAN)
+        return selected("SALESMAN", PROMPT_SALESMAN)
     
     # Default: OBSERVER
-    return ("OBSERVER", PROMPT_OBSERVER)
+    return selected("OBSERVER", PROMPT_OBSERVER)
 
 
 # --- Compatibilidad legacy ---
