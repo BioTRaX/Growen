@@ -28,6 +28,21 @@
 - Preservar los cambios preexistentes de la rama `feat/auditor-catalogo-completo`.
 - Documentar los cambios y actualizar cualquier información desactualizada en `Roadmap.md`, `README.md`, `CHANGELOG.md` y `docs/`.
 
+## Estado al cierre del 2026-09-20
+
+- Tareas 1 a 4 implementadas con ciclo RED–GREEN y contratos backend/Vue
+  verificados.
+- El smoke Vue autenticado recorrió los 29 nombres y enlaces, validó navegación
+  por `Product.id`, permisos admin/colaborador y cancelación segura del diálogo.
+- La revisión humana posterior aceptó los 10 hallazgos; PostgreSQL confirmó 29
+  canónicos `clean`, 10 excepciones activas y 10 acciones `accept_exception`.
+- Suite backend focal, suite Vue, typecheck, build, auditor documental, Ruff y
+  `git diff --check` aprobaron. Los 15 hallazgos históricos de Ruff en el router
+  tocado se sanearon con cambios semánticamente equivalentes.
+- Una nueva corrida por clic queda diferida por decisión del usuario hasta que
+  ingresen productos nuevos. El smoke local no se presenta como verificación
+  del estado productivo actual.
+
 ---
 
 ## Mapa de archivos

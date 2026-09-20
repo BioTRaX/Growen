@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -17,6 +18,7 @@ from decimal import Decimal
 
 from db.models import (
     CanonicalProduct,
+    CanonicalContentVersion,
     CanonicalBatchJob,
     CanonicalBatchJobItem,
     Category,
@@ -52,6 +54,7 @@ class CanonicalUpdate(BaseModel):
     sku_custom: str | None = None
     category_id: int | None = None
     subcategory_id: int | None = None
+    description_html: str | None = None
 
 
 class CanonicalBatchItem(BaseModel):
@@ -429,6 +432,8 @@ async def get_canonical_product(
         "name": stylize_product_name(cp.name),
         "brand": cp.brand,
         "specs_json": cp.specs_json,
+        "description_html": cp.description_html,
+        "content_revision": cp.content_revision,
     }
 
 
@@ -479,9 +484,30 @@ async def update_canonical_product(
                 detail={"code": "duplicate_sku", "message": "El SKU ya existe. Ingrese uno diferente."},
             )
         data["sku_custom"] = normalized_sku
+    if "description_html" in data:
+        desc_clean = data["description_html"]
+        if isinstance(desc_clean, str):
+            desc_clean = desc_clean.strip() or None
+        data["description_html"] = desc_clean
     for k, v in data.items():
         setattr(cp, k, v)
-    if "name" in data:
+    if "description_html" in data:
+        from services.routers.enrichment import canonical_snapshot
+
+        cp.content_revision = (cp.content_revision or 0) + 1
+        cp.last_enriched_at = datetime.utcnow()
+        cp.enriched_by = sess.user.id if sess and sess.user else None
+        session.add(
+            CanonicalContentVersion(
+                canonical_product_id=cp.id,
+                origin="manual_edit",
+                revision=cp.content_revision,
+                snapshot_json=canonical_snapshot(cp),
+                is_applied=True,
+                created_by_user_id=sess.user.id if sess and sess.user else None,
+            )
+        )
+    if "name" in data or "description_html" in data:
         linked_prods = list(
             (
                 await session.scalars(
@@ -493,7 +519,10 @@ async def update_canonical_product(
             ).all()
         )
         for p in linked_prods:
-            p.title = data["name"]
+            if "name" in data:
+                p.title = data["name"]
+            if "description_html" in data:
+                p.description_html = data["description_html"]
         if cp.sku_custom or cp.ng_sku:
             sku_list = [s for s in (cp.sku_custom, cp.ng_sku) if s]
             prods_by_sku = list(
@@ -504,7 +533,10 @@ async def update_canonical_product(
                 ).all()
             )
             for p in prods_by_sku:
-                p.title = data["name"]
+                if "name" in data:
+                    p.title = data["name"]
+                if "description_html" in data:
+                    p.description_html = data["description_html"]
     try:
         await session.commit()
     except IntegrityError as exc:
@@ -532,6 +564,8 @@ async def update_canonical_product(
         "sku_custom": cp.sku_custom,
         "category_id": cp.category_id,
         "subcategory_id": cp.subcategory_id,
+        "description_html": cp.description_html,
+        "content_revision": cp.content_revision,
     }
 
 

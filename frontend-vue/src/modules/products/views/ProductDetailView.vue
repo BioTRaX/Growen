@@ -15,6 +15,7 @@ import { getProduct, getProductHistory } from '../api/products'
 import CanonicalNameEditor from '../components/CanonicalNameEditor.vue'
 import CanonicalSkuEditor from '../components/CanonicalSkuEditor.vue'
 import EnrichmentPanel from '../components/EnrichmentPanel.vue'
+import ProductDescriptionDialog from '../components/ProductDescriptionDialog.vue'
 import StructuredProductData from '../components/StructuredProductData.vue'
 import TagManagementDialog from '../components/TagManagementDialog.vue'
 import { useEnrichmentJob } from '../composables/useEnrichmentJob'
@@ -29,6 +30,7 @@ const market = ref<ProductSources | null>(null)
 const loading = ref(false)
 const error = ref('')
 const tagsOpen = ref(false)
+const descriptionOpen = ref(false)
 const productId = Number(route.params.id)
 const canViewOperational = computed(() => auth.role === 'admin' || auth.role === 'colaborador')
 const canEditCanonicalSku = computed(() => auth.role === 'admin' || auth.role === 'colaborador')
@@ -115,6 +117,15 @@ function nameSaved(name: string): void {
   }
 }
 
+function descriptionSaved(payload: { descriptionHtml: string; contentRevision?: number }): void {
+  if (product.value) {
+    product.value.description_html = payload.descriptionHtml
+    if (payload.contentRevision !== undefined) {
+      product.value.content_revision = payload.contentRevision
+    }
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -180,7 +191,18 @@ onMounted(load)
       <v-row class="mt-2">
         <v-col cols="12" lg="8">
           <v-card>
-            <v-card-title>Descripción</v-card-title>
+            <v-card-title class="d-flex align-center justify-space-between">
+              <span>Descripción</span>
+              <v-btn
+                v-if="canEditCanonicalSku"
+                prepend-icon="mdi-pencil"
+                size="small"
+                variant="text"
+                @click="descriptionOpen = true"
+              >
+                Editar descripción
+              </v-btn>
+            </v-card-title>
             <v-card-text v-if="product.description_html" class="product-description" v-html="product.description_html" />
             <v-card-text v-else class="text-medium-emphasis">Todavía no hay una descripción canónica.</v-card-text>
           </v-card>
@@ -282,6 +304,16 @@ onMounted(load)
       :current-tags="product.tags"
       :product-ids="[product.id]"
       @saved="tagsSaved"
+    />
+
+    <ProductDescriptionDialog
+      v-if="product"
+      v-model="descriptionOpen"
+      :canonical-product-id="product.canonical_product_id"
+      :product-id="product.id"
+      :description-html="product.description_html"
+      :product-title="product.preferred_title || product.title"
+      @saved="descriptionSaved"
     />
   </v-container>
 </template>

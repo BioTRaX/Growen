@@ -12,6 +12,7 @@ pillow-heif>=0.13.0
 pypdf>=6.16.1,<7
 pytesseract>=0.3.13,<0.4
 beautifulsoup4>=4.15.0,<5
+soupsieve>=2.9.0,<3
 
 # Google APIs (Drive integration)
 google-api-python-client>=2.0.0

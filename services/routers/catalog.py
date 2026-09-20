@@ -3740,6 +3740,7 @@ class ProductUpdate(BaseModel):
     title: str | None = None
     category_id: int | None = None
     subcategory_id: int | None = None
+    description_html: str | None = None
 
 
 class ProductsDeleteRequest(BaseModel):
@@ -3782,6 +3783,11 @@ async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncS
             if not subcategory or subcategory.kind != "subcategory":
                 raise HTTPException(status_code=400, detail="subcategory_id inválido")
         prod.subcategory_id = int(data["subcategory_id"]) if data["subcategory_id"] is not None else None
+    if "description_html" in data:
+        desc_clean = data["description_html"]
+        if isinstance(desc_clean, str):
+            desc_clean = desc_clean.strip() or None
+        prod.description_html = desc_clean
     await session.commit()
     # audit description change
     try:
@@ -3804,7 +3810,7 @@ async def patch_product(product_id: int, payload: ProductUpdate, session: AsyncS
         await session.commit()
     except Exception:
         pass
-    return {"status": "ok"}
+    return {"status": "ok", "description_html": prod.description_html}
 
 
 @router.post(

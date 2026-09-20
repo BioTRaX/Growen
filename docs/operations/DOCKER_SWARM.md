@@ -99,6 +99,12 @@ autenticado automatizado no se declaró aprobado: el secreto de bootstrap
 y debe alinearse o ejecutarse con credenciales operativas sin rotarlas durante
 este rollout.
 
+Estado verificado el 2026-09-20:
+- Base de datos productiva (`growen_pgdata`) alineada al 100 % desde el volcado lógico de `dev`, transfiriendo 11 corridas de auditoría, 123 ítems auditados, 13 feedbacks, 59 trabajos de enriquecimiento, 173 activos de conocimiento y 43 versiones de contenido sin necesidad de reauditar el catálogo.
+- Volúmenes externos de media actualizados: `growen_public_media` (logos corporativos) y `growen_private_media` (comprobantes y remitos de compras).
+- Imágenes inmutables reconstruidas bajo la revisión `325fba480aa9aa000a78b385bf4c5283180fd964`, escaneadas con Trivy, publicadas en el registro privado LAN (`192.168.100.100:5000`) y desplegadas en el Swarm (`SingleNode`).
+- Los 18 servicios Swarm convergen en estado 1/1 y saludables. Comprobados `/health` (200), `/api/health` (200) y `/api/health/summary` (200 con DB, Redis, Storage y 7 workers activos: market, enrichment, catalog_audit y canonical_knowledge).
+
 ### 4. Smoke LAN
 
 Desde otro dispositivo con la CA instalada, proporcionar `ADMIN_USER_FILE`, `ADMIN_PASS_FILE`, `SMOKE_CA_BUNDLE` y ejecutar `scripts/test_login_flow.py`. Validar además navegador sin advertencias, CORS exacto, CSRF válido/inválido, cookie `Secure`, descarga privada autorizada y `404` no enumerable para accesos anónimos.

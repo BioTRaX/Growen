@@ -29,10 +29,10 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
   a los dispositivos autorizados.
 - [x] Completar login, push y pull contra el registro autenticado y TLS ya
   saludable; publicar sólo imágenes aprobadas por Trivy y conservar SBOM y
-  manifiesto de digests por commit (2026-09-13, revisión `bb48d80`).
+  manifiesto de digests por commit (2026-09-20, revisión `325fba4`).
 - [x] Ejecutar las fases `Bootstrap` y `Application` con topología `SingleNode`
-  después de aprobar independientemente migración y despliegue; los 17 servicios
-  estabilizados en estado 1/1 saludable (2026-09-13).
+  después de aprobar independientemente migración y despliegue; los 18 servicios
+  estabilizados en estado 1/1 saludable (2026-09-20).
 - [ ] Ejecutar el smoke autenticado desde otro dispositivo de la LAN contra
   `https://192.168.100.100` después de provisionar un certificado con IP SAN.
 - [x] Aplicar en una ventana controlada la migración `20260909_user_active` y la
@@ -51,6 +51,7 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
 
 - [x] Unificar el frontend productivo sobre Vue 3 como SPA principal (rutas raíz y `/login` integradas a `LoginView.vue`), eliminando la dependencia de fallback de React y resolviendo el error de Mixed Content (2026-09-13).
 - [x] Edición en línea de nombre canónico en el detalle del producto (`/productos/:id`) con sincronización atómica de títulos vinculados, y normalización de descargas/adjuntos mediante `apiUrl` para evitar redirección a `/login` (2026-09-13).
+- [x] Edición manual de descripción de productos en el detalle operativo (`/productos/:id`) con diálogo modal, editor y vista previa en tiempo real, soporte de formato automático a párrafos HTML, persistencia y versionado canónico con snapshot y compatibilidad para productos directos (2026-09-20).
 - [x] Completar la paridad funcional de Proveedores (`/proveedores/:id` con detalle, edición y gestión de adjuntos), Compras, Chat y Dashboard, activando el runtime Vue para todos los módulos de negocio en `modules.json` y regenerando las reglas Nginx (2026-09-15).
 - [x] Retiro total y desmantelamiento del código huérfano React legado (`frontend/`, ~23.400 líneas), unificando Dockerfile multietapa a un único build Vue 3 y orientando scripts de desarrollo/despliegue exclusivamente a `frontend-vue` (2026-09-15).
 - [x] Saneamiento integral de UI, router y gobernanza: eliminación de textos de transición en Dashboard y AppShell, sustitución de vistas residuales pendientes por `NotFoundView` (404) y actualización de `FRONTEND_MIGRATION_OPERATIONS.md` (2026-09-17).
