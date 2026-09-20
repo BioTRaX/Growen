@@ -34,3 +34,24 @@ async def test_ollama_falla_cerrado_con_json_invalido() -> None:
 
     with pytest.raises(SemanticAuditError, match="invalid_json"):
         await CatalogAuditOllamaClient(transport=transport).audit({"name": "Producto", "content": {}})
+
+
+@pytest.mark.asyncio
+async def test_ollama_reintenta_una_vez_si_la_primera_respuesta_no_es_json() -> None:
+    responses = iter([
+        httpx.Response(200, json={"response": "no-json"}),
+        httpx.Response(200, json={"response": '{"classification":"liquid","score":91,"fields":[],"critical":false}'}),
+    ])
+    attempts = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return next(responses)
+
+    result = await CatalogAuditOllamaClient(transport=httpx.MockTransport(handler)).audit(
+        {"name": "Fertilizante", "content": {}}
+    )
+
+    assert result["classification"] == "liquid"
+    assert attempts == 2

@@ -5,11 +5,25 @@
 # NG-HEADER: Lineamientos: Ver AGENTS.md
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from db.models import CanonicalProduct, CatalogAuditItem, CatalogAuditRun, User
+from db.models import (
+    CanonicalContentVersion,
+    CanonicalEnrichmentJob,
+    CanonicalProduct,
+    CatalogAuditItem,
+    CatalogAuditFeedback,
+    CatalogAuditRun,
+    Product,
+    ProductEquivalence,
+    Supplier,
+    SupplierProduct,
+    User,
+)
 from services.api import app
 from services.auth import hash_pw
 from services.routers import catalog_audits as catalog_audits_router
@@ -61,6 +75,49 @@ async def test_segundo_run_activo_responde_409(client_admin, db_session, monkeyp
     assert duplicate.json()["detail"]["code"] == "active_catalog_audit_exists"
 
 
+@pytest.mark.asyncio
+async def test_retry_descarta_job_enrich_fallido_para_permitir_un_nuevo_intento(
+    client_admin, db_session, monkeypatch
+) -> None:
+    product = CanonicalProduct(name="Producto sin contenido")
+    run = CatalogAuditRun(
+        id="run-enrich-fallido", scope="selected", mode="full", include_orphans=False,
+        enrich_missing=True, auto_fix=False, status="completed_with_issues", is_active_slot=False,
+        total_items=1, processed_items=1, issue_items=1,
+        error_code="worker_interrupted", error_message="Error anterior",
+    )
+    db_session.add_all([product, run])
+    await db_session.flush()
+    failed_job = CanonicalEnrichmentJob(
+        id="enrich-fallido", canonical_product_id=product.id,
+        client_request_id="audit:run-enrich-fallido:producto", scope="full", status="failed",
+    )
+    db_session.add(failed_job)
+    await db_session.flush()
+    item = CatalogAuditItem(
+        run_id=run.id, canonical_product_id=product.id, target_key=f"canonical:{product.id}",
+        input_hash="e" * 64, rules_version="catalog-audit-r1", feedback_version="0",
+        status="failed", enrichment_job_id=failed_job.id, error_code="enrich_missing_content",
+    )
+    db_session.add(item)
+    await db_session.commit()
+    await db_session.refresh(item)
+    monkeypatch.setattr("services.routers.catalog_audits.process_catalog_audit_run.send", lambda _run_id: None)
+
+    response = await client_admin.post(f"/canonical-products/catalog-audits/{run.id}/retry")
+
+    assert response.status_code == 202
+    await db_session.refresh(item)
+    await db_session.refresh(run)
+    assert item.status == "pending"
+    assert item.enrichment_job_id is None
+    assert run.processed_items == 0
+    assert run.clean_items == 0
+    assert run.issue_items == 0
+    assert run.error_code is None
+    assert run.error_message is None
+
+
 async def _healthy_preflight() -> dict:
     return {
         "ollama": {"ok": True, "model": "llama3.1:8b"},
@@ -81,6 +138,53 @@ async def test_listado_del_auditor_no_es_capturado_como_id_canonico(client_admin
 
     assert response.status_code == 200
     assert [item["run_id"] for item in response.json()["items"]] == ["run-listado-visible"]
+
+
+@pytest.mark.asyncio
+async def test_detalle_expone_nombre_y_ficha_interna_del_canonico(client_admin, db_session) -> None:
+    product = Product(sku_root="MAC-20L", title="Maceta interna", stock=0)
+    supplier = Supplier(slug="proveedor-auditor", name="Proveedor auditor")
+    linked = CanonicalProduct(name="Maceta Soplada 20L")
+    orphan = CanonicalProduct(name="Canónico sin ficha")
+    run = CatalogAuditRun(
+        id="run-nombre-y-ficha", scope="selected", mode="deterministic_only",
+        include_orphans=False, enrich_missing=False, auto_fix=False,
+        status="completed_with_issues", is_active_slot=False,
+    )
+    db_session.add_all([product, supplier, linked, orphan, run])
+    await db_session.flush()
+    supplier_product = SupplierProduct(
+        supplier_id=supplier.id, supplier_product_id="MAC-20L", title="Maceta del proveedor",
+        internal_product_id=product.id,
+    )
+    db_session.add(supplier_product)
+    await db_session.flush()
+    db_session.add(ProductEquivalence(
+        supplier_id=supplier.id, supplier_product_id=supplier_product.id,
+        canonical_product_id=linked.id, source="test",
+    ))
+    db_session.add_all([
+        CatalogAuditItem(
+            run_id=run.id, canonical_product_id=linked.id, target_key=f"canonical:{linked.id}",
+            input_hash="1" * 64, rules_version="catalog-audit-r1", feedback_version="0",
+            status="clean",
+        ),
+        CatalogAuditItem(
+            run_id=run.id, canonical_product_id=orphan.id, target_key=f"canonical:{orphan.id}",
+            input_hash="2" * 64, rules_version="catalog-audit-r1", feedback_version="0",
+            status="needs_review",
+        ),
+    ])
+    await db_session.commit()
+
+    response = await client_admin.get(f"/canonical-products/catalog-audits/{run.id}")
+
+    assert response.status_code == 200
+    items = {item["canonical_product_id"]: item for item in response.json()["items"]}
+    assert items[linked.id]["canonical_name"] == "Maceta Soplada 20L"
+    assert items[linked.id]["product_detail_id"] == product.id
+    assert items[orphan.id]["canonical_name"] == "Canónico sin ficha"
+    assert items[orphan.id]["product_detail_id"] is None
 
 
 @pytest.mark.asyncio
@@ -214,6 +318,72 @@ async def test_colaborador_no_puede_clasificar_item(client_collab, db_session) -
 
 
 @pytest.mark.asyncio
+async def test_colaborador_no_puede_aceptar_excepcion(client_collab, db_session) -> None:
+    product = CanonicalProduct(name="Producto revisable")
+    run = CatalogAuditRun(
+        id="run-excepcion-colaborador", scope="selected", mode="deterministic_only",
+        include_orphans=False, enrich_missing=False, auto_fix=False,
+        status="completed_with_issues", is_active_slot=False,
+    )
+    db_session.add_all([product, run])
+    await db_session.flush()
+    item = CatalogAuditItem(
+        run_id=run.id, canonical_product_id=product.id, target_key=f"canonical:{product.id}",
+        input_hash="f" * 64, rules_version="catalog-audit-r1", feedback_version="0",
+        status="needs_review",
+    )
+    db_session.add(item)
+    await db_session.commit()
+    await db_session.refresh(item)
+
+    response = await client_collab.post(
+        f"/canonical-products/catalog-audits/{run.id}/items/{item.id}/resolve",
+        json={"action": "accept_exception", "note": "Producto revisado manualmente"},
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_acepta_excepcion_y_deja_feedback_trazable(client_admin, db_session) -> None:
+    product = CanonicalProduct(name="Producto verificado", catalog_audit_status="needs_review")
+    run = CatalogAuditRun(
+        id="run-excepcion-admin", scope="selected", mode="deterministic_only",
+        include_orphans=False, enrich_missing=False, auto_fix=False,
+        status="completed_with_issues", is_active_slot=False,
+    )
+    db_session.add_all([product, run])
+    await db_session.flush()
+    item = CatalogAuditItem(
+        run_id=run.id, canonical_product_id=product.id, target_key=f"canonical:{product.id}",
+        input_hash="e" * 64, rules_version="catalog-audit-r1", feedback_version="0",
+        status="needs_review",
+    )
+    db_session.add(item)
+    await db_session.commit()
+    await db_session.refresh(item)
+
+    response = await client_admin.post(
+        f"/canonical-products/catalog-audits/{run.id}/items/{item.id}/resolve",
+        json={"action": "accept_exception", "note": "Producto verificado manualmente"},
+    )
+
+    assert response.status_code == 200
+    await db_session.refresh(item)
+    await db_session.refresh(product)
+    feedback = await db_session.scalar(
+        select(CatalogAuditFeedback).where(CatalogAuditFeedback.canonical_product_id == product.id)
+    )
+    assert item.status == "clean"
+    assert item.resolution == "accept_exception"
+    assert item.resolution_note == "Producto verificado manualmente"
+    assert product.catalog_audit_status == "clean"
+    assert feedback is not None
+    assert feedback.kind == "exception"
+    assert feedback.payload_json["note"] == "Producto verificado manualmente"
+
+
+@pytest.mark.asyncio
 async def test_correccion_manual_rechaza_campos_protegidos(client_admin, db_session) -> None:
     product = CanonicalProduct(name="Producto protegido", content_revision=2)
     run = CatalogAuditRun(
@@ -239,3 +409,40 @@ async def test_correccion_manual_rechaza_campos_protegidos(client_admin, db_sess
     )
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_correccion_manual_serializa_decimales_en_la_version(client_admin, db_session, monkeypatch) -> None:
+    product = CanonicalProduct(
+        name="Maceta medible", description_html="<p>Contenido original</p>",
+        height_cm=Decimal("12.50"), content_revision=2,
+    )
+    run = CatalogAuditRun(
+        id="run-version-decimal", scope="selected", mode="deterministic_only", include_orphans=False,
+        enrich_missing=False, auto_fix=False, status="completed_with_issues", is_active_slot=False,
+    )
+    db_session.add_all([product, run])
+    await db_session.flush()
+    item = CatalogAuditItem(
+        run_id=run.id, canonical_product_id=product.id, target_key=f"canonical:{product.id}",
+        input_hash="d" * 64, rules_version="catalog-audit-r1", feedback_version="0", status="needs_review",
+    )
+    db_session.add(item)
+    await db_session.commit()
+    await db_session.refresh(item)
+    monkeypatch.setattr("services.routers.catalog_audits.process_catalog_audit_run.send", lambda _run_id: None)
+
+    response = await client_admin.post(
+        f"/canonical-products/catalog-audits/{run.id}/items/{item.id}/resolve",
+        json={
+            "action": "apply_correction", "note": "Corrección controlada con snapshot",
+            "expected_content_revision": 2, "corrections": {"description_html": "<p>Contenido revisado</p>"},
+        },
+    )
+
+    assert response.status_code == 200
+    version = await db_session.scalar(
+        select(CanonicalContentVersion).where(CanonicalContentVersion.canonical_product_id == product.id)
+    )
+    assert version is not None
+    assert version.snapshot_json["height_cm"] == "12.50"

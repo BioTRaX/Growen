@@ -39,7 +39,7 @@ function Add-LockMetadata {
     $content = $header + [Environment]::NewLine + $content
     # pip-tools resuelve en Windows y puede perder el marcador transitivo de MCP.
     # Reponerlo evita que las imágenes Linux intenten instalar pywin32.
-    $content = $content -replace '(?m)^pywin32==([0-9.]+) \\$', 'pywin32==$1 ; sys_platform == "win32" \'
+    $content = $content -replace '(?m)^pywin32==([0-9.]+) \\\r?$', 'pywin32==$1 ; sys_platform == "win32" \'
     if ($AddLinuxMagic) {
         $linuxMagic = @"
 python-magic==0.4.27 ; platform_system != "Windows" \

@@ -80,16 +80,29 @@ def _redis_key(kind: str, value: str) -> str:
     return f"growen:mcp:{kind}:{digest}"
 
 
+def _secret_name() -> str:
+    audience = _audience()
+    service_secrets = {
+        os.getenv("MCP_PRODUCTS_JWT_AUDIENCE", "growen-mcp-products"): "MCP_PRODUCTS_SECRET_KEY",
+        os.getenv("MCP_WEB_SEARCH_JWT_AUDIENCE", "growen-mcp-web-search"): "MCP_WEB_SEARCH_SECRET_KEY",
+    }
+    return service_secrets.get(audience, "MCP_SECRET_KEY")
+
+
 def _secret() -> str:
-    value = read_secret("MCP_SECRET_KEY") or ""
+    service_name = _secret_name()
+    value = read_secret(service_name) or (read_secret("MCP_SECRET_KEY") if service_name != "MCP_SECRET_KEY" else None) or ""
     if value:
         return value
-    raise MCPTokenInvalid("MCP_SECRET_KEY no configurado")
+    raise MCPTokenInvalid(f"{service_name} no configurado")
 
 
 def _candidate_secrets(token: str) -> list[str]:
     current = _secret()
-    previous = read_secret("MCP_SECRET_KEY_PREVIOUS") or ""
+    service_name = _secret_name()
+    previous = read_secret(f"{service_name}_PREVIOUS") or (
+        read_secret("MCP_SECRET_KEY_PREVIOUS") if service_name != "MCP_SECRET_KEY" else None
+    ) or ""
     expected_kid = os.getenv("MCP_JWT_KEY_ID", "")
     previous_kid = os.getenv("MCP_JWT_PREVIOUS_KEY_ID", "")
     try:

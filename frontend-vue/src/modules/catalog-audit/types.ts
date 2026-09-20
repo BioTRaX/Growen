@@ -28,6 +28,8 @@ export interface CatalogAuditItem {
   item_id: number
   canonical_product_id: number | null
   product_id: number | null
+  canonical_name: string | null
+  product_detail_id: number | null
   status: AuditItemStatus
   input_hash: string
   rules_version: string

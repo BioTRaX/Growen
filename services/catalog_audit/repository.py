@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +42,21 @@ def canonical_content(product: CanonicalProduct) -> dict:
         "usage_instructions": product.usage_instructions or {},
         "content_revision": product.content_revision,
     }
+
+
+def _json_snapshot_value(value):
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_snapshot_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_snapshot_value(item) for item in value]
+    return value
+
+
+def canonical_snapshot(product: CanonicalProduct) -> dict:
+    """Devuelve una versión JSON-segura sin alterar la huella auditable."""
+    return _json_snapshot_value(canonical_content(product))
 
 
 def canonical_auditable_content(product: CanonicalProduct) -> dict:
@@ -112,6 +128,7 @@ async def create_run_items(
             .order_by(CatalogAuditItem.id.desc())
             .limit(1)
         )
+        reused_issue = previous and previous.status in {"needs_review", "quarantined"}
         item = CatalogAuditItem(
             run_id=run.id,
             canonical_product_id=product.id,
@@ -119,8 +136,17 @@ async def create_run_items(
             input_hash=input_hash,
             rules_version=RULESET_VERSION,
             feedback_version=feedback_version,
-            status="skipped_unchanged" if previous else "pending",
+            status=previous.status if reused_issue else ("skipped_unchanged" if previous else "pending"),
             reused_item_id=previous.id if previous else None,
+            product_class=previous.product_class if reused_issue else None,
+            score=previous.score if reused_issue else None,
+            passed=previous.passed if reused_issue else None,
+            findings_json=previous.findings_json if reused_issue else None,
+            semantic_json=previous.semantic_json if reused_issue else None,
+            corrections_json=previous.corrections_json if reused_issue else None,
+            evidence_json=previous.evidence_json if reused_issue else None,
+            error_code=previous.error_code if reused_issue else None,
+            error_message=previous.error_message if reused_issue else None,
             completed_at=datetime.utcnow() if previous else None,
         )
         session.add(item)

@@ -14,6 +14,14 @@ modo, Enrich para contenido ausente y autocorrección admin, seguir progreso,
 cancelar, reanudar y resolver ítems. El listado conserva las cuarentenas para
 staff con indicador visible. Ver [`CATALOG_AUDITOR.md`](CATALOG_AUDITOR.md).
 
+Cada fila del auditor muestra el nombre canónico y enlaza a la ficha mediante
+el `Product.id` interno; el ID canónico queda sólo como referencia. Si no hay
+producto interno vinculado se muestra un estado explícito sin enlace. En
+`/productos`, sólo admin ve **Aceptar revisión** para estados `needs_review`
+con coordenadas persistidas. El diálogo exige una nota, confirma la excepción
+como correcta mediante `accept_exception`, refresca el badge a `clean` y no
+aplica ninguna corrección de IA.
+
 ## Centro Conocimiento (2026-07-26)
 
 La ficha canónica muestra **Conocimiento** para staff. El centro compartido con Mercado reúne fuentes, documentos, imágenes, videos, hechos, historial e IA; permite alta, edición, procesamiento, revalidación, archivado/restauración y upload. Sus etiquetas/capacidades nunca se agregan a `Product.tags`. Mercado lo abre filtrado por `market`.

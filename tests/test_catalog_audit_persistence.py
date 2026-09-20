@@ -53,6 +53,35 @@ async def test_producto_sin_cambios_se_registra_como_skipped(db_session) -> None
 
 
 @pytest.mark.asyncio
+async def test_hallazgo_sin_cambios_conserva_estado_y_evidencia(db_session) -> None:
+    product = CanonicalProduct(name="Producto pendiente", description_html="<p>Ficha estable</p>")
+    previous_run = CatalogAuditRun(
+        id="run-issue-old", scope="all", mode="full", status="completed_with_issues", is_active_slot=False,
+    )
+    db_session.add_all([product, previous_run])
+    await db_session.flush()
+    previous_item = (await create_run_items(db_session, previous_run, [product], include_orphans=False))[0]
+    previous_item.status = "needs_review"
+    previous_item.product_class = "other"
+    previous_item.score = 62
+    previous_item.findings_json = {"warnings": ["Revisar descripción"]}
+    previous_item.evidence_json = ["https://evidencia.example/ficha"]
+    await db_session.commit()
+
+    current_run = CatalogAuditRun(id="run-issue-new", scope="all", mode="full", status="queued")
+    db_session.add(current_run)
+    await db_session.flush()
+    current_item = (await create_run_items(db_session, current_run, [product], include_orphans=False))[0]
+
+    assert current_item.status == "needs_review"
+    assert current_item.reused_item_id == previous_item.id
+    assert current_item.product_class == "other"
+    assert current_item.score == 62
+    assert current_item.findings_json == previous_item.findings_json
+    assert current_item.evidence_json == previous_item.evidence_json
+
+
+@pytest.mark.asyncio
 async def test_cambiar_solo_revision_no_repite_trabajo(db_session) -> None:
     product = CanonicalProduct(name="Carpa Indoor", description_html="<p>Ficha estable</p>", content_revision=1)
     old_run = CatalogAuditRun(id="run-revision-old", scope="all", mode="full", status="completed", is_active_slot=False)

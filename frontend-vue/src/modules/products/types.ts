@@ -42,6 +42,8 @@ export interface ProductListItem {
   canonical_sku: string | null
   canonical_name: string | null
   catalog_audit_status?: string | null
+  catalog_audit_run_id?: string | null
+  catalog_audit_item_id?: number | null
   first_variant_sku: string | null
   tags: ProductTag[]
   image_url: string | null

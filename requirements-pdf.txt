@@ -22,3 +22,4 @@ pytesseract
 playwright>=1.42.0
 weasyprint>=70.0,<71
 beautifulsoup4>=4.12.3
+soupsieve>=2.9.0,<3

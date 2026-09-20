@@ -165,8 +165,6 @@ Invoke-QualityCommand $python @(
 )
 
 if (-not $SkipFrontend) {
-    Invoke-QualityCommand 'npm.cmd' @('run', 'build') (Join-Path $root 'frontend')
-    Invoke-QualityCommand 'npm.cmd' @('audit', '--audit-level=moderate') (Join-Path $root 'frontend')
     Invoke-QualityCommand 'npm.cmd' @('run', 'typecheck') (Join-Path $root 'frontend-vue')
     Invoke-QualityCommand 'npm.cmd' @('test') (Join-Path $root 'frontend-vue')
     Invoke-QualityCommand 'npm.cmd' @('run', 'test:e2e') (Join-Path $root 'frontend-vue')
