@@ -110,6 +110,30 @@ export async function updateProductTitle(
   })
 }
 
+export async function updateCanonicalDescription(
+  canonicalId: number,
+  descriptionHtml: string,
+): Promise<{ id: number; description_html: string | null; content_revision: number }> {
+  return (await http.patch<{ id: number; description_html: string | null; content_revision: number }>(
+    `/canonical-products/${canonicalId}`,
+    {
+      description_html: descriptionHtml,
+    },
+  )).data
+}
+
+export async function updateProductDescription(
+  productId: number,
+  descriptionHtml: string,
+): Promise<{ status: string; description_html: string | null }> {
+  return (await http.patch<{ status: string; description_html: string | null }>(
+    `/products/${productId}`,
+    {
+      description_html: descriptionHtml,
+    },
+  )).data
+}
+
 export async function getProductHistory(id: number): Promise<ProductPurchaseHistory> {
   return (await http.get<ProductPurchaseHistory>(`/products/${id}/purchase-history`)).data
 }
