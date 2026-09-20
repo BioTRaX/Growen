@@ -15,13 +15,12 @@ import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form
-from datetime import datetime as _dt
 from fastapi.responses import JSONResponse, StreamingResponse
 from io import BytesIO, StringIO
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from pydantic import BaseModel, ValidationError, Field, field_validator
-from sqlalchemy import func, select, or_, and_, update, exists
+from sqlalchemy import func, select, or_, and_, exists
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
@@ -47,6 +46,7 @@ from db.models import (
     ProductTag,
     CanonicalEnrichmentJob,
     CanonicalContentVersion,
+    CatalogAuditItem,
 )
 from db.session import get_session
 from db.text_utils import stylize_product_name
@@ -149,10 +149,9 @@ async def product_purchase_history(product_id: int, session: AsyncSession = Depe
         } for movement in movements],
     }
 # ------------------------------- Productos (mínimo para tests) -------------------------------
-from pydantic import BaseModel as _PydModel
 
 
-class _ProductCreate(_PydModel):
+class _ProductCreate(BaseModel):
     title: str
     initial_stock: Decimal = Decimal("0")
     supplier_id: Optional[int] = None
@@ -191,7 +190,7 @@ async def _products_has_canonical(session: AsyncSession) -> bool:
             try:
                 await session.execute("ALTER TABLE products ADD COLUMN canonical_sku VARCHAR(32)")  # type: ignore[arg-type]
                 await session.commit()
-            except Exception as e:
+            except Exception:
                 # Reintento usando conexión en modo autocommit (algunos entornos SQLite pueden requerirlo)
                 try:
                     await session.rollback()
@@ -251,9 +250,8 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
     desired_sku = (payload.sku or payload.supplier_sku or payload.title)[:50].strip() if payload.sku or payload.supplier_sku else (payload.title or "")[:50].strip()
     if not desired_sku:
         raise HTTPException(status_code=400, detail={"code": "invalid_sku", "message": "SKU inválido"})
-    from db.sku_utils import is_canonical_sku, CANONICAL_SKU_PATTERN, CANONICAL_SKU_REGEX
+    from db.sku_utils import is_canonical_sku, CANONICAL_SKU_PATTERN
     strict_flag = os.getenv("CANONICAL_SKU_STRICT", "1") == "1"  # ahora estricto por defecto
-    force_gen_flag = os.getenv("FORCE_CANONICAL", "0") == "1"
 
     # Regla pseudo-canónica: si tiene exactamente dos '_' y no cumple regex => 422
     if desired_sku.count('_') == 2 and not is_canonical_sku(desired_sku):
@@ -384,9 +382,9 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
             if is_canonical_sku(desired_sku) and has_canonical_col:
                 prod.canonical_sku = desired_sku
         # Crear Variant con reintentos en caso de colisión de unicidad (modo no estricto)
-        import random as _r, string as _s
+        import random as _r
+        import string as _s
         max_variant_retries = 6
-        last_error = None
         var = None
         for vr in range(max_variant_retries):
             attempt_variant_sku = desired_sku if vr == 0 else (
@@ -402,8 +400,7 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
                     if is_canonical_sku(desired_sku) and has_canonical_col:
                         prod.canonical_sku = desired_sku
                 break
-            except IntegrityError as ie:  # collision
-                last_error = ie
+            except IntegrityError:  # collision
                 await session.rollback()
                 # Reanudar transacción lógica: necesitamos asegurar que prod sigue presente (en stub path ya está)
                 # Reiniciar sesión para siguiente intento
@@ -491,7 +488,7 @@ async def create_product_minimal(payload: _ProductCreate, session: AsyncSession 
 
 
 # ------------------------------- Proveedores: búsqueda (autocomplete) -------------------------------
-class _SupplierSearchItem(_PydModel):
+class _SupplierSearchItem(BaseModel):
     id: int
     name: str
     slug: str
@@ -526,7 +523,7 @@ async def suppliers_search(
 
 
 # ------------------------------- Variants: editar SKU interno -------------------------------
-class _VariantSkuUpdate(_PydModel):
+class _VariantSkuUpdate(BaseModel):
     sku: str
     note: Optional[str] = None
 
@@ -588,7 +585,7 @@ async def update_variant_sku(
 
 
 # ------------------------------- Búsqueda rápida de catálogo (POS) -------------------------------
-class _CatalogSearchItem(_PydModel):
+class _CatalogSearchItem(BaseModel):
     id: int
     kind: str  # product|canonical
     title: str
@@ -625,7 +622,7 @@ async def catalog_search(
     primary_image_path = (
         select(Image.path)
         .where(Image.product_id == Product.id)
-        .where(Image.active == True)
+        .where(Image.active.is_(True))
         .order_by(Image.is_primary.desc(), Image.sort_order.asc(), Image.id.asc())
         .limit(1)
         .scalar_subquery()
@@ -655,7 +652,7 @@ async def catalog_search(
         rows = (
             await session.execute(
                 base_query
-                .where((Product.stock != None) & (Product.stock > 0))
+                .where(Product.stock.is_not(None) & (Product.stock > 0))
                 .order_by(Product.stock.desc(), Product.title.asc())
                 .limit(limit)
             )
@@ -684,10 +681,6 @@ async def catalog_search(
                 ),
             ]
             and_conditions.append(or_(*or_conditions))
-        
-        # Normalizar término completo para búsqueda de relaciones (opcional)
-        term_lower = term.lower()
-        related_terms = []
         
         # Mapeo de términos relacionados (se agregan como OR global o se refinan?)
         # Nota: La lógica anterior usaba OR global. Para mantener simplicidad y potencia,
@@ -1010,7 +1003,7 @@ async def _build_product_response(session: AsyncSession, product: Product) -> di
             await session.execute(
                 select(Image)
                 .where(Image.product_id == product.id)
-                .where(Image.active == True)
+                .where(Image.active.is_(True))
                 .order_by(Image.sort_order, Image.id)
             )
         ).scalars().all()
@@ -1153,7 +1146,7 @@ async def variants_lookup(
 
 
 # ------------------------------- SupplierProduct: link ↔ Variant (upsert) -------------------------------
-class _SupplierProductLink(_PydModel):
+class _SupplierProductLink(BaseModel):
     supplier_id: int
     supplier_product_id: str
     internal_variant_id: int
@@ -1225,7 +1218,7 @@ async def supplier_product_link(
     }
 
 
-class _ProductsDeleteReq(_PydModel):
+class _ProductsDeleteReq(BaseModel):
     ids: List[int]
 
 
@@ -2553,6 +2546,19 @@ async def list_products(
     result = await session.execute(stmt)
     rows = result.all()
 
+    audit_item_ids = {
+        cp_obj.last_catalog_audit_item_id
+        for _, _, _, _, cp_obj in rows
+        if cp_obj and cp_obj.last_catalog_audit_item_id
+    }
+    audit_items_by_id: dict[int, str] = {}
+    if audit_item_ids:
+        audit_rows = (await session.execute(
+            select(CatalogAuditItem.id, CatalogAuditItem.run_id)
+            .where(CatalogAuditItem.id.in_(audit_item_ids))
+        )).all()
+        audit_items_by_id = dict(audit_rows)
+
     # Prefetch primer SKU por producto para evitar N+1
     product_ids = [p_obj.id for _, p_obj, *_ in rows]
     skus_by_product: dict[int, str | None] = {}
@@ -2593,7 +2599,7 @@ async def list_products(
         img_rows = (
             await session.execute(
                 select(Image.product_id, Image.id, Image.url, Image.path, Image.is_primary)
-                .where(Image.product_id.in_(product_ids), Image.active == True)
+                .where(Image.product_id.in_(product_ids), Image.active.is_(True))
                 .order_by(Image.product_id.asc(), Image.is_primary.desc().nulls_last(), Image.sort_order.asc().nulls_last(), Image.id.asc())
             )
         ).all()
@@ -2667,6 +2673,8 @@ async def list_products(
                 "canonical_sku": (cp_obj.sku_custom if (cp_obj and cp_obj.sku_custom) else (cp_obj.ng_sku if cp_obj else None)),
                 "canonical_name": stylize_product_name(cp_obj.name) if cp_obj else None,
                 "catalog_audit_status": cp_obj.catalog_audit_status if cp_obj else None,
+                "catalog_audit_item_id": cp_obj.last_catalog_audit_item_id if cp_obj else None,
+                "catalog_audit_run_id": audit_items_by_id.get(cp_obj.last_catalog_audit_item_id) if cp_obj else None,
                 "first_variant_sku": skus_by_product.get(p_obj.id),
                 # Etapa 1: Datos estructurados de enriquecimiento
                 "technical_specs": getattr(p_obj, 'technical_specs', None),
@@ -3552,7 +3560,7 @@ async def get_product(product_id: int, session: AsyncSession = Depends(get_sessi
         (
             await session.scalars(
                 select(Image)
-                .where(Image.product_id.in_(linked_ids), Image.active == True)
+                .where(Image.product_id.in_(linked_ids), Image.active.is_(True))
                 .order_by(Image.is_primary.desc(), Image.sort_order.asc().nulls_last(), Image.id.asc())
             )
         ).all()

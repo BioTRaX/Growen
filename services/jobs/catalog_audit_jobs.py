@@ -26,7 +26,7 @@ import services.jobs  # noqa: F401
 from db.models import CanonicalContentVersion, CanonicalEnrichmentJob, CanonicalProduct, CatalogAuditFeedback, CatalogAuditItem, CatalogAuditRun
 from db.session import SessionLocal
 from services.catalog_audit.ollama_client import CatalogAuditOllamaClient, SemanticAuditError
-from services.catalog_audit.repository import canonical_content, canonical_taxonomy
+from services.catalog_audit.repository import canonical_content, canonical_snapshot, canonical_taxonomy
 from services.catalog_audit.rules import CRITICAL_FLAGS, audit_catalog_content
 from services.enrichment.service import create_enrichment_job, dispatch_enrichment_job
 
@@ -106,7 +106,11 @@ async def _wait_for_enrich(run: CatalogAuditRun, item: CatalogAuditItem, product
             CanonicalEnrichmentJob.status.in_(ENRICH_ACTIVE),
         ))
     if not job:
-        request_id = f"audit:{run.id}:{product.id}:missing"[:64]
+        previous_attempts = await session.scalar(select(func.count(CanonicalEnrichmentJob.id)).where(
+            CanonicalEnrichmentJob.batch_id == run.id,
+            CanonicalEnrichmentJob.canonical_product_id == product.id,
+        )) or 0
+        request_id = f"audit:{run.id[:16]}:{product.id}:{previous_attempts + 1}"[:64]
         job, created = await create_enrichment_job(
             session, canonical_id=product.id, requested_product_id=None, client_request_id=request_id,
             scope="full", requested_by_user_id=run.requested_by_user_id, batch_id=run.id,
@@ -119,7 +123,17 @@ async def _wait_for_enrich(run: CatalogAuditRun, item: CatalogAuditItem, product
         run.status = "waiting_enrich"
         await session.commit()
         return True
-    if job.status not in ENRICH_USABLE or not _has_useful_content(product):
+    if job.status in ENRICH_USABLE and not _has_useful_content(product):
+        item.status = "needs_review"
+        item.error_code = "enrich_review_required"
+        item.error_message = "Enrich terminó sin campos aplicables; requiere revisión manual."
+        item.completed_at = datetime.utcnow()
+        product.catalog_audit_status = "needs_review"
+        product.catalog_audited_at = datetime.utcnow()
+        await session.flush()
+        product.last_catalog_audit_item_id = item.id
+        return False
+    if job.status not in ENRICH_USABLE:
         item.status = "failed"
         item.error_code = "enrich_missing_content"
         item.error_message = "Enrich terminó sin contenido útil para auditar."
@@ -181,7 +195,7 @@ async def _audit_item(run: CatalogAuditRun, item: CatalogAuditItem, session) -> 
     critical = bool(set(deterministic.flags) & CRITICAL_FLAGS) or bool(semantic.get("critical"))
     if run.auto_fix and item.corrections_json and deterministic.passed and not critical and item.auto_fix_attempts == 0:
         expected_revision = product.content_revision
-        before = canonical_content(product)
+        before = canonical_snapshot(product)
         changes = {correction["field"]: correction["proposed_value"] for correction in item.corrections_json}
         changes["content_revision"] = expected_revision + 1
         cas = await session.execute(update(CanonicalProduct).where(
@@ -199,7 +213,7 @@ async def _audit_item(run: CatalogAuditRun, item: CatalogAuditItem, session) -> 
             await session.refresh(product)
             session.add(CanonicalContentVersion(
                 canonical_product_id=product.id, origin="catalog_audit_auto_fix", revision=product.content_revision,
-                snapshot_json=canonical_content(product), is_applied=True, created_by_user_id=run.requested_by_user_id,
+                snapshot_json=canonical_snapshot(product), is_applied=True, created_by_user_id=run.requested_by_user_id,
             ))
             item.auto_fix_attempts = 1
             rerun = audit_catalog_content(

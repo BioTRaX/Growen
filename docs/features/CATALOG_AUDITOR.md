@@ -34,6 +34,19 @@ un run global activo. Los tratamientos son:
 
 Los canónicos en cuarentena no participan de catálogos públicos ni de las
 exportaciones de stock. El listado staff conserva el indicador de auditoría.
+La tabla del auditor presenta `canonical_name` como identidad principal y el
+ID canónico como referencia secundaria. `product_detail_id` apunta al menor
+`Product.id` interno vinculado por equivalencia y habilita la navegación a la
+ficha; cuando no existe vínculo la UI informa **Sin ficha interna vinculada** y
+no construye una URL con el ID canónico.
+
+En `/productos`, un administrador puede usar **Aceptar revisión** sobre un
+`needs_review` que conserve `catalog_audit_run_id` y
+`catalog_audit_item_id`. La acción exige una nota de al menos tres caracteres,
+invoca `accept_exception` y deja el producto en `clean` con usuario, fecha y
+feedback trazables. No aplica correcciones propuestas por IA ni inicia una
+reauditoría. Los colaboradores no ven la acción y el backend responde 403 si
+intentan invocarla directamente.
 
 ## Reglas, modelo local y autocorrección
 
@@ -45,7 +58,9 @@ clasificación y excepciones generan feedback versionado.
 El modo completo usa el cliente local exclusivo del auditor con
 `llama3.1:8b`, temperatura `0`, contexto `4096`, salida máxima `2048`, schema
 JSON y concurrencia operativa uno. Daemon, modelo, HTTP, JSON o schema inválidos
-fallan cerrado. No se guardan prompts completos.
+fallan cerrado. Una respuesta que no sea JSON se reintenta una sola vez; un
+segundo resultado inválido conserva `invalid_json` y exige intervención. No se
+guardan prompts completos.
 
 La autocorrección sólo está disponible para admin y exige auditoría
 determinista aprobada, confianza mínima `0,95`, dos dominios de evidencia y
@@ -61,6 +76,12 @@ pone en cuarentena un error crítico persistente; no hay rollback automático.
 - `GET /canonical-products/catalog-audits/{run_id}`
 - `POST .../{run_id}/cancel|retry`
 - `POST .../{run_id}/items/{item_id}/resolve`
+
+El detalle de una corrida agrega por ítem `canonical_name` y
+`product_detail_id`. `GET /products` agrega
+`catalog_audit_run_id`/`catalog_audit_item_id` desde el puntero persistido al
+último ítem. Ambos contratos se resuelven con consultas agrupadas, sin una
+consulta adicional por fila.
 
 `GET /canonical-products/catalog-audit-report` lee el último run persistido y
 nunca inicia trabajo.
@@ -87,6 +108,14 @@ Validar `/health/catalog-audit-worker`, Redis, el heartbeat de Enrich si se
 habilita contenido faltante y Ollama desde la vista. Al iniciar, el proceso
 reencola los runs persistidos que continúan activos; mensajes duplicados son
 seguros porque cada ejecución vuelve a comprobar su slot y sus ítems.
+Al reanudar un run terminado sólo vuelven a `pending` los ítems `failed` o
+`cancelled`; se elimina su referencia al job Enrich fallido, se recalculan los
+contadores y cada nuevo intento usa una clave de solicitud distinta. Un job
+Enrich `review_required` sin campos aplicables se clasifica como
+`needs_review`, no como fallo técnico.
+La clave Enrich incorpora el número persistido de intento: cambia después de
+un fallo, pero permanece determinista ante redelivery concurrente del mismo
+mensaje.
 En Windows el módulo instala `WindowsSelectorEventLoopPolicy` antes de crear
 sesiones Psycopg; sin esa política el broker puede consumir el mensaje mientras
 el run permanece `queued` por incompatibilidad del event loop.
@@ -128,3 +157,57 @@ Swarm y no deben reutilizarse para esta operación local. Las advertencias que
 indican que `growen_pgdata` o `growen_redis_data` conservan labels antiguos no
 autorizan a recrearlos, relabelarlos ni eliminarlos: son volúmenes productivos
 montados por Swarm.
+
+## Piloto completo del 2026-09-17
+
+Se ejecutó una auditoría real de los 29 canónicos en el entorno local con
+Redis, Dramatiq, Enrich, MCP Web Search y Ollama. El run
+`6934ff45cb834257bc558cc8090ca65a` terminó sin ítems fallidos: 18 `clean`, 10
+`needs_review` y 1 `skipped_unchanged`. No aparecieron huérfanos ni
+cuarentenas. Los diez hallazgos quedaron clasificados como revisión manual y no
+se aplicó ninguna recomendación automática. Tras reconciliar el camino
+`review_required`, el resumen persistido informa 29 auditados y 0 pendientes.
+
+La primera repetición consolidó las fichas que Enrich había modificado durante
+el run inicial: 10 se reutilizaron y 19 se reevaluaron. La repetición estable
+final `f9e26158f46c48398a51d1a51bae1a2b` reutilizó los 29 resultados sin
+duplicar jobs ni feedback: 19 quedaron `skipped_unchanged` y los 10 hallazgos
+conservaron `needs_review`, su evidencia y el estado
+`completed_with_issues`.
+
+También se ejercitó una corrección sin cambio material y su restauración sobre
+el canónico 11. Quedaron versiones `catalog_audit_pre_fix`,
+`catalog_audit_manual_fix`, `catalog_audit_pre_restore` y
+`catalog_audit_restore`, y la reauditoría posterior terminó trazada. Los
+snapshots convierten `Decimal` a texto exacto antes de persistir JSONB; esto
+evita el error 500 encontrado durante el primer intento sin modificar la huella
+auditable.
+
+El run real se creó con una sesión HTTP admin y CSRF contra el mismo endpoint
+que consume Vue. El componente Vue ofrece **Reanudar fallidos** también cuando
+el run terminó como `completed_with_issues`. El inicio de una nueva corrida
+mediante clic autenticado se difirió expresamente hasta que ingresen productos
+nuevos; no bloquea el cierre del piloto actual.
+
+El 2026-09-20 se completó un smoke autenticado y aislado de las superficies de
+lectura y resolución. Como admin, `/admin/auditor-catalogo` mostró los 29
+canónicos con nombre legible y enlaces internos válidos; `/productos/18`
+resolvió la ficha por `Product.id`, y `/productos` mostró los 29 resultados y
+10 acciones **Aceptar revisión**. El diálogo validó la nota, explicó que la
+acción no aplica correcciones de IA y se canceló sin enviar feedback. Como
+colaborador no apareció ninguna acción de aceptación y una invocación directa
+con sesión y CSRF válidos respondió `403`. Los usuarios sintéticos se
+eliminaron al terminar. Posteriormente, la revisión humana aceptó los 10 casos
+con sus notas. Una consulta de sólo lectura dentro del contenedor PostgreSQL
+confirmó 29 punteros canónicos en estado `clean`, 10 feedbacks activos de tipo
+`exception` y 10 acciones `accept_exception`. No se aplicaron correcciones de
+IA. Esta evidencia corresponde al entorno local y no equivale a producción
+verificada.
+
+MCP Web Search valida su JWT con `MCP_WEB_SEARCH_SECRET_KEY` según audiencia,
+en lugar de caer en la clave MCP genérica. La rotación conserva la clave previa
+específica del servicio y acepta `MCP_SECRET_KEY[_FILE]` como contrato de
+compatibilidad para los contenedores Compose/Swarm. Permanece como deuda
+separada un cierre tardío de
+clientes async observado en el worker Enrich (`Event loop is closed`), aunque
+no impidió completar los jobs del piloto.

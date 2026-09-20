@@ -9,12 +9,13 @@ param(
     [switch]$SkillsOnly,
     [ValidatePattern('^[a-z0-9-]+$')]
     [string]$SkillName,
+    [string]$PythonPath,
     [switch]$SkipFrontend
 )
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$python = Join-Path $root '.venv\Scripts\python.exe'
+$python = if ($PythonPath) { $PythonPath } else { Join-Path $root '.venv\Scripts\python.exe' }
 
 function Invoke-QualityCommand {
     param([string]$FilePath, [string[]]$ArgumentList, [string]$WorkingDirectory = $root)
@@ -65,7 +66,7 @@ foreach ($skill in $skillFiles) {
 Write-Host 'Skills canónicas verificadas.' -ForegroundColor Green
 
 if (-not (Test-Path -LiteralPath $python)) {
-    throw 'No existe la venv. Ejecutar scripts\bootstrap-dev.ps1.'
+    throw "No existe el intérprete Python autorizado: $python. Ejecutar scripts\bootstrap-dev.ps1 o usar -PythonPath."
 }
 Invoke-QualityCommand $python @('scripts/audit_agentic_environment.py')
 Write-Host 'Entorno agéntico verificado.' -ForegroundColor Green

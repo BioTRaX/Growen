@@ -83,6 +83,25 @@ Redis, los runs encolados/en curso y los ítems pendientes. La vista obtiene ese
 estado desde `GET /canonical-products/catalog-audits/summary`, que no ejecuta
 Ollama ni inicia auditorías.
 
+El piloto integral del 2026-09-17 procesó los 29 canónicos sin fallos técnicos.
+Una repetición estable reutilizó los 29: 19 como `skipped_unchanged` y 10
+conservando `needs_review` con su evidencia. No hubo huérfanos ni cuarentenas y
+la cobertura persistida terminó en 29 auditados y 0 pendientes. No se aplicaron
+recomendaciones automáticas. La reanudación descarta referencias
+a jobs Enrich fallidos, recalcula progreso y está disponible en Vue aun cuando
+el run terminó `completed_with_issues`. El detalle y la evidencia operativa se
+mantienen en [`docs/features/CATALOG_AUDITOR.md`](docs/features/CATALOG_AUDITOR.md).
+El auditor muestra el nombre canónico y sólo abre fichas con un `Product.id`
+interno resuelto. Productos permite a admin aceptar un `needs_review` con nota
+mediante `accept_exception`; esto registra feedback y estado `clean`, sin
+aplicar recomendaciones de IA. El smoke autenticado local del 2026-09-20
+verificó los 29 nombres y enlaces, la navegación por `Product.id`, las 10
+acciones admin y su ausencia para colaborador; el diálogo se canceló sin crear
+una excepción. La revisión humana posterior aceptó los 10 casos con nota y
+PostgreSQL confirmó los 29 canónicos en estado `clean`, sin aplicar
+recomendaciones de IA. Una nueva corrida por clic queda diferida hasta el
+ingreso de productos nuevos. Esta evidencia no verifica producción.
+
 El despliegue local del 2026-07-25 aplicó `20260725_canonical_enrichment_v2`,
 levantó MCP Web Search, Redis, worker, API y Vue, y activó
 `ENRICH_V2_ENABLED=1`. Ese smoke histórico obtuvo cinco fuentes y no aplicó

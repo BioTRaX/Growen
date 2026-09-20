@@ -4,6 +4,60 @@
 <!-- NG-HEADER: Lineamientos: Ver AGENTS.md -->
 # Changelog
 
+## 2026-09-20 — smoke autenticado de resolución del auditor
+
+- El smoke Vue local recorrió los 29 canónicos del auditor con nombres legibles
+  y enlaces internos válidos, confirmó una ficha mediante `Product.id` y mostró
+  las 10 acciones de aceptación pendientes para admin.
+- El diálogo exigió una nota válida, explicitó que no aplica recomendaciones de
+  IA y se canceló sin generar feedback ni cambiar los 10 `needs_review`.
+- Un colaborador autenticado no recibió acciones de aceptación y el endpoint
+  rechazó con `403` una invocación directa con sesión y CSRF válidos. Los
+  usuarios sintéticos se eliminaron después del smoke.
+- La revisión humana posterior aceptó los 10 casos con nota. PostgreSQL confirmó
+  los 29 canónicos `clean`, 10 excepciones activas y 10 acciones
+  `accept_exception`, sin aplicar recomendaciones de IA.
+- Una nueva auditoría mediante clic queda diferida hasta que ingresen productos
+  nuevos; esta validación local no declara producción verificada.
+- El gate de cierre saneó 15 hallazgos Ruff heredados del router de catálogo
+  mediante cambios equivalentes en imports, variables y expresiones SQLAlchemy;
+  la regresión focal permaneció verde.
+- `check-quality.ps1` acepta `-PythonPath` para ejecutar gates desde worktrees
+  administrados sin duplicar el venv canónico; el comportamiento predeterminado
+  continúa usando `.venv\Scripts\python.exe` del checkout actual.
+
+## 2026-09-19 — identificación y aceptación supervisada del auditor
+
+- El detalle de las corridas expone el nombre canónico y el `Product.id`
+  vinculado mediante consultas agrupadas; Vue muestra el nombre como identidad
+  principal y evita enlaces construidos con IDs canónicos.
+- `GET /products` entrega las coordenadas persistidas del último ítem auditado.
+  Sólo admin puede aceptar desde Productos un `needs_review` con nota mediante
+  `accept_exception`; el flujo registra trazabilidad y no aplica correcciones
+  de IA.
+- Se agregaron pruebas backend y Vue de payloads, navegación, permisos,
+  validación de nota, éxito y error. El smoke autenticado de lectura y permisos
+  se completó el 2026-09-20; no se declara despliegue ni producción verificada.
+
+## 2026-09-17 — piloto integral y recuperación del auditor de catálogo
+
+- Se procesaron los 29 canónicos reales sin fallos técnicos: 18 quedaron
+  limpios, 10 en revisión manual y 1 reutilizado; una repetición estable
+  reutilizó los 29 preservando 19 `skipped_unchanged` y 10 `needs_review`, sin
+  duplicar jobs ni feedback.
+- MCP Web Search ahora valida tokens con el secreto específico de su audiencia,
+  corrigiendo los 401 que bloqueaban Enrich durante la auditoría.
+- La reanudación de runs limpia el job Enrich terminal, recalcula contadores y
+  usa una clave nueva por intento; `review_required` se conserva como revisión
+  manual, actualiza la cobertura persistida y no se convierte en fallo técnico.
+- Ollama reintenta una sola vez una respuesta no JSON y mantiene fallo cerrado
+  si la segunda respuesta también es inválida.
+- Los snapshots de corrección y restauración serializan medidas `Decimal` sin
+  pérdida antes de persistir JSONB. Se verificó una corrección controlada, su
+  restauración y las versiones de auditoría asociadas.
+- Vue muestra **Reanudar fallidos** en runs `completed_with_issues` que todavía
+  contienen ítems fallidos, con cobertura de componente.
+
 ## 2026-09-17 — saneamiento de UI, router y formalización del cierre de migración
 
 - Se creó la vista `NotFoundView.vue` para atender errores 404 de navegación y subrutas administrativas no mapeadas, reutilizando el patrón visual de `v-empty-state` y eliminando referencias anacrónicas al frontend legado de React.

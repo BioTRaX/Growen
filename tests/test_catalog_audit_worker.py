@@ -135,8 +135,71 @@ async def test_contenido_ausente_crea_y_despacha_un_solo_enrich(db_session, monk
 
     job = await db_session.get(CanonicalEnrichmentJob, item.enrichment_job_id)
     assert job is not None
-    assert job.client_request_id == f"audit:{run.id}:{product.id}:missing"
+    assert job.client_request_id == f"audit:{run.id[:16]}:{product.id}:1"
     assert dispatched == [job.id]
+
+
+@pytest.mark.asyncio
+async def test_retry_de_auditoria_crea_otro_enrich_si_el_anterior_fallo(db_session, monkeypatch) -> None:
+    product = CanonicalProduct(name="Producto a reintentar")
+    run = CatalogAuditRun(
+        id="run-retry-enrich", scope="selected", mode="full", status="running",
+        is_active_slot=True, include_orphans=False, enrich_missing=True,
+    )
+    db_session.add_all([product, run])
+    await db_session.flush()
+    old_job = CanonicalEnrichmentJob(
+        id="job-enrich-anterior", canonical_product_id=product.id,
+        client_request_id=f"audit:{run.id[:16]}:{product.id}:1", batch_id=run.id,
+        scope="full", status="failed",
+    )
+    db_session.add(old_job)
+    await db_session.flush()
+    item = (await create_run_items(db_session, run, [product], include_orphans=False))[0]
+    dispatched: list[str] = []
+
+    async def fake_dispatch(job, _session) -> None:
+        dispatched.append(job.id)
+
+    monkeypatch.setattr("services.jobs.catalog_audit_jobs.dispatch_enrichment_job", fake_dispatch)
+
+    waiting = await _wait_for_enrich(run, item, product, db_session)
+
+    assert waiting is True
+    assert item.enrichment_job_id != old_job.id
+    new_job = await db_session.get(CanonicalEnrichmentJob, item.enrichment_job_id)
+    assert new_job.client_request_id == f"audit:{run.id[:16]}:{product.id}:2"
+    assert dispatched == [item.enrichment_job_id]
+
+
+@pytest.mark.asyncio
+async def test_enrich_revisable_sin_campos_aplicados_queda_para_revision_manual(db_session) -> None:
+    product = CanonicalProduct(name="Producto con evidencia insuficiente")
+    run = CatalogAuditRun(
+        id="run-enrich-revisable", scope="selected", mode="full", status="waiting_enrich",
+        is_active_slot=True, include_orphans=False, enrich_missing=True,
+    )
+    db_session.add_all([product, run])
+    await db_session.flush()
+    job = CanonicalEnrichmentJob(
+        id="job-enrich-revisable", canonical_product_id=product.id,
+        client_request_id="audit:revisable", scope="full", status="review_required",
+        result_json={"proposal": {"description_html": "<p>Propuesta de baja confianza.</p>"}},
+    )
+    db_session.add(job)
+    await db_session.flush()
+    item = (await create_run_items(db_session, run, [product], include_orphans=False))[0]
+    item.status = "waiting_enrich"
+    item.enrichment_job_id = job.id
+
+    waiting = await _wait_for_enrich(run, item, product, db_session)
+
+    assert waiting is False
+    assert item.status == "needs_review"
+    assert item.error_code == "enrich_review_required"
+    assert product.catalog_audit_status == "needs_review"
+    assert product.catalog_audited_at is not None
+    assert product.last_catalog_audit_item_id == item.id
 
 
 @pytest.mark.asyncio
