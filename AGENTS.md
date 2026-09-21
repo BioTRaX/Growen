@@ -318,6 +318,7 @@ Referencia rápida para agentes: qué hace cada script, cuándo usarlo y precauc
 - `db_check.py`: Verificaciones básicas de conexión / latencia (si aplica) (pendiente de ampliar si se requiere).
 - `db_diag.py`: Diagnóstico más extenso (consultas adicionales o checks; revisar contenido antes de usar en producción).
 - `db_port_probe.py`: Chequea disponibilidad del puerto DB (detección rápida de servicio caído o firewall local).
+- `check_media_permissions.py`: Verifica permisos de lectura y escritura en los directorios y volúmenes de media (públicos y privados). Detecta fallos de permisos antes de operaciones de importación.
 - `debug_migrations.py`: (Listado nuevamente para énfasis) No modificar sin actualizar `docs/features/MIGRATIONS_NOTES.md`.
 
 ### Administración de usuarios / seguridad básica

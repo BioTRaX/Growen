@@ -101,7 +101,7 @@ este rollout.
 
 Estado verificado el 2026-09-20:
 - Base de datos productiva (`growen_pgdata`) alineada al 100 % desde el volcado lógico de `dev`, transfiriendo 11 corridas de auditoría, 123 ítems auditados, 13 feedbacks, 59 trabajos de enriquecimiento, 173 activos de conocimiento y 43 versiones de contenido sin necesidad de reauditar el catálogo.
-- Volúmenes externos de media actualizados: `growen_public_media` (logos corporativos) y `growen_private_media` (comprobantes y remitos de compras).
+- Volúmenes externos de media actualizados: `growen_public_media` (logos corporativos) y `growen_private_media` (comprobantes y remitos de compras). Ambos volúmenes deben pertenecer a `app:app` (`uid:gid 100:101`) con permisos de escritura; de lo contrario, la subida de comprobantes temporales en compras arroja `PermissionError: [Errno 13]`. Corrección inmediata si fueron inicializados como root: `docker exec -u 0 <container_id> chown -R app:app /data/media`.
 - Imágenes inmutables reconstruidas bajo la revisión `325fba480aa9aa000a78b385bf4c5283180fd964`, escaneadas con Trivy, publicadas en el registro privado LAN (`192.168.100.100:5000`) y desplegadas en el Swarm (`SingleNode`).
 - Los 18 servicios Swarm convergen en estado 1/1 y saludables. Comprobados `/health` (200), `/api/health` (200) y `/api/health/summary` (200 con DB, Redis, Storage y 7 workers activos: market, enrichment, catalog_audit y canonical_knowledge).
 
