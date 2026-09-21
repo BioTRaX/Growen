@@ -110,6 +110,7 @@ Este documento contiene únicamente trabajo pendiente o futuro. El historial de 
   por `Product.id`, las 10 acciones admin, su cancelación segura y la ausencia
   de acciones para colaborador; la revisión editorial posterior dejó los 29
   canónicos `clean` (2026-09-20). No se declara producción verificada.
+- [x] Habilitar `ENRICH_V2_ENABLED=1` en el stack Docker Swarm (`docker-stack.yml`) y montar el secreto `mcp_web_search_secret_key` en `enrichment_worker`; desbloqueada la corrida de auditoría en producción que esperaba enriquecimiento (2026-09-21).
 - [ ] Completar evaluaciones RAG por rol, canal e intención con datos clasificados.
 - [ ] Evolucionar alertas de Mercado con score de confianza, circuit breaker y recomendaciones explicables con aprobación humana.
 - [ ] Incorporar inventario MeLi User Products/multiorigen después de validar el contrato oficial por site; el worker clásico falla cerrado mientras tanto.

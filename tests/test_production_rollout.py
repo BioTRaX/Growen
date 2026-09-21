@@ -101,8 +101,11 @@ def test_catalog_auditor_isolated_worker_is_declared_for_swarm() -> None:
 
     enrichment = stack["services"]["enrichment_worker"]
     assert enrichment["environment"]["OPENAI_API_KEY_FILE"] == "/run/secrets/openai_api_key"
+    assert enrichment["environment"]["MCP_WEB_SEARCH_SECRET_KEY_FILE"] == "/run/secrets/mcp_web_search_secret_key"
     assert "openai_api_key" in enrichment["secrets"]
+    assert "mcp_web_search_secret_key" in enrichment["secrets"]
     assert stack["secrets"]["openai_api_key"] == {"external": True}
+    assert stack["x-python-env"]["ENRICH_V2_ENABLED"] == "1"
 
 
 def test_alembic_runner_keeps_password_out_of_arguments(tmp_path, monkeypatch) -> None:

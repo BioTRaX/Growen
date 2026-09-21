@@ -105,6 +105,11 @@ Estado verificado el 2026-09-20:
 - Imágenes inmutables reconstruidas bajo la revisión `325fba480aa9aa000a78b385bf4c5283180fd964`, escaneadas con Trivy, publicadas en el registro privado LAN (`192.168.100.100:5000`) y desplegadas en el Swarm (`SingleNode`).
 - Los 18 servicios Swarm convergen en estado 1/1 y saludables. Comprobados `/health` (200), `/api/health` (200) y `/api/health/summary` (200 con DB, Redis, Storage y 7 workers activos: market, enrichment, catalog_audit y canonical_knowledge).
 
+Estado verificado el 2026-09-21:
+- Se activó `ENRICH_V2_ENABLED=1` en el entorno común Python de `docker-stack.yml` (`x-python-env`). Anteriormente el valor por defecto `"0"` bloqueaba el despacho de jobs desde el worker de auditoría y desde la API, dejando los jobs de enriquecimiento estancados en `queued` y la corrida en `waiting_enrich`.
+- Se montó el secreto Swarm `mcp_web_search_secret_key` y la variable `MCP_WEB_SEARCH_SECRET_KEY_FILE` en `growen_enrichment_worker`. Esto permite al worker firmar los JWT requeridos para comunicarse con el servidor `mcp_web_search:8002`.
+- Se convergieron los servicios `growen_api`, `growen_catalog_audit_worker` y `growen_enrichment_worker`, y se completó la corrida de auditoría que se encontraba estancada.
+
 ### 4. Smoke LAN
 
 Desde otro dispositivo con la CA instalada, proporcionar `ADMIN_USER_FILE`, `ADMIN_PASS_FILE`, `SMOKE_CA_BUNDLE` y ejecutar `scripts/test_login_flow.py`. Validar además navegador sin advertencias, CORS exacto, CSRF válido/inválido, cookie `Secure`, descarga privada autorizada y `404` no enumerable para accesos anónimos.

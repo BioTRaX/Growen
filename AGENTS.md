@@ -264,6 +264,7 @@ Antes de realizar cualquier cambio, el agente DEBE consultar la documentación r
 | **Enlaces y descargas en Vue (`:href`)** | Usar siempre `apiUrl(path)` de `src/services/transports` para endpoints de backend (adjuntos, PDFs, recibos). Evitar URLs directas sin prefijo `/api/` que causan captura errónea por el router SPA y redirección a `/login`. |
 | **Nuevo servicio Docker** | Revisar sección "Convenciones Docker" en este archivo, usar multi-stage builds |
 | **Problema de conexión DB** | Verificar patrón: `DB_URL = os.getenv("DB_URL") or settings.db_url` (ver corrección 2025-11-15) |
+| **Workers en Docker Swarm** | `docs/operations/DOCKER_SWARM.md`, `docker-stack.yml`. En Swarm los workers corren aislados; `services/orchestrator.py` es local Windows y no gestiona Swarm. Verificar `ENRICH_V2_ENABLED: "1"` en `x-python-env` y montajes de secretos MCP (`mcp_web_search_secret_key`). |
 
 ### Documentos de arquitectura general
 

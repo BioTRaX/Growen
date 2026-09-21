@@ -6,6 +6,7 @@ version: "3.9"
 
 x-python-env: &python-env
   ENV: production
+  ENRICH_V2_ENABLED: "1"
   GROWEN_RUNTIME_ROLE: worker
   PYTHONPATH: /app
   DB_URL: ""
@@ -169,7 +170,8 @@ services:
       <<: *python-env
       OPENAI_API_KEY: ""
       OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
-    secrets: [postgres_password, openai_api_key]
+      MCP_WEB_SEARCH_SECRET_KEY_FILE: /run/secrets/mcp_web_search_secret_key
+    secrets: [postgres_password, openai_api_key, mcp_web_search_secret_key]
     volumes: [growen_public_media:/data/media/public]
     networks: [backend, egress]
     deploy: {<<: *python-deploy, replicas: 1}
