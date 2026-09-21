@@ -169,7 +169,7 @@ onMounted(load)
           >
             Conocimiento
           </v-btn>
-          <v-btn v-if="canViewOperational" :href="`/productos/${product.id}/imagen`" prepend-icon="mdi-image-edit" variant="tonal">
+          <v-btn v-if="canViewOperational" :to="{ name: 'product-images-gallery', params: { id: product.id } }" prepend-icon="mdi-image-edit" variant="tonal">
             Imágenes avanzadas
           </v-btn>
         </div>

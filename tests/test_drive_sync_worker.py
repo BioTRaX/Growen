@@ -13,6 +13,8 @@ import os
 
 from workers.drive_sync import (
     extract_sku_from_filename,
+    parse_image_filename,
+    SkuParsedInfo,
     detect_mime_type,
     sync_drive_images,
 )
@@ -20,8 +22,61 @@ from db.models import Product
 from services.integrations.drive import GoogleDriveError
 
 
+class TestParseImageFilename:
+    """Tests para parse_image_filename con soporte de SKU canónico y fotos adicionales."""
+
+    def test_parse_primary_canonical(self):
+        """Detecta imagen principal directa o con sufijo 1."""
+        info1 = parse_image_filename("FER_0001_ORG.jpg")
+        assert info1 is not None
+        assert info1.sku == "FER_0001_ORG"
+        assert not info1.is_additional
+        assert info1.sort_order == 0
+
+        info2 = parse_image_filename("ABC_1234_XYZ 1.png")
+        assert info2 is not None
+        assert info2.sku == "ABC_1234_XYZ"
+        assert not info2.is_additional
+        assert info2.sort_order == 0
+
+    def test_parse_additional_numeric(self):
+        """Detecta imagen secundaria/adicional con sufijo numérico."""
+        info = parse_image_filename("FER_0001_ORG - 2.jpg")
+        assert info is not None
+        assert info.sku == "FER_0001_ORG"
+        assert info.is_additional is True
+        assert info.sort_order == 1
+
+        info_parenthesis = parse_image_filename("FER_0001_ORG (3).heic")
+        assert info_parenthesis is not None
+        assert info_parenthesis.sku == "FER_0001_ORG"
+        assert info_parenthesis.is_additional is True
+        assert info_parenthesis.sort_order == 2
+
+    def test_parse_additional_textual(self):
+        """Detecta imagen secundaria con sufijo de texto (Dorso, Reverso, etc.)."""
+        info = parse_image_filename("FER_0001_ORG Dorso.png")
+        assert info is not None
+        assert info.sku == "FER_0001_ORG"
+        assert info.is_additional is True
+        assert info.additional_label == "Dorso"
+        assert info.sort_order == 1
+
+        info2 = parse_image_filename("FER_0001_ORG - Trasera.webp")
+        assert info2 is not None
+        assert info2.sku == "FER_0001_ORG"
+        assert info2.is_additional is True
+        assert "Trasera" in (info2.additional_label or "")
+
+    def test_parse_invalid(self):
+        """Nombres no canónicos o sin SKU devuelven None."""
+        assert parse_image_filename("foto_random.jpg") is None
+        assert parse_image_filename("12345.png") is None
+        assert parse_image_filename("") is None
+
+
 class TestExtractSkuFromFilename:
-    """Tests para extracción de SKU desde nombres de archivo."""
+    """Tests para extracción de SKU desde nombres de archivo (retrocompatibilidad)."""
 
     def test_extract_sku_valid_format(self):
         """Extrae SKU correctamente del formato 'SKU #'."""
@@ -72,6 +127,11 @@ class TestDetectMimeType:
         content = b"GIF87a\x00\x00\x00\x00"
         assert detect_mime_type(content, "test.gif") == "image/gif"
 
+    def test_detect_heic(self):
+        """Detecta HEIC por magic bytes y extensión."""
+        content = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00"
+        assert detect_mime_type(content, "test.heic") == "image/heic"
+
     def test_detect_by_extension_fallback(self):
         """Usa extensión como fallback si no detecta magic bytes."""
         content = b"fake content"
@@ -79,6 +139,7 @@ class TestDetectMimeType:
         assert detect_mime_type(content, "test.png") == "image/png"
         assert detect_mime_type(content, "test.webp") == "image/webp"
         assert detect_mime_type(content, "test.gif") == "image/gif"
+        assert detect_mime_type(content, "test.heic") == "image/heic"
         assert detect_mime_type(content, "test.unknown") == "application/octet-stream"
 
 

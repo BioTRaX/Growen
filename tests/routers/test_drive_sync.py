@@ -7,6 +7,8 @@
 import pytest
 import pytest_asyncio
 import json
+import os
+import tempfile
 from unittest.mock import patch, AsyncMock, Mock
 from fastapi.testclient import TestClient
 
@@ -173,4 +175,36 @@ class TestDriveSyncWebSocket:
             ws.send_json({"type": "ping"})
             # Debería recibir pong (aunque el servidor puede no responder inmediatamente)
             # Este test verifica que la conexión acepta mensajes
+
+    @patch("services.integrations.drive.GoogleDriveSync.authenticate", new_callable=AsyncMock)
+    @patch("services.integrations.drive.GoogleDriveSync.list_images_in_folder", new_callable=AsyncMock)
+    def test_preview_endpoint(self, mock_list_images, _mock_auth, client):
+        """Test que el endpoint preview contrasta correctamente los archivos de Drive."""
+        mock_list_images.return_value = [
+            {"id": "f1", "name": "ABC_1234_XYZ.jpg", "mimeType": "image/jpeg", "size": 1024},
+            {"id": "f2", "name": "ABC_1234_XYZ - 2.jpg", "mimeType": "image/jpeg", "size": 2048},
+            {"id": "f3", "name": "random.png", "mimeType": "image/png", "size": 512},
+        ]
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+            tmp.write(b'{"type": "service_account"}')
+            tmp_path = tmp.name
+
+        try:
+            with patch.dict(os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": tmp_path}):
+                response = client.get("/admin/drive-sync/preview?source_folder_id=13d0sHLN0LrKAuxBV-Aibxrq05jz0n8F7")
+                assert response.status_code == 200
+                data = response.json()
+                assert data["folder_id"] == "13d0sHLN0LrKAuxBV-Aibxrq05jz0n8F7"
+                assert data["total_files"] == 3
+                assert data["no_sku_count"] == 1
+                items = data["items"]
+                assert len(items) == 3
+                assert items[0]["sku_extracted"] == "ABC_1234_XYZ"
+                assert items[0]["is_additional"] is False
+                assert items[1]["sku_extracted"] == "ABC_1234_XYZ"
+                assert items[1]["is_additional"] is True
+                assert items[2]["match_status"] == "no_sku"
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
 

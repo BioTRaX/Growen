@@ -13,6 +13,33 @@ export interface DriveRun {
   success_count: number; error_count: number; skipped_count: number; current_filename?: string | null
   error_message?: string | null; created_at?: string | null; completed_at?: string | null; items?: DriveItem[]
 }
+export interface DrivePreviewItem {
+  file_id: string
+  filename: string
+  mime_type?: string | null
+  size_bytes?: number | null
+  sku_extracted?: string | null
+  is_canonical: boolean
+  is_additional: boolean
+  additional_label?: string | null
+  sort_order: number
+  match_status: 'matched' | 'already_downloaded' | 'product_not_found' | 'no_sku' | 'error'
+  product_id?: number | null
+  product_title?: string | null
+  canonical_sku?: string | null
+  message: string
+}
+export interface DrivePreviewResponse {
+  folder_id: string
+  folder_name: string
+  total_files: number
+  matched_count: number
+  matches_additional_count: number
+  already_downloaded_count: number
+  unmatched_count: number
+  no_sku_count: number
+  items: DrivePreviewItem[]
+}
 export interface SchedulerStatus {
   running: boolean; enabled: boolean; working: boolean; start_hour: string; interval_hours: number
   next_run_time?: string | null; update_frequency_days: number; max_products_per_run: number
@@ -103,6 +130,7 @@ export interface CatalogAuditReport {
 export const getDriveStatus = async () => (await http.get<{ status: string; sync_id?: string | null }>('/admin/drive-sync/status')).data
 export const listDriveRuns = async (page = 1) => (await http.get<Page<DriveRun>>('/admin/drive-sync/runs', { params: { page } })).data
 export const getDriveRun = async (id: string) => (await http.get<DriveRun>(`/admin/drive-sync/runs/${id}`)).data
+export const previewDriveSync = async (sourceFolderId?: string) => (await http.get<DrivePreviewResponse>('/admin/drive-sync/preview', { params: { source_folder_id: sourceFolderId } })).data
 export const startDriveRun = async (sourceFolderId?: string) => (await http.post('/admin/drive-sync/start', null, { params: { source_folder_id: sourceFolderId } })).data
 export const cancelDriveRun = async (id: string) => (await http.post(`/admin/drive-sync/runs/${id}/cancel`)).data
 export const retryDriveRun = async (id: string, itemIds: number[]) => (await http.post(`/admin/drive-sync/runs/${id}/retry`, { item_ids: itemIds })).data

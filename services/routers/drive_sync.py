@@ -12,19 +12,22 @@ import logging
 import os
 import uuid
 from datetime import datetime
-from typing import Dict, Set, Optional
+from typing import Dict, Set, Optional, List
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks, Query
 from pydantic import BaseModel
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from db.models import DriveSyncItem, DriveSyncRun
+from db.models import DriveSyncItem, DriveSyncRun, Product, Image, ImageVersion, CanonicalProduct, ProductEquivalence, SupplierProduct
 from db.session import SessionLocal, get_session
 from services.auth import SessionData, require_roles, require_csrf, require_websocket_roles
 from services.jobs.drive_sync import sync_drive_images_task, PROGRESS_CHANNEL
-from services.integrations.drive import GoogleDriveSync
+from services.integrations.drive import GoogleDriveSync, GoogleDriveError
+from workers.drive_sync import parse_image_filename, is_canonical_sku, SkuParsedInfo
+from services.media import get_media_root
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,35 @@ class SyncStatusResponse(BaseModel):
     status: str
     message: str
     sync_id: Optional[str] = None
+
+
+class DrivePreviewItem(BaseModel):
+    file_id: str
+    filename: str
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    sku_extracted: Optional[str] = None
+    is_canonical: bool = False
+    is_additional: bool = False
+    additional_label: Optional[str] = None
+    sort_order: int = 0
+    match_status: str  # "matched", "already_downloaded", "product_not_found", "no_sku", "error"
+    product_id: Optional[int] = None
+    product_title: Optional[str] = None
+    canonical_sku: Optional[str] = None
+    message: str = ""
+
+
+class DrivePreviewResponse(BaseModel):
+    folder_id: str
+    folder_name: str
+    total_files: int
+    matched_count: int
+    matches_additional_count: int = 0
+    already_downloaded_count: int
+    unmatched_count: int
+    no_sku_count: int = 0
+    items: List[DrivePreviewItem]
 
 
 class RetryRunRequest(BaseModel):
@@ -263,6 +295,226 @@ async def _process_progress_message(data: dict) -> None:
     await broadcast_progress(progress_data)
 
 
+@router.get(
+    "/preview",
+    dependencies=[Depends(require_roles("colaborador", "admin"))],
+    response_model=DrivePreviewResponse,
+)
+async def preview_drive_sync(
+    source_folder_id: Optional[str] = Query(None, description="ID de carpeta en Google Drive"),
+    db: AsyncSession = Depends(get_session),
+) -> DrivePreviewResponse:
+    """Previsualiza y contrasta los archivos de Google Drive contra el catálogo de productos."""
+    default_folder = "13d0sHLN0LrKAuxBV-Aibxrq05jz0n8F7"
+    folder_id = (source_folder_id or "").strip()
+    if not folder_id:
+        env_f = (os.getenv("DRIVE_SOURCE_FOLDER_ID") or "").strip()
+        folder_id = env_f if (env_f and env_f != "REEMPLAZAR_CON_ID_CARPETA") else default_folder
+
+    credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if not credentials_path:
+        raise HTTPException(
+            status_code=400,
+            detail="GOOGLE_APPLICATION_CREDENTIALS no está configurado en el servidor.",
+        )
+
+    creds_path = Path(credentials_path)
+    if not creds_path.is_absolute():
+        project_root = Path(__file__).resolve().parent.parent.parent
+        creds_path = project_root / creds_path
+
+    if not creds_path.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Archivo de credenciales de Google Drive no encontrado: {creds_path}. Verifique la configuración de Service Account.",
+        )
+
+    try:
+        drive_sync = GoogleDriveSync(str(creds_path), folder_id)
+        await drive_sync.authenticate()
+
+        # Intentar obtener el nombre de la carpeta
+        folder_name = "Galeria x SKU"
+        try:
+            folder_meta = await asyncio.to_thread(
+                lambda: drive_sync.service.files().get(fileId=folder_id, fields="name").execute()
+            )
+            folder_name = folder_meta.get("name") or folder_name
+        except Exception:
+            pass
+
+        files = await drive_sync.list_images_in_folder()
+    except GoogleDriveError as e:
+        raise HTTPException(status_code=502, detail=f"Error al conectar con Google Drive: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error inesperado al consultar Google Drive: {e}")
+
+    items: List[DrivePreviewItem] = []
+    matched_count = 0
+    matches_additional_count = 0
+    already_downloaded_count = 0
+    unmatched_count = 0
+    no_sku_count = 0
+
+    root_media = get_media_root()
+
+    for f in files:
+        f_id = f.get("id", "")
+        f_name = f.get("name", "")
+        f_mime = f.get("mimeType", "")
+        f_size = int(f.get("size", 0)) if f.get("size") else None
+
+        parsed = parse_image_filename(f_name)
+        if not parsed or not parsed.raw_sku:
+            items.append(
+                DrivePreviewItem(
+                    file_id=f_id,
+                    filename=f_name,
+                    mime_type=f_mime,
+                    size_bytes=f_size,
+                    sku_extracted=None,
+                    is_canonical=False,
+                    is_additional=False,
+                    additional_label=None,
+                    sort_order=0,
+                    match_status="no_sku",
+                    product_id=None,
+                    product_title=None,
+                    canonical_sku=None,
+                    message="El nombre de archivo no contiene un formato de SKU válido.",
+                )
+            )
+            unmatched_count += 1
+            no_sku_count += 1
+            continue
+
+        sku = parsed.canonical_sku or parsed.raw_sku
+
+        # Buscar producto: 1) canonical_sku, 2) CanonicalProduct, 3) sku_root
+        product = await db.scalar(select(Product).where(Product.canonical_sku == sku))
+        if not product:
+            canonical = await db.scalar(
+                select(CanonicalProduct).where(
+                    or_(
+                        CanonicalProduct.sku_custom == sku,
+                        CanonicalProduct.ng_sku == sku,
+                        func.lower(CanonicalProduct.sku_custom) == sku.lower(),
+                        func.lower(CanonicalProduct.ng_sku) == sku.lower(),
+                    )
+                )
+            )
+            if canonical:
+                supplier_product = await db.scalar(
+                    select(SupplierProduct)
+                    .join(ProductEquivalence, ProductEquivalence.supplier_product_id == SupplierProduct.id)
+                    .where(ProductEquivalence.canonical_product_id == canonical.id)
+                    .limit(1)
+                )
+                if supplier_product and supplier_product.internal_product_id:
+                    product = await db.get(Product, supplier_product.internal_product_id)
+
+        if not product:
+            product = await db.scalar(select(Product).where(Product.sku_root == sku))
+
+        if not product:
+            items.append(
+                DrivePreviewItem(
+                    file_id=f_id,
+                    filename=f_name,
+                    mime_type=f_mime,
+                    size_bytes=f_size,
+                    sku_extracted=sku,
+                    is_canonical=parsed.is_canonical,
+                    is_additional=parsed.is_additional,
+                    additional_label=parsed.additional_label,
+                    sort_order=parsed.sort_order,
+                    match_status="product_not_found",
+                    product_id=None,
+                    product_title=None,
+                    canonical_sku=sku,
+                    message=f"No se encontró un producto en el catálogo con SKU '{sku}'.",
+                )
+            )
+            unmatched_count += 1
+            continue
+
+        # Verificar si ya fue descargada anteriormente
+        safe_name = f_name.replace("\\", "/").split("/")[-1]
+        already_downloaded = await db.scalar(
+            select(Image.id)
+            .join(ImageVersion, ImageVersion.image_id == Image.id)
+            .where(
+                Image.product_id == product.id,
+                Image.active == True,
+                ImageVersion.source_url == f"drive://{f_id}",
+            )
+            .limit(1)
+        )
+        if not already_downloaded:
+            already_downloaded = await db.scalar(
+                select(Image.id)
+                .where(
+                    Image.product_id == product.id,
+                    Image.active == True,
+                    or_(
+                        Image.path.like(f"%/{safe_name}"),
+                        Image.path.like(f"%\\{safe_name}"),
+                    )
+                )
+                .limit(1)
+            )
+
+        is_downloaded_physically = False
+        if already_downloaded:
+            existing_image = await db.get(Image, already_downloaded)
+            if existing_image and existing_image.path and (root_media / existing_image.path).exists():
+                is_downloaded_physically = True
+
+        if is_downloaded_physically:
+            match_status = "already_downloaded"
+            already_downloaded_count += 1
+            msg = "Ya descargada anteriormente (se omitirá la re-descarga)."
+        else:
+            match_status = "matched"
+            matched_count += 1
+            if parsed.is_additional:
+                matches_additional_count += 1
+                msg = f"Match correcto. Se montará como imagen adicional en la galería ({parsed.additional_label or '2'})."
+            else:
+                msg = "Match correcto. Se montará en la galería del producto."
+
+        items.append(
+            DrivePreviewItem(
+                file_id=f_id,
+                filename=f_name,
+                mime_type=f_mime,
+                size_bytes=f_size,
+                sku_extracted=sku,
+                is_canonical=parsed.is_canonical,
+                is_additional=parsed.is_additional,
+                additional_label=parsed.additional_label,
+                sort_order=parsed.sort_order,
+                match_status=match_status,
+                product_id=product.id,
+                product_title=product.title,
+                canonical_sku=product.canonical_sku or sku,
+                message=msg,
+            )
+        )
+
+    return DrivePreviewResponse(
+        folder_id=folder_id,
+        folder_name=folder_name,
+        total_files=len(files),
+        matched_count=matched_count,
+        matches_additional_count=matches_additional_count,
+        already_downloaded_count=already_downloaded_count,
+        unmatched_count=unmatched_count,
+        no_sku_count=no_sku_count,
+        items=items,
+    )
+
+
 @router.post(
     "/start",
     dependencies=[Depends(require_csrf)],
@@ -290,13 +542,19 @@ async def start_drive_sync(
             detail="Ya hay una sincronización en progreso",
         )
 
+    default_folder = "13d0sHLN0LrKAuxBV-Aibxrq05jz0n8F7"
+    effective_folder_id = (source_folder_id or "").strip()
+    if not effective_folder_id:
+        env_f = (os.getenv("DRIVE_SOURCE_FOLDER_ID") or "").strip()
+        effective_folder_id = env_f if (env_f and env_f != "REEMPLAZAR_CON_ID_CARPETA") else default_folder
+
     sync_id = str(uuid.uuid4())
     _current_sync_id = sync_id
     _sync_in_progress = True
     db.add(
         DriveSyncRun(
             id=sync_id,
-            source_folder_id=source_folder_id,
+            source_folder_id=effective_folder_id,
             status="queued",
             initiated_by_user_id=_user_id(session_data),
         )
@@ -305,8 +563,8 @@ async def start_drive_sync(
 
     # Encolar tarea en Dramatiq
     try:
-        message = sync_drive_images_task.send(sync_id, source_folder_id=source_folder_id)
-        logger.info(f"Sincronización Drive encolada (sync_id: {sync_id}, source_folder_id: {source_folder_id}, message_id: {message.message_id})")
+        message = sync_drive_images_task.send(sync_id, source_folder_id=effective_folder_id)
+        logger.info(f"Sincronización Drive encolada (sync_id: {sync_id}, source_folder_id: {effective_folder_id}, message_id: {message.message_id})")
     except Exception as e:
         _sync_in_progress = False
         _current_sync_id = None

@@ -37,6 +37,20 @@ ALLOWED_IMAGE_MIMES = {
     "image/gif",
     "image/heif",  # High Efficiency Image Format (iPhone, dispositivos modernos)
     "image/heic",  # Variante de HEIF
+    "image/heif-sequence",
+    "image/heic-sequence",
+    "image/pjpeg",
+    "image/x-png",
+}
+
+ALLOWED_IMAGE_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".gif",
+    ".heif",
+    ".heic",
 }
 
 
@@ -101,7 +115,7 @@ class GoogleDriveSync:
 
         Returns:
             Lista de diccionarios con metadata de archivos:
-            [{"id": str, "name": str, "mimeType": str}, ...]
+            [{"id": str, "name": str, "mimeType": str, "size": int, "md5Checksum": str}, ...]
         """
         if not self.service:
             raise GoogleDriveError("No autenticado. Llame a authenticate() primero.")
@@ -111,13 +125,9 @@ class GoogleDriveSync:
             page_token = None
 
             while True:
-                # Construir query con condiciones OR para cada MIME type
-                mime_conditions = " or ".join(
-                    [f"mimeType='{mime}'" for mime in ALLOWED_IMAGE_MIMES]
-                )
+                # Query que excluye carpetas y archivos en la papelera
                 query = (
                     f"'{self.source_folder_id}' in parents "
-                    f"and ({mime_conditions}) "
                     "and trashed=false "
                     "and mimeType!='application/vnd.google-apps.folder'"
                 )
@@ -130,7 +140,7 @@ class GoogleDriveSync:
                         self.service.files()
                         .list(
                             q=query,
-                            fields="nextPageToken, files(id, name, mimeType, size, parents)",
+                            fields="nextPageToken, files(id, name, mimeType, size, parents, md5Checksum)",
                             pageToken=page_token,
                             pageSize=100,
                         )
@@ -140,8 +150,14 @@ class GoogleDriveSync:
                 results = await asyncio.to_thread(execute_query)
 
                 items = results.get("files", [])
-                logger.debug(f"Página: {len(items)} archivos encontrados")
-                files.extend(items)
+                for item in items:
+                    name = item.get("name", "")
+                    mime = item.get("mimeType", "")
+                    ext = Path(name).suffix.lower()
+                    if mime in ALLOWED_IMAGE_MIMES or ext in ALLOWED_IMAGE_EXTENSIONS:
+                        files.append(item)
+                    else:
+                        logger.debug(f"Archivo ignorado por formato no admitido: {name} (mime={mime})")
 
                 page_token = results.get("nextPageToken")
                 if not page_token:
