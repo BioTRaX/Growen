@@ -1666,7 +1666,7 @@ El sistema incluye un pipeline robusto para importar remitos en formato PDF del 
 
 ## Lineamientos de agentes
 
-Consulta [AGENTS.md](AGENTS.md) para la estructura de prompts, el uso del encabezado NG-HEADER y el checklist de PRs.
+Consulta [AGENTS.md](AGENTS.md) para la estructura de prompts, el uso del encabezado NG-HEADER y el checklist de PRs. Para lineamientos de economía de contexto, filtros de exclusión y segmentación por dominio, ver [Optimización de tokens y gestión contextual](docs/development/TOKEN_OPTIMIZATION.md) y [Skills agénticas](docs/development/AGENT_SKILLS.md).
 
 ## Clientes y Ventas Vue
 

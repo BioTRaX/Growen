@@ -1,0 +1,106 @@
+# ==============================================================================
+# Growen - .geminiignore
+# Exclusión de archivos y directorios para Gemini Code Assist, Gemini CLI y Antigravity
+# ==============================================================================
+
+# Entornos virtuales, binarios y librerías de Python
+.venv/
+env/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+
+# Frontend: dependencias, builds, caches y artefactos de test
+node_modules/
+**/node_modules/
+frontend-vue/node_modules/
+frontend-vue/dist/
+frontend-vue/.vite/
+frontend-vue/test-results/
+frontend-vue/playwright-report/
+*.tsbuildinfo
+dist/
+build/
+
+# Control de versiones y metadatos
+.git/
+.github/
+
+# Logs del sistema y workers (se consultan bajo demanda, NO indexación masiva)
+logs/
+*.log
+*.log.*
+pytestdebug.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporales, caches y scratchpads
+tmp/
+temp/
+scratch/
+.cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.tmp
+*.bak
+*.swp
+*.old
+*.orig
+
+# Caches e historiales de asistentes auxiliares
+.aider*
+repomap.txt
+
+# Media pesada, imágenes, catálogos y binarios
+media/
+**/media/
+Imagenes/
+ImagenesTest/
+Productos/
+catalogos/
+Conocimientos/
+
+# Datos pesados, volcados y bases locales
+data/*.csv
+data/*.xlsx
+data/*.json
+!data/README.md
+backups/
+backup/
+*.sqlite
+*.db
+*.db-journal
+
+# Credenciales, certificados y secretos locales
+certs/
+credentials/
+secrets/
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.secret
+*.secrets
+.env
+.env.*
+!.env.dev
+!.env.prod.example
+*.local.*
+
+# Estado efímero de coordinación entre agentes
+.agents/state/
+
+# Historial de planes y specs extensos ejecutados (se leen bajo demanda puntual)
+docs/superpowers/plans/
+docs/superpowers/specs/

@@ -53,7 +53,7 @@ Este documento orienta a herramientas de asistencia de código (Copilot, Codex, 
 - Renovar con `scripts/agent_lock.py renew <scope> --agent <nombre> --ttl-minutes <n>` los locks de tareas que superen la mitad de su TTL. Un lock vencido no se renueva: debe readquirirse después de verificar el estado real del ámbito.
 - La arquitectura completa, los hallazgos de la auditoría y el detalle de ámbitos recomendados están en `docs/architecture/AGENT_ORCHESTRATION.md`.
 
-### Compatibilidad con Superpowers
+### Compatibilidad y Lazy Loading con Superpowers
 - Las skills de Superpowers pueden complementar la metodología de trabajo, pero las reglas y precedencias de Growen prevalecen en todo caso.
 - Los flujos de Superpowers no pueden activar `git add`, `commit`, `push`, `merge` ni publicación automática sin la autorización explícita del usuario y sin cumplir el gate completo de seguridad.
 - Superpowers nunca confirma trabajo directamente en `dev`. Sus pasos de commit, merge o push se subordinan a la rama efímera y a `git-commit-push`.
@@ -62,6 +62,20 @@ Este documento orienta a herramientas de asistencia de código (Copilot, Codex, 
 - Las respuestas, la documentación, los commits y los PRs generados mediante Superpowers deben producirse en español, aunque el origen del material sea inglés.
 - No se deben duplicar ni forzar forks locales de las 14 skills de Superpowers; la actualización debe seguirse desde su repositorio original y adaptarse localmente con reglas de precedencia.
 - Las skills canónicas locales conservan sólo reglas, comandos y contratos específicos de Growen. La metodología general se referencia por nombre y no se copia, para evitar trabajo duplicado y consumo innecesario de tokens.
+- **Protocolo de Lazy Loading:** Las 14 skills de Superpowers operan bajo carga diferida (lazy loading). Los asistentes mantendrán en contexto únicamente el catálogo indexado minimalista de una sola línea (`docs/superpowers/CATALOG.md`, ~500 tokens). Queda prohibido inyectar masivamente los 14 manifiestos completos (`SKILL.md`). El contenido extenso de una skill se lee exclusivamente bajo demanda puntual cuando una tarea lo requiera y no exista una alternativa canónica en `.agents/skills/`.
+
+### Optimización de Tokens e Indexación Contextual
+- **Filtros de Exclusión Obligatorios:** Todo asistente (GitHub Copilot, Gemini/Antigravity, Cursor, Aider) debe respetar las exclusiones definidas en `.copilotignore`, `.geminiignore`, `.cursorignore` y `.aiderignore`.
+- **Rutas Excluidas de Indexación:** Quedan estrictamente fuera de la indexación automática de fondo y de la búsqueda semántica: `media/`, `Imagenes/`, `ImagenesTest/`, `Productos/`, `catalogos/`, `Conocimientos/`, `node_modules/`, `frontend-vue/dist/`, `frontend-vue/.vite/`, `.venv/`, `.git/`, artefactos de compilación (`dist/`, `build/`, `.pytest_cache/`, `.ruff_cache/`) y la carpeta `logs/`.
+- **Acceso a Logs Bajo Demanda:** La exclusión de `logs/` no impide su lectura. Para tareas de debugging, los logs se consultan bajo demanda puntual mediante comandos acotados (ej. `Get-Content logs/archivo.log -Tail N`) o herramientas de lectura focalizada (`view_file` con rangos de línea). Queda prohibido volcar o indexar masivamente archivos `.log` en el contexto general.
+- **Pauta de Context-Splitting (Sesiones Segmentadas por Dominio):** Para evitar la saturación de tokens y la degradación de razonamiento por interferencia de dominios, las sesiones de interacción deben dividirse por área de responsabilidad:
+  - *Frontend:* `frontend-vue/` (componentes, vistas, stores Pinia, estilos). No arrastrar migraciones ni infraestructura.
+  - *Backend & API:* `services/`, `agent_core/` (FastAPI, auth, esquemas).
+  - *Base de Datos:* `db/`, `db/migrations/` (Alembic, modelos).
+  - *Workers & Jobs:* `workers/`, `services/jobs/` (Dramatiq, Redis, scrapers).
+  - *Infraestructura:* `infra/`, `docker-compose.yml`, `docker-stack.yml`, Swarm.
+  - *Gobernanza:* `.agents/`, `AGENTS.md`, `docs/architecture/`.
+  Al cambiar de dominio o tras un cierre de sesión, iniciar un hilo nuevo en contexto limpio. Ver guía detallada en `docs/development/TOKEN_OPTIMIZATION.md`.
 
 ## Encabezado obligatorio (NG-HEADER)
 Agregar al inicio de cada archivo de código y documentación `.md` (excepto `README.md`). Excepciones: `*.json`, `destinatarios.json`, binarios, imágenes, PDFs y otros archivos de datos.

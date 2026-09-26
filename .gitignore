@@ -149,3 +149,8 @@ Conocimientos/
 siyuan-widgets/*
 !siyuan-widgets/crono/
 !siyuan-widgets/crono/**
+
+# Asistentes de IA y repomap temporales
+.aider*
+!.aiderignore
+repomap.txt

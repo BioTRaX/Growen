@@ -37,9 +37,15 @@ Las skills externas de Superpowers pueden utilizarse como metodología general, 
 
 No cargar una skill de Superpowers sólo porque comparte vocabulario con la tarea. Cargarla cuando su metodología sea necesaria y luego aplicar únicamente la capa local relevante. Las skills locales no deben copiar ciclos, checklists ni explicaciones completas del pack.
 
-En resumen, Superpowers aporta disciplina y composición de flujos; Growen conserva la autoridad final sobre seguridad, entorno, idioma, documentación y publicación.
-
 Las 14 skills de Superpowers se mantienen en su instalación global y se actualizan desde el repositorio original. Growen no conserva forks locales: aplica esta capa de precedencia al descubrirlas desde el directorio compartido del usuario.
+
+### Protocolo de Lazy Loading y optimización de tokens
+
+Para prevenir el agotamiento acelerado de cuotas en suscripciones de IA (Copilot, Codex, Gemini/Antigravity), el uso de Superpowers se rige por las siguientes pautas de consumo mínimo:
+
+1. **Catálogo Minimalista en Memoria:** Los agentes consultan el catálogo de una sola línea en [`docs/superpowers/CATALOG.md`](../superpowers/CATALOG.md) (~500 tokens), en lugar de inyectar los 14 manifiestos completos (~90.000 tokens).
+2. **Carga Estricta Bajo Demanda:** Solo cuando una tarea no pueda resolverse con una skill canónica de Growen y justifique la metodología externa, el asistente lee el archivo `SKILL.md` específico (`~/.agents/skills/superpowers/<skill>/SKILL.md`).
+3. **Filtros de Indexación y Context-Splitting:** Se respetan los archivos `.copilotignore` y `.geminiignore`, y las tareas se segmentan por dominio para evitar la contaminación contextual. La guía completa se encuentra en [`docs/development/TOKEN_OPTIMIZATION.md`](TOKEN_OPTIMIZATION.md).
 
 ## Retrospectiva técnica de sesión
 

@@ -1,0 +1,46 @@
+# ==============================================================================
+# Growen - .aiderignore
+# Exclusión de archivos para análisis de repo y repomap en Aider
+# ==============================================================================
+
+.venv/
+env/
+venv/
+__pycache__/
+*.py[cod]
+
+node_modules/
+**/node_modules/
+frontend-vue/node_modules/
+frontend-vue/dist/
+
+.git/
+logs/
+*.log
+tmp/
+temp/
+scratch/
+.cache/
+.pytest_cache/
+.ruff_cache/
+
+media/
+Imagenes/
+ImagenesTest/
+Productos/
+catalogos/
+Conocimientos/
+backups/
+backup/
+data/
+
+certs/
+credentials/
+secrets/
+.env*
+!.env.dev
+!.env.prod.example
+
+.agents/state/
+docs/superpowers/plans/
+docs/superpowers/specs/

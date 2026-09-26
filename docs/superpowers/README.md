@@ -41,6 +41,13 @@ La precedencia local es la siguiente:
 
 Las 14 skills de Superpowers permanecen en la instalación global compartida del usuario y se actualizan desde su repositorio original. Codex, Gemini CLI, GitHub Copilot y Antigravity pueden descubrir el directorio compartido `~/.agents/skills`; `.agent/skills/` se conserva sólo para adaptadores legacy del proyecto. No se copian ni modifican las skills externas dentro de Growen.
 
+## Carga diferida (Lazy Loading) y optimización de tokens
+
+Para prevenir la saturación de contexto y el consumo desmedido de tokens:
+- **No inyectar los 14 manifiestos en bloque:** Los agentes deben consultar el catálogo minimalista [CATALOG.md](CATALOG.md) (~500 tokens), que condensa el nombre y 1 línea de descripción por skill.
+- **Carga bajo demanda puntual:** El archivo `SKILL.md` de una skill se lee únicamente cuando la tarea lo exige y no exista una alternativa canónica en `.agents/skills/`.
+- **Aislamiento de planes históricos:** Los archivos bajo `docs/superpowers/plans/` y `docs/superpowers/specs/` representan documentación histórica y están excluidos de la indexación automática mediante `.copilotignore` y `.geminiignore`. Se consultan solo bajo demanda.
+
 ## Documentación viva
 
 Toda documentación incluida bajo `docs/superpowers/` debe mantenerse sincronizada con:
